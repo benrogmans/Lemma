@@ -1,0 +1,18 @@
+version = 1
+
+[[analyzers]]
+name = "rust"
+enabled = true
+
+  [analyzers.meta]
+  # Clippy integration
+  clippy = true
+  # Coverage analysis
+  coverage_enabled = true
+  # Disable test code analysis (tests have different patterns)
+  skip_doc_coverage = ["test"]
+
+[[transformers]]
+name = "rustfmt"
+enabled = true
+
