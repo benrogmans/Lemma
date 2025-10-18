@@ -1,6 +1,8 @@
 use crate::evaluator::context::EvaluationContext;
 use crate::evaluator::rules::evaluate_rule;
-use crate::{Expression, ExpressionId, ExpressionKind, LemmaDoc, LemmaRule, LiteralValue, UnlessClause};
+use crate::{
+    Expression, ExpressionId, ExpressionKind, LemmaDoc, LemmaRule, LiteralValue, UnlessClause,
+};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -147,4 +149,3 @@ fn test_evaluate_rule_last_matching_wins() {
     // Last unless clause wins
     assert_eq!(result, LiteralValue::Number(Decimal::from(300)));
 }
-

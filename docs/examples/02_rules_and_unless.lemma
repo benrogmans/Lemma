@@ -1,0 +1,51 @@
+doc examples/rules_and_unless
+"""
+Rules and Unless Clauses
+
+This example demonstrates:
+- Simple rule expressions
+- Arithmetic operations
+- Unless clauses for conditional logic (last matching wins)
+- Boolean aliases (accept=true, reject=false)
+- Veto for validation (blocks rule entirely)
+
+IMPORTANT: Unless clauses are evaluated in order, and the LAST matching
+condition's result is used. This matches natural language: "X, unless Y, unless Z"
+means Z takes precedence if it matches.
+"""
+
+fact base_price = 100 USD
+fact quantity = 5
+fact is_premium = true
+fact customer_age = 17
+
+rule total_before_discount = base_price * quantity
+
+rule discount_percentage = 0%
+  unless quantity >= 10 then 10%
+  unless quantity >= 20 then 15%
+  unless is_premium then 20%
+
+rule total_after_discount = total_before_discount? * (1 - discount_percentage?)
+
+rule shipping_cost = 15 USD
+  unless total_after_discount? >= 100 USD then 10 USD
+  unless total_after_discount? >= 200 USD then 0 USD
+
+rule final_total = total_after_discount? + shipping_cost?
+
+rule age_validation = true
+  unless customer_age < 18 then veto "Customer must be 18 or older"
+  unless customer_age > 120 then veto "Invalid age"
+
+rule can_process = accept
+  unless customer_age < 18 then reject
+
+rule priority_processing = false
+  unless total_after_discount? > 500 USD then true
+  unless is_premium then true
+
+rule message = "Standard order"
+  unless final_total? > 1000 USD then "High-value order - manager approval required"
+  unless is_premium then "Premium order - expedited processing"
+

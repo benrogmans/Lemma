@@ -1,0 +1,39 @@
+doc examples/simple_facts
+"""
+Introduction to Lemma: Facts and Types
+
+This example demonstrates:
+- Basic fact declarations
+- Different literal types
+- Type annotations
+"""
+
+fact name = "Alice Johnson"
+fact age = 32
+fact employee_id = "EMP-2024-001"
+
+fact is_active = true
+fact is_manager = false
+
+fact start_date = 2024-01-15
+fact review_date = 2024-07-15
+
+fact base_salary = 75000
+fact currency_rate = 1.18
+
+fact percentage_complete = 87.5%
+fact tax_rate = 22%
+
+fact weight = 68.5 kilograms
+fact height = 175 centimeters
+fact distance_to_office = 12.5 kilometers
+
+fact max_file_size = 10 megabytes
+fact processing_time = 2.5 hours
+
+fact email_pattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
+
+fact unknown_date = [date]
+fact pending_amount = [money]
+fact optional_description = [text]
+

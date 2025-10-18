@@ -105,10 +105,7 @@ pub mod http {
             ));
         }
 
-        let facts: Vec<String> = params
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect();
+        let facts: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
         let fact_refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
 
         let response: Response = engine.evaluate(&doc_name, fact_refs).map_err(|e| {
@@ -122,7 +119,11 @@ pub mod http {
         })?;
 
         let results = convert_results(&response);
-        info!("Evaluated document '{}' with {} results", doc_name, results.len());
+        info!(
+            "Evaluated document '{}' with {} results",
+            doc_name,
+            results.len()
+        );
 
         Ok(Json(EvaluateResponse {
             results,
@@ -147,15 +148,17 @@ pub mod http {
         let mut temp_engine = Engine::new();
         let source_id = format!("inline_{}", chrono::Utc::now().timestamp_millis());
 
-        temp_engine.add_lemma_code(&payload.code, &source_id).map_err(|e| {
-            error!("Failed to parse code: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Failed to parse code: {}", e),
-                }),
-            )
-        })?;
+        temp_engine
+            .add_lemma_code(&payload.code, &source_id)
+            .map_err(|e| {
+                error!("Failed to parse code: {}", e);
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: format!("Failed to parse code: {}", e),
+                    }),
+                )
+            })?;
 
         let documents = temp_engine.list_documents();
         if documents.is_empty() {
@@ -193,7 +196,11 @@ pub mod http {
             None
         };
 
-        info!("Evaluated inline document '{}' with {} results", doc_name, results.len());
+        info!(
+            "Evaluated inline document '{}' with {} results",
+            doc_name,
+            results.len()
+        );
 
         Ok(Json(EvaluateResponse {
             results,
@@ -238,8 +245,11 @@ pub mod http {
 
 #[cfg(not(feature = "server"))]
 pub mod http {
-    pub async fn start_server(_engine: lemma::Engine, _host: &str, _port: u16) -> anyhow::Result<()> {
+    pub async fn start_server(
+        _engine: lemma::Engine,
+        _host: &str,
+        _port: u16,
+    ) -> anyhow::Result<()> {
         anyhow::bail!("Server feature not enabled. Recompile with --features server")
     }
 }
-

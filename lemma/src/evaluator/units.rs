@@ -18,21 +18,41 @@ pub(crate) fn convert_unit_for_arithmetic(
 ) -> LemmaResult<LiteralValue> {
     let unit = match value {
         LiteralValue::Unit(u) => u,
-        _ => return Err(LemmaError::Engine("Cannot convert non-unit value for arithmetic".to_string())),
+        _ => {
+            return Err(LemmaError::Engine(
+                "Cannot convert non-unit value for arithmetic".to_string(),
+            ))
+        }
     };
 
     let converted_value = match (unit, target) {
-        (NumericUnit::Duration(v, from), ConversionTarget::Duration(to)) => convert_duration(*v, from, to)?,
+        (NumericUnit::Duration(v, from), ConversionTarget::Duration(to)) => {
+            convert_duration(*v, from, to)?
+        }
         (NumericUnit::Mass(v, from), ConversionTarget::Mass(to)) => convert_mass(*v, from, to)?,
-        (NumericUnit::Length(v, from), ConversionTarget::Length(to)) => convert_length(*v, from, to)?,
-        (NumericUnit::Temperature(v, from), ConversionTarget::Temperature(to)) => convert_temperature(*v, from, to)?,
+        (NumericUnit::Length(v, from), ConversionTarget::Length(to)) => {
+            convert_length(*v, from, to)?
+        }
+        (NumericUnit::Temperature(v, from), ConversionTarget::Temperature(to)) => {
+            convert_temperature(*v, from, to)?
+        }
         (NumericUnit::Power(v, from), ConversionTarget::Power(to)) => convert_power(*v, from, to)?,
-        (NumericUnit::Volume(v, from), ConversionTarget::Volume(to)) => convert_volume(*v, from, to)?,
+        (NumericUnit::Volume(v, from), ConversionTarget::Volume(to)) => {
+            convert_volume(*v, from, to)?
+        }
         (NumericUnit::Force(v, from), ConversionTarget::Force(to)) => convert_force(*v, from, to)?,
-        (NumericUnit::Pressure(v, from), ConversionTarget::Pressure(to)) => convert_pressure(*v, from, to)?,
-        (NumericUnit::Energy(v, from), ConversionTarget::Energy(to)) => convert_energy(*v, from, to)?,
-        (NumericUnit::Frequency(v, from), ConversionTarget::Frequency(to)) => convert_frequency(*v, from, to)?,
-        (NumericUnit::DataSize(v, from), ConversionTarget::DataSize(to)) => convert_data_size(*v, from, to)?,
+        (NumericUnit::Pressure(v, from), ConversionTarget::Pressure(to)) => {
+            convert_pressure(*v, from, to)?
+        }
+        (NumericUnit::Energy(v, from), ConversionTarget::Energy(to)) => {
+            convert_energy(*v, from, to)?
+        }
+        (NumericUnit::Frequency(v, from), ConversionTarget::Frequency(to)) => {
+            convert_frequency(*v, from, to)?
+        }
+        (NumericUnit::DataSize(v, from), ConversionTarget::DataSize(to)) => {
+            convert_data_size(*v, from, to)?
+        }
         (NumericUnit::Money(v, from), ConversionTarget::Money(to)) => {
             if from == to {
                 *v
@@ -43,7 +63,11 @@ pub(crate) fn convert_unit_for_arithmetic(
                 )));
             }
         }
-        _ => return Err(LemmaError::Engine("Mismatched unit type for conversion".to_string())),
+        _ => {
+            return Err(LemmaError::Engine(
+                "Mismatched unit type for conversion".to_string(),
+            ))
+        }
     };
 
     let result_unit = match target {
@@ -60,7 +84,9 @@ pub(crate) fn convert_unit_for_arithmetic(
         ConversionTarget::DataSize(u) => NumericUnit::DataSize(converted_value, u.clone()),
         ConversionTarget::Money(u) => NumericUnit::Money(converted_value, u.clone()),
         ConversionTarget::Percentage => {
-            return Err(LemmaError::Engine("Cannot convert to percentage for arithmetic".to_string()));
+            return Err(LemmaError::Engine(
+                "Cannot convert to percentage for arithmetic".to_string(),
+            ));
         }
     };
 
@@ -74,17 +100,39 @@ pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> LemmaRes
     match value {
         LiteralValue::Unit(unit) => {
             let converted_value = match (unit, target) {
-                (NumericUnit::Duration(v, from), ConversionTarget::Duration(to)) => convert_duration(*v, from, to)?,
-                (NumericUnit::Mass(v, from), ConversionTarget::Mass(to)) => convert_mass(*v, from, to)?,
-                (NumericUnit::Length(v, from), ConversionTarget::Length(to)) => convert_length(*v, from, to)?,
-                (NumericUnit::Temperature(v, from), ConversionTarget::Temperature(to)) => convert_temperature(*v, from, to)?,
-                (NumericUnit::Power(v, from), ConversionTarget::Power(to)) => convert_power(*v, from, to)?,
-                (NumericUnit::Volume(v, from), ConversionTarget::Volume(to)) => convert_volume(*v, from, to)?,
-                (NumericUnit::Force(v, from), ConversionTarget::Force(to)) => convert_force(*v, from, to)?,
-                (NumericUnit::Pressure(v, from), ConversionTarget::Pressure(to)) => convert_pressure(*v, from, to)?,
-                (NumericUnit::Energy(v, from), ConversionTarget::Energy(to)) => convert_energy(*v, from, to)?,
-                (NumericUnit::Frequency(v, from), ConversionTarget::Frequency(to)) => convert_frequency(*v, from, to)?,
-                (NumericUnit::DataSize(v, from), ConversionTarget::DataSize(to)) => convert_data_size(*v, from, to)?,
+                (NumericUnit::Duration(v, from), ConversionTarget::Duration(to)) => {
+                    convert_duration(*v, from, to)?
+                }
+                (NumericUnit::Mass(v, from), ConversionTarget::Mass(to)) => {
+                    convert_mass(*v, from, to)?
+                }
+                (NumericUnit::Length(v, from), ConversionTarget::Length(to)) => {
+                    convert_length(*v, from, to)?
+                }
+                (NumericUnit::Temperature(v, from), ConversionTarget::Temperature(to)) => {
+                    convert_temperature(*v, from, to)?
+                }
+                (NumericUnit::Power(v, from), ConversionTarget::Power(to)) => {
+                    convert_power(*v, from, to)?
+                }
+                (NumericUnit::Volume(v, from), ConversionTarget::Volume(to)) => {
+                    convert_volume(*v, from, to)?
+                }
+                (NumericUnit::Force(v, from), ConversionTarget::Force(to)) => {
+                    convert_force(*v, from, to)?
+                }
+                (NumericUnit::Pressure(v, from), ConversionTarget::Pressure(to)) => {
+                    convert_pressure(*v, from, to)?
+                }
+                (NumericUnit::Energy(v, from), ConversionTarget::Energy(to)) => {
+                    convert_energy(*v, from, to)?
+                }
+                (NumericUnit::Frequency(v, from), ConversionTarget::Frequency(to)) => {
+                    convert_frequency(*v, from, to)?
+                }
+                (NumericUnit::DataSize(v, from), ConversionTarget::DataSize(to)) => {
+                    convert_data_size(*v, from, to)?
+                }
                 (NumericUnit::Money(v, from), ConversionTarget::Money(to)) => {
                     if from == to {
                         *v
@@ -95,7 +143,11 @@ pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> LemmaRes
                         )));
                     }
                 }
-                _ => return Err(LemmaError::Engine("Mismatched unit type for conversion".to_string())),
+                _ => {
+                    return Err(LemmaError::Engine(
+                        "Mismatched unit type for conversion".to_string(),
+                    ))
+                }
             };
             Ok(LiteralValue::Number(converted_value))
         }
@@ -103,23 +155,41 @@ pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> LemmaRes
         LiteralValue::Number(n) => {
             let result = match target {
                 ConversionTarget::Mass(u) => LiteralValue::Unit(NumericUnit::Mass(*n, u.clone())),
-                ConversionTarget::Length(u) => LiteralValue::Unit(NumericUnit::Length(*n, u.clone())),
-                ConversionTarget::Volume(u) => LiteralValue::Unit(NumericUnit::Volume(*n, u.clone())),
-                ConversionTarget::Duration(u) => LiteralValue::Unit(NumericUnit::Duration(*n, u.clone())),
-                ConversionTarget::Temperature(u) => LiteralValue::Unit(NumericUnit::Temperature(*n, u.clone())),
+                ConversionTarget::Length(u) => {
+                    LiteralValue::Unit(NumericUnit::Length(*n, u.clone()))
+                }
+                ConversionTarget::Volume(u) => {
+                    LiteralValue::Unit(NumericUnit::Volume(*n, u.clone()))
+                }
+                ConversionTarget::Duration(u) => {
+                    LiteralValue::Unit(NumericUnit::Duration(*n, u.clone()))
+                }
+                ConversionTarget::Temperature(u) => {
+                    LiteralValue::Unit(NumericUnit::Temperature(*n, u.clone()))
+                }
                 ConversionTarget::Power(u) => LiteralValue::Unit(NumericUnit::Power(*n, u.clone())),
                 ConversionTarget::Force(u) => LiteralValue::Unit(NumericUnit::Force(*n, u.clone())),
-                ConversionTarget::Pressure(u) => LiteralValue::Unit(NumericUnit::Pressure(*n, u.clone())),
-                ConversionTarget::Energy(u) => LiteralValue::Unit(NumericUnit::Energy(*n, u.clone())),
-                ConversionTarget::Frequency(u) => LiteralValue::Unit(NumericUnit::Frequency(*n, u.clone())),
-                ConversionTarget::DataSize(u) => LiteralValue::Unit(NumericUnit::DataSize(*n, u.clone())),
+                ConversionTarget::Pressure(u) => {
+                    LiteralValue::Unit(NumericUnit::Pressure(*n, u.clone()))
+                }
+                ConversionTarget::Energy(u) => {
+                    LiteralValue::Unit(NumericUnit::Energy(*n, u.clone()))
+                }
+                ConversionTarget::Frequency(u) => {
+                    LiteralValue::Unit(NumericUnit::Frequency(*n, u.clone()))
+                }
+                ConversionTarget::DataSize(u) => {
+                    LiteralValue::Unit(NumericUnit::DataSize(*n, u.clone()))
+                }
                 ConversionTarget::Money(u) => LiteralValue::Unit(NumericUnit::Money(*n, u.clone())),
                 ConversionTarget::Percentage => LiteralValue::Percentage(n * Decimal::from(100)),
             };
             Ok(result)
         }
 
-        _ => Err(LemmaError::Engine("Cannot convert value to target".to_string())),
+        _ => Err(LemmaError::Engine(
+            "Cannot convert value to target".to_string(),
+        )),
     }
 }
 
@@ -170,7 +240,11 @@ pub(crate) fn convert_mass(value: Decimal, from: &MassUnit, to: &MassUnit) -> Le
 }
 
 /// Convert length between different units
-pub(crate) fn convert_length(value: Decimal, from: &LengthUnit, to: &LengthUnit) -> LemmaResult<Decimal> {
+pub(crate) fn convert_length(
+    value: Decimal,
+    from: &LengthUnit,
+    to: &LengthUnit,
+) -> LemmaResult<Decimal> {
     if from == to {
         return Ok(value);
     }
@@ -215,7 +289,9 @@ pub(crate) fn convert_duration(
     }
 
     // Month and Year are calendar units, not time durations
-    if matches!(from, DurationUnit::Month | DurationUnit::Year) || matches!(to, DurationUnit::Month | DurationUnit::Year) {
+    if matches!(from, DurationUnit::Month | DurationUnit::Year)
+        || matches!(to, DurationUnit::Month | DurationUnit::Year)
+    {
         return Err(LemmaError::Engine(
             "Cannot convert calendar units (month/year) to other duration units. Use date arithmetic instead.".to_string()
         ));
@@ -260,7 +336,11 @@ pub(crate) fn convert_temperature(
 }
 
 /// Convert power between different units
-pub(crate) fn convert_power(value: Decimal, from: &PowerUnit, to: &PowerUnit) -> LemmaResult<Decimal> {
+pub(crate) fn convert_power(
+    value: Decimal,
+    from: &PowerUnit,
+    to: &PowerUnit,
+) -> LemmaResult<Decimal> {
     if from == to {
         return Ok(value);
     }

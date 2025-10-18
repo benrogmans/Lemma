@@ -1,0 +1,44 @@
+doc examples/unit_conversions
+"""
+Unit Conversions and Comparisons
+
+This example demonstrates:
+- Different unit types
+- Automatic unit conversions
+- Comparisons with units
+- Unit-aware arithmetic
+"""
+
+fact package_weight_kg = 25 kilograms
+fact distance_km = 100 kilometers
+fact temperature_c = 20 celsius
+fact data_size_mb = 500 megabytes
+fact processing_duration = 90 minutes
+fact container_volume = 5 liters
+
+rule package_weight_lbs = package_weight_kg in pounds
+rule distance_miles = distance_km in miles
+rule distance_feet = distance_km in feet
+rule temperature_f = temperature_c in fahrenheit
+rule temperature_k = temperature_c in kelvin
+rule data_size_gb = data_size_mb in gigabytes
+rule data_size_bytes = data_size_mb in bytes
+rule duration_hours = processing_duration in hours
+rule duration_seconds = processing_duration in seconds
+rule volume_gallons = container_volume in gallons
+rule volume_milliliters = container_volume in milliliters
+
+rule weight_limit = 50 pounds
+rule is_overweight = package_weight_kg in pounds > weight_limit?
+
+rule is_long_distance = distance_km > 50 kilometers
+
+rule total_distance = distance_km + 25 kilometers
+rule total_distance_miles = total_distance? in miles
+
+rule is_comfortable_temperature = temperature_c >= 18 celsius and temperature_c <= 24 celsius
+
+rule needs_compression = data_size_mb > 100 megabytes
+
+rule is_quick_processing = processing_duration < 2 hours
+

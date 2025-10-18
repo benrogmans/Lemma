@@ -1,5 +1,8 @@
 use crate::analysis::*;
-use crate::{Expression, ExpressionKind, FactReference, FactType, FactValue, LemmaFact, LemmaRule, LemmaType, RuleReference};
+use crate::{
+    Expression, ExpressionKind, FactReference, FactType, FactValue, LemmaFact, LemmaRule,
+    LemmaType, RuleReference,
+};
 
 #[test]
 fn test_extract_fact_references() {
@@ -91,4 +94,3 @@ fn test_recursive_fact_finding() {
     );
     assert_eq!(required.len(), 1);
 }
-

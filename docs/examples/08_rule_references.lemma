@@ -1,0 +1,59 @@
+doc examples/rule_references
+"""
+Rule References
+
+This example demonstrates how to reference other rules using the ? suffix.
+Rule references are distinguished from fact references by the question mark.
+"""
+
+fact age = 25
+fact has_drivers_license = true
+fact license_is_suspended = false
+fact has_vehicle = true
+fact vehicle_is_insured = true
+
+rule is_of_legal_age = age >= 18
+
+rule has_valid_license = has_drivers_license and not license_is_suspended
+
+rule vehicle_is_ready = has_vehicle and vehicle_is_insured
+
+rule can_drive_legally = is_of_legal_age? and has_valid_license? and vehicle_is_ready?
+
+rule driving_status = "Cannot drive"
+  unless can_drive_legally? then "Can drive legally"
+
+
+doc examples/eligibility_check
+"""
+Eligibility Check with Rule References
+
+Shows complex rule composition and cross-rule dependencies.
+"""
+
+fact user_age = 30
+fact has_passport = true
+fact passport_valid = true
+fact has_visa = false
+fact criminal_record = false
+fact debt_amount = 0
+
+rule is_adult = user_age >= 18
+
+rule has_valid_passport = has_passport and passport_valid
+
+rule has_valid_visa = has_visa
+
+rule travel_documents_valid = has_valid_passport? and has_valid_visa?
+
+rule background_check_passed = not criminal_record
+
+rule financial_standing_good = debt_amount < 10000
+
+rule can_travel_internationally = is_adult? and travel_documents_valid? and background_check_passed? and financial_standing_good?
+  unless not travel_documents_valid? then veto "Valid travel documents required"
+
+rule eligibility_message = "Not eligible"
+  unless not has_valid_visa? then "Valid passport but visa required"
+  unless can_travel_internationally? then "Eligible for international travel"
+

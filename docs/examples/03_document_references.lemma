@@ -1,0 +1,57 @@
+doc examples/base_employee
+"""
+Base Employee Document
+
+Defines basic employee facts that can be referenced and extended.
+"""
+
+fact name = "John Doe"
+fact monthly_salary = 5000
+fact department = "Engineering"
+fact employment_duration = 0 years
+fact is_full_time = true
+
+rule annual_salary = monthly_salary * 12
+
+rule is_eligible_for_bonus = false
+  unless employment_duration >= 1 years then true
+
+
+doc examples/specific_employee
+"""
+Specific Employee Document
+
+References the base employee document and overrides specific facts.
+Demonstrates document composition, fact overriding, and rule references.
+"""
+
+fact employee = doc examples/base_employee
+fact employee.name = "Alice Smith"
+fact employee.monthly_salary = 7500
+fact employee.employment_duration = 3 years
+
+rule salary_with_bonus = employee.annual_salary?
+  unless employee.is_eligible_for_bonus? then employee.annual_salary? * 1.1
+
+rule employee_summary = employee.name
+
+
+doc examples/contractor
+"""
+Contractor Document
+
+Shows a different employment model using document references.
+"""
+
+fact person = doc examples/base_employee
+fact person.is_full_time = false
+fact hourly_rate = 85
+fact hours_worked = 120 hours
+
+rule total_payment = hourly_rate * hours_worked
+
+rule annual_hours = hours_worked * 12
+
+rule benefits_eligible = false
+  unless annual_hours? > 1000 hours then true
+

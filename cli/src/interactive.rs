@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use inquire::{DateSelect, MultiSelect, Select, Text};
-use lemma::{Engine, TypeAnnotation, LemmaType};
+use lemma::{Engine, LemmaType, TypeAnnotation};
 
 pub fn run_interactive(
     engine: &Engine,
@@ -38,7 +38,10 @@ fn select_document(engine: &Engine) -> Result<String> {
         .map(|doc_name| {
             let facts_count = engine.get_document_facts(doc_name).len();
             let rules_count = engine.get_document_rules(doc_name).len();
-            format!("{} ({} facts, {} rules)", doc_name, facts_count, rules_count)
+            format!(
+                "{} ({} facts, {} rules)",
+                doc_name, facts_count, rules_count
+            )
         })
         .collect();
 
@@ -47,7 +50,9 @@ fn select_document(engine: &Engine) -> Result<String> {
         .prompt()
         .context("Failed to get document selection")?;
 
-    let doc_index = display_options.iter().position(|d| d == &selected)
+    let doc_index = display_options
+        .iter()
+        .position(|d| d == &selected)
         .context("Failed to find selected document index")?;
 
     Ok(documents[doc_index].clone())
@@ -93,7 +98,11 @@ fn prompt_facts(
         let mut required = std::collections::HashSet::new();
         for rule_name in rules {
             if let Some(rule) = all_rules.iter().find(|r| &r.name == rule_name) {
-                let rule_facts = lemma::analysis::find_required_facts_recursive(rule, &all_rules_vec, &doc_facts_vec);
+                let rule_facts = lemma::analysis::find_required_facts_recursive(
+                    rule,
+                    &all_rules_vec,
+                    &doc_facts_vec,
+                );
                 required.extend(rule_facts);
             }
         }
@@ -120,7 +129,7 @@ fn prompt_facts(
 
     for fact in required_facts {
         let fact_name = lemma::analysis::fact_display_name(fact);
-        
+
         let (type_ann, default_value) = match &fact.value {
             lemma::FactValue::TypeAnnotation(type_ann) => (type_ann.clone(), None),
             lemma::FactValue::Literal(lit) => {
@@ -143,7 +152,7 @@ fn prompt_facts(
             }
             _ => {
                 let prompt_message = format!("{} [{}]", fact_name, type_str);
-                
+
                 if let Some(default) = &default_value {
                     Text::new(&prompt_message)
                         .with_help_message(&get_help_for_type(&type_ann))
@@ -205,14 +214,23 @@ fn get_help_for_type(type_ann: &TypeAnnotation) -> String {
         TypeAnnotation::LemmaType(LemmaType::Number) => "Example: 42 or 3.14".to_string(),
         TypeAnnotation::LemmaType(LemmaType::Boolean) => "Enter: true or false".to_string(),
         TypeAnnotation::LemmaType(LemmaType::Money) => "Example: 100.50 USD".to_string(),
-        TypeAnnotation::LemmaType(LemmaType::Date) => "Example: 2023-12-25T14:30:00Z or date(2023, 12, 25)".to_string(),
-        TypeAnnotation::LemmaType(LemmaType::Duration) => "Example: 1.5 hour or 90 minutes".to_string(),
-        TypeAnnotation::LemmaType(LemmaType::Mass) => "Example: 5.5 kilograms or 12 pounds".to_string(),
-        TypeAnnotation::LemmaType(LemmaType::Length) => "Example: 10 meters or 5.5 feet".to_string(),
+        TypeAnnotation::LemmaType(LemmaType::Date) => {
+            "Example: 2023-12-25T14:30:00Z or date(2023, 12, 25)".to_string()
+        }
+        TypeAnnotation::LemmaType(LemmaType::Duration) => {
+            "Example: 1.5 hour or 90 minutes".to_string()
+        }
+        TypeAnnotation::LemmaType(LemmaType::Mass) => {
+            "Example: 5.5 kilograms or 12 pounds".to_string()
+        }
+        TypeAnnotation::LemmaType(LemmaType::Length) => {
+            "Example: 10 meters or 5.5 feet".to_string()
+        }
         TypeAnnotation::LemmaType(LemmaType::Percentage) => "Example: 50%".to_string(),
-        TypeAnnotation::LemmaType(LemmaType::Temperature) => "Example: 25 celsius or 77 fahrenheit".to_string(),
+        TypeAnnotation::LemmaType(LemmaType::Temperature) => {
+            "Example: 25 celsius or 77 fahrenheit".to_string()
+        }
         TypeAnnotation::LemmaType(LemmaType::Regex) => "Example: /pattern/".to_string(),
         _ => "Enter value".to_string(),
     }
 }
-

@@ -14,7 +14,9 @@ use walkdir::WalkDir;
 #[derive(Parser)]
 #[command(name = "lemma")]
 #[command(about = "Lemma: a language that means business")]
-#[command(long_about = "A declarative programming language for expressing business rules, facts, and logic.\nEvaluate rules from .lemma files, run as an HTTP server, or integrate with AI tools via MCP.")]
+#[command(
+    long_about = "A declarative programming language for expressing business rules, facts, and logic.\nEvaluate rules from .lemma files, run as an HTTP server, or integrate with AI tools via MCP."
+)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -104,21 +106,21 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Run { workdir, doc_name, facts, raw, interactive } => {
-            run_command(workdir, doc_name.as_ref(), facts, *raw, *interactive)
-        }
-        Commands::Show { workdir, doc_name } => {
-            show_command(workdir, doc_name)
-        }
-        Commands::List { root } => {
-            list_command(root)
-        }
-        Commands::Serve { workdir, host, port } => {
-            serve_command(workdir, host, *port)
-        }
-        Commands::Mcp { workdir } => {
-            mcp_command(workdir)
-        }
+        Commands::Run {
+            workdir,
+            doc_name,
+            facts,
+            raw,
+            interactive,
+        } => run_command(workdir, doc_name.as_ref(), facts, *raw, *interactive),
+        Commands::Show { workdir, doc_name } => show_command(workdir, doc_name),
+        Commands::List { root } => list_command(root),
+        Commands::Serve {
+            workdir,
+            host,
+            port,
+        } => serve_command(workdir, host, *port),
+        Commands::Mcp { workdir } => mcp_command(workdir),
     }
 }
 
@@ -137,7 +139,9 @@ fn run_command(
             eprintln!("Error: No document specified\n");
             eprintln!("Usage: lemma run [DOC[:RULES]] [FACTS...] [OPTIONS]\n");
             eprintln!("Examples:");
-            eprintln!("  lemma run pricing                    - Evaluate all rules in 'pricing' document");
+            eprintln!(
+                "  lemma run pricing                    - Evaluate all rules in 'pricing' document"
+            );
             eprintln!("  lemma run pricing:total              - Evaluate only 'total' rule");
             eprintln!("  lemma run pricing:total,tax          - Evaluate 'total' and 'tax' rules");
             eprintln!("  lemma run pricing price=100 qty=5    - Evaluate with fact overrides");
@@ -156,7 +160,8 @@ fn run_command(
             })
             .unwrap_or((None, None));
 
-        let (d, r, interactive_facts) = interactive::run_interactive(&engine, parsed_doc, parsed_rules)?;
+        let (d, r, interactive_facts) =
+            interactive::run_interactive(&engine, parsed_doc, parsed_rules)?;
         let mut all_facts = facts.to_vec();
         all_facts.extend(interactive_facts);
         (d, r, all_facts)
@@ -167,7 +172,11 @@ fn run_command(
         unreachable!()
     };
 
-    let response = engine.evaluate_rules(&doc, rules, final_facts.iter().map(|s| s.as_str()).collect())?;
+    let response = engine.evaluate_rules(
+        &doc,
+        rules,
+        final_facts.iter().map(|s| s.as_str()).collect(),
+    )?;
     let formatter = Formatter::default();
     print!("{}", formatter.format_response(&response, raw));
 
@@ -222,11 +231,7 @@ fn list_command(root: &PathBuf) -> Result<()> {
         .map(|doc_name| {
             let facts_count = engine.get_document_facts(doc_name).len();
             let rules_count = engine.get_document_rules(doc_name).len();
-            (
-                doc_name.clone(),
-                facts_count,
-                rules_count,
-            )
+            (doc_name.clone(), facts_count, rules_count)
         })
         .collect();
 
@@ -249,7 +254,10 @@ fn serve_command(workdir: &Path, host: &str, port: u16) -> Result<()> {
             let mut engine = Engine::new();
             load_workspace(&mut engine, workdir)?;
 
-            println!("Starting HTTP server with {} document(s) loaded", engine.list_documents().len());
+            println!(
+                "Starting HTTP server with {} document(s) loaded",
+                engine.list_documents().len()
+            );
             server::http::start_server(engine, host, port).await
         })?;
     }
@@ -270,7 +278,10 @@ fn mcp_command(workdir: &Path) -> Result<()> {
         let mut engine = Engine::new();
         load_workspace(&mut engine, workdir)?;
 
-        println!("Starting MCP server with {} document(s) loaded", engine.list_documents().len());
+        println!(
+            "Starting MCP server with {} document(s) loaded",
+            engine.list_documents().len()
+        );
         mcp::server::start_server(engine)?;
     }
 

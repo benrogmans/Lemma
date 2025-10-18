@@ -1,0 +1,121 @@
+doc examples/stress_test
+"""
+Comprehensive Lemma Stress Test
+Demonstrates: type annotations, complex rules, rule references with ?, 
+unless clauses (last matching wins), arithmetic, comparisons, and veto
+"""
+
+fact base_price = [money]
+fact quantity = [number]
+fact customer_tier = [text]
+fact loyalty_points = [number]
+fact package_weight = [number]
+fact delivery_distance = [number]
+fact is_express = [boolean]
+fact is_fragile = [boolean]
+fact payment_method = [text]
+
+fact min_order_value = 50
+fact free_shipping_threshold = 500
+
+rule is_standard = customer_tier is "standard"
+rule is_premium = customer_tier is "premium"
+rule is_vip = customer_tier is "vip"
+
+rule quantity_discount_rate = 0%
+  unless quantity >= 10 then 5%
+  unless quantity >= 50 then 10%
+  unless quantity >= 100 then 15%
+
+rule tier_discount_rate = 0%
+  unless is_premium? then 20%
+  unless is_vip? then 30%
+
+rule combined_discount_rate = quantity_discount_rate?
+  unless tier_discount_rate? > quantity_discount_rate? then tier_discount_rate?
+
+rule subtotal = base_price * quantity
+
+rule discount_amount = subtotal? * combined_discount_rate?
+
+rule net_price = subtotal? - discount_amount?
+
+rule price_per_unit = net_price? / quantity
+
+rule base_shipping = 10
+  unless package_weight > 20 then 15
+  unless package_weight > 50 then 25
+  unless package_weight > 100 then 40
+
+rule distance_fee = delivery_distance * 0.05
+
+rule fragile_fee = 0
+  unless is_fragile then 12
+
+rule standard_shipping = base_shipping? + distance_fee? + fragile_fee?
+
+rule express_multiplier = 1.0
+  unless is_express then 2.5
+
+rule total_shipping = standard_shipping? * express_multiplier?
+
+rule order_total = net_price? + total_shipping?
+
+rule loyalty_discount_rate = 0%
+  unless loyalty_points >= 1000 then 2%
+  unless loyalty_points >= 5000 then 5%
+  unless loyalty_points >= 10000 then 10%
+
+rule loyalty_discount = net_price? * loyalty_discount_rate?
+
+rule subtotal_after_loyalty = order_total? - loyalty_discount?
+
+rule qualifies_for_free_shipping = net_price? >= free_shipping_threshold
+
+rule final_before_fees = subtotal_after_loyalty?
+  unless qualifies_for_free_shipping? then net_price? - loyalty_discount?
+
+rule uses_credit = payment_method is "credit"
+rule uses_cash = payment_method is "cash"
+rule uses_debit = payment_method is "debit"
+
+rule processing_fee = 0
+  unless uses_credit? then final_before_fees? * 2.5%
+  unless uses_cash? then 5
+
+rule grand_total = final_before_fees? + processing_fee?
+
+rule estimated_delivery_days = 5
+  unless delivery_distance > 200 then 3
+  unless delivery_distance > 500 then 7
+  unless is_express then 1
+
+rule savings_total = discount_amount? + loyalty_discount?
+
+rule savings_percent = (savings_total? / subtotal?) * 100%
+
+rule is_high_value = price_per_unit? > 50
+
+rule is_bulk_order = quantity >= 50
+
+rule is_rush = is_express and estimated_delivery_days? <= 2
+
+rule order_status = "standard"
+  unless is_vip? then "vip"
+  unless is_high_value? then "high_value"
+  unless qualifies_for_free_shipping? then "free_shipping"
+  unless is_rush? then "rush"
+  unless is_bulk_order? then "bulk"
+
+rule meets_minimum = subtotal? >= min_order_value
+
+rule order_valid = meets_minimum?
+  unless quantity <= 0 then veto "Quantity must be positive"
+  unless base_price <= 0 then veto "Price must be positive"
+  unless not meets_minimum? then veto "Order below minimum value"
+
+rule summary = "Low value order"
+  unless savings_percent? > 10% then "Good savings!"
+  unless savings_percent? > 20% then "Great savings!"
+  unless savings_percent? > 30% then "Excellent savings!"
+

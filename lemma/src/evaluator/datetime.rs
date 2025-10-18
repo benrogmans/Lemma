@@ -3,8 +3,8 @@
 //! Handles arithmetic and comparisons with dates and datetimes.
 
 use crate::{
-    ArithmeticOperation, ComparisonOperator, DateTimeValue, LemmaError, LemmaResult,
-    LiteralValue, TimeValue, TimezoneValue,
+    ArithmeticOperation, ComparisonOperator, DateTimeValue, LemmaError, LemmaResult, LiteralValue,
+    TimeValue, TimezoneValue,
 };
 use chrono::{
     DateTime, Datelike, Duration as ChronoDuration, FixedOffset, NaiveDate, NaiveDateTime,
@@ -29,7 +29,7 @@ const EPOCH_DAY: u32 = 1;
 fn create_timezone_offset(timezone: &Option<TimezoneValue>) -> LemmaResult<FixedOffset> {
     if let Some(tz) = timezone {
         let offset_seconds = (tz.offset_hours as i32 * SECONDS_PER_HOUR)
-                           + (tz.offset_minutes as i32 * SECONDS_PER_MINUTE);
+            + (tz.offset_minutes as i32 * SECONDS_PER_MINUTE);
         FixedOffset::east_opt(offset_seconds).ok_or_else(|| {
             LemmaError::Engine(format!(
                 "Invalid timezone offset: {}:{}",
@@ -59,16 +59,20 @@ pub fn datetime_arithmetic(
 
             let new_dt = match unit {
                 crate::DurationUnit::Month => {
-                    let months = value.to_i32()
+                    let months = value
+                        .to_i32()
                         .ok_or_else(|| LemmaError::Engine("Month value too large".to_string()))?;
                     dt.checked_add_months(chrono::Months::new(months as u32))
                         .ok_or_else(|| LemmaError::Engine("Date overflow".to_string()))?
                 }
                 crate::DurationUnit::Year => {
-                    let years = value.to_i32()
+                    let years = value
+                        .to_i32()
                         .ok_or_else(|| LemmaError::Engine("Year value too large".to_string()))?;
-                    dt.checked_add_months(chrono::Months::new((years * MONTHS_PER_YEAR as i32) as u32))
-                        .ok_or_else(|| LemmaError::Engine("Date overflow".to_string()))?
+                    dt.checked_add_months(chrono::Months::new(
+                        (years * MONTHS_PER_YEAR as i32) as u32,
+                    ))
+                    .ok_or_else(|| LemmaError::Engine("Date overflow".to_string()))?
                 }
                 _ => {
                     let seconds = crate::parser::units::duration_to_seconds(*value, unit);
@@ -91,16 +95,20 @@ pub fn datetime_arithmetic(
 
             let new_dt = match unit {
                 crate::DurationUnit::Month => {
-                    let months = value.to_i32()
+                    let months = value
+                        .to_i32()
                         .ok_or_else(|| LemmaError::Engine("Month value too large".to_string()))?;
                     dt.checked_sub_months(chrono::Months::new(months as u32))
                         .ok_or_else(|| LemmaError::Engine("Date overflow".to_string()))?
                 }
                 crate::DurationUnit::Year => {
-                    let years = value.to_i32()
+                    let years = value
+                        .to_i32()
                         .ok_or_else(|| LemmaError::Engine("Year value too large".to_string()))?;
-                    dt.checked_sub_months(chrono::Months::new((years * MONTHS_PER_YEAR as i32) as u32))
-                        .ok_or_else(|| LemmaError::Engine("Date overflow".to_string()))?
+                    dt.checked_sub_months(chrono::Months::new(
+                        (years * MONTHS_PER_YEAR as i32) as u32,
+                    ))
+                    .ok_or_else(|| LemmaError::Engine("Date overflow".to_string()))?
                 }
                 _ => {
                     let seconds = crate::parser::units::duration_to_seconds(*value, unit);
@@ -124,7 +132,10 @@ pub fn datetime_arithmetic(
             let duration = left_dt - right_dt;
 
             let seconds = Decimal::from(duration.num_seconds());
-            Ok(LiteralValue::Unit(crate::NumericUnit::Duration(seconds, crate::DurationUnit::Second)))
+            Ok(LiteralValue::Unit(crate::NumericUnit::Duration(
+                seconds,
+                crate::DurationUnit::Second,
+            )))
         }
 
         _ => Err(LemmaError::Engine(format!(
@@ -270,7 +281,10 @@ pub fn time_arithmetic(
             let diff_seconds = diff.num_seconds();
             let seconds = Decimal::from(diff_seconds);
 
-            Ok(LiteralValue::Unit(crate::NumericUnit::Duration(seconds, crate::DurationUnit::Second)))
+            Ok(LiteralValue::Unit(crate::NumericUnit::Duration(
+                seconds,
+                crate::DurationUnit::Second,
+            )))
         }
 
         _ => Err(LemmaError::Engine(format!(

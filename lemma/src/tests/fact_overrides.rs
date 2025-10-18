@@ -102,4 +102,3 @@ fact contract.base.rate = 100"#;
         panic!("Expected Number literal");
     }
 }
-

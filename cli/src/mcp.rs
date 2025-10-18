@@ -213,14 +213,19 @@ pub mod server {
             }))
         }
 
-        fn call_tool(&mut self, params: Option<serde_json::Value>) -> Result<serde_json::Value, McpError> {
-            let params = params.ok_or_else(|| McpError::invalid_params("Missing params".to_string()))?;
+        fn call_tool(
+            &mut self,
+            params: Option<serde_json::Value>,
+        ) -> Result<serde_json::Value, McpError> {
+            let params =
+                params.ok_or_else(|| McpError::invalid_params("Missing params".to_string()))?;
 
             let tool_name = params["name"]
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing tool name".to_string()))?;
 
-            let arguments = params.get("arguments")
+            let arguments = params
+                .get("arguments")
                 .ok_or_else(|| McpError::invalid_params("Missing arguments".to_string()))?;
 
             debug!("Calling tool: {}", tool_name);
@@ -230,17 +235,25 @@ pub mod server {
                 "evaluate" => self.tool_evaluate(arguments),
                 "inspect" => self.tool_inspect(arguments),
                 "list_documents" => self.tool_list_documents(),
-                _ => Err(McpError::invalid_params(format!("Unknown tool: {}", tool_name))),
+                _ => Err(McpError::invalid_params(format!(
+                    "Unknown tool: {}",
+                    tool_name
+                ))),
             }
         }
 
-        fn tool_add_document(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+        fn tool_add_document(
+            &mut self,
+            args: &serde_json::Value,
+        ) -> Result<serde_json::Value, McpError> {
             let code = args["code"]
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing 'code' field".to_string()))?;
 
             if code.trim().is_empty() {
-                return Err(McpError::invalid_params("Document code cannot be empty".to_string()));
+                return Err(McpError::invalid_params(
+                    "Document code cannot be empty".to_string(),
+                ));
             }
 
             let source_id = args["source_id"]
@@ -248,12 +261,10 @@ pub mod server {
                 .map(String::from)
                 .unwrap_or_else(|| format!("doc_{}", chrono::Utc::now().timestamp_millis()));
 
-            self.engine
-                .add_lemma_code(code, &source_id)
-                .map_err(|e| {
-                    error!("Failed to add document: {}", e);
-                    McpError::internal_error(format!("Failed to parse document: {}", e))
-                })?;
+            self.engine.add_lemma_code(code, &source_id).map_err(|e| {
+                error!("Failed to add document: {}", e);
+                McpError::internal_error(format!("Failed to parse document: {}", e))
+            })?;
 
             info!("Document added: {}", source_id);
 
@@ -265,13 +276,18 @@ pub mod server {
             }))
         }
 
-        fn tool_evaluate(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+        fn tool_evaluate(
+            &mut self,
+            args: &serde_json::Value,
+        ) -> Result<serde_json::Value, McpError> {
             let document = args["document"]
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing 'document' field".to_string()))?;
 
             if document.trim().is_empty() {
-                return Err(McpError::invalid_params("Document name cannot be empty".to_string()));
+                return Err(McpError::invalid_params(
+                    "Document name cannot be empty".to_string(),
+                ));
             }
 
             if self.engine.get_document(document).is_none() {
@@ -288,16 +304,16 @@ pub mod server {
 
             let include_trace = args["include_trace"].as_bool().unwrap_or(false);
 
-            let response = self
-                .engine
-                .evaluate(document, facts)
-                .map_err(|e| {
-                    error!("Evaluation failed: {}", e);
-                    McpError::internal_error(format!("Evaluation failed: {}", e))
-                })?;
+            let response = self.engine.evaluate(document, facts).map_err(|e| {
+                error!("Evaluation failed: {}", e);
+                McpError::internal_error(format!("Evaluation failed: {}", e))
+            })?;
 
             let mut output = String::new();
-            output.push_str(&format!("Evaluation complete for document '{}'\n\n", document));
+            output.push_str(&format!(
+                "Evaluation complete for document '{}'\n\n",
+                document
+            ));
 
             if !response.results.is_empty() {
                 output.push_str("## Results\n\n");
@@ -322,7 +338,9 @@ pub mod server {
             }
 
             if include_trace {
-                let traces_to_show: Vec<_> = response.results.iter()
+                let traces_to_show: Vec<_> = response
+                    .results
+                    .iter()
                     .filter(|r| !r.trace.is_empty())
                     .collect();
 
@@ -338,7 +356,11 @@ pub mod server {
                 }
             }
 
-            info!("Evaluated document '{}' with {} results", document, response.results.len());
+            info!(
+                "Evaluated document '{}' with {} results",
+                document,
+                response.results.len()
+            );
 
             Ok(serde_json::json!({
                 "content": [{
@@ -354,7 +376,9 @@ pub mod server {
                 .ok_or_else(|| McpError::invalid_params("Missing 'document' field".to_string()))?;
 
             if document.trim().is_empty() {
-                return Err(McpError::invalid_params("Document name cannot be empty".to_string()));
+                return Err(McpError::invalid_params(
+                    "Document name cannot be empty".to_string(),
+                ));
             }
 
             self.engine.get_document(document).ok_or_else(|| {
@@ -400,7 +424,8 @@ pub mod server {
             let documents = self.engine.list_documents();
 
             let output = if documents.is_empty() {
-                "No documents loaded.\n\nUse the 'add_document' tool to load Lemma code.".to_string()
+                "No documents loaded.\n\nUse the 'add_document' tool to load Lemma code."
+                    .to_string()
             } else {
                 let mut s = format!("## Loaded Documents ({})\n\n", documents.len());
                 for doc in &documents {
@@ -479,4 +504,3 @@ pub mod server {
         anyhow::bail!("MCP feature not enabled. Recompile with --features mcp")
     }
 }
-

@@ -1,11 +1,7 @@
 use lemma::Engine;
 use rust_decimal::Decimal;
 
-fn get_rule_value(
-    engine: &Engine,
-    doc_name: &str,
-    rule_name: &str,
-) -> lemma::LiteralValue {
+fn get_rule_value(engine: &Engine, doc_name: &str, rule_name: &str) -> lemma::LiteralValue {
     let response = engine.evaluate(doc_name, vec![]).unwrap();
     response
         .results
@@ -32,8 +28,7 @@ rule are_equal = time_nyc == time_london
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
 
-    if let lemma::LiteralValue::Boolean(value) = get_rule_value(&engine, "test", "are_equal")
-    {
+    if let lemma::LiteralValue::Boolean(value) = get_rule_value(&engine, "test", "are_equal") {
         assert!(value, "Same instant in different timezones should be equal");
     } else {
         panic!("Expected Boolean value");
@@ -54,9 +49,7 @@ rule nyc_is_later = time_nyc > time_tokyo
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
 
-    if let lemma::LiteralValue::Boolean(value) =
-        get_rule_value(&engine, "test", "nyc_is_later")
-    {
+    if let lemma::LiteralValue::Boolean(value) = get_rule_value(&engine, "test", "nyc_is_later") {
         assert!(value, "NYC 10am is later than Tokyo 10am (same local time)");
     } else {
         panic!("Expected Boolean value");
@@ -189,9 +182,7 @@ rule utc_equivalent = india_time
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
 
-    if let lemma::LiteralValue::Date(date) =
-        get_rule_value(&engine, "test", "utc_equivalent")
-    {
+    if let lemma::LiteralValue::Date(date) = get_rule_value(&engine, "test", "utc_equivalent") {
         if let Some(tz) = date.timezone {
             assert_eq!(tz.offset_hours, 5);
             assert_eq!(tz.offset_minutes, 30);

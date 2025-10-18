@@ -474,10 +474,18 @@ impl NumericUnit {
     /// Extract the numeric value from any unit
     pub fn value(&self) -> Decimal {
         match self {
-            NumericUnit::Mass(v, _) | NumericUnit::Length(v, _) | NumericUnit::Volume(v, _) |
-            NumericUnit::Duration(v, _) | NumericUnit::Temperature(v, _) | NumericUnit::Power(v, _) |
-            NumericUnit::Force(v, _) | NumericUnit::Pressure(v, _) | NumericUnit::Energy(v, _) |
-            NumericUnit::Frequency(v, _) | NumericUnit::DataSize(v, _) | NumericUnit::Money(v, _) => *v,
+            NumericUnit::Mass(v, _)
+            | NumericUnit::Length(v, _)
+            | NumericUnit::Volume(v, _)
+            | NumericUnit::Duration(v, _)
+            | NumericUnit::Temperature(v, _)
+            | NumericUnit::Power(v, _)
+            | NumericUnit::Force(v, _)
+            | NumericUnit::Pressure(v, _)
+            | NumericUnit::Energy(v, _)
+            | NumericUnit::Frequency(v, _)
+            | NumericUnit::DataSize(v, _)
+            | NumericUnit::Money(v, _) => *v,
         }
     }
 

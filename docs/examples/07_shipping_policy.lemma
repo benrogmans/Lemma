@@ -1,0 +1,74 @@
+doc examples/shipping_policy
+"""
+E-commerce Shipping Policy
+
+A complex real-world example showing how Lemma can encode
+intricate business logic for shipping calculations.
+
+IMPORTANT: Unless clauses use "last matching wins" semantics.
+More specific conditions should come after more general ones.
+"""
+
+fact order_total = [money]
+fact item_weight = [mass]
+fact destination_country = "US"
+fact destination_state = "CA"
+fact is_po_box = [boolean]
+fact is_expedited = [boolean]
+fact is_hazardous = [boolean]
+fact customer_tier = "gold"
+
+rule base_shipping_rate = 35.00 USD
+  unless destination_country is "US" then 12.99 USD
+  unless destination_country is "NL" then 22.00 USD
+  unless destination_country is "BE" then 25.00 USD
+
+rule weight_surcharge = 0
+  unless item_weight > 5 kilograms then 7.50
+  unless item_weight > 20 kilograms then veto "Item too heavy for standard shipping"
+
+rule po_box_fee = 0
+  unless is_po_box then 5.00
+
+rule expedited_fee = 0
+  unless is_expedited then 25.00
+  unless is_expedited and item_weight > 10 kilograms then 45.00
+
+rule hazardous_fee = 0
+  unless is_hazardous then 50.00
+  unless is_hazardous and destination_country != "US" then veto "Cannot ship hazardous materials internationally"
+
+rule customer_discount = 0%
+  unless customer_tier is "silver"   then 10%
+  unless customer_tier is "gold"     then 20%
+  unless customer_tier is "platinum" then 30%
+
+rule free_shipping_eligible = order_total >= 100 and destination_country is "US"
+
+rule shipping_before_discount = base_shipping_rate? + weight_surcharge? + po_box_fee? + expedited_fee? + hazardous_fee?
+
+rule shipping_discount_amount = shipping_before_discount? * customer_discount?
+
+rule final_shipping = shipping_before_discount? - shipping_discount_amount?
+  unless free_shipping_eligible? then 0
+
+rule estimated_delivery_days
+  = 14 days
+  unless destination_country is "US" then 5 days
+  unless destination_country is "CA" then 10 days
+  unless destination_country is "MX" then 10 days
+  unless is_expedited then 2 days
+
+rule ships_to_location
+  = true
+  unless is_po_box and is_hazardous then veto "Cannot ship hazardous materials to PO boxes"
+  unless destination_state == "AK" or destination_state == "HI" then veto "Shipping not available to Alaska or Hawaii"
+
+rule total_with_shipping
+  = order_total + final_shipping?
+
+rule Summary
+  = "Standard shipping"
+  unless free_shipping_eligible? then "Free shipping (order over $100)"
+  unless is_expedited            then "Expedited shipping"
+

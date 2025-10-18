@@ -354,4 +354,3 @@ pub fn fact_display_name(fact: &LemmaFact) -> String {
         FactType::Foreign(foreign_ref) => foreign_ref.reference.join("."),
     }
 }
-

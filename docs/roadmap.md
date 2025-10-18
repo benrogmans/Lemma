@@ -1,0 +1,167 @@
+# Potential Improvements
+
+This document tracks identified improvements that could enhance the Lemma project.
+
+## Known Issues
+
+### Type-Aware Arithmetic with Percentages (Priority: High)
+
+**Issue**: Arithmetic operations between money and percentages don't apply percentage semantics.
+
+**Current Behavior**:
+- `200 EUR - 25%` = `199.75 EUR` (treats 25% as 0.25)
+- `100 USD + 10%` = `100.10 USD` (treats 10% as 0.10)
+
+**Expected Behavior**:
+- `200 EUR - 25%` should equal `150 EUR` (subtract 25% of 200)
+- `100 USD + 10%` should equal `110 USD` (add 10% of 100)
+
+**Solution**: Implement type-aware arithmetic in the evaluator:
+- Detect when percentage types interact with money/number types
+- Transform `money ± percentage` into `money * (1 ± percentage_value)`
+- Requires semantic analysis during evaluation
+
+**Impact**: Affects business rules with discounts, markups, tax calculations, and commission calculations.
+
+---
+
+## Infrastructure
+
+### CI/CD Pipeline (Priority: High)
+
+**Issue**: No automated testing on PRs or main branch.
+
+**Solution**: Add `.github/workflows/` for:
+- Running tests on PR
+- Lint checking with clippy
+- Building release artifacts
+- Publishing to crates.io (on tag)
+
+### Crates.io Badges (Priority: Low)
+
+**Issue**: README lacks badges for build status, crates.io version, docs.rs, etc.
+
+**Solution**: Add shields.io badges once CI/CD is set up.
+
+---
+
+## Security
+
+### Input Validation Review (Priority: High)
+
+**Issue**: Need security audit of parser and evaluator to ensure proper handling of user input.
+
+**Areas to review**:
+- String literal parsing and escaping
+- Identifier validation and sanitization
+- Expression evaluation safety
+
+### Resource Limits (Priority: Medium)
+
+**Issue**: No limits on computational resources.
+
+**Risks**:
+- Maximum document size (files stored in memory via Arc)
+- Maximum expression depth (stack overflow risk during parsing/evaluation)
+- Evaluation timeout (infinite loops or very expensive computations)
+- Memory usage limits (thousands of documents)
+- Maximum identifier/string length
+
+**Solution**: Add configurable limits with reasonable defaults.
+
+**Suggested Defaults**:
+- Max file size: 10MB
+- Max expression depth: 100 levels
+- Max query time: 30 seconds
+- Max documents in workspace: 1000
+- Max identifier length: 256 characters
+
+---
+
+## Performance
+
+### Add Benchmarks (Priority: Medium)
+
+**Issue**: No performance baseline or regression detection.
+
+**Solution**: Use `criterion` to benchmark:
+- Parse time for various document sizes
+- Transpilation time
+- End-to-end evaluation time
+- Unit conversion operations
+
+### Optimize Module Caching (Priority: Low)
+
+**Issue**: `evaluate()` with fact overrides may recreate evaluation context each time.
+
+**Solution**: Cache or reuse evaluation contexts for repeated queries with same fact overrides.
+
+---
+
+## Developer Experience
+
+### LSP Support (Priority: Medium)
+
+**Issue**: No IDE support for `.lemma` files.
+
+**Solution**: Create Language Server Protocol implementation for:
+- Syntax highlighting
+- Error checking
+- Auto-completion
+- Go-to-definition
+- Hover documentation
+
+### REPL (Priority: Low)
+
+**Issue**: No interactive mode for experimenting with rules.
+
+**Solution**: Create a REPL that allows:
+- Defining facts and rules interactively
+- Querying rules
+- Inspecting evaluation traces
+- Viewing trace of rule evaluation
+
+---
+
+## Planned Features
+
+### User Types
+
+**Feature**: Allow users to define custom types with units and conversions within documents.
+
+**Benefits**:
+- Domain-specific units (currencies, stock prices, custom measurements)
+- Enum types for business logic (status, priority levels)
+- Declarative conversion equations with automatic bidirectional conversion
+- Doc-scoped types prevent namespace pollution
+- Enables currency conversion with custom exchange rates
+
+**Implementation**: See [user_types.md](user_types.md) for implementation plan.
+
+**Estimated Effort**: 10 days
+
+### Multi Facts
+
+**Feature**: Support facts that hold multiple values with declarative list operations.
+
+**Benefits**:
+- Work with collections of data (salaries, employees, transactions)
+- Declarative aggregations (sum, avg, min, max, count)
+- Filtering with `where` clauses
+- Indexed access to list items
+- Type-safe operations on collections
+
+**Implementation**: See [multi_facts.md](multi_facts.md) for details.
+
+**Estimated Effort**: 20 days
+
+---
+
+## How to Contribute
+
+If you'd like to work on any of these improvements:
+
+1. Check if someone else is already working on it (check open issues/PRs)
+2. Create an issue discussing your approach
+3. Submit a PR referencing the issue
+4. Ensure tests pass and documentation is updated

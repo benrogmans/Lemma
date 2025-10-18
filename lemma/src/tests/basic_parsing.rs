@@ -271,4 +271,3 @@ fn test_parse_facts_from_strings() {
         _ => panic!("Expected Foreign fact type"),
     }
 }
-

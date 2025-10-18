@@ -1,8 +1,6 @@
 use comfy_table::{presets::UTF8_FULL, Attribute, Cell, CellAlignment, ContentArrangement, Table};
 use crossterm::style::Stylize;
-use lemma::{
-    LemmaDoc, LemmaFact, Response, LemmaRule, TraceStep,
-};
+use lemma::{LemmaDoc, LemmaFact, LemmaRule, Response, TraceStep};
 
 pub struct Formatter {
     use_colors: bool,
@@ -184,7 +182,7 @@ impl Formatter {
             for fact in facts {
                 let name = lemma::analysis::fact_display_name(fact);
                 let value_str = fact.value.to_string();
-                
+
                 let display = if self.use_colors {
                     match &fact.value {
                         lemma::FactValue::TypeAnnotation(_) => value_str.dark_grey().to_string(),
@@ -195,9 +193,19 @@ impl Formatter {
                 };
 
                 if self.use_colors {
-                    output.push_str(&format!("  {:<width$}  {}\n", name.bold(), display, width = max_name_len));
+                    output.push_str(&format!(
+                        "  {:<width$}  {}\n",
+                        name.bold(),
+                        display,
+                        width = max_name_len
+                    ));
                 } else {
-                    output.push_str(&format!("  {:<width$}  {}\n", name, display, width = max_name_len));
+                    output.push_str(&format!(
+                        "  {:<width$}  {}\n",
+                        name,
+                        display,
+                        width = max_name_len
+                    ));
                 }
             }
             output.push('\n');
@@ -307,7 +315,6 @@ impl Formatter {
             format!("  {}\n", text)
         }
     }
-
 }
 
 impl Default for Formatter {

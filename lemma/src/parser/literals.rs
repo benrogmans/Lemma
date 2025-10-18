@@ -57,11 +57,13 @@ fn parse_boolean_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
     let boolean = match pair.as_str() {
         "true" | "yes" | "accept" => true,
         "false" | "no" | "reject" => false,
-        _ => return Err(LemmaError::Engine(format!(
-            "Invalid boolean: '{}'\n\
+        _ => {
+            return Err(LemmaError::Engine(format!(
+                "Invalid boolean: '{}'\n\
              Expected one of: true, false, yes, no, accept, reject",
-            pair.as_str()
-        ))),
+                pair.as_str()
+            )))
+        }
     };
     Ok(LiteralValue::Boolean(boolean))
 }
@@ -266,7 +268,9 @@ fn parse_scientific_number(pair: Pair<Rule>) -> Result<Decimal, LemmaError> {
         LemmaError::Engine(format!(
             "Invalid exponent: '{}'\n\
              Expected an integer between -{} and +{}",
-            exponent_pair.as_str(), MAX_DECIMAL_EXPONENT, MAX_DECIMAL_EXPONENT
+            exponent_pair.as_str(),
+            MAX_DECIMAL_EXPONENT,
+            MAX_DECIMAL_EXPONENT
         ))
     })?;
 

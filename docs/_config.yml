@@ -1,0 +1,37 @@
+title: Lemma Documentation
+description: A programming language that means business - Write contracts, policies, and business rules in a way that both humans and computers can understand.
+theme: jekyll-theme-cayman
+show_downloads: true
+
+# GitHub metadata
+repository: benrogmans/lemma
+github:
+  is_project_page: true
+
+# Build settings
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+# Navigation
+nav_links:
+  - title: Home
+    url: /
+  - title: Language Guide
+    url: /index.html
+  - title: Reference
+    url: /REFERENCE.html
+  - title: Examples
+    url: /examples/
+  - title: GitHub
+    url: https://github.com/benrogmans/lemma
+
+# SEO
+lang: en
+author: Ben Rogmans
+
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+

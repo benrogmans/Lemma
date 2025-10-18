@@ -185,4 +185,3 @@ fn test_runtime_error_mapping() {
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Division by zero"));
 }
-

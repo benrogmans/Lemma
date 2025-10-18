@@ -4,11 +4,7 @@ use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
-fn get_rule_result(
-    engine: &mut Engine,
-    doc_name: &str,
-    rule_name: &str,
-) -> Option<LiteralValue> {
+fn get_rule_result(engine: &mut Engine, doc_name: &str, rule_name: &str) -> Option<LiteralValue> {
     let response = engine.evaluate(doc_name, vec![]).unwrap();
     response
         .results
@@ -509,12 +505,11 @@ rule to_km = distance in kilometers
     engine.add_lemma_code(code, "test").unwrap();
 
     // After using `in`, the result is a plain Number, not a Unit
-    if let Some(LiteralValue::Number(val)) =
-        get_rule_result(&mut engine, "test", "to_km")
-    {
+    if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "to_km") {
         assert!(
             (val - Decimal::from_str("1").unwrap()).abs() < Decimal::from_str("0.001").unwrap(),
-            "meters to kilometers conversion failed: got {}", val
+            "meters to kilometers conversion failed: got {}",
+            val
         );
     } else {
         panic!("to_km should be a Number after conversion");

@@ -1,11 +1,7 @@
 use lemma::Engine;
 use rust_decimal::Decimal;
 
-fn get_rule_value(
-    engine: &Engine,
-    doc_name: &str,
-    rule_name: &str,
-) -> lemma::LiteralValue {
+fn get_rule_value(engine: &Engine, doc_name: &str, rule_name: &str) -> lemma::LiteralValue {
     let response = engine.evaluate(doc_name, vec![]).unwrap();
     response
         .results
@@ -173,9 +169,7 @@ rule four_years_later = leap_date + 4 years
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
 
-    if let lemma::LiteralValue::Date(date) =
-        get_rule_value(&engine, "test", "four_years_later")
-    {
+    if let lemma::LiteralValue::Date(date) = get_rule_value(&engine, "test", "four_years_later") {
         assert_eq!(date.year, 2028);
         assert_eq!(date.month, 2);
         assert_eq!(date.day, 29);
@@ -197,9 +191,7 @@ rule three_months_ago = start_date - 3 months
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
 
-    if let lemma::LiteralValue::Date(date) =
-        get_rule_value(&engine, "test", "three_months_ago")
-    {
+    if let lemma::LiteralValue::Date(date) = get_rule_value(&engine, "test", "three_months_ago") {
         assert_eq!(date.year, 2023);
         assert_eq!(date.month, 11);
         assert_eq!(date.day, 15);
@@ -221,8 +213,7 @@ rule twenty_months_later = start_date + 20 months
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
 
-    if let lemma::LiteralValue::Date(date) =
-        get_rule_value(&engine, "test", "twenty_months_later")
+    if let lemma::LiteralValue::Date(date) = get_rule_value(&engine, "test", "twenty_months_later")
     {
         assert_eq!(date.year, 2024);
         assert_eq!(date.month, 9);
@@ -407,9 +398,7 @@ rule after_midnight = evening_time + 90 minutes
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
 
-    if let lemma::LiteralValue::Time(time) =
-        get_rule_value(&engine, "test", "after_midnight")
-    {
+    if let lemma::LiteralValue::Time(time) = get_rule_value(&engine, "test", "after_midnight") {
         assert_eq!(time.hour, 1);
         assert_eq!(time.minute, 0);
         assert_eq!(time.second, 0);
@@ -524,8 +513,7 @@ rule is_before = date1 < date2
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
 
-    if let lemma::LiteralValue::Boolean(value) = get_rule_value(&engine, "test", "is_before")
-    {
+    if let lemma::LiteralValue::Boolean(value) = get_rule_value(&engine, "test", "is_before") {
         assert!(value);
     } else {
         panic!("Expected Boolean value");

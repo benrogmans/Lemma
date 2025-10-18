@@ -189,7 +189,6 @@ rule volume_ml = volume_l in milliliters
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("2000.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -222,7 +221,6 @@ rule volume_l = volume_gal in liters
                 "Expected ~18.93 liters, got {}",
                 amount
             );
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -250,7 +248,6 @@ rule volume_pt = volume_qt in pints
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("16.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -283,7 +280,6 @@ rule volume_dl = volume_cl in deciliters
                 "Expected 7.5 deciliters, got {}",
                 amount
             );
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -405,7 +401,6 @@ rule power_w = power_kw in watts
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("5000.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -433,7 +428,6 @@ rule power_mw = power_w in milliwatts
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("2000000.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -466,7 +460,6 @@ rule energy_j = energy_kj in joules
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("10000.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -494,7 +487,6 @@ rule energy_wh = energy_kwh in watthours
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("2000.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -522,7 +514,6 @@ rule energy_cal = energy_kcal in calories
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("5000.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -555,7 +546,6 @@ rule pressure_pa = pressure_kpa in pascals
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("250000.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -583,7 +573,6 @@ rule pressure_kpa = pressure_mpa in kilopascals
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("3000.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -616,7 +605,6 @@ rule size_mb = size_gb in megabytes
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("10000.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -644,7 +632,6 @@ rule size_gb = size_tb in gigabytes
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("2000.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -672,7 +659,6 @@ rule size_tb = size_pb in terabytes
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("1000.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -700,7 +686,6 @@ rule size_mib = size_gib in mebibytes
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("8192.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -728,7 +713,6 @@ rule size_b = size_kib in bytes
     match result {
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("2097152.0").unwrap());
-
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -771,7 +755,6 @@ rule discounted_price = base_price * (1 - discount)
                 (amount - Decimal::from_str("11.0231").unwrap()).abs()
                     < Decimal::from_str("0.01").unwrap()
             );
-
         }
         _ => panic!("Expected Number (from 'in' conversion)"),
     }

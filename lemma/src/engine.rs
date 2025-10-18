@@ -1,5 +1,5 @@
 use crate::evaluator::Evaluator;
-use crate::{parse, Response, LemmaResult, Validator};
+use crate::{parse, LemmaResult, Response, Validator};
 use std::collections::HashMap;
 
 /// The Lemma evaluation engine.
@@ -65,7 +65,6 @@ impl Engine {
         self.documents.get(doc_name)
     }
 
-
     pub fn get_document_facts(&self, doc_name: &str) -> Vec<&crate::LemmaFact> {
         if let Some(doc) = self.documents.get(doc_name) {
             doc.facts.iter().collect()
@@ -114,4 +113,3 @@ impl Engine {
         )
     }
 }
-

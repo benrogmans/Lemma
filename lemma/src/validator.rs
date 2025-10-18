@@ -1,11 +1,10 @@
-
 /// Type of an expression for validation.
 ///
 /// Used during semantic analysis to catch type errors early,
 /// before code execution. Allows validation of logical operators,
 /// type compatibility, and currency matching.
 #[derive(Debug, Clone, PartialEq)]
- enum ExpressionType {
+enum ExpressionType {
     Boolean,
     Number,
     Percentage,
@@ -29,12 +28,12 @@
 
 impl ExpressionType {
     /// Returns true if this type is boolean
-     fn is_boolean(&self) -> bool {
+    fn is_boolean(&self) -> bool {
         matches!(self, ExpressionType::Boolean)
     }
 
     /// Returns a human-readable name for this type
-     fn name(&self) -> &'static str {
+    fn name(&self) -> &'static str {
         match self {
             ExpressionType::Boolean => "boolean",
             ExpressionType::Number => "number",
@@ -59,7 +58,7 @@ impl ExpressionType {
     }
 
     /// Infer the type from a literal value
-     fn from_literal(lit: &crate::LiteralValue) -> Self {
+    fn from_literal(lit: &crate::LiteralValue) -> Self {
         match lit {
             crate::LiteralValue::Boolean(_) => ExpressionType::Boolean,
             crate::LiteralValue::Number(_) => ExpressionType::Number,
@@ -84,10 +83,6 @@ impl ExpressionType {
         }
     }
 }
-
-
-
-
 
 use crate::{
     ConversionTarget, Expression, ExpressionKind, FactType, FactValue, LemmaDoc, LemmaError,
@@ -899,8 +894,12 @@ impl Validator {
                     (ExpressionType::Number, ConversionTarget::Temperature(_)) => {
                         Ok(ExpressionType::Temperature)
                     }
-                    (ExpressionType::Number, ConversionTarget::Power(_)) => Ok(ExpressionType::Power),
-                    (ExpressionType::Number, ConversionTarget::Force(_)) => Ok(ExpressionType::Force),
+                    (ExpressionType::Number, ConversionTarget::Power(_)) => {
+                        Ok(ExpressionType::Power)
+                    }
+                    (ExpressionType::Number, ConversionTarget::Force(_)) => {
+                        Ok(ExpressionType::Force)
+                    }
                     (ExpressionType::Number, ConversionTarget::Pressure(_)) => {
                         Ok(ExpressionType::Pressure)
                     }
@@ -913,7 +912,9 @@ impl Validator {
                     (ExpressionType::Number, ConversionTarget::DataSize(_)) => {
                         Ok(ExpressionType::DataSize)
                     }
-                    (ExpressionType::Number, ConversionTarget::Money(_)) => Ok(ExpressionType::Money),
+                    (ExpressionType::Number, ConversionTarget::Money(_)) => {
+                        Ok(ExpressionType::Money)
+                    }
                     (ExpressionType::Number, ConversionTarget::Percentage) => {
                         Ok(ExpressionType::Percentage)
                     }
@@ -938,7 +939,6 @@ impl Validator {
             }
         }
     }
-
 }
 
 impl Default for Validator {
@@ -946,4 +946,3 @@ impl Default for Validator {
         Self::new()
     }
 }
-

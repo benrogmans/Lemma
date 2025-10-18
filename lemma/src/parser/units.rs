@@ -136,9 +136,9 @@ fn try_parse_duration_unit(s: &str) -> Option<DurationUnit> {
 
 // Duration conversion constants (all relative to seconds)
 const SECONDS_PER_MINUTE: i32 = 60;
-const SECONDS_PER_HOUR: i32 = 3600;              // 60 * 60
-const SECONDS_PER_DAY: i32 = 86400;              // 24 * 60 * 60
-const SECONDS_PER_WEEK: i32 = 604800;            // 7 * 24 * 60 * 60
+const SECONDS_PER_HOUR: i32 = 3600; // 60 * 60
+const SECONDS_PER_DAY: i32 = 86400; // 24 * 60 * 60
+const SECONDS_PER_WEEK: i32 = 604800; // 7 * 24 * 60 * 60
 const MILLISECONDS_PER_SECOND: i32 = 1000;
 const MICROSECONDS_PER_SECOND: i32 = 1000000;
 

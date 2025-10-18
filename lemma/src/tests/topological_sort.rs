@@ -49,4 +49,3 @@ fn test_topological_sort_chain() {
         "Should be ordered A < B < C"
     );
 }
-

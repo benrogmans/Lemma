@@ -78,7 +78,9 @@ pub fn arithmetic_operation(
             match op {
                 ArithmeticOperation::Multiply => {
                     // 20% * 100 = 20 (apply percentage)
-                    Ok(LiteralValue::Number(p * n / Decimal::from(PERCENT_DENOMINATOR)))
+                    Ok(LiteralValue::Number(
+                        p * n / Decimal::from(PERCENT_DENOMINATOR),
+                    ))
                 }
                 _ => Err(LemmaError::Engine(format!(
                     "Operation {:?} not supported for percentage and number",
@@ -90,15 +92,21 @@ pub fn arithmetic_operation(
             match op {
                 ArithmeticOperation::Multiply => {
                     // 100 * 20% = 20 (apply percentage)
-                    Ok(LiteralValue::Number(n * p / Decimal::from(PERCENT_DENOMINATOR)))
+                    Ok(LiteralValue::Number(
+                        n * p / Decimal::from(PERCENT_DENOMINATOR),
+                    ))
                 }
                 ArithmeticOperation::Add => {
                     // 100 + 20% = 120 (increase by percentage)
-                    Ok(LiteralValue::Number(n + (n * p / Decimal::from(PERCENT_DENOMINATOR))))
+                    Ok(LiteralValue::Number(
+                        n + (n * p / Decimal::from(PERCENT_DENOMINATOR)),
+                    ))
                 }
                 ArithmeticOperation::Subtract => {
                     // 100 - 20% = 80 (decrease by percentage)
-                    Ok(LiteralValue::Number(n - (n * p / Decimal::from(PERCENT_DENOMINATOR))))
+                    Ok(LiteralValue::Number(
+                        n - (n * p / Decimal::from(PERCENT_DENOMINATOR)),
+                    ))
                 }
                 _ => Err(LemmaError::Engine(format!(
                     "Operation {:?} not supported for number and percentage",

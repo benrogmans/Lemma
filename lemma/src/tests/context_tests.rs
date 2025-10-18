@@ -62,4 +62,3 @@ fn test_build_fact_map_skips_type_annotations() {
     assert!(fact_map.contains_key("price"));
     assert!(!fact_map.contains_key("quantity"));
 }
-

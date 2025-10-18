@@ -13,7 +13,7 @@ pub mod operations;
 pub mod rules;
 pub mod units;
 
-use crate::{LemmaDoc, LemmaError, LemmaFact, Response, LemmaResult, RuleResult};
+use crate::{LemmaDoc, LemmaError, LemmaFact, LemmaResult, Response, RuleResult};
 use context::{build_fact_map, EvaluationContext};
 use std::collections::HashMap;
 
@@ -221,4 +221,3 @@ pub(crate) fn topological_sort(
 
     Ok(result)
 }
-

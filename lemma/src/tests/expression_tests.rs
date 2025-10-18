@@ -87,4 +87,3 @@ fn test_evaluate_simple_arithmetic() {
     // Check trace recorded the operation
     assert_eq!(context.trace.len(), 1);
 }
-

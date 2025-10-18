@@ -161,4 +161,3 @@ fn parse_doc(
 fn parse_doc_name(pair: Pair<Rule>) -> Result<String, LemmaError> {
     Ok(pair.as_str().to_string())
 }
-
