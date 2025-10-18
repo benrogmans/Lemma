@@ -1,0 +1,32 @@
+{
+  "name": "@lemma/engine",
+  "version": "0.4.0",
+  "description": "Lemma business rules engine - WebAssembly bindings",
+  "main": "lemma.js",
+  "types": "lemma.d.ts",
+  "files": [
+    "lemma_bg.wasm",
+    "lemma.js",
+    "lemma.d.ts",
+    "lemma_bg.js",
+    "lemma_bg.wasm.d.ts"
+  ],
+  "keywords": [
+    "business-rules",
+    "logic",
+    "declarative",
+    "wasm",
+    "webassembly"
+  ],
+  "author": "Ben Rogmans <ben@amrai.nl>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/benrogmans/lemma"
+  },
+  "homepage": "https://github.com/benrogmans/lemma",
+  "bugs": {
+    "url": "https://github.com/benrogmans/lemma/issues"
+  }
+}
+
