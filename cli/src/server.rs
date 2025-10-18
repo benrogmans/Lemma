@@ -225,10 +225,10 @@ pub mod http {
         response
             .results
             .iter()
-            .filter(|r| !r.trace.is_empty())
+            .filter(|r| !r.operations.is_empty())
             .map(|r| TraceJson {
                 rule_name: r.rule_name.clone(),
-                steps: r.trace.iter().map(|s| format!("{:?}", s)).collect(),
+                steps: r.operations.iter().map(|s| format!("{:?}", s)).collect(),
             })
             .collect()
     }

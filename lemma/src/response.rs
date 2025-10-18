@@ -13,13 +13,13 @@ pub struct Response {
     pub warnings: Vec<String>,
 }
 
-/// A single step in the execution trace
+/// A record of a single operation during evaluation
 ///
-/// Represents one logical step taken during rule evaluation,
+/// Represents one operation performed during rule evaluation,
 /// capturing the actual values and decisions made during execution.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum TraceStep {
+pub enum OperationRecord {
     FactUsed {
         name: String,
         value: LiteralValue,
@@ -58,7 +58,7 @@ pub struct RuleResult {
     pub bindings: HashMap<String, LiteralValue>,
     pub missing_facts: Option<Vec<String>>,
     pub veto_message: Option<String>,
-    pub trace: Vec<TraceStep>,
+    pub operations: Vec<OperationRecord>,
 }
 
 impl Response {
@@ -99,15 +99,15 @@ impl RuleResult {
             bindings,
             missing_facts: None,
             veto_message: None,
-            trace: Vec::new(),
+            operations: Vec::new(),
         }
     }
 
-    pub fn success_with_trace(
+    pub fn success_with_operations(
         rule_name: String,
         result: LiteralValue,
         bindings: HashMap<String, LiteralValue>,
-        trace: Vec<TraceStep>,
+        operations: Vec<OperationRecord>,
     ) -> Self {
         Self {
             rule_name,
@@ -115,7 +115,7 @@ impl RuleResult {
             bindings,
             missing_facts: None,
             veto_message: None,
-            trace,
+            operations,
         }
     }
 
@@ -126,7 +126,7 @@ impl RuleResult {
             bindings: HashMap::new(),
             missing_facts: None,
             veto_message: None,
-            trace: Vec::new(),
+            operations: Vec::new(),
         }
     }
 
@@ -137,7 +137,7 @@ impl RuleResult {
             bindings: HashMap::new(),
             missing_facts: Some(facts),
             veto_message: None,
-            trace: Vec::new(),
+            operations: Vec::new(),
         }
     }
 
@@ -148,7 +148,7 @@ impl RuleResult {
             bindings: HashMap::new(),
             missing_facts: None,
             veto_message: message,
-            trace: Vec::new(),
+            operations: Vec::new(),
         }
     }
 }

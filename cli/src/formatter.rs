@@ -1,6 +1,6 @@
 use comfy_table::{presets::UTF8_FULL, Attribute, Cell, CellAlignment, ContentArrangement, Table};
 use crossterm::style::Stylize;
-use lemma::{LemmaDoc, LemmaFact, LemmaRule, Response, TraceStep};
+use lemma::{LemmaDoc, LemmaFact, LemmaRule, OperationRecord, Response};
 
 pub struct Formatter {
     use_colors: bool,
@@ -51,9 +51,9 @@ impl Formatter {
             let verdict_cell = if let Some(ref value) = result.result {
                 let mut content = format!("{}\n", value);
 
-                if !result.trace.is_empty() {
+                if !result.operations.is_empty() {
                     content.push('\n');
-                    for (i, step) in result.trace.iter().enumerate() {
+                    for (i, step) in result.operations.iter().enumerate() {
                         content.push_str(&self.format_trace_step_plain(i, step));
                     }
                 }
@@ -75,15 +75,15 @@ impl Formatter {
         format!("{}\n", table)
     }
 
-    fn format_trace_step_plain(&self, index: usize, step: &TraceStep) -> String {
+    fn format_trace_step_plain(&self, index: usize, step: &OperationRecord) -> String {
         match step {
-            TraceStep::FactUsed { name, value } => {
+            OperationRecord::FactUsed { name, value } => {
                 format!("  {:>2}. fact {} = {}\n", index, name, value)
             }
-            TraceStep::RuleUsed { name, value } => {
+            OperationRecord::RuleUsed { name, value } => {
                 format!("  {:>2}. rule {} = {}\n", index, name, value)
             }
-            TraceStep::OperationExecuted {
+            OperationRecord::OperationExecuted {
                 operation,
                 inputs,
                 result,
@@ -107,7 +107,7 @@ impl Formatter {
                     )
                 }
             }
-            TraceStep::UnlessClauseEvaluated {
+            OperationRecord::UnlessClauseEvaluated {
                 index: clause_index,
                 matched,
                 result_if_matched,
@@ -128,10 +128,10 @@ impl Formatter {
                     format!("  {:>2}. unless clause {} skipped\n", index, clause_index)
                 }
             }
-            TraceStep::DefaultValue { value } => {
+            OperationRecord::DefaultValue { value } => {
                 format!("  {:>2}. default = {}\n", index, value)
             }
-            TraceStep::FinalResult { value } => {
+            OperationRecord::FinalResult { value } => {
                 format!("  {:>2}. result = {}\n", index, value)
             }
         }

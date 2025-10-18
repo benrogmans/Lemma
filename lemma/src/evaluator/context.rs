@@ -2,7 +2,9 @@
 //!
 //! Contains all state needed during evaluation of a single document.
 
-use crate::{FactType, FactValue, LemmaDoc, LemmaFact, LiteralValue, OperationRecord, OperationResult};
+use crate::{
+    FactType, FactValue, LemmaDoc, LemmaFact, LiteralValue, OperationRecord, OperationResult,
+};
 use std::collections::HashMap;
 
 /// Context for evaluating a Lemma document

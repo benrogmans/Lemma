@@ -4,7 +4,7 @@
 
 use super::context::EvaluationContext;
 use super::expression::evaluate_expression;
-use crate::{OperationResult, LemmaError, LemmaRule};
+use crate::{LemmaError, LemmaRule, OperationResult};
 
 /// Evaluate a rule to produce its final result
 ///
@@ -37,34 +37,38 @@ pub fn evaluate_rule(
 
         if matched {
             let result = evaluate_expression(&unless_clause.result, context)?;
-            
+
             // If result is vetoed, the veto applies to this rule
             if let OperationResult::Veto(msg) = result {
                 return Ok(OperationResult::Veto(msg));
             }
 
             let result_value = result.value().unwrap().clone();
-            context.operations.push(OperationRecord::UnlessClauseEvaluated {
-                index,
-                matched: true,
-                result_if_matched: Some(result_value.clone()),
-            });
+            context
+                .operations
+                .push(OperationRecord::UnlessClauseEvaluated {
+                    index,
+                    matched: true,
+                    result_if_matched: Some(result_value.clone()),
+                });
             context.operations.push(OperationRecord::FinalResult {
                 value: result_value.clone(),
             });
             return Ok(OperationResult::Value(result_value));
         } else {
-            context.operations.push(OperationRecord::UnlessClauseEvaluated {
-                index,
-                matched: false,
-                result_if_matched: None,
-            });
+            context
+                .operations
+                .push(OperationRecord::UnlessClauseEvaluated {
+                    index,
+                    matched: false,
+                    result_if_matched: None,
+                });
         }
     }
 
     // No unless clause matched - evaluate default expression
     let default_result = evaluate_expression(&rule.expression, context)?;
-    
+
     // If default is vetoed, the veto applies to this rule
     if let OperationResult::Veto(msg) = default_result {
         return Ok(OperationResult::Veto(msg));

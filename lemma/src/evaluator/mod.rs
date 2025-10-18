@@ -100,7 +100,9 @@ impl Evaluator {
             match rules::evaluate_rule(rule, &mut context) {
                 Ok(result) => {
                     // Store result in context for subsequent rules
-                    context.rule_results.insert(rule.name.clone(), result.clone());
+                    context
+                        .rule_results
+                        .insert(rule.name.clone(), result.clone());
 
                     // Add to response based on result type
                     match result {

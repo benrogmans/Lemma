@@ -1,4 +1,4 @@
-use lemma::{Engine, TraceStep};
+use lemma::{Engine, OperationRecord};
 
 #[test]
 fn test_trace_simple_rule() {
@@ -16,24 +16,24 @@ fn test_trace_simple_rule() {
     assert_eq!(response.results.len(), 1);
     let result = &response.results[0];
 
-    assert!(!result.trace.is_empty(), "Trace should not be empty");
+    assert!(!result.operations.is_empty(), "Trace should not be empty");
 
     let has_fact_used = result
-        .trace
+        .operations
         .iter()
-        .any(|step| matches!(step, TraceStep::FactUsed { name, .. } if name == "price"));
+        .any(|step| matches!(step, OperationRecord::FactUsed { name, .. } if name == "price"));
     assert!(has_fact_used, "Trace should contain fact_used for price");
 
     let has_default_value = result
-        .trace
+        .operations
         .iter()
-        .any(|step| matches!(step, TraceStep::DefaultValue { .. }));
+        .any(|step| matches!(step, OperationRecord::DefaultValue { .. }));
     assert!(has_default_value, "Trace should contain default_value");
 
     let has_final_result = result
-        .trace
+        .operations
         .iter()
-        .any(|step| matches!(step, TraceStep::FinalResult { .. }));
+        .any(|step| matches!(step, OperationRecord::FinalResult { .. }));
     assert!(has_final_result, "Trace should contain final_result");
 }
 
@@ -59,10 +59,10 @@ fn test_trace_unless_clauses() {
     let result = &response.results[0];
 
     let unless_steps: Vec<_> = result
-        .trace
+        .operations
         .iter()
         .filter_map(|step| {
-            if let TraceStep::UnlessClauseEvaluated {
+            if let OperationRecord::UnlessClauseEvaluated {
                 index,
                 matched,
                 result_if_matched,
@@ -115,9 +115,9 @@ fn test_trace_with_rule_reference() {
         .expect("Should have quadruple result");
 
     let has_rule_used = quadruple_result
-        .trace
+        .operations
         .iter()
-        .any(|step| matches!(step, TraceStep::RuleUsed { name, .. } if name == "double"));
+        .any(|step| matches!(step, OperationRecord::RuleUsed { name, .. } if name == "double"));
     assert!(has_rule_used, "Trace should contain rule_used for double");
 }
 
@@ -140,10 +140,10 @@ fn test_trace_last_matching_unless_wins() {
     let result = &response.results[0];
 
     let unless_steps: Vec<_> = result
-        .trace
+        .operations
         .iter()
         .filter_map(|step| {
-            if let TraceStep::UnlessClauseEvaluated { index, matched, .. } = step {
+            if let OperationRecord::UnlessClauseEvaluated { index, matched, .. } = step {
                 Some((*index, *matched))
             } else {
                 None
@@ -166,7 +166,7 @@ fn test_trace_last_matching_unless_wins() {
         "Second-to-last clause evaluated second (quantity >= 10 should match)"
     );
 
-    if let Some(TraceStep::FinalResult { value }) = result.trace.last() {
+    if let Some(OperationRecord::FinalResult { value }) = result.operations.last() {
         assert_eq!(
             format!("{}", value),
             "10%",
@@ -193,21 +193,21 @@ fn test_trace_captures_actual_values() {
     let result = &response.results[0];
 
     let has_fact_used = result
-        .trace
+        .operations
         .iter()
-        .any(|step| matches!(step, TraceStep::FactUsed { name, .. } if name == "price"));
+        .any(|step| matches!(step, OperationRecord::FactUsed { name, .. } if name == "price"));
     assert!(has_fact_used, "Trace should contain fact_used for price");
 
     let has_default_value = result
-        .trace
+        .operations
         .iter()
-        .any(|step| matches!(step, TraceStep::DefaultValue { .. }));
+        .any(|step| matches!(step, OperationRecord::DefaultValue { .. }));
     assert!(has_default_value, "Trace should contain default_value");
 
     let has_final_result = result
-        .trace
+        .operations
         .iter()
-        .any(|step| matches!(step, TraceStep::FinalResult { .. }));
+        .any(|step| matches!(step, OperationRecord::FinalResult { .. }));
     assert!(has_final_result, "Trace should contain final_result");
 }
 
@@ -228,10 +228,10 @@ fn test_trace_arithmetic_operation() {
     let result = &response.results[0];
 
     let operation_steps: Vec<_> = result
-        .trace
+        .operations
         .iter()
         .filter_map(|step| {
-            if let TraceStep::OperationExecuted {
+            if let OperationRecord::OperationExecuted {
                 operation,
                 inputs,
                 result,
@@ -267,10 +267,10 @@ fn test_trace_comparison_operation() {
     let result = &response.results[0];
 
     let operation_steps: Vec<_> = result
-        .trace
+        .operations
         .iter()
         .filter_map(|step| {
-            if let TraceStep::OperationExecuted {
+            if let OperationRecord::OperationExecuted {
                 operation,
                 inputs,
                 result,
@@ -311,10 +311,10 @@ fn test_trace_multiple_operations() {
     let result = &response.results[0];
 
     let operation_steps: Vec<_> = result
-        .trace
+        .operations
         .iter()
         .filter_map(|step| {
-            if let TraceStep::OperationExecuted { operation, .. } = step {
+            if let OperationRecord::OperationExecuted { operation, .. } = step {
                 Some(operation.clone())
             } else {
                 None
@@ -348,10 +348,10 @@ fn test_trace_operations_with_unless() {
     let result = &response.results[0];
 
     let operation_steps: Vec<_> = result
-        .trace
+        .operations
         .iter()
         .filter_map(|step| {
-            if let TraceStep::OperationExecuted { operation, .. } = step {
+            if let OperationRecord::OperationExecuted { operation, .. } = step {
                 Some(operation.clone())
             } else {
                 None
@@ -384,10 +384,10 @@ fn test_trace_logical_operations() {
     let result = &response.results[0];
 
     let operation_steps: Vec<_> = result
-        .trace
+        .operations
         .iter()
         .filter_map(|step| {
-            if let TraceStep::OperationExecuted { operation, .. } = step {
+            if let OperationRecord::OperationExecuted { operation, .. } = step {
                 Some(operation.clone())
             } else {
                 None

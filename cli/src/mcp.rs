@@ -341,14 +341,14 @@ pub mod server {
                 let traces_to_show: Vec<_> = response
                     .results
                     .iter()
-                    .filter(|r| !r.trace.is_empty())
+                    .filter(|r| !r.operations.is_empty())
                     .collect();
 
                 if !traces_to_show.is_empty() {
                     output.push_str("\n## Execution Trace\n\n");
                     for result in traces_to_show {
                         output.push_str(&format!("### Rule: {}\n\n", result.rule_name));
-                        for (i, step) in result.trace.iter().enumerate() {
+                        for (i, step) in result.operations.iter().enumerate() {
                             output.push_str(&format!("{}. {:?}\n", i + 1, step));
                         }
                         output.push('\n');

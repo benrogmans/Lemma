@@ -65,7 +65,7 @@ pub use engine::Engine;
 pub use error::LemmaError;
 pub use operation_result::OperationResult;
 pub use parser::parse;
-pub use response::{Response, RuleResult, OperationRecord};
+pub use response::{OperationRecord, Response, RuleResult};
 pub use semantic::*;
 pub use validator::{ValidatedDocuments, Validator};
 

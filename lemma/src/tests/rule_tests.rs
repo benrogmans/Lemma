@@ -1,7 +1,7 @@
 use crate::evaluator::context::EvaluationContext;
 use crate::evaluator::rules::evaluate_rule;
 use crate::{
-    OperationResult, Expression, ExpressionId, ExpressionKind, LemmaDoc, LemmaRule, LiteralValue,
+    Expression, ExpressionId, ExpressionKind, LemmaDoc, LemmaRule, LiteralValue, OperationResult,
     UnlessClause,
 };
 use rust_decimal::Decimal;

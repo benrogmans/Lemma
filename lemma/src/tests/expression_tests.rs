@@ -1,8 +1,8 @@
 use crate::evaluator::context::EvaluationContext;
 use crate::evaluator::expression::evaluate_expression;
 use crate::{
-    ArithmeticOperation, OperationResult, Expression, ExpressionId, ExpressionKind, FactReference,
-    LemmaDoc, LiteralValue,
+    ArithmeticOperation, Expression, ExpressionId, ExpressionKind, FactReference, LemmaDoc,
+    LiteralValue, OperationResult,
 };
 use rust_decimal::Decimal;
 use std::collections::HashMap;
