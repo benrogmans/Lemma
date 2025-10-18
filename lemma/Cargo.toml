@@ -1,0 +1,33 @@
+[package]
+name = "lemma"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A declarative programming language for business rules."
+homepage = "https://github.com/benrogmans/lemma"
+documentation = "https://docs.rs/lemma"
+readme = "README.md"
+keywords = ["logic", "rules", "declarative", "dsl", "rust"]
+categories = ["parser-implementations", "development-tools"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pest.workspace = true
+pest_derive.workspace = true
+chrono.workspace = true
+regex.workspace = true
+ariadne.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rust_decimal.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+console_error_panic_hook.workspace = true
+
+[dev-dependencies]
+proptest = "1.4"
