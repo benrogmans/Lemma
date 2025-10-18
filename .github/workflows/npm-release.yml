@@ -1,0 +1,71 @@
+name: NPM Release
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  detect-wasm-changes:
+    name: Detect WASM Version Changes
+    runs-on: ubuntu-latest
+    outputs:
+      wasm_changed: ${{ steps.check.outputs.wasm_changed }}
+      wasm_version: ${{ steps.check.outputs.wasm_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check version changes
+        id: check
+        run: |
+          WASM_VERSION=$(grep '^  "version":' lemma/package.json | head -1 | sed 's/.*"version": "\(.*\)",/\1/')
+          echo "wasm_version=$WASM_VERSION" >> $GITHUB_OUTPUT
+
+          if git diff HEAD^ HEAD -- lemma/package.json | grep -q '^+  "version":'; then
+            echo "wasm_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "wasm_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+  release-npm:
+    name: Release @lemma/engine to NPM
+    needs: detect-wasm-changes
+    if: needs.detect-wasm-changes.outputs.wasm_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM package
+        run: wasm-pack build lemma --target web --out-dir pkg
+
+      - name: Copy package.json
+        run: cp lemma/package.json lemma/pkg/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish to NPM
+        working-directory: lemma/pkg
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag wasm-v${{ needs.detect-wasm-changes.outputs.wasm_version }}
+          git push origin wasm-v${{ needs.detect-wasm-changes.outputs.wasm_version }}
+

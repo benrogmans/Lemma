@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  detect-changes:
+    name: Detect Version Changes
+    runs-on: ubuntu-latest
+    outputs:
+      lemma_changed: ${{ steps.check.outputs.lemma_changed }}
+      lemma_version: ${{ steps.check.outputs.lemma_version }}
+      cli_changed: ${{ steps.check.outputs.cli_changed }}
+      cli_version: ${{ steps.check.outputs.cli_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check version changes
+        id: check
+        run: |
+          LEMMA_VERSION=$(grep '^version = ' lemma/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          CLI_VERSION=$(grep '^version = ' cli/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+          echo "lemma_version=$LEMMA_VERSION" >> $GITHUB_OUTPUT
+          echo "cli_version=$CLI_VERSION" >> $GITHUB_OUTPUT
+
+          if git diff HEAD^ HEAD -- lemma/Cargo.toml | grep -q '^+version = '; then
+            echo "lemma_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "lemma_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+          if git diff HEAD^ HEAD -- cli/Cargo.toml | grep -q '^+version = '; then
+            echo "cli_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "cli_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+  release-lemma:
+    name: Release lemma (library)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.lemma_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run tests
+        run: cargo nextest run -p lemma --all-features
+
+      - name: Publish to crates.io
+        run: cargo publish -p lemma --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag lemma-v${{ needs.detect-changes.outputs.lemma_version }}
+          git push origin lemma-v${{ needs.detect-changes.outputs.lemma_version }}
+
+  release-cli:
+    name: Release lemma CLI binary
+    needs: [detect-changes, release-lemma]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.cli_changed == 'true' &&
+      (needs.release-lemma.result == 'success' || needs.release-lemma.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run tests
+        run: cargo nextest run --workspace --all-features
+
+      - name: Publish CLI to crates.io
+        run: cargo publish -p lemma-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Build release binary
+        run: cargo build --release -p lemma-cli
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: cli-v${{ needs.detect-changes.outputs.cli_version }}
+          name: Lemma CLI v${{ needs.detect-changes.outputs.cli_version }}
+          files: target/release/lemma
+          body: |
+            ## Installation
+
+            Download the binary or install from source:
+
+            ```bash
+            cargo install lemma-cli@${{ needs.detect-changes.outputs.cli_version }}
+            ```
+
+            Or use the library in your Rust project:
+
+            ```bash
+            cargo add lemma
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
