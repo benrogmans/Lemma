@@ -45,17 +45,28 @@ pub fn evaluate_expression(
             // Look up already-computed rule result
             // Topological sort ensures this rule was computed before us
             let rule_name = rule_ref.reference.join(".");
-            let value = context.rule_results.get(&rule_name).ok_or_else(|| {
-                LemmaError::Engine(format!("Rule {} not yet computed", rule_name))
-            })?;
 
-            // Add trace entry
-            context.trace.push(TraceStep::RuleUsed {
-                name: rule_name,
-                value: value.clone(),
-            });
+            // Check if rule was vetoed
+            if let Some(veto_message) = context.vetoed_rules.get(&rule_name) {
+                // Rule was vetoed - the veto applies to this rule too
+                return Err(LemmaError::Veto(veto_message.clone()));
+            }
 
-            Ok(value.clone())
+            // Check if rule has a result
+            if let Some(value) = context.rule_results.get(&rule_name) {
+                // Add trace entry
+                context.trace.push(TraceStep::RuleUsed {
+                    name: rule_name,
+                    value: value.clone(),
+                });
+                return Ok(value.clone());
+            }
+
+            // Rule not computed yet
+            Err(LemmaError::Engine(format!(
+                "Rule {} not yet computed",
+                rule_name
+            )))
         }
 
         ExpressionKind::Arithmetic(left, op, right) => {

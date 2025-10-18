@@ -31,6 +31,10 @@ pub struct EvaluationContext<'a> {
     /// Maps rule name -> computed value
     pub rule_results: HashMap<String, LiteralValue>,
 
+    /// Rules that have been vetoed (computed but with no result)
+    /// Maps rule name -> veto message
+    pub vetoed_rules: HashMap<String, Option<String>>,
+
     /// Trace accumulator - records every operation
     pub trace: Vec<TraceStep>,
 }
@@ -49,6 +53,7 @@ impl<'a> EvaluationContext<'a> {
             sources,
             facts,
             rule_results: HashMap::new(),
+            vetoed_rules: HashMap::new(),
             trace: Vec::new(),
         }
     }

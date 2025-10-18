@@ -135,20 +135,31 @@ See: [reference.md - Boolean Literals](reference.md#boolean-literals)
 
 ### Veto
 
-Use `veto` to block a rule entirely when constraints are violated:
+Use `veto` to block a rule entirely when the input data is invalid or constraints are violated:
 
 ```lemma
-rule discount = 0%
-  unless quantity >= 10 then 10%
-  unless quantity >= 50 then 20%
-  unless age < 18 then veto "Must be 18 or older"
+rule validated_age = age
+  unless age < 0 then veto "Age must be a positive number"
+  unless age > 120 then veto "Invalid age value"
 ```
 
-When a veto applies, the rule produces **no valid result** - it's blocked completely. This is useful for validation and hard constraints.
+When a veto applies, the rule produces **no valid result** - it's blocked completely. This is useful for data validation and hard constraints. Use veto when the data itself is invalid, not for negative business logic results.
 
-**Best Practice:** Put veto clauses last so they override all other logic.
+**Key behavior**: If a rule references a vetoed rule and needs its value, the veto applies to the dependent rule. If an unless clause provides an alternative value, the veto doesn't apply:
 
-See: [examples/02_rules_and_unless.lemma](examples/02_rules_and_unless.lemma), [examples/08_rule_references.lemma](examples/08_rule_references.lemma)
+```lemma
+rule validated_score = score
+  unless score < 0 then veto "Invalid score"
+
+rule result = validated_score?
+  unless use_default then 50
+```
+
+If `validated_score` is vetoed but `use_default` is true, `result` = 50 (veto does not apply).
+
+**Best practice:** Put veto clauses last so they override all other logic.
+
+See: [examples/02_rules_and_unless.lemma](examples/02_rules_and_unless.lemma), [examples/08_rule_references.lemma](examples/08_rule_references.lemma), [veto_semantics.md](veto_semantics.md)
 
 ### Rule References
 

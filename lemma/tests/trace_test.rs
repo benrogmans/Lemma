@@ -75,23 +75,22 @@ fn test_trace_unless_clauses() {
         })
         .collect();
 
+    // With reversed evaluation, we only trace what we actually evaluate
+    // We evaluate in reverse: clause 2 (is_premium) matches, so we stop there
     assert_eq!(
         unless_steps.len(),
-        3,
-        "Should have 3 unless clause evaluations"
+        1,
+        "Should have 1 unless clause evaluation (stopped at first match)"
     );
 
-    assert_eq!(unless_steps[0].0, 0, "First unless clause index");
-    assert_eq!(unless_steps[0].1, false, "quantity >= 10 should be false");
-
-    assert_eq!(unless_steps[1].0, 1, "Second unless clause index");
-    assert_eq!(unless_steps[1].1, false, "quantity >= 20 should be false");
-
-    assert_eq!(unless_steps[2].0, 2, "Third unless clause index");
-    assert_eq!(unless_steps[2].1, true, "is_premium should be true");
+    assert_eq!(
+        unless_steps[0].0, 2,
+        "Last unless clause index (is_premium)"
+    );
+    assert_eq!(unless_steps[0].1, true, "is_premium should be true");
     assert!(
-        unless_steps[2].2.is_some(),
-        "Third unless should have result value"
+        unless_steps[0].2.is_some(),
+        "Matching unless should have result value"
     );
 }
 
@@ -152,15 +151,19 @@ fn test_trace_last_matching_unless_wins() {
         })
         .collect();
 
+    // With reversed evaluation, we evaluate from the end
+    // Clause 1 (quantity >= 20) doesn't match (15 >= 20 is false)
+    // Clause 0 (quantity >= 10) matches (15 >= 10 is true), so we return
+    assert_eq!(unless_steps.len(), 2, "Should evaluate 2 clauses");
     assert_eq!(
         unless_steps[0],
-        (0, true),
-        "First unless should match (quantity >= 10)"
+        (1, false),
+        "Last clause evaluated first (quantity >= 20 should be false)"
     );
     assert_eq!(
         unless_steps[1],
-        (1, false),
-        "Second unless should not match (quantity >= 20)"
+        (0, true),
+        "Second-to-last clause evaluated second (quantity >= 10 should match)"
     );
 
     if let Some(TraceStep::FinalResult { value }) = result.trace.last() {

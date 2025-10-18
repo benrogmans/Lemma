@@ -4,63 +4,24 @@
 
 use super::context::EvaluationContext;
 use super::expression::evaluate_expression;
-use crate::{LemmaError, LemmaResult, LemmaRule, LiteralValue, UnlessClause};
+use crate::{LemmaError, LemmaResult, LemmaRule, LiteralValue};
 
 /// Evaluate a rule to produce its final value
 ///
-/// Rules have a default expression and optional unless clauses.
 /// Unless clauses are evaluated in reverse order (last matching wins).
+/// If no unless clause matches, evaluate the default expression.
 pub fn evaluate_rule(
     rule: &LemmaRule,
     context: &mut EvaluationContext,
 ) -> LemmaResult<LiteralValue> {
-    let default_value = evaluate_expression(&rule.expression, context)?;
-
-    if rule.unless_clauses.is_empty() {
-        // Trace: using default value
-        use crate::TraceStep;
-        context.trace.push(TraceStep::DefaultValue {
-            value: default_value.clone(),
-        });
-        context.trace.push(TraceStep::FinalResult {
-            value: default_value.clone(),
-        });
-        return Ok(default_value);
-    }
-
-    let result = evaluate_unless_clauses(&rule.unless_clauses, default_value.clone(), context)?;
-
-    // Trace: final result
-    use crate::TraceStep;
-    context.trace.push(TraceStep::FinalResult {
-        value: result.clone(),
-    });
-
-    Ok(result)
-}
-
-/// Evaluate unless clauses in REVERSE order (last matching wins)
-///
-/// Iterate from the END, return on FIRST match.
-/// Trace ALL clauses for complete observability.
-fn evaluate_unless_clauses(
-    unless_clauses: &[UnlessClause],
-    default_value: LiteralValue,
-    context: &mut EvaluationContext,
-) -> LemmaResult<LiteralValue> {
     use crate::TraceStep;
 
-    // First pass: evaluate ALL unless clauses in FORWARD order for tracing
-    let mut evaluations = Vec::new();
-    for (index, unless_clause) in unless_clauses.iter().enumerate() {
+    // Evaluate unless clauses in reverse order (last matching wins)
+    for (index, unless_clause) in rule.unless_clauses.iter().enumerate().rev() {
         let condition_result = evaluate_expression(&unless_clause.condition, context)?;
 
-        let (matched, result) = match condition_result {
-            LiteralValue::Boolean(true) => {
-                let result = evaluate_expression(&unless_clause.result, context)?;
-                (true, Some(result))
-            }
-            LiteralValue::Boolean(false) => (false, None),
+        let matched = match condition_result {
+            LiteralValue::Boolean(b) => b,
             _ => {
                 return Err(LemmaError::Engine(
                     "Unless condition must evaluate to boolean".to_string(),
@@ -68,25 +29,32 @@ fn evaluate_unless_clauses(
             }
         };
 
-        // Trace EVERY unless clause evaluation (both true and false)
-        context.trace.push(TraceStep::UnlessClauseEvaluated {
-            index,
-            matched,
-            result_if_matched: result.clone(),
-        });
-
-        evaluations.push((matched, result));
-    }
-
-    // Second pass: find LAST matching clause (reverse iteration)
-    for (matched, result) in evaluations.iter().rev() {
-        if *matched {
-            return Ok(result.clone().unwrap());
+        if matched {
+            let result = evaluate_expression(&unless_clause.result, context)?;
+            context.trace.push(TraceStep::UnlessClauseEvaluated {
+                index,
+                matched: true,
+                result_if_matched: Some(result.clone()),
+            });
+            context.trace.push(TraceStep::FinalResult {
+                value: result.clone(),
+            });
+            return Ok(result);
+        } else {
+            context.trace.push(TraceStep::UnlessClauseEvaluated {
+                index,
+                matched: false,
+                result_if_matched: None,
+            });
         }
     }
 
-    // No unless clause matched, use default value
+    // No unless clause matched - evaluate default expression
+    let default_value = evaluate_expression(&rule.expression, context)?;
     context.trace.push(TraceStep::DefaultValue {
+        value: default_value.clone(),
+    });
+    context.trace.push(TraceStep::FinalResult {
         value: default_value.clone(),
     });
     Ok(default_value)

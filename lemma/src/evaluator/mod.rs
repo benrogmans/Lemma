@@ -113,6 +113,9 @@ impl Evaluator {
                     ));
                 }
                 Err(LemmaError::Veto(msg)) => {
+                    // Mark the rule as vetoed in the context
+                    // This allows other rules to reference it without getting "not yet computed" errors
+                    context.vetoed_rules.insert(rule.name.clone(), msg.clone());
                     response.add_result(RuleResult::veto(rule.name.clone(), msg));
                 }
                 Err(LemmaError::Engine(msg)) if msg.starts_with("Missing fact:") => {

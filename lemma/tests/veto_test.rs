@@ -1,3 +1,11 @@
+//! Veto functionality tests
+//!
+//! Key behaviors:
+//! 1. Veto blocks a rule from producing any valid result
+//! 2. Veto applies only when the vetoed rule's value is needed
+//! 3. Unless clauses can provide alternative values, so the veto doesn't apply
+//! 4. Veto in unless clause conditions or results will apply to the dependent rule
+
 use lemma::{Engine, LiteralValue};
 use rust_decimal::Decimal;
 use std::str::FromStr;
