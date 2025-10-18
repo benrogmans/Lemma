@@ -281,7 +281,7 @@ Contributions welcome! See [docs/contributing.md](docs/contributing.md) for setu
 Use in browsers via NPM:
 
 ```bash
-npm install @lemma/engine
+npm install @benrogmans/lemma-engine
 ```
 
 See [WASM documentation](docs/wasm.md) for usage examples.

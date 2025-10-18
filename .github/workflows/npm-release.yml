@@ -19,17 +19,19 @@ jobs:
       - name: Check version changes
         id: check
         run: |
-          WASM_VERSION=$(grep '^  "version":' lemma/package.json | head -1 | sed 's/.*"version": "\(.*\)",/\1/')
+          # Read version from workspace Cargo.toml (single source of truth)
+          WASM_VERSION=$(grep '^\[workspace.package\]' -A 10 Cargo.toml | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/')
           echo "wasm_version=$WASM_VERSION" >> $GITHUB_OUTPUT
 
-          if git diff HEAD^ HEAD -- lemma/package.json | grep -q '^+  "version":'; then
+          # Check if workspace version changed
+          if git diff HEAD^ HEAD -- Cargo.toml | grep -q '^+version = '; then
             echo "wasm_changed=true" >> $GITHUB_OUTPUT
           else
             echo "wasm_changed=false" >> $GITHUB_OUTPUT
           fi
 
   release-npm:
-    name: Release @lemma/engine to NPM
+    name: Release @benrogmans/lemma-engine to NPM
     needs: detect-wasm-changes
     if: needs.detect-wasm-changes.outputs.wasm_changed == 'true'
     runs-on: ubuntu-latest
@@ -47,8 +49,11 @@ jobs:
       - name: Build WASM package
         run: wasm-pack build lemma --target web --out-dir pkg
 
-      - name: Copy package.json
-        run: cp lemma/package.json lemma/pkg/package.json
+      - name: Copy and update package.json with version from Cargo.toml
+        run: |
+          cp lemma/package.json lemma/pkg/package.json
+          # Update version in package.json to match Cargo.toml
+          sed -i "s/\"version\": \".*\"/\"version\": \"${{ needs.detect-wasm-changes.outputs.wasm_version }}\"/" lemma/pkg/package.json
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

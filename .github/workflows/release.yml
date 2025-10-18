@@ -21,21 +21,18 @@ jobs:
       - name: Check version changes
         id: check
         run: |
-          LEMMA_VERSION=$(grep '^version = ' lemma/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          CLI_VERSION=$(grep '^version = ' cli/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          # Read version from workspace Cargo.toml
+          VERSION=$(grep '^\[workspace.package\]' -A 10 Cargo.toml | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/')
 
-          echo "lemma_version=$LEMMA_VERSION" >> $GITHUB_OUTPUT
-          echo "cli_version=$CLI_VERSION" >> $GITHUB_OUTPUT
+          echo "lemma_version=$VERSION" >> $GITHUB_OUTPUT
+          echo "cli_version=$VERSION" >> $GITHUB_OUTPUT
 
-          if git diff HEAD^ HEAD -- lemma/Cargo.toml | grep -q '^+version = '; then
+          # Check if workspace version changed
+          if git diff HEAD^ HEAD -- Cargo.toml | grep -q '^+version = '; then
             echo "lemma_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "lemma_changed=false" >> $GITHUB_OUTPUT
-          fi
-
-          if git diff HEAD^ HEAD -- cli/Cargo.toml | grep -q '^+version = '; then
             echo "cli_changed=true" >> $GITHUB_OUTPUT
           else
+            echo "lemma_changed=false" >> $GITHUB_OUTPUT
             echo "cli_changed=false" >> $GITHUB_OUTPUT
           fi
 

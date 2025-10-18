@@ -11,13 +11,13 @@ The Lemma Engine can be compiled to WebAssembly and used directly in web browser
 Install from NPM:
 
 ```bash
-npm install @lemma/engine
+npm install @benrogmans/lemma-engine
 ```
 
 ## Usage
 
 ```javascript
-import init, { WasmEngine } from '@lemma/engine';
+import init, { WasmEngine } from '@benrogmans/lemma-engine';
 
 await init();
 const engine = new WasmEngine();
