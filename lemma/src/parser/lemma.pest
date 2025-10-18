@@ -1,0 +1,336 @@
+// ================================================================================================
+// 1. BASIC TOKENS
+// ================================================================================================
+
+SPACE = _{ WHITE_SPACE | NEWLINE }
+
+// Supports scientific notation: 1.23e+5, 5.67E-3, 1e10, etc.
+number_literal = { scientific_number | decimal_number }
+
+scientific_number = {
+    decimal_number ~ ("e" | "E") ~ exponent_part
+}
+
+decimal_number = {
+    ("+" | "-")? ~
+    ASCII_DIGIT+ ~ ("_" ~ ASCII_DIGIT+)* ~
+    ("." ~ ASCII_DIGIT+)?
+}
+
+exponent_part = {
+    ("+" | "-")? ~ ASCII_DIGIT+
+}
+
+// ================================================================================================
+// 2. UNIT DEFINITIONS
+// ================================================================================================
+
+text_type = { ^"text" }
+number_type = { ^"number" }
+date_type = { ^"date" }
+boolean_type = { ^"boolean" }
+regex_type = { ^"regex" }
+percentage_type = { ^"percentage" }
+
+// Unit types (semantic categories)
+weight_type = { ^"weight" | ^"mass" }
+length_type = { ^"length" | ^"distance" }
+volume_type = { ^"volume" }
+duration_type = { ^"duration" | ^"time" }
+temperature_type = { ^"temperature" }
+power_type = { ^"power" }
+energy_type = { ^"energy" }
+force_type = { ^"force" }
+pressure_type = { ^"pressure" }
+frequency_type = { ^"frequency" }
+data_size_type = { ^"data_size" | ^"data" }
+money_type = { ^"money" | ^"currency" }
+
+// Generic unit word - can be any alphabetic identifier
+// Units are resolved in the parser for better error messages
+// Must not match reserved keywords
+unit_word = { !reserved_keyword ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// ================================================================================================
+// 3. OTHER COMMON DEFINITIONS
+// ================================================================================================
+
+boolean_literal = { "true" | "false" | "yes" | "no" | "accept" | "reject" }
+
+string_literal = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+percentage_literal = { number_literal ~ ("%" ~ !(SPACE* ~ ASCII_DIGIT) | (SPACE+ ~ ^"percent")) }
+
+regex_literal = {
+    "/" ~ (regex_char)* ~ "/"
+}
+
+regex_char = {
+    "\\/" |
+    (!"/" ~ ANY)
+}
+
+// ================================================================================================
+// 4. TOP-LEVEL DOCUMENT STRUCTURE
+// ================================================================================================
+
+lemma_file = { SOI ~ SPACE* ~ doc* ~ SPACE* ~ EOI }
+
+doc = {
+    doc_declaration ~ SPACE* ~
+    commentary_block? ~ SPACE* ~
+    (fact_definition | fact_override | rule_definition | SPACE)*
+}
+
+doc_declaration = { ^"doc" ~ SPACE+ ~ doc_name }
+
+doc_name = { identifier ~ ("/" ~ identifier)* }
+identifier = { ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_" | "-")* }
+
+commentary_block = _{ "\"\"\"" ~ commentary_content ~ "\"\"\"" ~ NEWLINE* }
+commentary_content = { (!"\"\"\"" ~ ANY)* }
+
+reserved_keyword = _{
+    (^"doc" | ^"fact" | ^"rule" | ^"then" | ^"unless" |
+     ^"have" | ^"not" | ^"in" | ^"and" | ^"or" |
+     ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" |
+     ^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject" |
+     ^"percent" | ^"percentage" | ^"veto") ~
+    !(ASCII_ALPHANUMERIC | "_")
+}
+
+label = { !reserved_keyword ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// ================================================================================================
+// 5. FACT DEFINITIONS
+// ================================================================================================
+
+fact_definition = { ^"fact" ~ SPACE+ ~ fact_name ~ SPACE* ~ "=" ~ SPACE* ~ fact_value }
+fact_override = { ^"fact" ~ SPACE+ ~ fact_override_name ~ SPACE* ~ "=" ~ SPACE* ~ fact_value }
+fact = { fact_definition | fact_override }
+
+fact_name = { label }
+fact_override_name = { label ~ ("." ~ label)+ }
+fact_reference = { label ~ ("." ~ label)* }
+
+fact_value = {
+    type_annotation |
+    document_reference |
+    literal
+}
+
+type_annotation = { "[" ~ type_name ~ "]" }
+
+type_name = {
+    text_type | number_type | date_type | boolean_type | regex_type | percentage_type |
+    weight_type | length_type | volume_type | duration_type | temperature_type |
+    power_type | energy_type | force_type | pressure_type | frequency_type |
+    data_size_type | money_type
+}
+
+// Unit types for "in" conversions - resolved in parser
+unit_types = _{
+    unit_word
+}
+
+document_reference = { ^"doc" ~ SPACE+ ~ doc_name }
+
+// ================================================================================================
+// 6. RULE DEFINITIONS
+// ================================================================================================
+
+rule_name = { label }
+
+rule_definition = { ^"rule" ~ SPACE+ ~ rule_name ~ SPACE* ~ "=" ~ SPACE* ~ rule_expression }
+
+rule_expression = {
+    expression_group ~
+    (SPACE* ~ unless_statement)*
+}
+
+unless_statement = {
+    ^"unless" ~ SPACE+ ~ expression_group ~ SPACE* ~
+    ^"then" ~ SPACE+ ~ (veto_expression | expression_group)
+}
+
+veto_expression = {
+    ^"veto" ~ (SPACE+ ~ string_literal)?
+}
+
+// ================================================================================================
+// 7. EXPRESSIONS
+// ================================================================================================
+
+expression_group = {
+    or_expression
+}
+
+or_expression = {
+    and_expression ~
+    (SPACE+ ~ ^"or" ~ SPACE+ ~ and_expression)*
+}
+
+and_expression = {
+    and_operand ~
+    (SPACE+ ~ ^"and" ~ SPACE+ ~ and_operand)*
+}
+
+and_operand = {
+    boolean_expression |
+    comparable_base ~ (SPACE* ~ comp_operator ~ SPACE* ~ comparable_base)?
+}
+
+expression = {
+    boolean_expression |
+    comparison_expression |
+    arithmetic_expression
+}
+
+
+
+// ------------------------------------------------------------------------------------------------
+// 7.2 ARITHMETIC EXPRESSIONS
+// ------------------------------------------------------------------------------------------------
+
+// Primary expressions - the ONLY place where parentheses appear
+primary = {
+    literal |
+    reference_expression |
+    "(" ~ expression_group ~ ")"
+}
+
+add_plus = { "+" }
+add_minus = { "-" }
+add_op = { add_plus | add_minus }
+
+mul_star = { "*" }
+mul_slash = { "/" }
+mul_percent = { "%" }
+mul_op = { mul_star | mul_slash | mul_percent }
+
+pow_caret = { "^" }
+
+unary_plus = { "+" }
+unary_minus = { "-" }
+
+// Factor: unary operators and math functions apply to primary expressions
+// Primary is FIRST to avoid backtracking on parentheses
+factor = {
+    (unary_plus | unary_minus)? ~ (primary | sqrt_expr | sin_expr | cos_expr | tan_expr | asin_expr | acos_expr | atan_expr | log_expr | exp_expr)
+}
+
+power = { factor ~ (SPACE* ~ pow_caret ~ SPACE* ~ power)? }
+
+term = { power ~ (SPACE* ~ (mul_star | mul_slash | mul_percent) ~ SPACE* ~ power)* }
+
+arithmetic_expression = { term ~ (SPACE* ~ (add_plus | add_minus) ~ SPACE* ~ term)* }
+
+// ------------------------------------------------------------------------------------------------
+// 7.3 COMPARISON EXPRESSIONS
+// ------------------------------------------------------------------------------------------------
+
+comp_gte = { ">=" }
+comp_lte = { "<=" }
+comp_eq  = { "==" }
+comp_ne  = { "!=" }
+comp_is_not = { ^"is not" }
+comp_gt  = { ">" }
+comp_lt  = { "<" }
+comp_is  = { ^"is" }
+comp_operator = { comp_gte | comp_lte | comp_eq | comp_ne | comp_is_not | comp_gt | comp_lt | comp_is }
+
+comparison_expression = {
+    comparable_base ~ SPACE* ~ comp_operator ~ SPACE* ~ comparable_base
+}
+
+comparable_base = {
+    arithmetic_expression ~ (SPACE+ ~ ^"in" ~ SPACE+ ~ unit_types)?
+}
+
+// ------------------------------------------------------------------------------------------------
+// 7.4 LOGICAL EXPRESSIONS
+// ------------------------------------------------------------------------------------------------
+
+have_not_expr = { ^"have not" ~ SPACE+ ~ reference_expression }
+have_expr     = { ^"have" ~ SPACE+ ~ reference_expression }
+not_have_expr = { ^"not have" ~ SPACE+ ~ reference_expression }
+not_expr      = { ^"not" ~ SPACE+ ~ (primary | reference_expression) }
+sqrt_expr     = { ^"sqrt" ~ (SPACE+ ~ arithmetic_expression | primary) }
+sin_expr      = { ^"sin" ~ (SPACE+ ~ arithmetic_expression | primary) }
+cos_expr      = { ^"cos" ~ (SPACE+ ~ arithmetic_expression | primary) }
+tan_expr      = { ^"tan" ~ (SPACE+ ~ arithmetic_expression | primary) }
+asin_expr     = { ^"asin" ~ (SPACE+ ~ arithmetic_expression | primary) }
+acos_expr     = { ^"acos" ~ (SPACE+ ~ arithmetic_expression | primary) }
+atan_expr     = { ^"atan" ~ (SPACE+ ~ arithmetic_expression | primary) }
+log_expr      = { ^"log" ~ (SPACE+ ~ arithmetic_expression | primary) }
+exp_expr      = { ^"exp" ~ (SPACE+ ~ arithmetic_expression | primary) }
+
+boolean_expression = { have_not_expr | not_have_expr | have_expr | not_expr }
+
+// ------------------------------------------------------------------------------------------------
+// 7.5 REFERENCE EXPRESSIONS
+// ------------------------------------------------------------------------------------------------
+
+reference_expression = {
+    rule_reference |
+    fact_reference |
+    fact_name
+}
+
+rule_reference = { label ~ ("." ~ label)* ~ "?" }
+
+// ================================================================================================
+// 8. LITERALS
+// ================================================================================================
+
+literal = {
+    date_time_literal |
+    time_literal |
+    boolean_literal |
+    string_literal |
+    percentage_literal |
+    unit_literal |
+    regex_literal |
+    number_literal
+}
+
+// ------------------------------------------------------------------------------------------------
+// 8.1 DATE/TIME LITERALS
+// ------------------------------------------------------------------------------------------------
+
+year = { ASCII_DIGIT{4} }
+month = { ASCII_DIGIT{1,2} }
+day = { ASCII_DIGIT{1,2} }
+hour = { ASCII_DIGIT{1,2} }
+minute = { ASCII_DIGIT{1,2} }
+second = { ASCII_DIGIT{1,2} }
+
+timezone = { timezone_utc | timezone_offset }
+timezone_utc = { "Z" }
+timezone_offset = { timezone_sign ~ timezone_hour ~ ":" ~ timezone_minute }
+timezone_sign = { "+" | "-" }
+timezone_hour = { ASCII_DIGIT{2} }
+timezone_minute = { ASCII_DIGIT{2} }
+
+// Time literals (HH:MM:SS with optional timezone)
+time_literal = { ASCII_DIGIT{2} ~ ":" ~ ASCII_DIGIT{2} ~ (":" ~ ASCII_DIGIT{2})? ~ timezone? }
+
+// DateTime literals with optional time and timezone
+date_time_literal = {
+    ASCII_DIGIT{4} ~ "-" ~ ASCII_DIGIT{2} ~ "-" ~ ASCII_DIGIT{2} ~
+    ("T" ~ ASCII_DIGIT{2} ~ ":" ~ ASCII_DIGIT{2} ~ (":" ~ ASCII_DIGIT{2})? ~ timezone?)?
+}
+
+// ------------------------------------------------------------------------------------------------
+// 8.2 UNIT LITERALS
+// ------------------------------------------------------------------------------------------------
+
+unit_literal = { number_literal ~ SPACE* ~ unit_types }
+
+// ================================================================================================
+// NOTES
+// ================================================================================================
+// - WHITE_SPACE and NEWLINE are built-in Pest rules and should not be redefined
+// - Rules marked with _ are silent (won't appear in the parse tree)
+// - Type annotations are case-insensitive using the ^ operator
+// - Literal values are ordered by parsing precedence to avoid conflicts
