@@ -72,5 +72,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag wasm-v${{ needs.detect-wasm-changes.outputs.wasm_version }}
-          git push origin wasm-v${{ needs.detect-wasm-changes.outputs.wasm_version }}
+          git push https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git wasm-v${{ needs.detect-wasm-changes.outputs.wasm_version }}
 

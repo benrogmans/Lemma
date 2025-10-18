@@ -61,7 +61,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag lemma-v${{ needs.detect-changes.outputs.lemma_version }}
-          git push origin lemma-v${{ needs.detect-changes.outputs.lemma_version }}
+          git push https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git lemma-v${{ needs.detect-changes.outputs.lemma_version }}
 
   release-cli:
     name: Release lemma CLI binary

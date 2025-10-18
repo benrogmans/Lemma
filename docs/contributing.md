@@ -75,10 +75,31 @@ cargo +nightly fuzz run fuzz_parser -- -max_total_time=60  # Run for 60 seconds
 ```
 
 ### WASM Build
+
+#### Web Target (Browsers)
 ```bash
-wasm-pack build lemma --target web --out-dir target/wasm
-wasm-pack build lemma --target nodejs --out-dir target/wasm-node
+cd lemma
+wasm-pack build --target web --out-dir pkg
+cp package.json pkg/package.json
 ```
+
+#### Node.js Target
+```bash
+cd lemma
+wasm-pack build --target nodejs --out-dir pkg-node
+cp package.json pkg-node/package.json
+```
+
+**Note:** The `package.json` copying step is required because `wasm-pack` generates its own package.json. We need to override it with our custom package name `@benrogmans/lemma-engine`.
+
+#### Testing WASM
+After building, test the WASM package:
+
+```bash
+npm test
+```
+
+This will run comprehensive tests and show results in the terminal.
 
 ## Release (maintainers only)
 

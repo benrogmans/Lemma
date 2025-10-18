@@ -1,7 +1,8 @@
 {
   "name": "@benrogmans/lemma-engine",
-  "version": "0.0.0-dev",
-  "description": "Lemma business rules engine - WebAssembly bindings",
+  "type": "module",
+  "version": "0.5.1",
+  "description": "Lemma: A declarative programming language for business rules. Run in browsers with WebAssembly.",
   "main": "lemma.js",
   "types": "lemma.d.ts",
   "files": [
@@ -27,6 +28,9 @@
   "homepage": "https://github.com/benrogmans/lemma",
   "bugs": {
     "url": "https://github.com/benrogmans/lemma/issues"
+  },
+  "scripts": {
+    "test": "node test-wasm.js"
   }
 }
 

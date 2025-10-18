@@ -7,9 +7,9 @@ members = [
 exclude = ["lemma/fuzz"]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.2"
 edition = "2021"
-authors = ["Ben Rogmans <ben@amrai.nl>"]
+authors = ["benrogmans <ben@amrai.nl>"]
 description = "Lemma: business rules for man and machine"
 license = "Apache-2.0"
 repository = "https://github.com/benrogmans/lemma"
