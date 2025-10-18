@@ -18,8 +18,8 @@ anyhow.workspace = true
 chrono.workspace = true
 walkdir = "2.4"
 crossterm = "0.27"
-comfy-table = "7.1"
-inquire = { version = "0.7", features = ["date"] }
+comfy-table = "7.2"
+inquire = { version = "0.9", features = ["date"] }
 
 # Server dependencies (optional)
 axum = { workspace = true, optional = true }
