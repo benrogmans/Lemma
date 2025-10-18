@@ -1,0 +1,12 @@
+/target
+
+# WASM build output
+lemma/pkg/
+
+# Fuzz testing artifacts
+lemma/fuzz/artifacts/
+lemma/fuzz/corpus/
+lemma/fuzz/target/
+
+# DeepSource coverage
+coverage/
