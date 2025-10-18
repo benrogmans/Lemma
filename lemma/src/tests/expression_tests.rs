@@ -1,8 +1,8 @@
 use crate::evaluator::context::EvaluationContext;
 use crate::evaluator::expression::evaluate_expression;
 use crate::{
-    ArithmeticOperation, Expression, ExpressionId, ExpressionKind, FactReference, LemmaDoc,
-    LiteralValue,
+    ArithmeticOperation, OperationResult, Expression, ExpressionId, ExpressionKind, FactReference,
+    LemmaDoc, LiteralValue,
 };
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -22,7 +22,10 @@ fn test_evaluate_literal() {
     );
 
     let result = evaluate_expression(&expr, &mut context).unwrap();
-    assert_eq!(result, LiteralValue::Number(Decimal::from(42)));
+    assert_eq!(
+        result,
+        OperationResult::Value(LiteralValue::Number(Decimal::from(42)))
+    );
 }
 
 #[test]
@@ -48,10 +51,13 @@ fn test_evaluate_fact_reference() {
     );
 
     let result = evaluate_expression(&expr, &mut context).unwrap();
-    assert_eq!(result, LiteralValue::Number(Decimal::from(100)));
+    assert_eq!(
+        result,
+        OperationResult::Value(LiteralValue::Number(Decimal::from(100)))
+    );
 
     // Check trace
-    assert_eq!(context.trace.len(), 1);
+    assert_eq!(context.operations.len(), 1);
 }
 
 #[test]
@@ -82,8 +88,11 @@ fn test_evaluate_simple_arithmetic() {
     );
 
     let result = evaluate_expression(&expr, &mut context).unwrap();
-    assert_eq!(result, LiteralValue::Number(Decimal::from(15)));
+    assert_eq!(
+        result,
+        OperationResult::Value(LiteralValue::Number(Decimal::from(15)))
+    );
 
     // Check trace recorded the operation
-    assert_eq!(context.trace.len(), 1);
+    assert_eq!(context.operations.len(), 1);
 }

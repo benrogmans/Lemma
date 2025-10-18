@@ -51,6 +51,7 @@ pub mod ast;
 pub mod engine;
 pub mod error;
 pub mod evaluator;
+pub mod operation_result;
 pub mod parser;
 pub mod response;
 pub mod semantic;
@@ -62,8 +63,9 @@ pub mod wasm;
 pub use ast::{ExpressionId, ExpressionIdGenerator, Span};
 pub use engine::Engine;
 pub use error::LemmaError;
+pub use operation_result::OperationResult;
 pub use parser::parse;
-pub use response::{Response, RuleResult, TraceStep};
+pub use response::{Response, RuleResult, OperationRecord};
 pub use semantic::*;
 pub use validator::{ValidatedDocuments, Validator};
 

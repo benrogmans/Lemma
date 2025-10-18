@@ -33,9 +33,6 @@ pub enum LemmaError {
     /// Circular dependency error
     CircularDependency(String),
 
-    /// Rule blocked by veto with optional message
-    Veto(Option<String>),
-
     /// Multiple errors collected together
     MultipleErrors(Vec<LemmaError>),
 }
@@ -171,10 +168,6 @@ impl fmt::Display for LemmaError {
             }
             LemmaError::Engine(msg) => write!(f, "Engine error: {}", msg),
             LemmaError::CircularDependency(msg) => write!(f, "Circular dependency: {}", msg),
-            LemmaError::Veto(msg_opt) => match msg_opt {
-                Some(msg) => write!(f, "Rule blocked by veto: {}", msg),
-                None => write!(f, "Rule blocked by veto"),
-            },
             LemmaError::MultipleErrors(errors) => {
                 writeln!(f, "Multiple errors occurred:")?;
                 for error in errors {

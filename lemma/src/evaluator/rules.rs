@@ -4,24 +4,30 @@
 
 use super::context::EvaluationContext;
 use super::expression::evaluate_expression;
-use crate::{LemmaError, LemmaResult, LemmaRule, LiteralValue};
+use crate::{OperationResult, LemmaError, LemmaRule};
 
-/// Evaluate a rule to produce its final value
+/// Evaluate a rule to produce its final result
 ///
 /// Unless clauses are evaluated in reverse order (last matching wins).
 /// If no unless clause matches, evaluate the default expression.
 pub fn evaluate_rule(
     rule: &LemmaRule,
     context: &mut EvaluationContext,
-) -> LemmaResult<LiteralValue> {
-    use crate::TraceStep;
+) -> Result<OperationResult, LemmaError> {
+    use crate::OperationRecord;
 
     // Evaluate unless clauses in reverse order (last matching wins)
     for (index, unless_clause) in rule.unless_clauses.iter().enumerate().rev() {
         let condition_result = evaluate_expression(&unless_clause.condition, context)?;
 
-        let matched = match condition_result {
-            LiteralValue::Boolean(b) => b,
+        // If condition is vetoed, the veto applies to this rule
+        if let OperationResult::Veto(msg) = condition_result {
+            return Ok(OperationResult::Veto(msg));
+        }
+
+        let condition_value = condition_result.value().unwrap();
+        let matched = match condition_value {
+            crate::LiteralValue::Boolean(b) => *b,
             _ => {
                 return Err(LemmaError::Engine(
                     "Unless condition must evaluate to boolean".to_string(),
@@ -31,17 +37,24 @@ pub fn evaluate_rule(
 
         if matched {
             let result = evaluate_expression(&unless_clause.result, context)?;
-            context.trace.push(TraceStep::UnlessClauseEvaluated {
+            
+            // If result is vetoed, the veto applies to this rule
+            if let OperationResult::Veto(msg) = result {
+                return Ok(OperationResult::Veto(msg));
+            }
+
+            let result_value = result.value().unwrap().clone();
+            context.operations.push(OperationRecord::UnlessClauseEvaluated {
                 index,
                 matched: true,
-                result_if_matched: Some(result.clone()),
+                result_if_matched: Some(result_value.clone()),
             });
-            context.trace.push(TraceStep::FinalResult {
-                value: result.clone(),
+            context.operations.push(OperationRecord::FinalResult {
+                value: result_value.clone(),
             });
-            return Ok(result);
+            return Ok(OperationResult::Value(result_value));
         } else {
-            context.trace.push(TraceStep::UnlessClauseEvaluated {
+            context.operations.push(OperationRecord::UnlessClauseEvaluated {
                 index,
                 matched: false,
                 result_if_matched: None,
@@ -50,12 +63,19 @@ pub fn evaluate_rule(
     }
 
     // No unless clause matched - evaluate default expression
-    let default_value = evaluate_expression(&rule.expression, context)?;
-    context.trace.push(TraceStep::DefaultValue {
+    let default_result = evaluate_expression(&rule.expression, context)?;
+    
+    // If default is vetoed, the veto applies to this rule
+    if let OperationResult::Veto(msg) = default_result {
+        return Ok(OperationResult::Veto(msg));
+    }
+
+    let default_value = default_result.value().unwrap().clone();
+    context.operations.push(OperationRecord::DefaultValue {
         value: default_value.clone(),
     });
-    context.trace.push(TraceStep::FinalResult {
+    context.operations.push(OperationRecord::FinalResult {
         value: default_value.clone(),
     });
-    Ok(default_value)
+    Ok(OperationResult::Value(default_value))
 }

@@ -1,7 +1,8 @@
 use crate::evaluator::context::EvaluationContext;
 use crate::evaluator::rules::evaluate_rule;
 use crate::{
-    Expression, ExpressionId, ExpressionKind, LemmaDoc, LemmaRule, LiteralValue, UnlessClause,
+    OperationResult, Expression, ExpressionId, ExpressionKind, LemmaDoc, LemmaRule, LiteralValue,
+    UnlessClause,
 };
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -26,7 +27,10 @@ fn test_evaluate_rule_no_unless() {
     };
 
     let result = evaluate_rule(&rule, &mut context).unwrap();
-    assert_eq!(result, LiteralValue::Number(Decimal::from(42)));
+    assert_eq!(
+        result,
+        OperationResult::Value(LiteralValue::Number(Decimal::from(42)))
+    );
 }
 
 #[test]
@@ -61,7 +65,10 @@ fn test_evaluate_rule_with_unless_no_match() {
     };
 
     let result = evaluate_rule(&rule, &mut context).unwrap();
-    assert_eq!(result, LiteralValue::Number(Decimal::from(100)));
+    assert_eq!(
+        result,
+        OperationResult::Value(LiteralValue::Number(Decimal::from(100)))
+    );
 }
 
 #[test]
@@ -96,7 +103,10 @@ fn test_evaluate_rule_with_unless_match() {
     };
 
     let result = evaluate_rule(&rule, &mut context).unwrap();
-    assert_eq!(result, LiteralValue::Number(Decimal::from(200)));
+    assert_eq!(
+        result,
+        OperationResult::Value(LiteralValue::Number(Decimal::from(200)))
+    );
 }
 
 #[test]
@@ -147,5 +157,8 @@ fn test_evaluate_rule_last_matching_wins() {
 
     let result = evaluate_rule(&rule, &mut context).unwrap();
     // Last unless clause wins
-    assert_eq!(result, LiteralValue::Number(Decimal::from(300)));
+    assert_eq!(
+        result,
+        OperationResult::Value(LiteralValue::Number(Decimal::from(300)))
+    );
 }

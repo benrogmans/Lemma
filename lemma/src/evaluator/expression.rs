@@ -4,24 +4,24 @@
 
 use super::context::EvaluationContext;
 use crate::{
-    ast::Span, ArithmeticOperation, Expression, ExpressionKind, LemmaError, LemmaResult,
-    LiteralValue, MathematicalOperator, TraceStep,
+    ast::Span, ArithmeticOperation, Expression, ExpressionKind, LemmaError, LiteralValue,
+    MathematicalOperator, OperationRecord, OperationResult,
 };
 use rust_decimal::Decimal;
 use std::sync::Arc;
 
-/// Evaluate an expression to produce a literal value
+/// Evaluate an expression to produce an operation result
 ///
 /// This is the core of the evaluator - recursively processes expressions
-/// and generates trace entries for every operation.
+/// and records operations for every step.
 pub fn evaluate_expression(
     expr: &Expression,
     context: &mut EvaluationContext,
-) -> LemmaResult<LiteralValue> {
+) -> Result<OperationResult, LemmaError> {
     match &expr.kind {
         ExpressionKind::Literal(lit) => {
             // Literals evaluate to themselves
-            Ok(lit.clone())
+            Ok(OperationResult::Value(lit.clone()))
         }
 
         ExpressionKind::FactReference(fact_ref) => {
@@ -33,12 +33,12 @@ pub fn evaluate_expression(
                 .ok_or_else(|| LemmaError::Engine(format!("Missing fact: {}", fact_name)))?;
 
             // Add trace entry
-            context.trace.push(TraceStep::FactUsed {
+            context.operations.push(OperationRecord::FactUsed {
                 name: fact_name,
                 value: value.clone(),
             });
 
-            Ok(value.clone())
+            Ok(OperationResult::Value(value.clone()))
         }
 
         ExpressionKind::RuleReference(rule_ref) => {
@@ -46,20 +46,22 @@ pub fn evaluate_expression(
             // Topological sort ensures this rule was computed before us
             let rule_name = rule_ref.reference.join(".");
 
-            // Check if rule was vetoed
-            if let Some(veto_message) = context.vetoed_rules.get(&rule_name) {
-                // Rule was vetoed - the veto applies to this rule too
-                return Err(LemmaError::Veto(veto_message.clone()));
-            }
-
             // Check if rule has a result
-            if let Some(value) = context.rule_results.get(&rule_name) {
-                // Add trace entry
-                context.trace.push(TraceStep::RuleUsed {
-                    name: rule_name,
-                    value: value.clone(),
-                });
-                return Ok(value.clone());
+            if let Some(result) = context.rule_results.get(&rule_name) {
+                match result {
+                    OperationResult::Veto(msg) => {
+                        // Rule was vetoed - the veto applies to this rule too
+                        return Ok(OperationResult::Veto(msg.clone()));
+                    }
+                    OperationResult::Value(value) => {
+                        // Add trace entry
+                        context.operations.push(OperationRecord::RuleUsed {
+                            name: rule_name,
+                            value: value.clone(),
+                        });
+                        return Ok(OperationResult::Value(value.clone()));
+                    }
+                }
             }
 
             // Rule not computed yet
@@ -70,11 +72,22 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::Arithmetic(left, op, right) => {
-            let left_val = evaluate_expression(left, context)?;
-            let right_val = evaluate_expression(right, context)?;
+            let left_result = evaluate_expression(left, context)?;
+            let right_result = evaluate_expression(right, context)?;
+
+            // If either operand is vetoed, propagate the veto
+            if let OperationResult::Veto(msg) = left_result {
+                return Ok(OperationResult::Veto(msg));
+            }
+            if let OperationResult::Veto(msg) = right_result {
+                return Ok(OperationResult::Veto(msg));
+            }
+
+            let left_val = left_result.value().unwrap();
+            let right_val = right_result.value().unwrap();
 
             // Convert Engine errors to Runtime errors with source location
-            let result = super::operations::arithmetic_operation(&left_val, op, &right_val)
+            let result = super::operations::arithmetic_operation(left_val, op, right_val)
                 .map_err(|e| convert_engine_error_to_runtime(e, expr, context))?;
 
             // Add trace
@@ -87,21 +100,32 @@ pub fn evaluate_expression(
                 ArithmeticOperation::Power => "power",
             };
 
-            context.trace.push(TraceStep::OperationExecuted {
+            context.operations.push(OperationRecord::OperationExecuted {
                 operation: op_name.to_string(),
-                inputs: vec![left_val, right_val],
+                inputs: vec![left_val.clone(), right_val.clone()],
                 result: result.clone(),
                 unless_clause_index: None,
             });
 
-            Ok(result)
+            Ok(OperationResult::Value(result))
         }
 
         ExpressionKind::Comparison(left, op, right) => {
-            let left_val = evaluate_expression(left, context)?;
-            let right_val = evaluate_expression(right, context)?;
+            let left_result = evaluate_expression(left, context)?;
+            let right_result = evaluate_expression(right, context)?;
 
-            let result = super::operations::comparison_operation(&left_val, op, &right_val)?;
+            // If either operand is vetoed, propagate the veto
+            if let OperationResult::Veto(msg) = left_result {
+                return Ok(OperationResult::Veto(msg));
+            }
+            if let OperationResult::Veto(msg) = right_result {
+                return Ok(OperationResult::Veto(msg));
+            }
+
+            let left_val = left_result.value().unwrap();
+            let right_val = right_result.value().unwrap();
+
+            let result = super::operations::comparison_operation(left_val, op, right_val)?;
 
             // Add trace
             let op_name = match op {
@@ -115,24 +139,35 @@ pub fn evaluate_expression(
                 crate::ComparisonOperator::IsNot => "is_not",
             };
 
-            context.trace.push(TraceStep::OperationExecuted {
+            context.operations.push(OperationRecord::OperationExecuted {
                 operation: op_name.to_string(),
-                inputs: vec![left_val, right_val],
+                inputs: vec![left_val.clone(), right_val.clone()],
                 result: LiteralValue::Boolean(result),
                 unless_clause_index: None,
             });
 
-            Ok(LiteralValue::Boolean(result))
+            Ok(OperationResult::Value(LiteralValue::Boolean(result)))
         }
 
         ExpressionKind::LogicalAnd(left, right) => {
-            let left_val = evaluate_expression(left, context)?;
-            let right_val = evaluate_expression(right, context)?;
+            let left_result = evaluate_expression(left, context)?;
+            let right_result = evaluate_expression(right, context)?;
+
+            // If either operand is vetoed, propagate the veto
+            if let OperationResult::Veto(msg) = left_result {
+                return Ok(OperationResult::Veto(msg));
+            }
+            if let OperationResult::Veto(msg) = right_result {
+                return Ok(OperationResult::Veto(msg));
+            }
+
+            let left_val = left_result.value().unwrap();
+            let right_val = right_result.value().unwrap();
 
             match (left_val, right_val) {
                 (LiteralValue::Boolean(l), LiteralValue::Boolean(r)) => {
                     // No trace for logical operations - only trace the sub-expressions
-                    Ok(LiteralValue::Boolean(l && r))
+                    Ok(OperationResult::Value(LiteralValue::Boolean(*l && *r)))
                 }
                 _ => Err(LemmaError::Engine(
                     "Logical AND requires boolean operands".to_string(),
@@ -141,13 +176,24 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::LogicalOr(left, right) => {
-            let left_val = evaluate_expression(left, context)?;
-            let right_val = evaluate_expression(right, context)?;
+            let left_result = evaluate_expression(left, context)?;
+            let right_result = evaluate_expression(right, context)?;
+
+            // If either operand is vetoed, propagate the veto
+            if let OperationResult::Veto(msg) = left_result {
+                return Ok(OperationResult::Veto(msg));
+            }
+            if let OperationResult::Veto(msg) = right_result {
+                return Ok(OperationResult::Veto(msg));
+            }
+
+            let left_val = left_result.value().unwrap();
+            let right_val = right_result.value().unwrap();
 
             match (left_val, right_val) {
                 (LiteralValue::Boolean(l), LiteralValue::Boolean(r)) => {
                     // No trace for logical operations - only trace the sub-expressions
-                    Ok(LiteralValue::Boolean(l || r))
+                    Ok(OperationResult::Value(LiteralValue::Boolean(*l || *r)))
                 }
                 _ => Err(LemmaError::Engine(
                     "Logical OR requires boolean operands".to_string(),
@@ -156,10 +202,17 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::LogicalNegation(inner, _negation_type) => {
-            let value = evaluate_expression(inner, context)?;
+            let result = evaluate_expression(inner, context)?;
+
+            // If the operand is vetoed, propagate the veto
+            if let OperationResult::Veto(msg) = result {
+                return Ok(OperationResult::Veto(msg));
+            }
+
+            let value = result.value().unwrap();
 
             match value {
-                LiteralValue::Boolean(b) => Ok(LiteralValue::Boolean(!b)),
+                LiteralValue::Boolean(b) => Ok(OperationResult::Value(LiteralValue::Boolean(!b))),
                 _ => Err(LemmaError::Engine(
                     "Logical NOT requires boolean operand".to_string(),
                 )),
@@ -167,21 +220,29 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::UnitConversion(value_expr, target) => {
-            let value = evaluate_expression(value_expr, context)?;
-            super::units::convert_unit(&value, target)
+            let result = evaluate_expression(value_expr, context)?;
+
+            // If the operand is vetoed, propagate the veto
+            if let OperationResult::Veto(msg) = result {
+                return Ok(OperationResult::Veto(msg));
+            }
+
+            let value = result.value().unwrap();
+            let converted = super::units::convert_unit(value, target)?;
+            Ok(OperationResult::Value(converted))
         }
 
         ExpressionKind::MathematicalOperator(op, operand) => {
             evaluate_mathematical_operator(op, operand, context)
         }
 
-        ExpressionKind::Veto(veto_expr) => Err(LemmaError::Veto(veto_expr.message.clone())),
+        ExpressionKind::Veto(veto_expr) => Ok(OperationResult::Veto(veto_expr.message.clone())),
 
         ExpressionKind::FactHasAnyValue(fact_ref) => {
             // Check if fact exists and has a value
             let fact_name = fact_ref.reference.join(".");
             let has_value = context.facts.contains_key(&fact_name);
-            Ok(LiteralValue::Boolean(has_value))
+            Ok(OperationResult::Value(LiteralValue::Boolean(has_value)))
         }
     }
 }
@@ -191,8 +252,15 @@ fn evaluate_mathematical_operator(
     op: &MathematicalOperator,
     operand: &Expression,
     context: &mut EvaluationContext,
-) -> LemmaResult<LiteralValue> {
-    let value = evaluate_expression(operand, context)?;
+) -> Result<OperationResult, LemmaError> {
+    let result = evaluate_expression(operand, context)?;
+
+    // If the operand is vetoed, propagate the veto
+    if let OperationResult::Veto(msg) = result {
+        return Ok(OperationResult::Veto(msg));
+    }
+
+    let value = result.value().unwrap();
 
     match value {
         LiteralValue::Number(n) => {
@@ -201,7 +269,7 @@ fn evaluate_mathematical_operator(
                 LemmaError::Engine("Cannot convert to float for mathematical operation".to_string())
             })?;
 
-            let result = match op {
+            let math_result = match op {
                 MathematicalOperator::Sqrt => float_val.sqrt(),
                 MathematicalOperator::Sin => float_val.sin(),
                 MathematicalOperator::Cos => float_val.cos(),
@@ -213,13 +281,13 @@ fn evaluate_mathematical_operator(
                 MathematicalOperator::Exp => float_val.exp(),
             };
 
-            let decimal_result = Decimal::from_f64_retain(result).ok_or_else(|| {
+            let decimal_result = Decimal::from_f64_retain(math_result).ok_or_else(|| {
                 LemmaError::Engine(
                     "Mathematical operation result cannot be represented".to_string(),
                 )
             })?;
 
-            Ok(LiteralValue::Number(decimal_result))
+            Ok(OperationResult::Value(LiteralValue::Number(decimal_result)))
         }
         _ => Err(LemmaError::Engine(
             "Mathematical operators require number operands".to_string(),

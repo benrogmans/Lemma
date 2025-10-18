@@ -94,29 +94,28 @@ impl Evaluator {
             }
 
             // Clear trace for this rule
-            context.trace.clear();
+            context.operations.clear();
 
             // Evaluate the rule
             match rules::evaluate_rule(rule, &mut context) {
-                Ok(value) => {
+                Ok(result) => {
                     // Store result in context for subsequent rules
-                    context
-                        .rule_results
-                        .insert(rule.name.clone(), value.clone());
+                    context.rule_results.insert(rule.name.clone(), result.clone());
 
-                    // Add to response
-                    response.add_result(RuleResult::success_with_trace(
-                        rule.name.clone(),
-                        value,
-                        HashMap::new(),
-                        context.trace.clone(),
-                    ));
-                }
-                Err(LemmaError::Veto(msg)) => {
-                    // Mark the rule as vetoed in the context
-                    // This allows other rules to reference it without getting "not yet computed" errors
-                    context.vetoed_rules.insert(rule.name.clone(), msg.clone());
-                    response.add_result(RuleResult::veto(rule.name.clone(), msg));
+                    // Add to response based on result type
+                    match result {
+                        crate::OperationResult::Value(value) => {
+                            response.add_result(RuleResult::success_with_operations(
+                                rule.name.clone(),
+                                value,
+                                HashMap::new(),
+                                context.operations.clone(),
+                            ));
+                        }
+                        crate::OperationResult::Veto(msg) => {
+                            response.add_result(RuleResult::veto(rule.name.clone(), msg));
+                        }
+                    }
                 }
                 Err(LemmaError::Engine(msg)) if msg.starts_with("Missing fact:") => {
                     failed_rules.insert(rule.name.clone());

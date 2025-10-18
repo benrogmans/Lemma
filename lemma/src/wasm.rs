@@ -117,9 +117,5 @@ fn format_error(error: &LemmaError) -> String {
             let error_messages: Vec<String> = errors.iter().map(format_error).collect();
             format!("Multiple Errors:\n{}", error_messages.join("\n"))
         }
-        LemmaError::Veto(msg) => match msg {
-            Some(m) => format!("Veto: {}", m),
-            None => "Veto".to_string(),
-        },
     }
 }
