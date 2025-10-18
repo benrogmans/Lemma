@@ -1,0 +1,49 @@
+[package]
+name = "lemma-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.lemma]
+path = ".."
+
+[[bin]]
+name = "fuzz_parser"
+path = "fuzz_targets/fuzz_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_expressions"
+path = "fuzz_targets/fuzz_expressions.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_literals"
+path = "fuzz_targets/fuzz_literals.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_deeply_nested"
+path = "fuzz_targets/fuzz_deeply_nested.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_fact_overrides"
+path = "fuzz_targets/fuzz_fact_overrides.rs"
+test = false
+doc = false
+bench = false
