@@ -7,7 +7,7 @@ members = [
 exclude = ["lemma/fuzz"]
 
 [workspace.package]
-version = "0.6.2"
+version = "0.6.3"
 edition = "2021"
 authors = ["benrogmans <ben@amrai.nl>"]
 description = "The programming language that means business."

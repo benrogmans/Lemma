@@ -1,7 +1,7 @@
-title: Lemma Documentation
-description: A programming language that means business - Write contracts, policies, and business rules in a way that both humans and computers can understand.
+title: Lemma
+description: A programming language that means business.
 theme: jekyll-theme-cayman
-show_downloads: true
+show_downloads: false
 baseurl: "/Lemma"
 url: "https://benrogmans.github.io"
 
