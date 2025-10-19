@@ -10,3 +10,12 @@ lemma/fuzz/target/
 
 # DeepSource coverage
 coverage/
+
+# IDE and editor configurations
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
