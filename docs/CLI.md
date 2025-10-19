@@ -171,11 +171,19 @@ Content-Type: application/json
 
 ### `lemma mcp` - Start MCP server
 
-Start a Model Context Protocol server for LLM integration (coming soon).
+Start a Model Context Protocol server for AI assistant integration.
 
 ```bash
-lemma mcp [--workdir <path>]
+lemma mcp [-d <path>]
 ```
+
+**Options:**
+- `-d, --dir` - Workspace root directory (default: `.`)
+
+The MCP server provides AI assistants with tools to:
+- Add and evaluate Lemma documents
+- Inspect document structure
+- Query rules with fact overrides
 
 ## Workspace Structure
 
@@ -247,13 +255,13 @@ curl -X POST http://localhost:3000/evaluate \
 
 ## Features
 
-- ✅ **Document Listing** - Load and list all documents from a directory
-- ✅ **CLI Evaluation** - Run documents from command line with operation records
-- ✅ **Interactive Mode** - Guided prompts with fuzzy search, multi-select, and calendar date picker
-- ✅ **Raw Output Mode** - Extract values for piping to other Unix tools
-- ✅ **HTTP Server** - REST API with both stateful and stateless evaluation
-- ✅ **Document Inspection** - View document structure and requirements
-- 🚧 **MCP Server** - LLM integration (coming soon)
+- **Document Listing** - Load and list all documents from a directory
+- **CLI Evaluation** - Run documents from command line with operation records
+- **Interactive Mode** - Guided prompts with fuzzy search, multi-select, and calendar date picker
+- **Raw Output Mode** - Extract values for piping to other Unix tools
+- **HTTP Server** - REST API with both stateful and stateless evaluation
+- **Document Inspection** - View document structure and requirements
+- **MCP Server** - Model Context Protocol for AI assistant integration
 
 ## Performance
 

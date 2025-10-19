@@ -1,49 +1,6 @@
-# Potential Improvements
+# Roadmap
 
-This document tracks identified improvements that could enhance the Lemma project.
-
-## Known Issues
-
-### Type-Aware Arithmetic with Percentages (Priority: High)
-
-**Issue**: Arithmetic operations between money and percentages don't apply percentage semantics.
-
-**Current Behavior**:
-- `200 EUR - 25%` = `199.75 EUR` (treats 25% as 0.25)
-- `100 USD + 10%` = `100.10 USD` (treats 10% as 0.10)
-
-**Expected Behavior**:
-- `200 EUR - 25%` should equal `150 EUR` (subtract 25% of 200)
-- `100 USD + 10%` should equal `110 USD` (add 10% of 100)
-
-**Solution**: Implement type-aware arithmetic in the evaluator:
-- Detect when percentage types interact with money/number types
-- Transform `money ± percentage` into `money * (1 ± percentage_value)`
-- Requires semantic analysis during evaluation
-
-**Impact**: Affects business rules with discounts, markups, tax calculations, and commission calculations.
-
----
-
-## Infrastructure
-
-### CI/CD Pipeline (Priority: High)
-
-**Issue**: No automated testing on PRs or main branch.
-
-**Solution**: Add `.github/workflows/` for:
-- Running tests on PR
-- Lint checking with clippy
-- Building release artifacts
-- Publishing to crates.io (on tag)
-
-### Crates.io Badges (Priority: Low)
-
-**Issue**: README lacks badges for build status, crates.io version, docs.rs, etc.
-
-**Solution**: Add shields.io badges once CI/CD is set up.
-
----
+This document tracks planned improvements and known issues for the Lemma project.
 
 ## Security
 
@@ -56,7 +13,7 @@ This document tracks identified improvements that could enhance the Lemma projec
 - Identifier validation and sanitization
 - Expression evaluation safety
 
-### Resource Limits (Priority: Medium)
+### Resource Limits (Priority: High)
 
 **Issue**: No limits on computational resources.
 
@@ -70,9 +27,9 @@ This document tracks identified improvements that could enhance the Lemma projec
 **Solution**: Add configurable limits with reasonable defaults.
 
 **Suggested Defaults**:
-- Max file size: 10MB
+- Max file size: 10 MB
 - Max expression depth: 100 levels
-- Max query time: 30 seconds
+- Max evaluation time: 10 seconds
 - Max documents in workspace: 1000
 - Max identifier length: 256 characters
 
@@ -86,7 +43,7 @@ This document tracks identified improvements that could enhance the Lemma projec
 
 **Solution**: Use `criterion` to benchmark:
 - Parse time for various document sizes
-- Transpilation time
+- Evaluation time for different complexity levels
 - End-to-end evaluation time
 - Unit conversion operations
 
@@ -111,15 +68,15 @@ This document tracks identified improvements that could enhance the Lemma projec
 - Go-to-definition
 - Hover documentation
 
-### REPL (Priority: Low)
+### Enhanced Interactive Mode (Priority: Low)
 
-**Issue**: No interactive mode for experimenting with rules.
+**Issue**: Interactive mode exists but could be more powerful.
 
-**Solution**: Create a REPL that allows:
-- Defining facts and rules interactively
-- Querying rules
-- Inspecting evaluation operations
-- Viewing operation records of rule evaluation
+**Enhancements**:
+- Multi-line document editing
+- Command history and autocomplete
+- Live evaluation as you type
+- Step-through debugging of rule evaluation
 
 ---
 

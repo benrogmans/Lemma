@@ -24,7 +24,7 @@ rule discount = 0%
 rule price = 200 eur - discount?
 ```
 
-Note: Lemma intelligently handles arithmetic between different types - `200 eur - discount?` automatically applies the percentage to the money value.
+The `200 eur - discount?` expression automatically applies percentage semantics, resulting in `180 eur` when discount is `10%`.
 
 ## Why Lemma?
 
@@ -62,7 +62,7 @@ rule can_vote = false
 Query it:
 
 ```bash
-lemma run hello --workdir .
+lemma run hello -d .
 # Output: Shows all rules in the hello document with operation records
 ```
 
@@ -200,19 +200,19 @@ rule loan_approval = reject
 
 ```bash
 # Run a document (evaluates all rules)
-lemma run document_name --workdir .
+lemma run document_name -d .
 
 # Override facts
-lemma run document_name --workdir . age=25 income="50000 USD"
+lemma run document_name -d . age=25 income="50000 USD"
 
-# Inspect document structure
-lemma inspect document_name --workdir .
+# Show document structure
+lemma show document_name -d .
 
-# Load and manage workspace
-lemma workspace ./policies/
+# List all documents in workspace
+lemma list ./policies/
 
 # Start HTTP server
-lemma serve --workdir ./policies --port 3000
+lemma serve -d ./policies --port 3000
 ```
 
 ### HTTP Server
@@ -220,7 +220,7 @@ lemma serve --workdir ./policies --port 3000
 Start a server with your workspace pre-loaded:
 
 ```bash
-lemma serve --workdir ./policies
+lemma serve -d ./policies
 
 # Evaluate with inline code
 curl -X POST http://localhost:3000/evaluate \
@@ -259,10 +259,11 @@ lemma/
 
 Lemma is implemented in pure Rust, providing:
 
-- **Pure Rust evaluator** - Fast, deterministic execution without external dependencies
-- **Type-aware operations** - Automatic type checking and conversions
-- **Composability** - Rules build on rules with dependency resolution
+- **Pure Rust evaluator** - Fast, deterministic execution with no external dependencies
+- **Type-aware operations** - Automatic type checking and semantic conversions
+- **Composability** - Rules reference other rules with automatic dependency resolution
 - **Rich type system** - Built-in units with automatic conversions
+- **Operation tracking** - Complete audit trail of every evaluation step
 - **HTTP Server** - REST API with workspace pre-loading
 - **WebAssembly support** - Run in browsers and edge environments
 
