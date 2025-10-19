@@ -24,14 +24,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Check version changes
         id: check
         run: |
           # Read version from workspace Cargo.toml (single source of truth)
-          VERSION=$(grep '^\[workspace.package\]' -A 10 Cargo.toml | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          CURRENT_VERSION=$(grep '^\[workspace.package\]' -A 10 Cargo.toml | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
 
           # For manual trigger, always consider changed
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
@@ -42,25 +42,32 @@ jobs:
             exit 0
           fi
 
-          # Check if workspace version changed
-          if git diff HEAD^ HEAD -- Cargo.toml | grep -q '^+version = '; then
+          # Get the latest tag (last published version)
+          LATEST_TAG=$(git describe --tags --abbrev=0 --match "cli-v*" 2>/dev/null || echo "cli-v0.0.0")
+          TAG_VERSION=${LATEST_TAG#cli-v}
+          
+          echo "Current version: $CURRENT_VERSION"
+          echo "Latest tag version: $TAG_VERSION"
+
+          # Check if workspace version changed compared to latest tag
+          if [ "$CURRENT_VERSION" != "$TAG_VERSION" ]; then
             echo "version_changed=true" >> $GITHUB_OUTPUT
 
-            # Check individual component changes
-            if git diff HEAD^ HEAD -- lemma/src/ lemma/Cargo.toml | grep -q .; then
+            # For version changes, check what components changed since the last tag
+            if git diff $LATEST_TAG HEAD -- lemma/src/ lemma/Cargo.toml | grep -q .; then
               echo "lemma_changed=true" >> $GITHUB_OUTPUT
             else
               echo "lemma_changed=false" >> $GITHUB_OUTPUT
             fi
 
-            if git diff HEAD^ HEAD -- cli/src/ cli/Cargo.toml | grep -q .; then
+            if git diff $LATEST_TAG HEAD -- cli/src/ cli/Cargo.toml | grep -q .; then
               echo "cli_changed=true" >> $GITHUB_OUTPUT
             else
               echo "cli_changed=false" >> $GITHUB_OUTPUT
             fi
 
             # WASM changes when lemma changes
-            if git diff HEAD^ HEAD -- lemma/src/ lemma/Cargo.toml lemma/package.json | grep -q .; then
+            if git diff $LATEST_TAG HEAD -- lemma/src/ lemma/Cargo.toml lemma/package.json | grep -q .; then
               echo "wasm_changed=true" >> $GITHUB_OUTPUT
             else
               echo "wasm_changed=false" >> $GITHUB_OUTPUT

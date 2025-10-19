@@ -7,6 +7,8 @@ edition = "2021"
 [package.metadata]
 cargo-fuzz = true
 
+[workspace]
+
 [dependencies]
 libfuzzer-sys = "0.4"
 
