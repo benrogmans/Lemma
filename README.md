@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/benrogmans/lemma/workflows/CI/badge.svg)](https://github.com/benrogmans/lemma/actions/workflows/ci.yml)
 [![DeepSource](https://app.deepsource.com/gh/benrogmans/lemma.svg/?label=active+issues&show_trend=true)](https://app.deepsource.com/gh/benrogmans/lemma/)
-[![Crates.io](https://img.shields.io/crates/v/lemma.svg)](https://crates.io/crates/lemma)
-[![Documentation](https://docs.rs/lemma/badge.svg)](https://docs.rs/lemma)
+[![Crates.io](https://img.shields.io/crates/v/lemma-engine.svg)](https://crates.io/crates/lemma-engine)
+[![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/crates/l/lemma.svg)](LICENSE)
 
 > **Rules for man and machine**
@@ -32,7 +32,7 @@ Note: Lemma intelligently handles arithmetic between different types - `200 eur 
 - **Type-safe** - Built-in support for money, dates, durations, units with automatic conversions
 - **Declarative** - Describe what, not how
 - **Composable** - Documents reference and extend each other
-- **Traceable** - Every decision has a clear audit trail
+- **Auditable** - Every decision has a clear audit trail
 - **Pure Rust** - Fast, deterministic execution without external dependencies
 
 ## Quick Start
@@ -40,7 +40,7 @@ Note: Lemma intelligently handles arithmetic between different types - `200 eur 
 ### Installation
 
 ```bash
-cargo install lemma
+cargo install lemma-cli
 ```
 
 ### Your First Rule
@@ -63,10 +63,7 @@ Query it:
 
 ```bash
 lemma run hello --workdir .
-# Output: Shows all rules in the hello document
-
-lemma run hello --workdir . --trace
-# Output: Shows execution trace for all rules
+# Output: Shows all rules in the hello document with operation records
 ```
 
 ### Real-World Example
@@ -207,9 +204,6 @@ lemma run document_name --workdir .
 
 # Override facts
 lemma run document_name --workdir . age=25 income="50000 USD"
-
-# Show execution trace
-lemma run document_name --workdir . --trace
 
 # Inspect document structure
 lemma inspect document_name --workdir .

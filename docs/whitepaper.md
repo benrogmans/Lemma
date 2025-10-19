@@ -58,7 +58,7 @@ Lemma addresses these problems by providing a declarative language that:
 - **Last wins semantics**: The "unless" clause uses "last matching wins" logic that mirrors how humans naturally express exceptions and special cases.
 - **Fully executable**: Despite its natural syntax, Lemma uses a pure Rust evaluator, providing rigorous logical inference and deterministic evaluation.
 - **Composable**: Documents reference and extend each other, enabling modular rule design.
-- **Traceable**: Every decision can be traced back to specific facts and rules with execution traces.
+- **Auditable**: Every decision can be traced back to specific facts and rules with operation records.
 
 ### 1.3 Example
 
@@ -931,8 +931,8 @@ rule tax_bracket = "10%"
   unless income > 95375 usd then "22%"
 EOF
 
-# Override facts and show trace
-lemma run example income="100000 usd" --trace
+# Override facts
+lemma run example income="100000 usd"
 ```
 
 Documentation, examples, and source code are available at:

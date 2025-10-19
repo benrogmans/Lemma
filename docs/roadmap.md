@@ -118,8 +118,8 @@ This document tracks identified improvements that could enhance the Lemma projec
 **Solution**: Create a REPL that allows:
 - Defining facts and rules interactively
 - Querying rules
-- Inspecting evaluation traces
-- Viewing trace of rule evaluation
+- Inspecting evaluation operations
+- Viewing operation records of rule evaluation
 
 ---
 

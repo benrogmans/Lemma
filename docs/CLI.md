@@ -151,8 +151,7 @@ Content-Type: application/json
   "code": "doc example\nfact x = 5\nrule y = x * 2",
   "facts": {
     "x": 100
-  },
-  "include_trace": false
+  }
 }
 ```
 
@@ -166,8 +165,7 @@ Content-Type: application/json
       "veto_reason": null
     }
   ],
-  "warnings": [],
-  "traces": null
+  "warnings": []
 }
 ```
 
@@ -250,7 +248,7 @@ curl -X POST http://localhost:3000/evaluate \
 ## Features
 
 - ✅ **Document Listing** - Load and list all documents from a directory
-- ✅ **CLI Evaluation** - Run documents from command line with detailed traces by default
+- ✅ **CLI Evaluation** - Run documents from command line with operation records
 - ✅ **Interactive Mode** - Guided prompts with fuzzy search, multi-select, and calendar date picker
 - ✅ **Raw Output Mode** - Extract values for piping to other Unix tools
 - ✅ **HTTP Server** - REST API with both stateful and stateless evaluation
