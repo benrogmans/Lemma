@@ -16,7 +16,7 @@ rule weight_lbs = weight_kg in pounds
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", vec![]).unwrap();
+    let response = engine.evaluate("test1", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -49,7 +49,7 @@ rule weight_kg = weight_tons in kilograms
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", vec![]).unwrap();
+    let response = engine.evaluate("test2", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -81,7 +81,7 @@ rule distance_miles = distance_km in miles
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", vec![]).unwrap();
+    let response = engine.evaluate("test1", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -113,7 +113,7 @@ rule distance_meters = distance_yards in meters
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", vec![]).unwrap();
+    let response = engine.evaluate("test2", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -145,7 +145,7 @@ rule length_cm = length_dm in centimeters
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test3", vec![]).unwrap();
+    let response = engine.evaluate("test3", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -177,7 +177,7 @@ rule volume_ml = volume_l in milliliters
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", vec![]).unwrap();
+    let response = engine.evaluate("test1", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -204,7 +204,7 @@ rule volume_l = volume_gal in liters
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", vec![]).unwrap();
+    let response = engine.evaluate("test2", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -236,7 +236,7 @@ rule volume_pt = volume_qt in pints
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test3", vec![]).unwrap();
+    let response = engine.evaluate("test3", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -263,7 +263,7 @@ rule volume_dl = volume_cl in deciliters
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test4", vec![]).unwrap();
+    let response = engine.evaluate("test4", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -300,7 +300,7 @@ rule time_min = time_h in minutes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", vec![]).unwrap();
+    let response = engine.evaluate("test1", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -328,7 +328,7 @@ rule time_ms = time_s in milliseconds
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", vec![]).unwrap();
+    let response = engine.evaluate("test2", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -356,7 +356,7 @@ rule time_us = time_ms in microseconds
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test3", vec![]).unwrap();
+    let response = engine.evaluate("test3", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -389,7 +389,7 @@ rule power_w = power_kw in watts
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", vec![]).unwrap();
+    let response = engine.evaluate("test1", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -416,7 +416,7 @@ rule power_mw = power_w in milliwatts
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", vec![]).unwrap();
+    let response = engine.evaluate("test2", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -448,7 +448,7 @@ rule energy_j = energy_kj in joules
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", vec![]).unwrap();
+    let response = engine.evaluate("test1", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -475,7 +475,7 @@ rule energy_wh = energy_kwh in watthours
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", vec![]).unwrap();
+    let response = engine.evaluate("test2", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -502,7 +502,7 @@ rule energy_cal = energy_kcal in calories
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test3", vec![]).unwrap();
+    let response = engine.evaluate("test3", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -534,7 +534,7 @@ rule pressure_pa = pressure_kpa in pascals
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", vec![]).unwrap();
+    let response = engine.evaluate("test1", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -561,7 +561,7 @@ rule pressure_kpa = pressure_mpa in kilopascals
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", vec![]).unwrap();
+    let response = engine.evaluate("test2", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -593,7 +593,7 @@ rule size_mb = size_gb in megabytes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", vec![]).unwrap();
+    let response = engine.evaluate("test1", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -620,7 +620,7 @@ rule size_gb = size_tb in gigabytes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", vec![]).unwrap();
+    let response = engine.evaluate("test2", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -647,7 +647,7 @@ rule size_tb = size_pb in terabytes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test3", vec![]).unwrap();
+    let response = engine.evaluate("test3", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -674,7 +674,7 @@ rule size_mib = size_gib in mebibytes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test4", vec![]).unwrap();
+    let response = engine.evaluate("test4", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -701,7 +701,7 @@ rule size_b = size_kib in bytes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test5", vec![]).unwrap();
+    let response = engine.evaluate("test5", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -739,7 +739,7 @@ rule discounted_price = base_price * (1 - discount)
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("complex", vec![]).unwrap();
+    let response = engine.evaluate("complex", None, None).unwrap();
 
     let weight_result = response
         .results

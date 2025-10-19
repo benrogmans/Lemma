@@ -19,7 +19,7 @@ rule equal_false = a == c
         )
         .unwrap();
 
-    let response = engine.evaluate("test_equal_numbers", vec![]).unwrap();
+    let response = engine.evaluate("test_equal_numbers", None, None).unwrap();
 
     let equal_true = response
         .results
@@ -54,7 +54,7 @@ rule different_greeting = greeting == other
         )
         .unwrap();
 
-    let response = engine.evaluate("test_equal_text", vec![]).unwrap();
+    let response = engine.evaluate("test_equal_text", None, None).unwrap();
 
     let same = response
         .results
@@ -90,7 +90,7 @@ rule different_price = price_a == price_c
         )
         .unwrap();
 
-    let response = engine.evaluate("test_equal_money", vec![]).unwrap();
+    let response = engine.evaluate("test_equal_money", None, None).unwrap();
 
     let same = response
         .results
@@ -126,7 +126,7 @@ rule mixed = flag_a == flag_c
         )
         .unwrap();
 
-    let response = engine.evaluate("test_equal_booleans", vec![]).unwrap();
+    let response = engine.evaluate("test_equal_booleans", None, None).unwrap();
 
     let both_true = response
         .results
@@ -162,7 +162,9 @@ rule message = "inactive"
         )
         .unwrap();
 
-    let response = engine.evaluate("test_equal_conditions", vec![]).unwrap();
+    let response = engine
+        .evaluate("test_equal_conditions", None, None)
+        .unwrap();
 
     let message = response
         .results

@@ -37,7 +37,7 @@ rule contract_valid = is_salary_valid? and vacation_days_ok? and is_adult?
         .add_lemma_code(employment_terms, "test.lemma")
         .unwrap();
 
-    let response = engine.evaluate("employment_terms", vec![]).unwrap();
+    let response = engine.evaluate("employment_terms", None, None).unwrap();
 
     let total_comp = response
         .results
@@ -95,7 +95,7 @@ rule final_cost = (base_shipping? + distance_fee?) * express_multiplier?
 
     engine.add_lemma_code(shipping_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("shipping", vec![]).unwrap();
+    let response = engine.evaluate("shipping", None, None).unwrap();
 
     let weight_pounds = response
         .results
@@ -152,7 +152,7 @@ rule effective_rate = (tax_amount? / income) * 100%
 
     engine.add_lemma_code(tax_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("tax_calculation", vec![]).unwrap();
+    let response = engine.evaluate("tax_calculation", None, None).unwrap();
 
     let taxable = response
         .results
@@ -218,7 +218,7 @@ rule status = "OK"
     engine.add_lemma_code(config_doc, "test.lemma").unwrap();
     engine.add_lemma_code(monitoring_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("monitoring", vec![]).unwrap();
+    let response = engine.evaluate("monitoring", None, None).unwrap();
 
     let system_healthy = response
         .results
@@ -260,7 +260,7 @@ rule status = "OK"
         .add_lemma_code(monitoring_override, "test.lemma")
         .unwrap();
 
-    let response2 = engine.evaluate("monitoring", vec![]).unwrap();
+    let response2 = engine.evaluate("monitoring", None, None).unwrap();
 
     let system_healthy2 = response2
         .results
@@ -315,7 +315,7 @@ rule trip_summary = is_high_speed? and is_long_distance? and is_high_power?
 
     engine.add_lemma_code(physics_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("physics_calculation", vec![]).unwrap();
+    let response = engine.evaluate("physics_calculation", None, None).unwrap();
 
     let mass_pounds = response
         .results
@@ -357,8 +357,9 @@ rule status = "LOW"
 
     engine.add_lemma_code(config_doc, "test.lemma").unwrap();
 
+    let facts = lemma::parse_facts(&["threshold=500", "multiplier=2"]).unwrap();
     let response = engine
-        .evaluate("dynamic_config", vec!["threshold=500", "multiplier=2"])
+        .evaluate("dynamic_config", None, Some(facts))
         .unwrap();
 
     let calculated = response
@@ -375,8 +376,9 @@ rule status = "LOW"
         .unwrap();
     assert_eq!(status.result.as_ref().unwrap().to_string(), "\"LOW\"");
 
+    let facts2 = lemma::parse_facts(&["threshold=150", "multiplier=2"]).unwrap();
     let response2 = engine
-        .evaluate("dynamic_config", vec!["threshold=150", "multiplier=2"])
+        .evaluate("dynamic_config", None, Some(facts2))
         .unwrap();
 
     let status2 = response2
@@ -416,7 +418,7 @@ rule is_on_schedule = elapsed_time? <= phase1_duration + phase2_duration
 
     engine.add_lemma_code(timeline_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("project_timeline", vec![]).unwrap();
+    let response = engine.evaluate("project_timeline", None, None).unwrap();
 
     let phase1_complete = response
         .results
@@ -454,7 +456,7 @@ rule end_date = start + duration
 "#;
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     let end_date = response
         .results
@@ -480,7 +482,7 @@ rule start_date = end - duration
 "#;
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     let start_date = response
         .results
@@ -506,7 +508,7 @@ rule duration = end - start
 "#;
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     let duration = response
         .results
@@ -534,7 +536,7 @@ rule date1_after_date2 = date1 > date2
 "#;
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     let before = response
         .results
@@ -725,7 +727,7 @@ rule is_valid = value >= config.min_value and value <= config.max_value
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(child_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("child", vec![]).unwrap();
+    let response = engine.evaluate("child", None, None).unwrap();
 
     let is_valid = response
         .results
@@ -756,7 +758,7 @@ rule is_valid = salary >= base_contract.min_salary and salary <= base_contract.m
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(child_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("child", vec![]).unwrap();
+    let response = engine.evaluate("child", None, None).unwrap();
 
     let is_valid = response
         .results
@@ -786,7 +788,7 @@ rule probation_end = base_contract.project_start + base_contract.probation_perio
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(child_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("child", vec![]).unwrap();
+    let response = engine.evaluate("child", None, None).unwrap();
 
     let probation_end = response
         .results

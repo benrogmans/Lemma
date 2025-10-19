@@ -13,7 +13,7 @@ rule lighter = weight1 < weight2
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     // 3 kg = 3000 g, so 3000 g > 300 g = true
     let heavier = response
@@ -45,7 +45,7 @@ rule equal = 1000 meters == 1 kilometer
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     // 100 m < 1 km (1000 m) = true
     let shorter = response
@@ -76,7 +76,7 @@ rule less_time = time1 < time2
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     // 90 seconds < 2 minutes (120 seconds) = true
     let less_time = response
@@ -99,7 +99,7 @@ rule weight_greater = weight > distance
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     // Different categories: compares numeric values (5 > 3 = true)
     let weight_greater = response
@@ -122,7 +122,7 @@ rule less_than_10 = weight < 10
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     // 5 kg > 3 (extracts value: 5 > 3 = true)
     let greater = response
@@ -153,7 +153,7 @@ rule total = weight1 + weight2
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     // 2 kg + 500 g = 2.5 kg (preserved left unit)
     let total = response
@@ -178,7 +178,7 @@ rule speed = distance / time
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     // 15 meters / 3 seconds = 5 (dimensionless number)
     let speed = response
@@ -201,7 +201,7 @@ rule same_temp = temp1 == temp2
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     // 0°C == 32°F = true (both are freezing point)
     let same_temp = response
@@ -224,7 +224,7 @@ rule less_power = power1 < power2
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     // 500 W < 1 kW (1000 W) = true
     let less_power = response

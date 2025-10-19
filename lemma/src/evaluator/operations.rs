@@ -299,7 +299,7 @@ fn convert_to_matching_unit(
         crate::NumericUnit::Pressure(_, u) => crate::ConversionTarget::Pressure(u.clone()),
         crate::NumericUnit::Energy(_, u) => crate::ConversionTarget::Energy(u.clone()),
         crate::NumericUnit::Frequency(_, u) => crate::ConversionTarget::Frequency(u.clone()),
-        crate::NumericUnit::DataSize(_, u) => crate::ConversionTarget::DataSize(u.clone()),
+        crate::NumericUnit::Data(_, u) => crate::ConversionTarget::Data(u.clone()),
         crate::NumericUnit::Money(_, u) => crate::ConversionTarget::Money(u.clone()),
     };
     super::units::convert_unit_for_arithmetic(value, &conversion_target)
@@ -318,15 +318,6 @@ fn compare_decimals(left: Decimal, op: &ComparisonOperator, right: &Decimal) -> 
 }
 
 /// Helper to get a human-readable type name
-fn type_name(value: &LiteralValue) -> &'static str {
-    match value {
-        LiteralValue::Number(_) => "Number",
-        LiteralValue::Percentage(_) => "Percentage",
-        LiteralValue::Boolean(_) => "Boolean",
-        LiteralValue::Text(_) => "Text",
-        LiteralValue::Date(_) => "Date",
-        LiteralValue::Time(_) => "Time",
-        LiteralValue::Unit(unit) => unit.category(),
-        LiteralValue::Regex(_) => "Regex",
-    }
+fn type_name(value: &LiteralValue) -> String {
+    value.to_type().to_string()
 }

@@ -22,7 +22,7 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
         "pricing.lemma",
     )?;
 
-    let response = engine.evaluate("pricing", vec![])?;
+    let response = engine.evaluate("pricing", None, None)?;
 
     // Check discount rule result
     let discount_result = response
@@ -75,7 +75,7 @@ fn test_unit_add_percentage() -> LemmaResult<()> {
         "tax.lemma",
     )?;
 
-    let response = engine.evaluate("tax_calculation", vec![])?;
+    let response = engine.evaluate("tax_calculation", None, None)?;
 
     let result = response
         .results
@@ -117,7 +117,7 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
         "ops.lemma",
     )?;
 
-    let response = engine.evaluate("unit_percentage_ops", vec![])?;
+    let response = engine.evaluate("unit_percentage_ops", None, None)?;
 
     // Check increased (50 gbp + 20% = 60 gbp)
     let increased_result = response
@@ -192,7 +192,7 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
         "complex.lemma",
     )?;
 
-    let response = engine.evaluate("complex_pricing", vec![])?;
+    let response = engine.evaluate("complex_pricing", None, None)?;
 
     // Check after_bulk (1000 eur - 15% = 850 eur)
     let after_bulk_result = response
@@ -259,7 +259,7 @@ fn test_unit_percentage_with_different_currencies() -> LemmaResult<()> {
         "multi.lemma",
     )?;
 
-    let response = engine.evaluate("multi_currency", vec![])?;
+    let response = engine.evaluate("multi_currency", None, None)?;
 
     // Check USD (100 usd - 12% = 88 usd)
     let usd_result = response

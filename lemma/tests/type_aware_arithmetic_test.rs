@@ -18,7 +18,7 @@ rule test_passes = price_after_discount? == expected?
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
-        .evaluate("test_money_minus_percentage", vec![])
+        .evaluate("test_money_minus_percentage", None, None)
         .unwrap();
 
     let price_after_discount = response
@@ -57,7 +57,7 @@ rule test_passes = price_with_markup? == expected?
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
-        .evaluate("test_money_plus_percentage", vec![])
+        .evaluate("test_money_plus_percentage", None, None)
         .unwrap();
 
     let price_with_markup = response
@@ -96,7 +96,7 @@ rule test_passes = result? == expected?
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
-        .evaluate("test_number_times_percentage", vec![])
+        .evaluate("test_number_times_percentage", None, None)
         .unwrap();
 
     let result = response
@@ -132,7 +132,9 @@ rule test_passes = final_price? == expected?
 "#;
 
     engine.add_lemma_code(code, "test").unwrap();
-    let response = engine.evaluate("test_with_rule_reference", vec![]).unwrap();
+    let response = engine
+        .evaluate("test_with_rule_reference", None, None)
+        .unwrap();
 
     let discount_amount = response
         .results
@@ -169,7 +171,9 @@ rule test_passes = after_second? == expected?
 "#;
 
     engine.add_lemma_code(code, "test").unwrap();
-    let response = engine.evaluate("test_chained_percentages", vec![]).unwrap();
+    let response = engine
+        .evaluate("test_chained_percentages", None, None)
+        .unwrap();
 
     let after_first = response
         .results

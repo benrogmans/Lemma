@@ -17,7 +17,7 @@ rule remainder = a % b
         )
         .unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -45,7 +45,7 @@ rule result = base ^ exponent
         )
         .unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -73,7 +73,7 @@ rule is_odd = (value % 2) == 1
         )
         .unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
 
     let is_even = response
         .results
@@ -104,7 +104,7 @@ rule square_root = base ^ 0.5
         )
         .unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -132,7 +132,7 @@ rule calculation = (x % y) + (2 ^ 3)
         )
         .unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     let result = response
         .results
         .iter()

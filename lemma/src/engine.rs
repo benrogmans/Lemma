@@ -81,35 +81,31 @@ impl Engine {
         }
     }
 
-    pub fn evaluate(&self, doc_name: &str, fact_values: Vec<&str>) -> LemmaResult<Response> {
-        self.evaluate_rules(doc_name, None, fact_values)
-    }
-
-    /// Evaluate specific rules in a document
+    /// Evaluate rules in a document with optional fact overrides
     ///
-    /// If `rule_names` is None, evaluates all rules (backward compatible).
+    /// If `rule_names` is None, evaluates all rules.
     /// If `rule_names` is Some, only returns results for the specified rules,
     /// but still computes their dependencies.
-    pub fn evaluate_rules(
+    ///
+    /// Fact overrides must be pre-parsed using `parse_facts()`.
+    pub fn evaluate(
         &self,
         doc_name: &str,
         rule_names: Option<Vec<String>>,
-        fact_values: Vec<&str>,
+        fact_overrides: Option<Vec<crate::LemmaFact>>,
     ) -> LemmaResult<Response> {
-        // Parse fact overrides
-        let fact_overrides = if !fact_values.is_empty() {
-            crate::parser::parse_facts(&fact_values)?
-        } else {
-            vec![]
-        };
-
-        // Use the pure Rust evaluator
+        let overrides = fact_overrides.unwrap_or_default();
         self.evaluator.evaluate_document(
             doc_name,
             &self.documents,
             &self.sources,
-            fact_overrides,
+            overrides,
             rule_names,
         )
+    }
+
+    /// Get all documents (needed by serializers for schema resolution)
+    pub fn get_all_documents(&self) -> &HashMap<String, crate::LemmaDoc> {
+        &self.documents
     }
 }

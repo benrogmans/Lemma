@@ -18,7 +18,7 @@ fn test_evaluate_document_all_rules() {
         )
         .unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     assert_eq!(response.results.len(), 2);
 
     let sum_result = response
@@ -60,7 +60,7 @@ fn test_evaluate_empty_facts() {
         )
         .unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     assert_eq!(response.results.len(), 1);
     assert_eq!(
         response.results[0].result,
@@ -84,7 +84,7 @@ fn test_evaluate_boolean_rule() {
         )
         .unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     assert_eq!(
         response.results[0].result,
         Some(crate::LiteralValue::Boolean(true))
@@ -106,7 +106,7 @@ fn test_evaluate_with_unless_clause() {
         )
         .unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     assert_eq!(
         response.results[0].result,
         Some(crate::LiteralValue::Number(
@@ -118,7 +118,7 @@ fn test_evaluate_with_unless_clause() {
 #[test]
 fn test_document_not_found() {
     let engine = Engine::new();
-    let result = engine.evaluate("nonexistent", vec![]);
+    let result = engine.evaluate("nonexistent", None, None);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("not found"));
 }
@@ -148,7 +148,7 @@ fn test_multiple_documents() {
         )
         .unwrap();
 
-    let response1 = engine.evaluate("doc1", vec![]).unwrap();
+    let response1 = engine.evaluate("doc1", None, None).unwrap();
     assert_eq!(
         response1.results[0].result,
         Some(crate::LiteralValue::Number(
@@ -156,7 +156,7 @@ fn test_multiple_documents() {
         ))
     );
 
-    let response2 = engine.evaluate("doc2", vec![]).unwrap();
+    let response2 = engine.evaluate("doc2", None, None).unwrap();
     assert_eq!(
         response2.results[0].result,
         Some(crate::LiteralValue::Number(
@@ -180,7 +180,7 @@ fn test_runtime_error_mapping() {
         )
         .unwrap();
 
-    let result = engine.evaluate("test", vec![]);
+    let result = engine.evaluate("test", None, None);
     // Division by zero returns an error from the evaluator
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Division by zero"));

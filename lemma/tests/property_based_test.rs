@@ -5,7 +5,7 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 
 fn get_rule_result(engine: &mut Engine, doc_name: &str, rule_name: &str) -> Option<LiteralValue> {
-    let response = engine.evaluate(doc_name, vec![]).unwrap();
+    let response = engine.evaluate(doc_name, None, None).unwrap();
     response
         .results
         .iter()
@@ -98,7 +98,8 @@ rule doubled = x * 2
         engine.add_lemma_code(code, "test").unwrap();
 
         let override_fact = format!("x={}", n);
-        let response = engine.evaluate("test", vec![override_fact.as_str()]).unwrap();
+        let facts = lemma::parse_facts(&[override_fact.as_str()]).unwrap();
+        let response = engine.evaluate("test", None, Some(facts)).unwrap();
 
         if let Some(result) = response.results.iter().find(|r| r.rule_name == "doubled") {
             if let Some(LiteralValue::Number(val)) = &result.result {

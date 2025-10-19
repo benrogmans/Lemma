@@ -2,7 +2,7 @@ use lemma::Engine;
 use rust_decimal::Decimal;
 
 fn get_rule_value(engine: &Engine, doc_name: &str, rule_name: &str) -> lemma::LiteralValue {
-    let response = engine.evaluate(doc_name, vec![]).unwrap();
+    let response = engine.evaluate(doc_name, None, None).unwrap();
     response
         .results
         .iter()

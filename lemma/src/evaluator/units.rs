@@ -50,7 +50,7 @@ pub(crate) fn convert_unit_for_arithmetic(
         (NumericUnit::Frequency(v, from), ConversionTarget::Frequency(to)) => {
             convert_frequency(*v, from, to)?
         }
-        (NumericUnit::DataSize(v, from), ConversionTarget::DataSize(to)) => {
+        (NumericUnit::Data(v, from), ConversionTarget::Data(to)) => {
             convert_data_size(*v, from, to)?
         }
         (NumericUnit::Money(v, from), ConversionTarget::Money(to)) => {
@@ -81,7 +81,7 @@ pub(crate) fn convert_unit_for_arithmetic(
         ConversionTarget::Pressure(u) => NumericUnit::Pressure(converted_value, u.clone()),
         ConversionTarget::Energy(u) => NumericUnit::Energy(converted_value, u.clone()),
         ConversionTarget::Frequency(u) => NumericUnit::Frequency(converted_value, u.clone()),
-        ConversionTarget::DataSize(u) => NumericUnit::DataSize(converted_value, u.clone()),
+        ConversionTarget::Data(u) => NumericUnit::Data(converted_value, u.clone()),
         ConversionTarget::Money(u) => NumericUnit::Money(converted_value, u.clone()),
         ConversionTarget::Percentage => {
             return Err(LemmaError::Engine(
@@ -130,7 +130,7 @@ pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> LemmaRes
                 (NumericUnit::Frequency(v, from), ConversionTarget::Frequency(to)) => {
                     convert_frequency(*v, from, to)?
                 }
-                (NumericUnit::DataSize(v, from), ConversionTarget::DataSize(to)) => {
+                (NumericUnit::Data(v, from), ConversionTarget::Data(to)) => {
                     convert_data_size(*v, from, to)?
                 }
                 (NumericUnit::Money(v, from), ConversionTarget::Money(to)) => {
@@ -178,9 +178,7 @@ pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> LemmaRes
                 ConversionTarget::Frequency(u) => {
                     LiteralValue::Unit(NumericUnit::Frequency(*n, u.clone()))
                 }
-                ConversionTarget::DataSize(u) => {
-                    LiteralValue::Unit(NumericUnit::DataSize(*n, u.clone()))
-                }
+                ConversionTarget::Data(u) => LiteralValue::Unit(NumericUnit::Data(*n, u.clone())),
                 ConversionTarget::Money(u) => LiteralValue::Unit(NumericUnit::Money(*n, u.clone())),
                 ConversionTarget::Percentage => LiteralValue::Percentage(n * Decimal::from(100)),
             };
@@ -533,10 +531,10 @@ pub(crate) fn convert_frequency(
 /// Convert data size between different units
 pub(crate) fn convert_data_size(
     value: Decimal,
-    from: &crate::DataSizeUnit,
-    to: &crate::DataSizeUnit,
+    from: &crate::DataUnit,
+    to: &crate::DataUnit,
 ) -> LemmaResult<Decimal> {
-    use crate::DataSizeUnit::*;
+    use crate::DataUnit::*;
     if from == to {
         return Ok(value);
     }

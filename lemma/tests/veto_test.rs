@@ -22,7 +22,7 @@ rule is_adult = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("age_check", vec![]).unwrap();
+    let response = engine.evaluate("age_check", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -48,7 +48,7 @@ rule is_valid = value > 0
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("validation", vec![]).unwrap();
+    let response = engine.evaluate("validation", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -71,7 +71,7 @@ rule is_adult = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("age_check", vec![]).unwrap();
+    let response = engine.evaluate("age_check", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -96,7 +96,7 @@ rule eligible = age >= 18 and score >= 80
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("validation", vec![]).unwrap();
+    let response = engine.evaluate("validation", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -124,7 +124,7 @@ rule eligible = age >= 18 and score >= 80
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("validation", vec![]).unwrap();
+    let response = engine.evaluate("validation", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -151,7 +151,7 @@ rule valid_compensation = salary >= 40000
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("salary_check", vec![]).unwrap();
+    let response = engine.evaluate("salary_check", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -181,7 +181,7 @@ rule can_drive = age >= 16
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("mixed_validation", vec![]).unwrap();
+    let response = engine.evaluate("mixed_validation", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -204,7 +204,7 @@ rule can_ship = package_weight <= 50 kilograms
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("weight_check", vec![]).unwrap();
+    let response = engine.evaluate("weight_check", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -230,7 +230,7 @@ rule is_affordable = price <= 1000
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("pricing_check", vec![]).unwrap();
+    let response = engine.evaluate("pricing_check", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -257,7 +257,7 @@ rule is_valid_date = event_date >= min_date
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("date_validation", vec![]).unwrap();
+    let response = engine.evaluate("date_validation", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -283,7 +283,7 @@ rule is_complete = completion >= 95%
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("completion_check", vec![]).unwrap();
+    let response = engine.evaluate("completion_check", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -311,7 +311,7 @@ rule eligible = has_permission
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("eligibility", vec![]).unwrap();
+    let response = engine.evaluate("eligibility", None, None).unwrap();
     let eligible_result = response
         .results
         .iter()
@@ -338,7 +338,7 @@ rule within_budget = expenses < income
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("budget_check", vec![]).unwrap();
+    let response = engine.evaluate("budget_check", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -364,7 +364,7 @@ rule is_active = status == "active"
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("status_check", vec![]).unwrap();
+    let response = engine.evaluate("status_check", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -392,7 +392,7 @@ rule double_value = value * 2
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("multi_rule", vec![]).unwrap();
+    let response = engine.evaluate("multi_rule", None, None).unwrap();
 
     let check_positive = response
         .results
@@ -437,7 +437,7 @@ rule is_valid = value > 0
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("edge_case", vec![]).unwrap();
+    let response = engine.evaluate("edge_case", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -460,7 +460,7 @@ rule valid = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("special_chars", vec![]).unwrap();
+    let response = engine.evaluate("special_chars", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -491,7 +491,7 @@ rule valid = value > 0
     let mut engine = Engine::new();
     engine.add_lemma_code(&code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("long_message", vec![]).unwrap();
+    let response = engine.evaluate("long_message", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -515,7 +515,7 @@ rule check = value > 10
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("priority_test", vec![]).unwrap();
+    let response = engine.evaluate("priority_test", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -543,7 +543,7 @@ rule eligible = age >= 18 and score >= 80
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("double_veto", vec![]).unwrap();
+    let response = engine.evaluate("double_veto", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -567,7 +567,7 @@ rule eligible = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("or_condition", vec![]).unwrap();
+    let response = engine.evaluate("or_condition", None, None).unwrap();
     let rule_result = response
         .results
         .iter()
@@ -593,7 +593,7 @@ rule can_proceed = true
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("negation_test", vec![]).unwrap();
+    let response = engine.evaluate("negation_test", None, None).unwrap();
     let rule_result = response
         .results
         .iter()

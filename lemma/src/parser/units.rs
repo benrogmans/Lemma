@@ -50,7 +50,7 @@ pub fn resolve_unit(value: Decimal, unit_str: &str) -> Result<LiteralValue, Lemm
     }
 
     if let Some(unit) = try_parse_data_size_unit(&unit_lower) {
-        return Ok(LiteralValue::Unit(NumericUnit::DataSize(value, unit)));
+        return Ok(LiteralValue::Unit(NumericUnit::Data(value, unit)));
     }
 
     if let Some(currency) = try_parse_money_unit(&unit_lower) {
@@ -235,18 +235,18 @@ fn try_parse_frequency_unit(s: &str) -> Option<FrequencyUnit> {
 }
 
 // Data Size Units
-fn try_parse_data_size_unit(s: &str) -> Option<DataSizeUnit> {
+fn try_parse_data_size_unit(s: &str) -> Option<DataUnit> {
     match s {
-        "petabyte" | "petabytes" => Some(DataSizeUnit::Petabyte),
-        "terabyte" | "terabytes" => Some(DataSizeUnit::Terabyte),
-        "gigabyte" | "gigabytes" => Some(DataSizeUnit::Gigabyte),
-        "megabyte" | "megabytes" => Some(DataSizeUnit::Megabyte),
-        "kilobyte" | "kilobytes" => Some(DataSizeUnit::Kilobyte),
-        "byte" | "bytes" => Some(DataSizeUnit::Byte),
-        "tebibyte" | "tebibytes" => Some(DataSizeUnit::Tebibyte),
-        "gibibyte" | "gibibytes" => Some(DataSizeUnit::Gibibyte),
-        "mebibyte" | "mebibytes" => Some(DataSizeUnit::Mebibyte),
-        "kibibyte" | "kibibytes" => Some(DataSizeUnit::Kibibyte),
+        "petabyte" | "petabytes" => Some(DataUnit::Petabyte),
+        "terabyte" | "terabytes" => Some(DataUnit::Terabyte),
+        "gigabyte" | "gigabytes" => Some(DataUnit::Gigabyte),
+        "megabyte" | "megabytes" => Some(DataUnit::Megabyte),
+        "kilobyte" | "kilobytes" => Some(DataUnit::Kilobyte),
+        "byte" | "bytes" => Some(DataUnit::Byte),
+        "tebibyte" | "tebibytes" => Some(DataUnit::Tebibyte),
+        "gibibyte" | "gibibytes" => Some(DataUnit::Gibibyte),
+        "mebibyte" | "mebibytes" => Some(DataUnit::Mebibyte),
+        "kibibyte" | "kibibytes" => Some(DataUnit::Kibibyte),
         _ => None,
     }
 }
@@ -318,7 +318,7 @@ pub fn resolve_conversion_target(unit_str: &str) -> Result<ConversionTarget, Lem
     }
 
     if let Some(unit) = try_parse_data_size_unit(&unit_lower) {
-        return Ok(ConversionTarget::DataSize(unit));
+        return Ok(ConversionTarget::Data(unit));
     }
 
     if let Some(unit) = try_parse_money_unit(&unit_lower) {

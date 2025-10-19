@@ -9,6 +9,7 @@ pub mod http {
     };
     use lemma::{Engine, Response};
     use serde::{Deserialize, Serialize};
+
     use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::sync::Arc;
@@ -97,16 +98,34 @@ pub mod http {
 
         let facts: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
         let fact_refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
+        let parsed_facts = if !fact_refs.is_empty() {
+            match lemma::parse_facts(&fact_refs) {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    error!("Failed to parse facts: {}", e);
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: format!("Failed to parse facts: {}", e),
+                        }),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
 
-        let response: Response = engine.evaluate(&doc_name, fact_refs).map_err(|e| {
-            error!("Evaluation failed: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Evaluation failed: {}", e),
-                }),
-            )
-        })?;
+        let response: Response = engine
+            .evaluate(&doc_name, None, parsed_facts)
+            .map_err(|e| {
+                error!("Evaluation failed: {}", e);
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: format!("Evaluation failed: {}", e),
+                    }),
+                )
+            })?;
 
         let results = convert_results(&response);
         info!(
@@ -167,16 +186,35 @@ pub mod http {
             .map(|(k, v)| format!("{}={}", k, json_value_to_lemma(v)))
             .collect();
         let fact_refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
+        let parsed_facts = if !fact_refs.is_empty() {
+            match lemma::parse_facts(&fact_refs) {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    error!("Failed to parse facts: {}", e);
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: format!("Failed to parse facts: {}", e),
+                        }),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
 
-        let response: Response = temp_engine.evaluate(doc_name, fact_refs).map_err(|e| {
-            error!("Evaluation failed: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Evaluation failed: {}", e),
-                }),
-            )
-        })?;
+        let response: Response =
+            temp_engine
+                .evaluate(doc_name, None, parsed_facts)
+                .map_err(|e| {
+                    error!("Evaluation failed: {}", e);
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: format!("Evaluation failed: {}", e),
+                        }),
+                    )
+                })?;
 
         let results = convert_results(&response);
 

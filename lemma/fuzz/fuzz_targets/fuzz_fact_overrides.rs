@@ -14,7 +14,9 @@ rule doubled = x * 2
 "#;
         
         if engine.add_lemma_code(code, "fuzz_override").is_ok() {
-            let _ = engine.evaluate("fuzz_test", vec![s]);
+            if let Ok(facts) = lemma::parse_facts(&[s]) {
+                let _ = engine.evaluate("fuzz_test", None, Some(facts));
+            }
         }
     }
 });

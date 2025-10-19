@@ -197,7 +197,7 @@ fn get_type_annotation_from_literal(lit: &lemma::LiteralValue) -> TypeAnnotation
                 NumericUnit::Pressure(_, _) => TypeAnnotation::LemmaType(LemmaType::Pressure),
                 NumericUnit::Energy(_, _) => TypeAnnotation::LemmaType(LemmaType::Energy),
                 NumericUnit::Frequency(_, _) => TypeAnnotation::LemmaType(LemmaType::Frequency),
-                NumericUnit::DataSize(_, _) => TypeAnnotation::LemmaType(LemmaType::DataSize),
+                NumericUnit::Data(_, _) => TypeAnnotation::LemmaType(LemmaType::Data),
                 NumericUnit::Money(_, _) => TypeAnnotation::LemmaType(LemmaType::Money),
             }
         }

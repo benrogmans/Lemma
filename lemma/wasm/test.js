@@ -144,8 +144,8 @@ export async function test() {
     if (!doubleRule.result || doubleRule.result.value !== "100") {
       throw new Error(`Expected double_number to be 100 (50*2), got ${doubleRule.result?.value}`);
     }
-    if (doubleRule.result.type !== "Number") {
-      throw new Error(`Expected type to be Number, got ${doubleRule.result.type}`);
+    if (doubleRule.result.type !== "number") {
+      throw new Error(`Expected type to be nmber, got ${doubleRule.result.type}`);
     }
     console.log('✓ Type handling in facts object successful');
 

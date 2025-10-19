@@ -332,7 +332,7 @@ fn format_type_annotation(type_ann: &crate::TypeAnnotation) -> String {
             LemmaType::Mass => "mass".to_string(),
             LemmaType::Length => "length".to_string(),
             LemmaType::Volume => "volume".to_string(),
-            LemmaType::DataSize => "datasize".to_string(),
+            LemmaType::Data => "datasize".to_string(),
             LemmaType::Energy => "energy".to_string(),
             LemmaType::Power => "power".to_string(),
             LemmaType::Pressure => "pressure".to_string(),

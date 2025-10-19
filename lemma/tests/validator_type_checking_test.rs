@@ -167,7 +167,7 @@ fn test_all_unit_types_in_conversions() {
         ("(value * 101325) in pascals", "Pressure"),
         ("(value * 1000) in joules", "Energy"),
         ("(value * 60) in hertz", "Frequency"),
-        ("(value * 1024) in bytes", "DataSize"),
+        ("(value * 1024) in bytes", "Data"),
     ];
 
     for (conversion, unit_name) in test_cases {

@@ -17,7 +17,7 @@ rule discount = 0
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
     // Query the discount rule
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     let discount_result = response
         .results
         .iter()
@@ -47,7 +47,7 @@ rule can_drive = age >= 18 and has_license
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -76,7 +76,7 @@ rule result = base * multiplier
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -107,7 +107,7 @@ rule final_price = 100 - discount?
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("test", vec![]).unwrap();
+    let response = engine.evaluate("test", None, None).unwrap();
     let result = response
         .results
         .iter()

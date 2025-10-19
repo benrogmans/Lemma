@@ -297,10 +297,22 @@ pub mod server {
                 .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
 
-            let response = self.engine.evaluate(document, facts).map_err(|e| {
-                error!("Evaluation failed: {}", e);
-                McpError::internal_error(format!("Evaluation failed: {}", e))
-            })?;
+            let parsed_facts = if !facts.is_empty() {
+                Some(lemma::parse_facts(&facts).map_err(|e| {
+                    error!("Failed to parse facts: {}", e);
+                    McpError::internal_error(format!("Failed to parse facts: {}", e))
+                })?)
+            } else {
+                None
+            };
+
+            let response = self
+                .engine
+                .evaluate(document, None, parsed_facts)
+                .map_err(|e| {
+                    error!("Evaluation failed: {}", e);
+                    McpError::internal_error(format!("Evaluation failed: {}", e))
+                })?;
 
             let mut output = String::new();
             output.push_str(&format!(

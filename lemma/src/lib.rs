@@ -22,7 +22,7 @@
 //!     "#, "example.lemma")?;
 //!
 //!     // Evaluate the document
-//!     let response = engine.evaluate("example", vec![])?;
+//!     let response = engine.evaluate("example", None, None)?;
 //!
 //!     Ok(())
 //! }
@@ -55,6 +55,7 @@ pub mod operation_result;
 pub mod parser;
 pub mod response;
 pub mod semantic;
+pub mod serializers;
 pub mod validator;
 
 #[cfg(target_arch = "wasm32")]
@@ -64,7 +65,7 @@ pub use ast::{ExpressionId, ExpressionIdGenerator, Span};
 pub use engine::Engine;
 pub use error::LemmaError;
 pub use operation_result::OperationResult;
-pub use parser::parse;
+pub use parser::{parse, parse_facts};
 pub use response::{OperationRecord, Response, RuleResult};
 pub use semantic::*;
 pub use validator::{ValidatedDocuments, Validator};

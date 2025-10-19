@@ -154,7 +154,7 @@ fn test_runtime_error_division_by_zero() {
         )
         .unwrap();
 
-    let result = engine.evaluate("test", vec![]);
+    let result = engine.evaluate("test", None, None);
 
     match result {
         Err(LemmaError::Runtime(details)) => {
@@ -195,7 +195,8 @@ fn test_runtime_error_division_by_zero_with_cli_facts() {
         )
         .unwrap();
 
-    let result = engine.evaluate("test", vec!["hours_worked=0"]);
+    let facts = lemma::parse_facts(&["hours_worked=0"]).unwrap();
+    let result = engine.evaluate("test", None, Some(facts));
 
     match result {
         Err(LemmaError::Runtime(details)) => {
@@ -262,7 +263,7 @@ fn test_runtime_error_type_mismatch_text_in_arithmetic() {
         )
         .unwrap();
 
-    let result = engine.evaluate("test", vec![]);
+    let result = engine.evaluate("test", None, None);
 
     match result {
         Err(LemmaError::Runtime(details)) => {
@@ -297,7 +298,7 @@ fn test_runtime_error_boolean_in_arithmetic() {
         )
         .unwrap();
 
-    let result = engine.evaluate("test", vec![]);
+    let result = engine.evaluate("test", None, None);
 
     match result {
         Err(LemmaError::Runtime(details)) => {
@@ -442,7 +443,7 @@ fn test_division_by_zero_has_helpful_suggestion() {
         )
         .unwrap();
 
-    let result = engine.evaluate("test", vec![]);
+    let result = engine.evaluate("test", None, None);
 
     match result {
         Err(LemmaError::Runtime(details)) => {
@@ -527,7 +528,7 @@ fn test_runtime_error_has_source_context() {
         )
         .unwrap();
 
-    let result = engine.evaluate("test", vec![]);
+    let result = engine.evaluate("test", None, None);
 
     match result {
         Err(LemmaError::Runtime(details)) => {

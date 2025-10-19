@@ -2,7 +2,7 @@ use lemma::Engine;
 use rust_decimal::Decimal;
 
 fn get_rule_value(engine: &Engine, doc_name: &str, rule_name: &str) -> lemma::LiteralValue {
-    let response = engine.evaluate(doc_name, vec![]).unwrap();
+    let response = engine.evaluate(doc_name, None, None).unwrap();
     response
         .results
         .iter()
@@ -26,7 +26,9 @@ rule check = leap_date
     engine
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
-    let response = engine.evaluate("test", vec![]).expect("Failed to evaluate");
+    let response = engine
+        .evaluate("test", None, None)
+        .expect("Failed to evaluate");
     assert!(!response.results.is_empty());
 }
 
@@ -42,7 +44,9 @@ rule check = leap_date
     engine
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
-    let response = engine.evaluate("test", vec![]).expect("Failed to evaluate");
+    let response = engine
+        .evaluate("test", None, None)
+        .expect("Failed to evaluate");
     assert!(!response.results.is_empty());
 }
 

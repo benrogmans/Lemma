@@ -31,50 +31,45 @@ impl WasmEngine {
 
     #[wasm_bindgen(js_name = evaluate)]
     pub fn evaluate(&mut self, doc_name: &str, fact_values_json: &str) -> String {
-        // Convert JSON object to fact strings
+        // Convert JSON object to Lemma syntax strings using serializers
         let fact_values: Vec<String> = if fact_values_json.is_empty() || fact_values_json == "{}" {
             Vec::new()
         } else {
-            // Parse as JSON object
-            let json_value: serde_json::Value = match serde_json::from_str(fact_values_json) {
-                Ok(v) => v,
-                Err(e) => {
+            // Get the document and all documents for schema-aware conversion
+            let doc = match self.engine.get_document(doc_name) {
+                Some(d) => d,
+                None => {
                     return format!(
-                        r#"{{"success":false,"document":null,"rules":null,"warnings":null,"error":"Invalid fact values JSON: {}"}}"#,
-                        e
+                        r#"{{"success":false,"document":null,"rules":null,"warnings":null,"error":"Document '{}' not found"}}"#,
+                        doc_name
                     );
                 }
             };
+            let all_docs = self.engine.get_all_documents();
 
-            // Convert object to fact strings - let the parser handle the rest
-            match json_value {
-                serde_json::Value::Object(map) => {
-                    let mut facts = Vec::new();
-                    for (key, value) in map {
-                        // Check for unsupported nested structures
-                        match &value {
-                            serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
-                                return format!(
-                                    r#"{{"success":false,"document":null,"rules":null,"warnings":null,"error":"Nested objects and arrays are not supported. Fact '{}' has an invalid value type"}}"#,
-                                    key
-                                );
-                            }
-                            _ => {
-                                facts.push(format!("{}={}", key, value));
-                            }
-                        }
-                    }
-                    facts
-                }
-                _ => {
-                    return r#"{"success":false,"document":null,"rules":null,"warnings":null,"error":"Fact values must be a JSON object"}"#.to_string();
+            // Use JSON serializer to convert to Lemma syntax
+            match crate::serializers::from_json(fact_values_json.as_bytes(), doc, all_docs) {
+                Ok(lemma_strings) => lemma_strings,
+                Err(e) => {
+                    return format!(
+                        r#"{{"success":false,"document":null,"rules":null,"warnings":null,"error":"{}"}}"#,
+                        format_error(&e).replace('"', "\\\"")
+                    );
                 }
             }
         };
 
         let fact_refs: Vec<&str> = fact_values.iter().map(|s| s.as_str()).collect();
+        let facts = if !fact_refs.is_empty() {
+            match crate::parser::parse_facts(&fact_refs) {
+                Ok(f) => Some(f),
+                Err(e) => return format!("{{\"success\":false,\"error\":\"{}\"}}", e),
+            }
+        } else {
+            None
+        };
 
-        match self.engine.evaluate(doc_name, fact_refs) {
+        match self.engine.evaluate(doc_name, None, facts) {
             Ok(response) => {
                 // Transform results array into an object with rule names as keys
                 let mut results_map = serde_json::Map::new();
@@ -86,7 +81,7 @@ impl WasmEngine {
                         rule_obj.insert(
                             "result".to_string(),
                             serde_json::json!({
-                                "type": lit_val.type_name(),
+                                "type": lit_val.to_type().to_string(),
                                 "value": lit_val.display_value()
                             }),
                         );

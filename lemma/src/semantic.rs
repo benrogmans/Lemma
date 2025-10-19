@@ -169,7 +169,7 @@ pub enum ConversionTarget {
     Pressure(PressureUnit),
     Energy(EnergyUnit),
     Frequency(FrequencyUnit),
-    DataSize(DataSizeUnit),
+    Data(DataUnit),
     Money(MoneyUnit),
     Percentage,
 }
@@ -239,7 +239,7 @@ pub enum LemmaType {
     Force,
     Pressure,
     Frequency,
-    DataSize,
+    Data,
     Money,
 }
 
@@ -257,23 +257,36 @@ pub enum LiteralValue {
 }
 
 impl LiteralValue {
-    /// Get the type name of this value
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            LiteralValue::Number(_) => "Number",
-            LiteralValue::Text(_) => "Text",
-            LiteralValue::Date(_) => "Date",
-            LiteralValue::Time(_) => "Time",
-            LiteralValue::Boolean(_) => "Boolean",
-            LiteralValue::Percentage(_) => "Percentage",
-            LiteralValue::Unit(u) => u.category(),
-            LiteralValue::Regex(_) => "Regex",
-        }
-    }
-
     /// Get the display value as a string (uses the Display implementation)
     pub fn display_value(&self) -> String {
         self.to_string()
+    }
+
+    /// Convert a LiteralValue to its corresponding LemmaType
+    pub fn to_type(&self) -> LemmaType {
+        match self {
+            LiteralValue::Text(_) => LemmaType::Text,
+            LiteralValue::Number(_) => LemmaType::Number,
+            LiteralValue::Date(_) => LemmaType::Date,
+            LiteralValue::Time(_) => LemmaType::Date,
+            LiteralValue::Boolean(_) => LemmaType::Boolean,
+            LiteralValue::Percentage(_) => LemmaType::Percentage,
+            LiteralValue::Regex(_) => LemmaType::Regex,
+            LiteralValue::Unit(unit) => match unit {
+                NumericUnit::Mass(_, _) => LemmaType::Mass,
+                NumericUnit::Length(_, _) => LemmaType::Length,
+                NumericUnit::Volume(_, _) => LemmaType::Volume,
+                NumericUnit::Duration(_, _) => LemmaType::Duration,
+                NumericUnit::Temperature(_, _) => LemmaType::Temperature,
+                NumericUnit::Power(_, _) => LemmaType::Power,
+                NumericUnit::Force(_, _) => LemmaType::Force,
+                NumericUnit::Pressure(_, _) => LemmaType::Pressure,
+                NumericUnit::Energy(_, _) => LemmaType::Energy,
+                NumericUnit::Frequency(_, _) => LemmaType::Frequency,
+                NumericUnit::Data(_, _) => LemmaType::Data,
+                NumericUnit::Money(_, _) => LemmaType::Money,
+            },
+        }
     }
 }
 
@@ -332,7 +345,7 @@ impl_unit_serialize!(
     PressureUnit,
     EnergyUnit,
     FrequencyUnit,
-    DataSizeUnit,
+    DataUnit,
     MoneyUnit
 );
 
@@ -443,7 +456,7 @@ pub enum FrequencyUnit {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DataSizeUnit {
+pub enum DataUnit {
     Petabyte,
     Terabyte,
     Gigabyte,
@@ -487,7 +500,7 @@ pub enum NumericUnit {
     Pressure(Decimal, PressureUnit),
     Energy(Decimal, EnergyUnit),
     Frequency(Decimal, FrequencyUnit),
-    DataSize(Decimal, DataSizeUnit),
+    Data(Decimal, DataUnit),
     Money(Decimal, MoneyUnit),
 }
 
@@ -505,26 +518,8 @@ impl NumericUnit {
             | NumericUnit::Pressure(v, _)
             | NumericUnit::Energy(v, _)
             | NumericUnit::Frequency(v, _)
-            | NumericUnit::DataSize(v, _)
+            | NumericUnit::Data(v, _)
             | NumericUnit::Money(v, _) => *v,
-        }
-    }
-
-    /// Get the unit category name for error messages
-    pub fn category(&self) -> &'static str {
-        match self {
-            NumericUnit::Mass(_, _) => "Mass",
-            NumericUnit::Length(_, _) => "Length",
-            NumericUnit::Volume(_, _) => "Volume",
-            NumericUnit::Duration(_, _) => "Duration",
-            NumericUnit::Temperature(_, _) => "Temperature",
-            NumericUnit::Power(_, _) => "Power",
-            NumericUnit::Force(_, _) => "Force",
-            NumericUnit::Pressure(_, _) => "Pressure",
-            NumericUnit::Energy(_, _) => "Energy",
-            NumericUnit::Frequency(_, _) => "Frequency",
-            NumericUnit::DataSize(_, _) => "DataSize",
-            NumericUnit::Money(_, _) => "Money",
         }
     }
 
@@ -547,7 +542,7 @@ impl NumericUnit {
             NumericUnit::Pressure(_, u) => NumericUnit::Pressure(new_value, u.clone()),
             NumericUnit::Energy(_, u) => NumericUnit::Energy(new_value, u.clone()),
             NumericUnit::Frequency(_, u) => NumericUnit::Frequency(new_value, u.clone()),
-            NumericUnit::DataSize(_, u) => NumericUnit::DataSize(new_value, u.clone()),
+            NumericUnit::Data(_, u) => NumericUnit::Data(new_value, u.clone()),
             NumericUnit::Money(_, u) => NumericUnit::Money(new_value, u.clone()),
         }
     }
@@ -580,7 +575,7 @@ impl fmt::Display for NumericUnit {
             NumericUnit::Pressure(v, u) => write!(f, "{} {}", v, u),
             NumericUnit::Energy(v, u) => write!(f, "{} {}", v, u),
             NumericUnit::Frequency(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::DataSize(v, u) => write!(f, "{} {}", v, u),
+            NumericUnit::Data(v, u) => write!(f, "{} {}", v, u),
             NumericUnit::Money(v, u) => write!(f, "{} {}", v, u),
         }
     }
@@ -781,7 +776,11 @@ impl LiteralValue {
             LiteralValue::Percentage(p) => format!("percentage {}%", p),
             LiteralValue::Date(_) => "date value".to_string(),
             LiteralValue::Unit(unit) => {
-                format!("{} value {}", unit.category().to_lowercase(), unit)
+                format!(
+                    "{} value {}",
+                    LiteralValue::Unit(unit.clone()).to_type(),
+                    unit
+                )
             }
             LiteralValue::Regex(s) => format!("regex value {}", s),
             LiteralValue::Time(time) => {
@@ -927,19 +926,19 @@ impl fmt::Display for FrequencyUnit {
     }
 }
 
-impl fmt::Display for DataSizeUnit {
+impl fmt::Display for DataUnit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DataSizeUnit::Petabyte => write!(f, "petabyte"),
-            DataSizeUnit::Terabyte => write!(f, "terabyte"),
-            DataSizeUnit::Gigabyte => write!(f, "gigabyte"),
-            DataSizeUnit::Megabyte => write!(f, "megabyte"),
-            DataSizeUnit::Kilobyte => write!(f, "kilobyte"),
-            DataSizeUnit::Byte => write!(f, "byte"),
-            DataSizeUnit::Tebibyte => write!(f, "tebibyte"),
-            DataSizeUnit::Gibibyte => write!(f, "gibibyte"),
-            DataSizeUnit::Mebibyte => write!(f, "mebibyte"),
-            DataSizeUnit::Kibibyte => write!(f, "kibibyte"),
+            DataUnit::Petabyte => write!(f, "petabyte"),
+            DataUnit::Terabyte => write!(f, "terabyte"),
+            DataUnit::Gigabyte => write!(f, "gigabyte"),
+            DataUnit::Megabyte => write!(f, "megabyte"),
+            DataUnit::Kilobyte => write!(f, "kilobyte"),
+            DataUnit::Byte => write!(f, "byte"),
+            DataUnit::Tebibyte => write!(f, "tebibyte"),
+            DataUnit::Gibibyte => write!(f, "gibibyte"),
+            DataUnit::Mebibyte => write!(f, "mebibyte"),
+            DataUnit::Kibibyte => write!(f, "kibibyte"),
         }
     }
 }
@@ -973,7 +972,7 @@ impl fmt::Display for ConversionTarget {
             ConversionTarget::Pressure(unit) => write!(f, "{}", unit),
             ConversionTarget::Energy(unit) => write!(f, "{}", unit),
             ConversionTarget::Frequency(unit) => write!(f, "{}", unit),
-            ConversionTarget::DataSize(unit) => write!(f, "{}", unit),
+            ConversionTarget::Data(unit) => write!(f, "{}", unit),
             ConversionTarget::Money(unit) => write!(f, "{}", unit),
             ConversionTarget::Percentage => write!(f, "percentage"),
         }
@@ -999,7 +998,7 @@ impl fmt::Display for LemmaType {
             LemmaType::Pressure => write!(f, "pressure"),
             LemmaType::Energy => write!(f, "energy"),
             LemmaType::Frequency => write!(f, "frequency"),
-            LemmaType::DataSize => write!(f, "data_size"),
+            LemmaType::Data => write!(f, "data"),
             LemmaType::Money => write!(f, "money"),
         }
     }

@@ -102,7 +102,7 @@ fn parse_fact_type_annotation(pair: Pair<Rule>) -> Result<FactValue, LemmaError>
                     Rule::force_type => LemmaType::Force,
                     Rule::pressure_type => LemmaType::Pressure,
                     Rule::frequency_type => LemmaType::Frequency,
-                    Rule::data_size_type => LemmaType::DataSize,
+                    Rule::data_size_type => LemmaType::Data,
                     Rule::money_type => LemmaType::Money,
                     _ => {
                         return Err(LemmaError::Engine(format!(

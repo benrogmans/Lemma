@@ -172,11 +172,16 @@ fn run_command(
         unreachable!()
     };
 
-    let response = engine.evaluate_rules(
-        &doc,
-        rules,
-        final_facts.iter().map(|s| s.as_str()).collect(),
-    )?;
+    // Parse facts
+    let facts = if !final_facts.is_empty() {
+        let refs: Vec<&str> = final_facts.iter().map(|s| s.as_str()).collect();
+        Some(lemma::parse_facts(&refs)?)
+    } else {
+        None
+    };
+
+    // Evaluate
+    let response = engine.evaluate(&doc, rules, facts)?;
     let formatter = Formatter::default();
     print!("{}", formatter.format_response(&response, raw));
 

@@ -20,7 +20,7 @@ enum ExpressionType {
     Pressure,
     Energy,
     Frequency,
-    DataSize,
+    Data,
     Date,
     Unknown,
     Never,
@@ -50,7 +50,7 @@ impl ExpressionType {
             ExpressionType::Pressure => "pressure",
             ExpressionType::Energy => "energy",
             ExpressionType::Frequency => "frequency",
-            ExpressionType::DataSize => "data size",
+            ExpressionType::Data => "data",
             ExpressionType::Date => "date",
             ExpressionType::Unknown => "unknown",
             ExpressionType::Never => "never",
@@ -76,7 +76,7 @@ impl ExpressionType {
                 crate::NumericUnit::Pressure(_, _) => ExpressionType::Pressure,
                 crate::NumericUnit::Energy(_, _) => ExpressionType::Energy,
                 crate::NumericUnit::Frequency(_, _) => ExpressionType::Frequency,
-                crate::NumericUnit::DataSize(_, _) => ExpressionType::DataSize,
+                crate::NumericUnit::Data(_, _) => ExpressionType::Data,
             },
             crate::LiteralValue::Date(_) => ExpressionType::Date,
             _ => ExpressionType::Unknown,
@@ -909,9 +909,7 @@ impl Validator {
                     (ExpressionType::Number, ConversionTarget::Frequency(_)) => {
                         Ok(ExpressionType::Frequency)
                     }
-                    (ExpressionType::Number, ConversionTarget::DataSize(_)) => {
-                        Ok(ExpressionType::DataSize)
-                    }
+                    (ExpressionType::Number, ConversionTarget::Data(_)) => Ok(ExpressionType::Data),
                     (ExpressionType::Number, ConversionTarget::Money(_)) => {
                         Ok(ExpressionType::Money)
                     }
@@ -930,7 +928,7 @@ impl Validator {
                     | (_, ConversionTarget::Pressure(_))
                     | (_, ConversionTarget::Energy(_))
                     | (_, ConversionTarget::Frequency(_))
-                    | (_, ConversionTarget::DataSize(_))
+                    | (_, ConversionTarget::Data(_))
                     | (_, ConversionTarget::Money(_)) => Ok(ExpressionType::Number),
 
                     // Percentage conversions

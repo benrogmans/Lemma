@@ -13,7 +13,7 @@ rule net_multiplier = 1 - discount
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("pricing", vec![]).unwrap();
+    let response = engine.evaluate("pricing", None, None).unwrap();
     let result = response
         .results
         .iter()
@@ -41,7 +41,7 @@ rule is_heavy = weight > 5 kilograms
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("shipping", vec![]).unwrap();
+    let response = engine.evaluate("shipping", None, None).unwrap();
     let result = response
         .results
         .iter()
