@@ -1,3 +1,8 @@
+---
+layout: default
+title: CLI Guide
+---
+
 # Lemma CLI
 
 The Lemma CLI provides everything you need to work with Lemma: document evaluation, workspace management, and HTTP/MCP servers.

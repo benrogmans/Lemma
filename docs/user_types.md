@@ -1,3 +1,8 @@
+---
+layout: default
+title: User Types
+---
+
 # User Types Implementation Plan
 
 ## Overview

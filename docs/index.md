@@ -1,3 +1,8 @@
+---
+layout: default
+title: Lemma Documentation
+---
+
 # Lemma Documentation
 
 **Logic for man and machine**

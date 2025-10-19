@@ -1,3 +1,8 @@
+---
+layout: default
+title: Language Reference
+---
+
 # Lemma Language Reference
 
 Quick reference for all operators, units, and types in Lemma.

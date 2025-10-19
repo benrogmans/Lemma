@@ -1,3 +1,8 @@
+---
+layout: default
+title: Whitepaper
+---
+
 # Lemma: A Declarative Language for Business Logic
 ## Rules for Man and Machine
 

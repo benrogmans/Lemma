@@ -1,3 +1,8 @@
+---
+layout: default
+title: Veto Semantics
+---
+
 # Veto semantics
 
 ## Purpose

@@ -1,3 +1,8 @@
+---
+layout: default
+title: Multi Facts
+---
+
 # Multi Facts Implementation Plan
 
 ## Overview

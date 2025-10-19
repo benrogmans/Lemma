@@ -1,3 +1,8 @@
+---
+layout: default
+title: Roadmap
+---
+
 # Roadmap
 
 This document tracks planned improvements and known issues for the Lemma project.

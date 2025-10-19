@@ -1,3 +1,8 @@
+---
+layout: default
+title: Testing and Enhancement
+---
+
 # Lemma Testing and Enhancement Plan
 
 ## Overview
