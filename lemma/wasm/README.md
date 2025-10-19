@@ -54,7 +54,7 @@ Adds a Lemma document to the engine.
 const result = engine.addLemmaCode(`
   doc employee_contract
 
-  fact salary = 5000 eur/month
+  fact salary = 5000 eur
   fact start_date = 2024-01-15
   fact vacation_days = 25
 
@@ -148,11 +148,16 @@ async function calculatePricing() {
       unless is_member then 10%
 
     rule promo_discount = 0%
-      unless promo_code == "SAVE20" then 20%
       unless promo_code == "SAVE10" then 10%
+      unless promo_code == "SAVE20" then 20%
 
-    rule best_discount = max(bulk_discount, member_discount, promo_discount)
-    rule final_price = base_price * quantity * (1 - best_discount)
+    rule best_discount = bulk_discount?
+      unless member_discount? >= bulk_discount?  then member_discount?
+      unless promo_discount? >= bulk_discount?   then promo_discount?
+      unless member_discount? >= promo_discount? then member_discount?
+      unless promo_discount? >= member_discount? then promo_discount?
+    
+    rule final_price = base_price * quantity * (1 - best_discount?)
   `;
 
   // Load the document

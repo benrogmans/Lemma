@@ -4,7 +4,7 @@
 [![DeepSource](https://app.deepsource.com/gh/benrogmans/lemma.svg/?label=active+issues&show_trend=true)](https://app.deepsource.com/gh/benrogmans/lemma/)
 [![Crates.io](https://img.shields.io/crates/v/lemma-engine.svg)](https://crates.io/crates/lemma-engine)
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
-[![License](https://img.shields.io/crates/l/lemma.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 > **Rules for man and machine**
 
