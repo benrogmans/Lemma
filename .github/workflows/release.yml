@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:  # Allow manual trigger
 
+permissions:
+  contents: write
+
 jobs:
   detect-version-changes:
     name: Detect Version Changes
@@ -94,7 +97,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag lemma-engine-v${{ needs.detect-version-changes.outputs.version }}
-          git push https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git lemma-engine-v${{ needs.detect-version-changes.outputs.version }}
+          git push origin lemma-engine-v${{ needs.detect-version-changes.outputs.version }}
 
   release-wasm:
     name: Release @benrogmans/lemma-engine to NPM
@@ -134,7 +137,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag wasm-v${{ needs.detect-version-changes.outputs.version }}
-          git push https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git wasm-v${{ needs.detect-version-changes.outputs.version }}
+          git push origin wasm-v${{ needs.detect-version-changes.outputs.version }}
 
   release-cli:
     name: Release lemma-cli to crates.io
