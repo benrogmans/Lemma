@@ -140,12 +140,12 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
 
-      - name: Run fuzz targets (30s each)
+      - name: Run fuzz targets (90s each)
         run: |
           cd lemma/fuzz
           for target in fuzz_parser fuzz_expressions fuzz_literals fuzz_deeply_nested fuzz_fact_overrides; do
             echo "Running $target..."
-            cargo +nightly fuzz run $target -- -max_total_time=30 || true
+            cargo +nightly fuzz run $target -- -max_total_time=90 || true
           done
 
   wasm:
