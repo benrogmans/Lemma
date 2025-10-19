@@ -29,21 +29,17 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.1'
-          bundler-cache: false
+          bundler-cache: true
+          working-directory: docs
 
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v4
 
-      - name: Install Jekyll
-        run: |
-          gem install bundler
-          gem install jekyll jekyll-seo-tag jekyll-sitemap
-
       - name: Build with Jekyll
         run: |
           cd docs
-          jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+          bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
         env:
           JEKYLL_ENV: production
 
