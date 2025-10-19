@@ -54,7 +54,7 @@ impl Formatter {
                 if !result.operations.is_empty() {
                     content.push('\n');
                     for (i, step) in result.operations.iter().enumerate() {
-                        content.push_str(&self.format_trace_step_plain(i, step));
+                        content.push_str(&self.format_operation_step(i, step));
                     }
                 }
 
@@ -75,7 +75,7 @@ impl Formatter {
         format!("{}\n", table)
     }
 
-    fn format_trace_step_plain(&self, index: usize, step: &OperationRecord) -> String {
+    fn format_operation_step(&self, index: usize, step: &OperationRecord) -> String {
         match step {
             OperationRecord::FactUsed { name, value } => {
                 format!("  {:>2}. fact {} = {}\n", index, name, value)

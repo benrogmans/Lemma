@@ -23,15 +23,11 @@ pub mod http {
         code: String,
         #[serde(default)]
         facts: HashMap<String, serde_json::Value>,
-        #[serde(default)]
-        include_trace: bool,
     }
 
     #[derive(Debug, Serialize)]
     struct EvaluateResponse {
         results: Vec<RuleResultJson>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        traces: Option<Vec<TraceJson>>,
         warnings: Vec<String>,
     }
 
@@ -42,12 +38,6 @@ pub mod http {
         value: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         veto_reason: Option<String>,
-    }
-
-    #[derive(Debug, Serialize)]
-    struct TraceJson {
-        rule_name: String,
-        steps: Vec<String>,
     }
 
     #[derive(Debug, Serialize)]
@@ -127,7 +117,6 @@ pub mod http {
 
         Ok(Json(EvaluateResponse {
             results,
-            traces: None,
             warnings: response.warnings,
         }))
     }
@@ -190,11 +179,6 @@ pub mod http {
         })?;
 
         let results = convert_results(&response);
-        let traces = if payload.include_trace {
-            Some(convert_traces(&response))
-        } else {
-            None
-        };
 
         info!(
             "Evaluated inline document '{}' with {} results",
@@ -204,7 +188,6 @@ pub mod http {
 
         Ok(Json(EvaluateResponse {
             results,
-            traces,
             warnings: response.warnings,
         }))
     }
@@ -217,18 +200,6 @@ pub mod http {
                 name: r.rule_name.clone(),
                 value: r.result.as_ref().map(|v| v.to_string()),
                 veto_reason: r.veto_message.clone(),
-            })
-            .collect()
-    }
-
-    fn convert_traces(response: &Response) -> Vec<TraceJson> {
-        response
-            .results
-            .iter()
-            .filter(|r| !r.operations.is_empty())
-            .map(|r| TraceJson {
-                rule_name: r.rule_name.clone(),
-                steps: r.operations.iter().map(|s| format!("{:?}", s)).collect(),
             })
             .collect()
     }

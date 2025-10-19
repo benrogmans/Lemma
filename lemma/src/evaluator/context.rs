@@ -12,7 +12,7 @@ use std::collections::HashMap;
 /// Contains all state needed for a single evaluation:
 /// - Facts (inputs)
 /// - Rule results (computed values)
-/// - Trace (execution log)
+/// - Operation records (execution log)
 pub struct EvaluationContext<'a> {
     /// Document being evaluated
     pub current_doc: &'a LemmaDoc,

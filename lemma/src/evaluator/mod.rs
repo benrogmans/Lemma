@@ -4,7 +4,7 @@
 //! 1. Building a fact map (inputs)
 //! 2. Topologically sorting rules (execution plan)
 //! 3. Executing rules in dependency order
-//! 4. Building response with traces
+//! 4. Building response with operation records
 
 pub mod context;
 pub mod datetime;
@@ -93,7 +93,7 @@ impl Evaluator {
                 continue;
             }
 
-            // Clear trace for this rule
+            // Clear operation records for this rule
             context.operations.clear();
 
             // Evaluate the rule
@@ -109,7 +109,7 @@ impl Evaluator {
                         crate::OperationResult::Value(value) => {
                             response.add_result(RuleResult::success_with_operations(
                                 rule.name.clone(),
-                                value,
+                                value.clone(),
                                 HashMap::new(),
                                 context.operations.clone(),
                             ));

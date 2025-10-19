@@ -13,7 +13,7 @@ use walkdir::WalkDir;
 
 #[derive(Parser)]
 #[command(name = "lemma")]
-#[command(about = "Lemma: a language that means business")]
+#[command(about = "The programming language that means business.")]
 #[command(
     long_about = "A declarative programming language for expressing business rules, facts, and logic.\nEvaluate rules from .lemma files, run as an HTTP server, or integrate with AI tools via MCP."
 )]
@@ -78,7 +78,7 @@ enum Commands {
     ///
     /// Runs a server that evaluates Lemma documents via HTTP POST requests.
     /// Useful for integrating Lemma rules into web applications and microservices.
-    /// API: POST /evaluate with {code, facts, include_trace}
+    /// API: POST /evaluate with {code, facts}
     Serve {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]

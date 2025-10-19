@@ -32,7 +32,7 @@ pub fn evaluate_expression(
                 .get(&fact_name)
                 .ok_or_else(|| LemmaError::Engine(format!("Missing fact: {}", fact_name)))?;
 
-            // Add trace entry
+            // Record operation
             context.operations.push(OperationRecord::FactUsed {
                 name: fact_name,
                 value: value.clone(),
@@ -54,7 +54,7 @@ pub fn evaluate_expression(
                         return Ok(OperationResult::Veto(msg.clone()));
                     }
                     OperationResult::Value(value) => {
-                        // Add trace entry
+                        // Record operation
                         context.operations.push(OperationRecord::RuleUsed {
                             name: rule_name,
                             value: value.clone(),
@@ -90,7 +90,7 @@ pub fn evaluate_expression(
             let result = super::operations::arithmetic_operation(left_val, op, right_val)
                 .map_err(|e| convert_engine_error_to_runtime(e, expr, context))?;
 
-            // Add trace
+            // Record operation
             let op_name = match op {
                 ArithmeticOperation::Add => "add",
                 ArithmeticOperation::Subtract => "subtract",
@@ -127,7 +127,7 @@ pub fn evaluate_expression(
 
             let result = super::operations::comparison_operation(left_val, op, right_val)?;
 
-            // Add trace
+            // Record operation
             let op_name = match op {
                 crate::ComparisonOperator::GreaterThan => "greater_than",
                 crate::ComparisonOperator::LessThan => "less_than",
@@ -166,7 +166,7 @@ pub fn evaluate_expression(
 
             match (left_val, right_val) {
                 (LiteralValue::Boolean(l), LiteralValue::Boolean(r)) => {
-                    // No trace for logical operations - only trace the sub-expressions
+                    // No operation record for logical operations - only record sub-expressions
                     Ok(OperationResult::Value(LiteralValue::Boolean(*l && *r)))
                 }
                 _ => Err(LemmaError::Engine(
@@ -192,7 +192,7 @@ pub fn evaluate_expression(
 
             match (left_val, right_val) {
                 (LiteralValue::Boolean(l), LiteralValue::Boolean(r)) => {
-                    // No trace for logical operations - only trace the sub-expressions
+                    // No operation record for logical operations - only record sub-expressions
                     Ok(OperationResult::Value(LiteralValue::Boolean(*l || *r)))
                 }
                 _ => Err(LemmaError::Engine(

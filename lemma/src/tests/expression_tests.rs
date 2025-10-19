@@ -56,7 +56,7 @@ fn test_evaluate_fact_reference() {
         OperationResult::Value(LiteralValue::Number(Decimal::from(100)))
     );
 
-    // Check trace
+    // Check operation recorded
     assert_eq!(context.operations.len(), 1);
 }
 
@@ -93,6 +93,6 @@ fn test_evaluate_simple_arithmetic() {
         OperationResult::Value(LiteralValue::Number(Decimal::from(15)))
     );
 
-    // Check trace recorded the operation
+    // Check operation recorded
     assert_eq!(context.operations.len(), 1);
 }

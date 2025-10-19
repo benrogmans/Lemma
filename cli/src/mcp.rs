@@ -177,11 +177,6 @@ pub mod server {
                                     "items": { "type": "string" },
                                     "description": "Optional fact overrides in format 'name=value' (e.g., ['price=100', 'quantity=5'])",
                                     "default": []
-                                },
-                                "include_trace": {
-                                    "type": "boolean",
-                                    "description": "Include execution trace showing how each rule was evaluated",
-                                    "default": false
                                 }
                             },
                             "required": ["document"]
@@ -302,8 +297,6 @@ pub mod server {
                 .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
 
-            let include_trace = args["include_trace"].as_bool().unwrap_or(false);
-
             let response = self.engine.evaluate(document, facts).map_err(|e| {
                 error!("Evaluation failed: {}", e);
                 McpError::internal_error(format!("Evaluation failed: {}", e))
@@ -334,25 +327,6 @@ pub mod server {
                 output.push_str("\n## Warnings\n\n");
                 for warning in &response.warnings {
                     output.push_str(&format!("- {}\n", warning));
-                }
-            }
-
-            if include_trace {
-                let traces_to_show: Vec<_> = response
-                    .results
-                    .iter()
-                    .filter(|r| !r.operations.is_empty())
-                    .collect();
-
-                if !traces_to_show.is_empty() {
-                    output.push_str("\n## Execution Trace\n\n");
-                    for result in traces_to_show {
-                        output.push_str(&format!("### Rule: {}\n\n", result.rule_name));
-                        for (i, step) in result.operations.iter().enumerate() {
-                            output.push_str(&format!("{}. {:?}\n", i + 1, step));
-                        }
-                        output.push('\n');
-                    }
                 }
             }
 
