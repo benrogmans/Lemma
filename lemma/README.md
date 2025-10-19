@@ -37,17 +37,25 @@ fn main() -> LemmaResult<()> {
 
 ## Documentation
 
-- **API docs**: Run `cargo doc --open` or visit [docs.rs](https://docs.rs/lemma)
+- **API docs**: Run `cargo doc --open` or visit [docs.rs](https://docs.rs/lemma-engine)
 - **Language guide**: [Lemma language documentation](https://github.com/benrogmans/lemma/tree/main/docs)
 - **Examples**: [Complete examples](https://github.com/benrogmans/lemma/tree/main/docs/examples)
 
 ## WebAssembly
 
-Compile to WASM for use in browsers (from project root):
+Build for use in browsers and Node.js:
 
 ```bash
-wasm-pack build lemma --target web --out-dir target/wasm
+node wasm/build.js
 ```
+
+Or install from NPM:
+
+```bash
+npm install @benrogmans/lemma-engine
+```
+
+See [wasm/README.md](wasm/README.md) for detailed JavaScript API documentation.
 
 ## License
 

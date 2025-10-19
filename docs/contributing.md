@@ -76,28 +76,24 @@ cargo +nightly fuzz run fuzz_parser -- -max_total_time=60  # Run for 60 seconds
 
 ### WASM Build
 
-#### Web Target (Browsers)
+#### Build and Test
 ```bash
 cd lemma
-wasm-pack build --target web --out-dir pkg
-cp package.json pkg/package.json
+
+# Build WASM package
+node wasm/build.js
+
+# Test WASM package
+node wasm/test.js
 ```
 
-#### Node.js Target
-```bash
-cd lemma
-wasm-pack build --target nodejs --out-dir pkg-node
-cp package.json pkg-node/package.json
-```
+The WASM scripts:
+- **wasm/build.js**: Compiles WASM using the web target (works in both browsers and Node.js)
+- **wasm/test.js**: Runs comprehensive tests on the compiled WASM module
 
-**Note:** The `package.json` copying step is required because `wasm-pack` generates its own package.json. We need to override it with our custom package name `@benrogmans/lemma-engine`.
+The build automatically generates a package.json from Cargo.toml metadata.
 
-#### Testing WASM
-After building, test the WASM package:
-
-```bash
-npm test
-```
+For detailed JavaScript API documentation, see [lemma/wasm/README.md](../lemma/wasm/README.md).
 
 This will run comprehensive tests and show results in the terminal.
 

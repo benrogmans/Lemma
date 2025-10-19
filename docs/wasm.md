@@ -94,9 +94,11 @@ For `evaluate()`, the `data` field contains a serialized `Response`. The `warnin
 If you need to build the WASM package yourself:
 
 ```bash
-cargo install wasm-pack
-wasm-pack build lemma --target web --out-dir pkg
+cd lemma
+node wasm/build.js
 ```
 
-This generates JavaScript bindings in `lemma/pkg/`.
+This generates JavaScript bindings in `lemma/pkg/` with a package.json created from Cargo.toml metadata.
+
+For comprehensive JavaScript API documentation and examples, see [lemma/wasm/README.md](../lemma/wasm/README.md).
 

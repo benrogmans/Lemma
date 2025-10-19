@@ -273,7 +273,7 @@ fn test_runtime_error_type_mismatch_text_in_arithmetic() {
             );
 
             if let Some(ref sugg) = details.suggestion {
-                assert!(sugg.len() > 0);
+                assert!(!sugg.is_empty());
             }
         }
         Err(e) => panic!("Expected Runtime error for type mismatch, got: {:?}", e),
@@ -531,7 +531,10 @@ fn test_runtime_error_has_source_context() {
 
     match result {
         Err(LemmaError::Runtime(details)) => {
-            assert!(details.source_text.len() > 0, "Should include source text");
+            assert!(
+                !details.source_text.is_empty(),
+                "Should include source text"
+            );
             assert!(details.source_text.contains("numerator"));
             assert!(details.source_text.contains("denominator"));
         }

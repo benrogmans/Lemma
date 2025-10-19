@@ -860,7 +860,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
-name = "lemma"
+name = "lemma-cli"
+version = "0.5.2"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "axum",
+ "chrono",
+ "clap",
+ "comfy-table",
+ "crossterm 0.27.0",
+ "inquire",
+ "lemma-engine",
+ "predicates",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower 0.4.13",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
+]
+
+[[package]]
+name = "lemma-engine"
 version = "0.5.2"
 dependencies = [
  "ariadne",
@@ -874,32 +900,6 @@ dependencies = [
  "serde",
  "serde_json",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "lemma-cli"
-version = "0.5.2"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "axum",
- "chrono",
- "clap",
- "comfy-table",
- "crossterm 0.27.0",
- "inquire",
- "lemma",
- "predicates",
- "proptest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tower 0.4.13",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "walkdir",
 ]
 
 [[package]]

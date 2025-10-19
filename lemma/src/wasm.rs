@@ -1,18 +1,9 @@
 use crate::{Engine, LemmaError};
-use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WasmEngine {
     engine: Engine,
-}
-
-#[derive(Serialize, Deserialize)]
-struct WasmResponse {
-    success: bool,
-    data: Option<String>,
-    error: Option<String>,
-    warnings: Option<Vec<String>>,
 }
 
 #[wasm_bindgen]
@@ -29,35 +20,54 @@ impl WasmEngine {
     #[wasm_bindgen(js_name = addLemmaCode)]
     pub fn add_lemma_code(&mut self, code: &str, source: &str) -> String {
         match self.engine.add_lemma_code(code, source) {
-            Ok(_) => serde_json::to_string(&WasmResponse {
-                success: true,
-                data: Some("Document added successfully".to_string()),
-                error: None,
-                warnings: None,
-            }).unwrap_or_else(|_| r#"{"success":true,"data":"Document added successfully","error":null,"warnings":null}"#.to_string()),
-            Err(e) => serde_json::to_string(&WasmResponse {
-                success: false,
-                data: None,
-                error: Some(format_error(&e)),
-                warnings: None,
-            }).unwrap_or_else(|_| format!(r#"{{"success":false,"data":null,"error":"{}","warnings":null}}"#, format_error(&e).replace('"', "\\\""))),
+            Ok(_) => r#"{"success":true,"message":"Document added successfully","error":null}"#
+                .to_string(),
+            Err(e) => format!(
+                r#"{{"success":false,"message":null,"error":"{}"}}"#,
+                format_error(&e).replace('"', "\\\"")
+            ),
         }
     }
 
     #[wasm_bindgen(js_name = evaluate)]
     pub fn evaluate(&mut self, doc_name: &str, fact_values_json: &str) -> String {
-        let fact_values: Vec<String> = if fact_values_json.is_empty() {
+        // Convert JSON object to fact strings
+        let fact_values: Vec<String> = if fact_values_json.is_empty() || fact_values_json == "{}" {
             Vec::new()
         } else {
-            match serde_json::from_str(fact_values_json) {
+            // Parse as JSON object
+            let json_value: serde_json::Value = match serde_json::from_str(fact_values_json) {
                 Ok(v) => v,
                 Err(e) => {
-                    return serde_json::to_string(&WasmResponse {
-                        success: false,
-                        data: None,
-                        error: Some(format!("Invalid fact values JSON: {}", e)),
-                        warnings: None,
-                    }).unwrap_or_else(|_| format!(r#"{{"success":false,"data":null,"error":"Invalid fact values JSON","warnings":null}}"#));
+                    return format!(
+                        r#"{{"success":false,"document":null,"rules":null,"warnings":null,"error":"Invalid fact values JSON: {}"}}"#,
+                        e
+                    );
+                }
+            };
+
+            // Convert object to fact strings - let the parser handle the rest
+            match json_value {
+                serde_json::Value::Object(map) => {
+                    let mut facts = Vec::new();
+                    for (key, value) in map {
+                        // Check for unsupported nested structures
+                        match &value {
+                            serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                                return format!(
+                                    r#"{{"success":false,"document":null,"rules":null,"warnings":null,"error":"Nested objects and arrays are not supported. Fact '{}' has an invalid value type"}}"#,
+                                    key
+                                );
+                            }
+                            _ => {
+                                facts.push(format!("{}={}", key, value));
+                            }
+                        }
+                    }
+                    facts
+                }
+                _ => {
+                    return r#"{"success":false,"document":null,"rules":null,"warnings":null,"error":"Fact values must be a JSON object"}"#.to_string();
                 }
             }
         };
@@ -66,43 +76,80 @@ impl WasmEngine {
 
         match self.engine.evaluate(doc_name, fact_refs) {
             Ok(response) => {
-                match serde_json::to_string(&response) {
-                    Ok(json) => serde_json::to_string(&WasmResponse {
-                        success: true,
-                        data: Some(json),
-                        error: None,
-                        warnings: if response.warnings.is_empty() { None } else { Some(response.warnings.clone()) },
-                    }).unwrap_or_else(|_| r#"{"success":false,"data":null,"error":"Failed to serialize response","warnings":null}"#.to_string()),
-                    Err(e) => serde_json::to_string(&WasmResponse {
-                        success: false,
-                        data: None,
-                        error: Some(format!("Serialization error: {}", e)),
-                        warnings: None,
-                    }).unwrap_or_else(|_| r#"{"success":false,"data":null,"error":"Serialization error","warnings":null}"#.to_string()),
+                // Transform results array into an object with rule names as keys
+                let mut results_map = serde_json::Map::new();
+                for result in response.results {
+                    let mut rule_obj = serde_json::Map::new();
+
+                    // Transform the result to clean type/value format
+                    if let Some(ref lit_val) = result.result {
+                        rule_obj.insert(
+                            "result".to_string(),
+                            serde_json::json!({
+                                "type": lit_val.type_name(),
+                                "value": lit_val.display_value()
+                            }),
+                        );
+                    } else {
+                        rule_obj.insert("result".to_string(), serde_json::Value::Null);
+                    }
+
+                    // Include veto message if present
+                    if let Some(veto_msg) = result.veto_message {
+                        rule_obj.insert("veto".to_string(), serde_json::Value::String(veto_msg));
+                    }
+
+                    // Include missing facts if present
+                    if let Some(missing) = result.missing_facts {
+                        if !missing.is_empty() {
+                            rule_obj.insert(
+                                "missing_facts".to_string(),
+                                serde_json::to_value(&missing).unwrap_or(serde_json::Value::Null),
+                            );
+                        }
+                    }
+
+                    // Include operations if present
+                    if !result.operations.is_empty() {
+                        rule_obj.insert(
+                            "operations".to_string(),
+                            serde_json::json!(result.operations.clone()),
+                        );
+                    }
+
+                    results_map.insert(result.rule_name, serde_json::Value::Object(rule_obj));
                 }
+
+                // Build the flat response with consistent structure
+                serde_json::to_string(&serde_json::json!({
+                    "success": true,
+                    "document": response.doc_name,
+                    "rules": results_map,
+                    "warnings": if response.warnings.is_empty() { serde_json::Value::Null } else { serde_json::json!(response.warnings) },
+                    "error": serde_json::Value::Null
+                })).unwrap_or_else(|_| r#"{"success":false,"document":null,"rules":null,"warnings":null,"error":"Failed to serialize response"}"#.to_string())
             }
-            Err(e) => serde_json::to_string(&WasmResponse {
-                success: false,
-                data: None,
-                error: Some(format_error(&e)),
-                warnings: None,
-            }).unwrap_or_else(|_| format!(r#"{{"success":false,"data":null,"error":"{}","warnings":null}}"#, format_error(&e).replace('"', "\\\""))),
+            Err(e) => format!(
+                r#"{{"success":false,"document":null,"rules":null,"warnings":null,"error":"{}"}}"#,
+                format_error(&e).replace('"', "\\\"")
+            ),
         }
     }
 
     #[wasm_bindgen(js_name = listDocuments)]
     pub fn list_documents(&self) -> String {
         let docs = self.engine.list_documents();
-        let docs_json = serde_json::to_string(&docs).unwrap_or_else(|_| "[]".to_string());
-        serde_json::to_string(&WasmResponse {
-            success: true,
-            data: Some(docs_json),
-            error: None,
-            warnings: None,
-        })
-        .unwrap_or_else(|_| {
-            r#"{"success":true,"data":"[]","error":null,"warnings":null}"#.to_string()
-        })
+        match serde_json::to_string(&serde_json::json!({
+            "success": true,
+            "documents": docs,
+            "error": serde_json::Value::Null
+        })) {
+            Ok(json) => json,
+            Err(_) => {
+                r#"{"success":false,"documents":null,"error":"Failed to serialize documents"}"#
+                    .to_string()
+            }
+        }
     }
 }
 

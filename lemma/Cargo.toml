@@ -1,18 +1,19 @@
 [package]
-name = "lemma"
+name = "lemma-engine"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "A declarative programming language for business rules."
+description = "The programming language that means business."
 homepage = "https://github.com/benrogmans/lemma"
-documentation = "https://docs.rs/lemma"
+documentation = "https://docs.rs/lemma-engine"
 readme = "README.md"
 keywords = ["logic", "rules", "declarative", "dsl", "rust"]
 categories = ["parser-implementations", "development-tools"]
 
 [lib]
+name = "lemma"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

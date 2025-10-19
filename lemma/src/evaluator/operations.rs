@@ -118,7 +118,20 @@ pub fn arithmetic_operation(
         (LiteralValue::Percentage(p), LiteralValue::Unit(unit))
         | (LiteralValue::Unit(unit), LiteralValue::Percentage(p)) => match op {
             ArithmeticOperation::Multiply => {
+                // Unit * Percentage = Unit scaled by percentage (e.g., 100 eur * 20% = 20 eur)
                 let result_value = unit.value() * p / Decimal::from(PERCENT_DENOMINATOR);
+                Ok(LiteralValue::Unit(unit.with_value(result_value)))
+            }
+            ArithmeticOperation::Add => {
+                // Unit + Percentage = Unit increased by percentage (e.g., 100 eur + 20% = 120 eur)
+                let increase = unit.value() * p / Decimal::from(PERCENT_DENOMINATOR);
+                let result_value = unit.value() + increase;
+                Ok(LiteralValue::Unit(unit.with_value(result_value)))
+            }
+            ArithmeticOperation::Subtract => {
+                // Unit - Percentage = Unit decreased by percentage (e.g., 100 eur - 20% = 80 eur)
+                let decrease = unit.value() * p / Decimal::from(PERCENT_DENOMINATOR);
+                let result_value = unit.value() - decrease;
                 Ok(LiteralValue::Unit(unit.with_value(result_value)))
             }
             _ => Err(LemmaError::Engine(format!(

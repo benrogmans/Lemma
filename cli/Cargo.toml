@@ -12,7 +12,7 @@ name = "lemma"
 path = "src/main.rs"
 
 [dependencies]
-lemma = { path = "../lemma" }
+lemma = { package = "lemma-engine", path = "../lemma" }
 clap.workspace = true
 anyhow.workspace = true
 chrono.workspace = true

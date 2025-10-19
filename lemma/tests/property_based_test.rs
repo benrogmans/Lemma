@@ -436,15 +436,12 @@ rule commutative2 = 5 + x
 
         let comm1 = get_rule_result(&mut engine, "test", "commutative1");
         let comm2 = get_rule_result(&mut engine, "test", "commutative2");
-        match (comm1, comm2) {
-            (Some(LiteralValue::Number(v1)), Some(LiteralValue::Number(v2))) => {
-                assert!(
-                    (v1 - v2).abs() < Decimal::from_str("0.001").unwrap(),
-                    "Commutativity failed for {}",
-                    n
-                );
-            }
-            _ => {}
+        if let (Some(LiteralValue::Number(v1)), Some(LiteralValue::Number(v2))) = (comm1, comm2) {
+            assert!(
+                (v1 - v2).abs() < Decimal::from_str("0.001").unwrap(),
+                "Commutativity failed for {}",
+                n
+            );
         }
     }
 }
@@ -467,30 +464,28 @@ rule a_gte_a = a >= a
     engine.add_lemma_code(code, "test").unwrap();
 
     if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "a_eq_a") {
-        assert_eq!(val, true, "Reflexive equality failed");
+        assert!(val, "Reflexive equality failed");
     }
 
     if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "a_lte_a") {
-        assert_eq!(val, true, "Reflexive <= failed");
+        assert!(val, "Reflexive <= failed");
     }
 
     if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "a_gte_a") {
-        assert_eq!(val, true, "Reflexive >= failed");
+        assert!(val, "Reflexive >= failed");
     }
 
     let ab = get_rule_result(&mut engine, "test", "a_lt_b");
     let bc = get_rule_result(&mut engine, "test", "b_lt_c");
     let ac = get_rule_result(&mut engine, "test", "a_lt_c");
 
-    match (ab, bc, ac) {
-        (
-            Some(LiteralValue::Boolean(true)),
-            Some(LiteralValue::Boolean(true)),
-            Some(LiteralValue::Boolean(val)),
-        ) => {
-            assert_eq!(val, true, "Transitivity of < failed");
-        }
-        _ => {}
+    if let (
+        Some(LiteralValue::Boolean(true)),
+        Some(LiteralValue::Boolean(true)),
+        Some(LiteralValue::Boolean(val)),
+    ) = (ab, bc, ac)
+    {
+        assert!(val, "Transitivity of < failed");
     }
 }
 

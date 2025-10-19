@@ -1,4 +1,4 @@
-name: CI
+name: Quality
 
 on:
   push:
@@ -147,4 +147,33 @@ jobs:
             echo "Running $target..."
             cargo +nightly fuzz run $target -- -max_total_time=30 || true
           done
+
+  wasm:
+    name: WASM Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build WASM
+        run: |
+          cd lemma
+          node wasm/build.js
+
+      - name: Test WASM
+        run: |
+          cd lemma
+          node wasm/test.js
 

@@ -256,6 +256,27 @@ pub enum LiteralValue {
     Regex(String),     // e.g., "/pattern/"
 }
 
+impl LiteralValue {
+    /// Get the type name of this value
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            LiteralValue::Number(_) => "Number",
+            LiteralValue::Text(_) => "Text",
+            LiteralValue::Date(_) => "Date",
+            LiteralValue::Time(_) => "Time",
+            LiteralValue::Boolean(_) => "Boolean",
+            LiteralValue::Percentage(_) => "Percentage",
+            LiteralValue::Unit(u) => u.category(),
+            LiteralValue::Regex(_) => "Regex",
+        }
+    }
+
+    /// Get the display value as a string (uses the Display implementation)
+    pub fn display_value(&self) -> String {
+        self.to_string()
+    }
+}
+
 /// A time value
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct TimeValue {

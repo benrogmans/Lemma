@@ -10,7 +10,7 @@ exclude = ["lemma/fuzz"]
 version = "0.5.2"
 edition = "2021"
 authors = ["benrogmans <ben@amrai.nl>"]
-description = "Lemma: business rules for man and machine"
+description = "The programming language that means business."
 license = "Apache-2.0"
 repository = "https://github.com/benrogmans/lemma"
 
