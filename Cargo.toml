@@ -7,10 +7,10 @@ members = [
 exclude = ["lemma/fuzz"]
 
 [workspace.package]
-version = "0.6.3"
+version = "0.6.4"
 edition = "2021"
 authors = ["benrogmans <ben@amrai.nl>"]
-description = "The programming language that means business."
+description = "A language that means business."
 license = "Apache-2.0"
 repository = "https://github.com/benrogmans/lemma"
 

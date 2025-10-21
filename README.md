@@ -6,34 +6,33 @@
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-> **Rules for man and machine**
+> **A language that means business.**
 
-Lemma is a declarative programming language for business logic. It reads like English but evaluates like code. Write business rules, contracts, and policies that both humans and computers can understand.
+Lemma is a declarative programming language for business logic. Write business rules, contracts, and policies that both humans and computers can understand.
 
 ```lemma
 doc pricing
 
-fact quantity   = [number]
-fact is_vip     = false
+fact quantity = [number]
+fact is_vip   = false
 
 rule discount = 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
   unless is_vip         then 25%
 
-rule price = 200 eur - discount?
+rule price = quantity * 20 eur - discount?
 ```
 
-The `200 eur - discount?` expression automatically applies percentage semantics, resulting in `180 eur` when discount is `10%`.
+Note how Lemma automatically deducts the discount percentage in the expression `quantity * 20 eur - discount?`.
 
 ## Why Lemma?
 
-- **Natural syntax** - Reads like plain English, no cryptic symbols
-- **Type-safe** - Built-in support for money, dates, durations, units with automatic conversions
-- **Declarative** - Describe what, not how
-- **Composable** - Documents reference and extend each other
-- **Auditable** - Every decision has a clear audit trail
-- **Pure Rust** - Fast, deterministic execution without external dependencies
+Lemma bridges the gap between business and code. Business rules are traditionally encoded in either natural language documents that humans can read but machines cannot execute, or in imperative code that machines can execute but humans struggle to read. This creates a fundamental disconnect: legal contracts, policies, and business rules live in one world, while their software implementations live in another.
+
+Generative AI excels at creative tasks because it operates on probability. It approximates—it doesn't calculate. Business rules cannot be *almost correct*, *most of the time*.
+
+**Lemma provides certainty**. Every answer is exact, delivered in milliseconds, and the reasoning is verifiable.
 
 ## Quick Start
 
@@ -43,51 +42,72 @@ The `200 eur - discount?` expression automatically applies percentage semantics,
 cargo install lemma-cli
 ```
 
-### Your First Rule
+### Your first Lemma doc
 
-Create `hello.lemma`:
+Create `shipping.lemma`:
 
 ```lemma
-doc hello
+doc shipping
 
-fact name = "World"
-fact age = 25
+fact is_express = true
+fact package_weight = 2.5 kilograms
 
-rule greeting = "Hello, " + name + "!"
+rule express_fee = 0 USD
+  unless is_express then 4.99 USD
 
-rule can_vote = false
-  unless age >= 18 then true
+rule base_shipping = 5.99 USD
+  unless package_weight > 1 kilogram  then  8.99 USD
+  unless package_weight > 5 kilograms then 15.99 USD
+
+rule total_cost = base_shipping + express_fee
 ```
+
+Use spaces and tabs in `unless` expressions to align it like a table, making scanning the rule at a glance really easy.
+
+**What this calculates:**
+- Express fee: $0.00 USD, unless `is_express` is true, then $4.99
+- Base shipping: $5.99, but for packages that weigh 1-5kg it is $8.99, and for all packages >5kg it is $15.99
+- Total cost: Base shipping plus express fee
+
+As obvious as it looks, that is how Lemma encodes it.
 
 Query it:
 
 ```bash
-lemma run hello -d .
-# Output: Shows all rules in the hello document with operation records
+lemma run shipping
+# Output:
+# ┌───────────────┬──────────────────────────────────────────────────────┐
+# │ Rule          ┆ Evaluation                                           │
+# ╞═══════════════╪══════════════════════════════════════════════════════╡
+# │ express_fee   ┆ 4.99 USD                                             │
+# │               ┆                                                      │
+# │               ┆    0. fact is_express = true                         │
+# │               ┆    1. unless clause 0 matched → 4.99 USD             │
+# │               ┆    2. result = 4.99 USD                              │
+# ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+# │ base_shipping ┆ 8.99 USD                                             │
+# │               ┆                                                      │
+# │               ┆    0. fact package_weight = 2.5 kilogram             │
+# │               ┆    1. greater_than(2.5 kilogram, 5 kilogram) → false │
+# │               ┆    2. unless clause 1 skipped                        │
+# │               ┆    3. fact package_weight = 2.5 kilogram             │
+# │               ┆    4. greater_than(2.5 kilogram, 1 kilogram) → true  │
+# │               ┆    5. unless clause 0 matched → 8.99 USD             │
+# │               ┆    6. result = 8.99 USD                              │
+# ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+# │ total_cost    ┆ 13.98 USD                                            │
+# │               ┆                                                      │
+# │               ┆    0. rule base_shipping = 8.99 USD                  │
+# │               ┆    1. rule express_fee = 4.99 USD                    │
+# │               ┆    2. add(8.99 USD, 4.99 USD) → 13.98 USD            │
+# │               ┆    3. result = 13.98 USD                             │
+# └───────────────┴──────────────────────────────────────────────────────┘
 ```
 
-### Real-World Example
-
-```lemma
-doc tax_policy
-
-fact income = 75000 USD
-fact filing_status = "single"
-
-rule standard_deduction = 13850 USD
-  unless filing_status == "married" then 27700 USD
-
-rule taxable_income = income - standard_deduction?
-
-rule tax_owed = 0 USD
-  unless taxable_income? > 11000 USD then (taxable_income? - 11000 USD) * 10%
-  unless taxable_income? > 44725 USD then 3372.50 USD + (taxable_income? - 44725 USD) * 12%
-  unless taxable_income? > 95375 USD then 9875 USD + (taxable_income? - 95375 USD) * 22%
-```
 
 ## Key Features
 
-### Unless Clauses
+### Rules with unless clauses
 
 Rules start with a default value, then conditions override:
 
@@ -100,9 +120,9 @@ rule discount = 0%
 rule price = base_price * (1 - discount)
 ```
 
-**The last matching condition wins** - just like natural language!
+**The last matching condition wins** - mirroring how business rules, legal documents, and standard operating procedures are written: "In principle X applies, unless [more specific condition] Y, unless [even more specific] Z..."
 
-### Rich Type System
+### Rich type system
 
 ```lemma
 fact salary = 50000 USD
@@ -134,7 +154,7 @@ rule distance_in_miles = distance in miles
 rule temperature_f = temperature in fahrenheit
 ```
 
-### Rule References
+### Rule references
 
 Compose complex logic from simple rules:
 
@@ -153,7 +173,7 @@ rule can_drive = is_adult? and has_license?
   unless license_suspended? then veto "License suspended"
 ```
 
-### Document Composition
+### Document composition
 
 ```lemma
 doc employee
@@ -171,7 +191,7 @@ rule employee_bonus = employee.base_salary * bonus_policy.bonus_rate
 rule manager_bonus = manager.base_salary * bonus_policy.bonus_rate
 ```
 
-### Veto for Hard Constraints
+### Veto for hard constraints
 
 ```lemma
 doc loan_approval
@@ -186,7 +206,7 @@ rule loan_approval = reject
   unless bankruptcy_flag then veto "Cannot approve due to bankruptcy"
 ```
 
-**Veto blocks the rule entirely** (no valid result), while `reject` just returns `false`.
+**Veto blocks the rule entirely**; there will not be any result.
 
 ## Documentation
 
@@ -200,19 +220,37 @@ rule loan_approval = reject
 
 ```bash
 # Run a document (evaluates all rules)
-lemma run document_name -d .
+lemma run examples/simple_facts
 
-# Override facts
-lemma run document_name -d . age=25 income="50000 USD"
+# Run specific rules only
+lemma run examples/tax_calculation:tax_owed
+
+# Override facts at runtime
+lemma run examples/tax_calculation income=75000 filing_status="married"
+
+# Interactive mode for exploring documents and facts
+lemma run --interactive
+
+# Machine-readable output (for scripts and tools)
+lemma run pricing --raw
 
 # Show document structure
-lemma show document_name -d .
+lemma show pricing
 
 # List all documents in workspace
+lemma list
+
+# List documents in specific directory
 lemma list ./policies/
 
-# Start HTTP server
-lemma serve -d ./policies --port 3000
+# Start HTTP server (workspace auto-detected)
+lemma serve --port 3000
+
+# Start server with specific workspace
+lemma serve --dir ./policies --port 3000
+
+# Start MCP server for AI assistant integration
+lemma mcp
 ```
 
 ### HTTP Server
@@ -220,7 +258,7 @@ lemma serve -d ./policies --port 3000
 Start a server with your workspace pre-loaded:
 
 ```bash
-lemma serve -d ./policies
+lemma serve --dir ./policies
 
 # Evaluate with inline code
 curl -X POST http://localhost:3000/evaluate \
@@ -231,49 +269,15 @@ curl -X POST http://localhost:3000/evaluate \
   }'
 ```
 
-## Project Structure
+The server provides endpoints for document evaluation, fact inspection, and rule validation.
 
-```
-lemma/
-├── cli/                # CLI application (includes HTTP server)
-│   └── src/
-│       ├── main.rs     # CLI commands
-│       ├── server.rs   # HTTP server module
-│       └── formatter.rs
-├── lemma/              # Core library
-└── docs/               # Documentation & examples
-    ├── examples/       # Example .lemma files
-    └── *.md            # Detailed guides
-```
+### MCP Server
 
-## Use Cases
+The MCP (Model Context Protocol) server enables AI assistants to interact with Lemma documents programmatically, providing tools for document creation, evaluation, and inspection.
 
-- **Business Rules** - Pricing, eligibility, validation logic
-- **Contracts** - Legal terms and conditions
-- **Policies** - HR, compliance, governance rules
-- **Configuration** - Complex conditional settings
-- **Tax & Finance** - Progressive calculations, brackets
-- **Logistics** - Shipping rules, routing decisions
+### WebAssembly
 
-## Implementation
-
-Lemma is implemented in pure Rust, providing:
-
-- **Pure Rust evaluator** - Fast, deterministic execution with no external dependencies
-- **Type-aware operations** - Automatic type checking and semantic conversions
-- **Composability** - Rules reference other rules with automatic dependency resolution
-- **Rich type system** - Built-in units with automatic conversions
-- **Operation tracking** - Complete audit trail of every evaluation step
-- **HTTP Server** - REST API with workspace pre-loading
-- **WebAssembly support** - Run in browsers and edge environments
-
-## Contributing
-
-Contributions welcome! See [docs/contributing.md](docs/contributing.md) for setup and workflow.
-
-## WebAssembly
-
-Use in browsers via NPM:
+Lemma also ships as a WebAssembly module (WASM), letting you evaluate rules directly in the browser or at the edge. This keeps latency low and data local. Install Lemma from NPM:
 
 ```bash
 npm install @benrogmans/lemma-engine
@@ -281,10 +285,46 @@ npm install @benrogmans/lemma-engine
 
 See [WASM documentation](docs/wasm.md) for usage examples.
 
+
+## Status
+
+Lemma is still in an early stage of development and is **not yet recommended for production use**. Expect breaking changes, incomplete features, and evolving semantics while the project matures.
+
+## Project structure overview
+
+```
+lemma/
+├── cli/                    # CLI application (includes HTTP, MCP, interactive modes)
+│   ├── src/
+│   │   ├── main.rs         # CLI commands
+│   │   ├── server.rs       # HTTP server module
+│   │   ├── mcp.rs          # MCP (Model Context Protocol) server
+│   │   ├── interactive.rs  # Interactive command helpers
+│   │   └── formatter.rs
+│   └── tests/
+│       └── cli_integration_test.rs
+├── lemma/                  # Core engine library
+│   ├── src/
+│   │   ├── parser/         # Grammar and parsing logic
+│   │   ├── evaluator/      # Evaluation pipeline
+│   │   ├── serializers/    # Output serializers (JSON, etc.)
+│   │   └── ...             # Engine modules (analysis, validator, wasm, tests)
+│   └── tests/              # Engine integration tests
+├── docs/                   # Documentation & examples
+│   ├── examples/           # Example .lemma files
+│   └── *.md                # Guides, reference, roadmap, etc.
+└── README.md               # This file
+```
+
+
+## Contributing
+
+Contributions are very welcome! See [docs/contributing.md](docs/contributing.md) for setup and workflow, and check the [project roadmap](docs/roadmap.md) for exciting features you can help shape.
+
 ## License
 
 Apache 2.0 - see LICENSE file for details.
 
 ---
 
-**[View on GitHub](https://github.com/benrogmans/lemma)** • **[Report Issue](https://github.com/benrogmans/lemma/issues)** • **[Documentation](docs/index.md)** • **[Contributing](docs/contributing.md)**
+**[View on GitHub](https://github.com/benrogmans/lemma)** • **[Report Issue](https://github.com/benrogmans/lemma/issues)** • **[Documentation](docs/index.md)** • **[Contributing](docs/contributing.md)** • **[Roadmap](docs/roadmap.md)** • **[WASM](docs/wasm.md)**

@@ -45,7 +45,7 @@ function parseCargoMetadata() {
     repository: extractField(workspaceSection, 'repository') || 'https://github.com/benrogmans/lemma',
     description: extractField(packageSection, 'description') ||
                  extractField(workspaceSection, 'description') ||
-                 'The programming language that means business.',
+                 'A language that means business.',
     homepage: extractField(packageSection, 'homepage') || 'https://github.com/benrogmans/lemma',
     keywords: []
   };

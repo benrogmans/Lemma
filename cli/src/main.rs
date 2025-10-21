@@ -13,9 +13,9 @@ use walkdir::WalkDir;
 
 #[derive(Parser)]
 #[command(name = "lemma")]
-#[command(about = "The programming language that means business.")]
+#[command(about = "A language that means business.")]
 #[command(
-    long_about = "A declarative programming language for expressing business rules, facts, and logic.\nEvaluate rules from .lemma files, run as an HTTP server, or integrate with AI tools via MCP."
+    long_about = "Lemma is a declarative programming language for business logic, expressed simply and clearly.\nThe CLI lets you evaluate rules from .lemma files, run Lemma as an HTTP server, or integrate with AI tools via MCP."
 )]
 #[command(version)]
 struct Cli {
