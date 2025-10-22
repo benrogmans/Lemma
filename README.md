@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/benrogmans/lemma/workflows/CI/badge.svg)](https://github.com/benrogmans/lemma/actions/workflows/ci.yml)
 [![DeepSource](https://app.deepsource.com/gh/benrogmans/lemma.svg/?label=active+issues&show_trend=true)](https://app.deepsource.com/gh/benrogmans/lemma/)
+[![DeepSource](https://app.deepsource.com/gh/benrogmans/Lemma.svg/?label=code+coverage&show_trend=true&token=io5MTIFqayHQ03Fif5vJKemG)](https://app.deepsource.com/gh/benrogmans/Lemma/)
 [![Crates.io](https://img.shields.io/crates/v/lemma-engine.svg)](https://crates.io/crates/lemma-engine)
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -30,9 +31,14 @@ Note how Lemma automatically deducts the discount percentage in the expression `
 
 Lemma bridges the gap between business and code. Business rules are traditionally encoded in either natural language documents that humans can read but machines cannot execute, or in imperative code that machines can execute but humans struggle to read. This creates a fundamental disconnect: legal contracts, policies, and business rules live in one world, while their software implementations live in another.
 
-Generative AI excels at creative tasks because it operates on probability. It approximates—it doesn't calculate. Business rules cannot be *almost correct*, *most of the time*.
+Lemma eliminates the translation, by letting you unify business logic. 
+
+### What about AI
+AI models operate on probability. By design, they approximate—they don't calculate. This makes them great at language, but bad at math.
 
 **Lemma provides certainty**. Every answer is exact, delivered in milliseconds, and the reasoning is verifiable.
+
+Pro tip: use Lemma's MCP server to make your LLMs deterministic. Use LLMs as a friendly interface for your Lemma docs.
 
 ## Quick Start
 
