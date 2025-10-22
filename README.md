@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/benrogmans/lemma/workflows/CI/badge.svg)](https://github.com/benrogmans/lemma/actions/workflows/ci.yml)
 [![DeepSource](https://app.deepsource.com/gh/benrogmans/lemma.svg/?label=active+issues&show_trend=true)](https://app.deepsource.com/gh/benrogmans/lemma/)
+[![DeepSource](https://app.deepsource.com/gh/benrogmans/Lemma.svg/?label=code+coverage&show_trend=true&token=io5MTIFqayHQ03Fif5vJKemG)](https://app.deepsource.com/gh/benrogmans/Lemma/)
 [![Crates.io](https://img.shields.io/crates/v/lemma-engine.svg)](https://crates.io/crates/lemma-engine)
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
