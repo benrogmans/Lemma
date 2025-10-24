@@ -124,7 +124,7 @@ fn extract_rule_references(expr: &Expression, references: &mut HashSet<String>) 
             let rule_name = if rule_ref.reference.len() > 1 {
                 rule_ref.reference.join(".")
             } else {
-                rule_ref.reference.last().unwrap_or(&String::new()).clone()
+                rule_ref.reference.last().cloned().unwrap_or_default()
             };
             references.insert(rule_name);
         }

@@ -22,12 +22,9 @@ pub(crate) fn find_fact_type(
                 FactValue::Literal(lit) => Ok(lit.to_type()),
                 FactValue::TypeAnnotation(TypeAnnotation::LemmaType(t)) => Ok(t.clone()),
                 FactValue::DocumentReference(ref_doc) => {
-                    if name.contains('.') {
-                        let parts: Vec<&str> = name.splitn(2, '.').collect();
-                        if parts.len() == 2 {
-                            if let Some(referenced) = all_docs.get(ref_doc) {
-                                return find_fact_type(parts[1], referenced, all_docs);
-                            }
+                    if let Some((_, field)) = name.split_once('.') {
+                        if let Some(referenced) = all_docs.get(ref_doc) {
+                            return find_fact_type(field, referenced, all_docs);
                         }
                     }
                     Err(LemmaError::Engine(format!(

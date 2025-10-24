@@ -1,8 +1,8 @@
 # Lemma
 
 [![CI](https://github.com/benrogmans/lemma/workflows/CI/badge.svg)](https://github.com/benrogmans/lemma/actions/workflows/ci.yml)
-[![DeepSource](https://app.deepsource.com/gh/benrogmans/lemma.svg/?label=active+issues&show_trend=true)](https://app.deepsource.com/gh/benrogmans/lemma/)
-[![DeepSource](https://app.deepsource.com/gh/benrogmans/Lemma.svg/?label=code+coverage&show_trend=true&token=io5MTIFqayHQ03Fif5vJKemG)](https://app.deepsource.com/gh/benrogmans/Lemma/)
+[![DeepSource](https://app.deepsource.com/gh/benrogmans/lemma.svg/?label=active+issues&show_trend=false)](https://app.deepsource.com/gh/benrogmans/lemma/)
+[![DeepSource](https://app.deepsource.com/gh/benrogmans/Lemma.svg/?label=code+coverage&show_trend=false&token=io5MTIFqayHQ03Fif5vJKemG)](https://app.deepsource.com/gh/benrogmans/Lemma/)
 [![Crates.io](https://img.shields.io/crates/v/lemma-engine.svg)](https://crates.io/crates/lemma-engine)
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -250,10 +250,10 @@ lemma list
 lemma list ./policies/
 
 # Start HTTP server (workspace auto-detected)
-lemma serve --port 3000
+lemma server --port 3000
 
 # Start server with specific workspace
-lemma serve --dir ./policies --port 3000
+lemma server --dir ./policies --port 3000
 
 # Start MCP server for AI assistant integration
 lemma mcp
@@ -264,7 +264,7 @@ lemma mcp
 Start a server with your workspace pre-loaded:
 
 ```bash
-lemma serve --dir ./policies
+lemma server --dir ./policies
 
 # Evaluate with inline code
 curl -X POST http://localhost:3000/evaluate \

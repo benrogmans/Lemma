@@ -1,31 +1,21 @@
 use crate::evaluator::Evaluator;
-use crate::{parse, LemmaResult, Response, Validator};
+use crate::{parse, LemmaDoc, LemmaResult, Response, Validator};
 use std::collections::HashMap;
 
 /// The Lemma evaluation engine.
 ///
 /// Pure Rust implementation that evaluates Lemma documents directly from the AST.
+#[derive(Default)]
 pub struct Engine {
-    documents: HashMap<String, crate::LemmaDoc>,
+    documents: HashMap<String, LemmaDoc>,
     sources: HashMap<String, String>,
     validator: Validator,
     evaluator: Evaluator,
 }
 
-impl Default for Engine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Engine {
     pub fn new() -> Self {
-        Self {
-            documents: HashMap::new(),
-            sources: HashMap::new(),
-            validator: Validator::new(),
-            evaluator: Evaluator::new(),
-        }
+        Self::default()
     }
 
     pub fn add_lemma_code(&mut self, lemma_code: &str, source: &str) -> LemmaResult<()> {

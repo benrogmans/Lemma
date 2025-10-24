@@ -79,7 +79,7 @@ enum Commands {
     /// Runs a server that evaluates Lemma documents via HTTP POST requests.
     /// Useful for integrating Lemma rules into web applications and microservices.
     /// API: POST /evaluate with {code, facts}
-    Serve {
+    Server {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
@@ -115,11 +115,11 @@ fn main() -> Result<()> {
         } => run_command(workdir, doc_name.as_ref(), facts, *raw, *interactive),
         Commands::Show { workdir, doc_name } => show_command(workdir, doc_name),
         Commands::List { root } => list_command(root),
-        Commands::Serve {
+        Commands::Server {
             workdir,
             host,
             port,
-        } => serve_command(workdir, host, *port),
+        } => server_command(workdir, host, *port),
         Commands::Mcp { workdir } => mcp_command(workdir),
     }
 }
@@ -153,12 +153,10 @@ fn run_command(
             std::process::exit(1);
         }
 
-        let (parsed_doc, parsed_rules) = doc_name
-            .map(|name| {
-                let (doc, rules) = parse_doc_and_rules(name);
-                (Some(doc), rules)
-            })
-            .unwrap_or((None, None));
+        let (parsed_doc, parsed_rules) = doc_name.map_or((None, None), |name| {
+            let (doc, rules) = parse_doc_and_rules(name);
+            (Some(doc), rules)
+        });
 
         let (d, r, interactive_facts) =
             interactive::run_interactive(&engine, parsed_doc, parsed_rules)?;
@@ -250,7 +248,7 @@ fn list_command(root: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn serve_command(workdir: &Path, host: &str, port: u16) -> Result<()> {
+fn server_command(workdir: &Path, host: &str, port: u16) -> Result<()> {
     #[cfg(feature = "server")]
     {
         use tokio::runtime::Runtime;

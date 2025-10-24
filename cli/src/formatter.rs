@@ -7,10 +7,6 @@ pub struct Formatter {
 }
 
 impl Formatter {
-    pub fn new(use_colors: bool) -> Self {
-        Self { use_colors }
-    }
-
     pub fn format_response(&self, response: &Response, raw: bool) -> String {
         if raw {
             self.format_raw(response)
@@ -319,6 +315,6 @@ impl Formatter {
 
 impl Default for Formatter {
     fn default() -> Self {
-        Self::new(true)
+        Self { use_colors: true }
     }
 }

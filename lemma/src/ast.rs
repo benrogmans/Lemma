@@ -45,24 +45,19 @@ impl fmt::Display for ExpressionId {
 }
 
 /// Counter for generating unique expression IDs
+#[derive(Default)]
 pub struct ExpressionIdGenerator {
     next_id: u64,
 }
 
 impl ExpressionIdGenerator {
     pub fn new() -> Self {
-        Self { next_id: 0 }
+        Self::default()
     }
 
     pub fn next_id(&mut self) -> ExpressionId {
         let id = ExpressionId(self.next_id);
         self.next_id += 1;
         id
-    }
-}
-
-impl Default for ExpressionIdGenerator {
-    fn default() -> Self {
-        Self::new()
     }
 }

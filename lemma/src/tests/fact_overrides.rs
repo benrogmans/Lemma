@@ -46,10 +46,13 @@ fact contract.base.rate = 100"#;
             reference: vec!["contract".to_string(), "start_date".to_string()]
         })
     );
-    if let FactValue::Literal(LiteralValue::Date(_)) = &result[0].facts[1].value {
-    } else {
-        panic!("Expected Date literal");
-    }
+    assert!(
+        matches!(
+            &result[0].facts[1].value,
+            FactValue::Literal(LiteralValue::Date(_))
+        ),
+        "Expected Date literal"
+    );
 
     assert_eq!(
         result[0].facts[2].fact_type,
@@ -57,10 +60,10 @@ fact contract.base.rate = 100"#;
             reference: vec!["contract".to_string(), "end_date".to_string()]
         })
     );
-    if let FactValue::TypeAnnotation(_) = &result[0].facts[2].value {
-    } else {
-        panic!("Expected TypeAnnotation");
-    }
+    assert!(
+        matches!(&result[0].facts[2].value, FactValue::TypeAnnotation(_)),
+        "Expected TypeAnnotation"
+    );
 
     assert_eq!(
         result[0].facts[3].fact_type,

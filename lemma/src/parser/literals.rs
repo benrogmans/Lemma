@@ -97,7 +97,7 @@ fn parse_regex_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
             pattern_parts.push(inner_pair.as_str());
         }
     }
-    let pattern = pattern_parts.join("");
+    let pattern = pattern_parts.concat();
     match regex::Regex::new(&pattern) {
         Ok(_) => Ok(LiteralValue::Regex(regex_str)),
         Err(e) => Err(LemmaError::Engine(format!(

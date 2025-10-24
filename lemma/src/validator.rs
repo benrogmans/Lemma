@@ -941,6 +941,6 @@ impl Validator {
 
 impl Default for Validator {
     fn default() -> Self {
-        Self::new()
+        Self
     }
 }
