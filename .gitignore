@@ -10,6 +10,8 @@ lemma/fuzz/target/
 
 # DeepSource coverage
 coverage/
+*.info
+*.profraw
 
 # IDE and editor configurations
 .cursor/
