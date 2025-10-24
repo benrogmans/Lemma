@@ -98,6 +98,7 @@ pub struct ValidatedDocuments {
 }
 
 /// Comprehensive semantic validator that runs after parsing but before evaluation
+#[derive(Default)]
 pub struct Validator;
 
 impl Validator {
@@ -936,11 +937,5 @@ impl Validator {
                 }
             }
         }
-    }
-}
-
-impl Default for Validator {
-    fn default() -> Self {
-        Self
     }
 }

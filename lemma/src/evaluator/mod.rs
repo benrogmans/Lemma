@@ -17,7 +17,8 @@ use crate::{LemmaDoc, LemmaError, LemmaFact, LemmaResult, Response, RuleResult};
 use context::{build_fact_map, EvaluationContext};
 use std::collections::HashMap;
 
-/// Stateless evaluator for Lemma documents
+/// Evaluates Lemma rules within their document context
+#[derive(Default)]
 pub struct Evaluator;
 
 impl Evaluator {
@@ -136,12 +137,6 @@ impl Evaluator {
         }
 
         Ok(response)
-    }
-}
-
-impl Default for Evaluator {
-    fn default() -> Self {
-        Self
     }
 }
 

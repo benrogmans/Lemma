@@ -6,6 +6,12 @@ pub struct Formatter {
     use_colors: bool,
 }
 
+impl Default for Formatter {
+    fn default() -> Self {
+        Self { use_colors: true }
+    }
+}
+
 impl Formatter {
     pub fn format_response(&self, response: &Response, raw: bool) -> String {
         if raw {
@@ -310,11 +316,5 @@ impl Formatter {
         } else {
             format!("  {}\n", text)
         }
-    }
-}
-
-impl Default for Formatter {
-    fn default() -> Self {
-        Self { use_colors: true }
     }
 }
