@@ -13,7 +13,16 @@ mod literal_parsing;
 mod unit_parsing;
 
 // Evaluator tests
-mod context_tests;
-mod expression_tests;
-mod rule_tests;
+mod context;
+mod expressions;
+mod rules;
 mod topological_sort;
+
+// Semantic tests
+mod semantic;
+
+// Error tests
+mod error;
+
+// Serializer tests
+mod serializers;

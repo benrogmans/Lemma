@@ -127,7 +127,7 @@ lemma list ./policies
 Start an HTTP REST API server with a pre-loaded workspace.
 
 ```bash
-lemma serve [-d <path>] [--host <host>] [-p <port>]
+lemma server [-d <path>] [--host <host>] [-p <port>]
 ```
 
 **Options:**
@@ -137,7 +137,7 @@ lemma serve [-d <path>] [--host <host>] [-p <port>]
 
 **Example:**
 ```bash
-lemma serve -d ./policies -p 8080
+lemma server -d ./policies -p 8080
 ```
 
 **API Endpoints:**
@@ -234,14 +234,14 @@ lemma run pricing base_price=200 quantity=5
 lemma show pricing
 
 # 6. Start HTTP server
-lemma serve -p 3000
+lemma server -p 3000
 ```
 
 ### HTTP Server Usage
 
 ```bash
 # Start server
-lemma serve --workdir ./policies &
+lemma server --workdir ./policies &
 
 # Evaluate with inline code
 curl -X POST http://localhost:3000/evaluate \
@@ -283,7 +283,7 @@ Make sure your `.lemma` files are in the workspace directory and contain valid `
 ### "Address already in use"
 Another process is using the port. Try a different port:
 ```bash
-lemma serve --port 8080
+lemma server --port 8080
 ```
 
 ### Parse errors

@@ -17,7 +17,8 @@ use crate::{LemmaDoc, LemmaError, LemmaFact, LemmaResult, Response, RuleResult};
 use context::{build_fact_map, EvaluationContext};
 use std::collections::HashMap;
 
-/// Stateless evaluator for Lemma documents
+/// Evaluates Lemma rules within their document context
+#[derive(Default)]
 pub struct Evaluator;
 
 impl Evaluator {
@@ -139,12 +140,6 @@ impl Evaluator {
     }
 }
 
-impl Default for Evaluator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Build an execution plan for rules using topological sort
 ///
 /// Returns rules in dependency order (dependencies before dependents)
@@ -185,7 +180,7 @@ pub(crate) fn topological_sort(
     // Count how many dependencies each node has
     let mut dependency_count: HashMap<String, usize> = HashMap::new();
     for node in &all_nodes {
-        let count = graph.get(node).map(|deps| deps.len()).unwrap_or(0);
+        let count = graph.get(node).map_or(0, |deps| deps.len());
         dependency_count.insert(node.clone(), count);
     }
 

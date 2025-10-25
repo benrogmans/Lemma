@@ -38,7 +38,7 @@ lemma show examples/pricing
 lemma list ./docs/examples
 
 # Start the HTTP server
-lemma serve --port 3000 --dir ./docs/examples
+lemma server --port 3000 --dir ./docs/examples
 
 # Start the MCP server (AI assistant integration)
 lemma mcp --dir ./docs/examples

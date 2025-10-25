@@ -132,14 +132,14 @@ fn prompt_facts(
 
         let (type_ann, default_value) = match &fact.value {
             lemma::FactValue::TypeAnnotation(type_ann) => (type_ann.clone(), None),
-            lemma::FactValue::Literal(lit) => {
-                let type_ann = get_type_annotation_from_literal(lit);
-                (type_ann, Some(format!("{}", lit)))
-            }
+            lemma::FactValue::Literal(lit) => (
+                TypeAnnotation::LemmaType(lit.to_type()),
+                Some(format!("{}", lit)),
+            ),
             lemma::FactValue::DocumentReference(_) => continue,
         };
 
-        let type_str = format_type(&type_ann);
+        let type_str = type_ann.to_string();
 
         let value = match &type_ann {
             TypeAnnotation::LemmaType(LemmaType::Date) => {
@@ -155,13 +155,13 @@ fn prompt_facts(
 
                 if let Some(default) = &default_value {
                     Text::new(&prompt_message)
-                        .with_help_message(&get_help_for_type(&type_ann))
+                        .with_help_message(&format!("Example: {}", type_ann.example_value()))
                         .with_default(default)
                         .prompt()
                         .context(format!("Failed to get value for {}", fact_name))?
                 } else {
                     Text::new(&prompt_message)
-                        .with_help_message(&get_help_for_type(&type_ann))
+                        .with_help_message(&format!("Example: {}", type_ann.example_value()))
                         .prompt()
                         .context(format!("Failed to get value for {}", fact_name))?
                 }
@@ -172,65 +172,4 @@ fn prompt_facts(
     }
 
     Ok(fact_values)
-}
-
-fn get_type_annotation_from_literal(lit: &lemma::LiteralValue) -> TypeAnnotation {
-    use lemma::LiteralValue;
-    match lit {
-        LiteralValue::Text(_) => TypeAnnotation::LemmaType(LemmaType::Text),
-        LiteralValue::Number(_) => TypeAnnotation::LemmaType(LemmaType::Number),
-        LiteralValue::Boolean(_) => TypeAnnotation::LemmaType(LemmaType::Boolean),
-        LiteralValue::Date(_) => TypeAnnotation::LemmaType(LemmaType::Date),
-        LiteralValue::Time(_) => TypeAnnotation::LemmaType(LemmaType::Duration),
-        LiteralValue::Percentage(_) => TypeAnnotation::LemmaType(LemmaType::Percentage),
-        LiteralValue::Regex(_) => TypeAnnotation::LemmaType(LemmaType::Regex),
-        LiteralValue::Unit(unit) => {
-            use lemma::NumericUnit;
-            match unit {
-                NumericUnit::Mass(_, _) => TypeAnnotation::LemmaType(LemmaType::Mass),
-                NumericUnit::Length(_, _) => TypeAnnotation::LemmaType(LemmaType::Length),
-                NumericUnit::Volume(_, _) => TypeAnnotation::LemmaType(LemmaType::Volume),
-                NumericUnit::Duration(_, _) => TypeAnnotation::LemmaType(LemmaType::Duration),
-                NumericUnit::Temperature(_, _) => TypeAnnotation::LemmaType(LemmaType::Temperature),
-                NumericUnit::Power(_, _) => TypeAnnotation::LemmaType(LemmaType::Power),
-                NumericUnit::Force(_, _) => TypeAnnotation::LemmaType(LemmaType::Force),
-                NumericUnit::Pressure(_, _) => TypeAnnotation::LemmaType(LemmaType::Pressure),
-                NumericUnit::Energy(_, _) => TypeAnnotation::LemmaType(LemmaType::Energy),
-                NumericUnit::Frequency(_, _) => TypeAnnotation::LemmaType(LemmaType::Frequency),
-                NumericUnit::Data(_, _) => TypeAnnotation::LemmaType(LemmaType::Data),
-                NumericUnit::Money(_, _) => TypeAnnotation::LemmaType(LemmaType::Money),
-            }
-        }
-    }
-}
-
-fn format_type(type_ann: &TypeAnnotation) -> String {
-    type_ann.to_string()
-}
-
-fn get_help_for_type(type_ann: &TypeAnnotation) -> String {
-    match type_ann {
-        TypeAnnotation::LemmaType(LemmaType::Text) => "Example: \"hello world\"".to_string(),
-        TypeAnnotation::LemmaType(LemmaType::Number) => "Example: 42 or 3.14".to_string(),
-        TypeAnnotation::LemmaType(LemmaType::Boolean) => "Enter: true or false".to_string(),
-        TypeAnnotation::LemmaType(LemmaType::Money) => "Example: 100.50 USD".to_string(),
-        TypeAnnotation::LemmaType(LemmaType::Date) => {
-            "Example: 2023-12-25T14:30:00Z or date(2023, 12, 25)".to_string()
-        }
-        TypeAnnotation::LemmaType(LemmaType::Duration) => {
-            "Example: 1.5 hour or 90 minutes".to_string()
-        }
-        TypeAnnotation::LemmaType(LemmaType::Mass) => {
-            "Example: 5.5 kilograms or 12 pounds".to_string()
-        }
-        TypeAnnotation::LemmaType(LemmaType::Length) => {
-            "Example: 10 meters or 5.5 feet".to_string()
-        }
-        TypeAnnotation::LemmaType(LemmaType::Percentage) => "Example: 50%".to_string(),
-        TypeAnnotation::LemmaType(LemmaType::Temperature) => {
-            "Example: 25 celsius or 77 fahrenheit".to_string()
-        }
-        TypeAnnotation::LemmaType(LemmaType::Regex) => "Example: /pattern/".to_string(),
-        _ => "Enter value".to_string(),
-    }
 }

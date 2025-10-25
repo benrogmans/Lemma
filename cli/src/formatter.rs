@@ -6,11 +6,13 @@ pub struct Formatter {
     use_colors: bool,
 }
 
-impl Formatter {
-    pub fn new(use_colors: bool) -> Self {
-        Self { use_colors }
+impl Default for Formatter {
+    fn default() -> Self {
+        Self { use_colors: true }
     }
+}
 
+impl Formatter {
     pub fn format_response(&self, response: &Response, raw: bool) -> String {
         if raw {
             self.format_raw(response)
@@ -20,7 +22,7 @@ impl Formatter {
     }
 
     fn format_raw(&self, response: &Response) -> String {
-        let mut output = String::new();
+        let mut output = String::default();
 
         for result in &response.results {
             if let Some(ref value) = result.result {
@@ -143,7 +145,7 @@ impl Formatter {
         facts: &[&LemmaFact],
         rules: &[&LemmaRule],
     ) -> String {
-        let mut output = String::new();
+        let mut output = String::default();
 
         output.push_str(&self.section_divider());
         output.push_str(&self.style_header(&format!("  {}", doc.name)));
@@ -245,7 +247,7 @@ impl Formatter {
         doc_count: usize,
         documents: &[(String, usize, usize)],
     ) -> String {
-        let mut output = String::new();
+        let mut output = String::default();
 
         output.push_str(&self.section_divider());
         output.push_str(&self.style_header("  Workspace Summary"));
@@ -314,11 +316,5 @@ impl Formatter {
         } else {
             format!("  {}\n", text)
         }
-    }
-}
-
-impl Default for Formatter {
-    fn default() -> Self {
-        Self::new(true)
     }
 }

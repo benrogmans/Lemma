@@ -126,7 +126,7 @@ lemma run examples/pricing quantity=10
 
 ```bash
 cargo install lemma-cli
-lemma serve --port 8080
+lemma server --port 8080
 ```
 
 ### WebAssembly

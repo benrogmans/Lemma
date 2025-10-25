@@ -314,7 +314,7 @@ pub mod server {
                     McpError::internal_error(format!("Evaluation failed: {}", e))
                 })?;
 
-            let mut output = String::new();
+            let mut output = String::default();
             output.push_str(&format!(
                 "Evaluation complete for document '{}'\n\n",
                 document
@@ -374,7 +374,7 @@ pub mod server {
             let facts = self.engine.get_document_facts(document);
             let rules = self.engine.get_document_rules(document);
 
-            let mut output = String::new();
+            let mut output = String::default();
             output.push_str(&format!("# Document: {}\n\n", document));
 
             output.push_str(&format!("## Facts ({})\n\n", facts.len()));
