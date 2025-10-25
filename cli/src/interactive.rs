@@ -132,9 +132,10 @@ fn prompt_facts(
 
         let (type_ann, default_value) = match &fact.value {
             lemma::FactValue::TypeAnnotation(type_ann) => (type_ann.clone(), None),
-            lemma::FactValue::Literal(lit) => {
-                (TypeAnnotation::LemmaType(lit.to_type()), Some(format!("{}", lit)))
-            }
+            lemma::FactValue::Literal(lit) => (
+                TypeAnnotation::LemmaType(lit.to_type()),
+                Some(format!("{}", lit)),
+            ),
             lemma::FactValue::DocumentReference(_) => continue,
         };
 

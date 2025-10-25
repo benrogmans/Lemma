@@ -51,10 +51,7 @@ cargo deny check --config .cargo/deny.toml
 - Formatting (rustfmt)
 - Security audit (cargo-deny)
 - Quick fuzz tests (30s)
-
-**Quality analysis** (doesn't block merges):
-- DeepSource: coverage + code quality + AI suggestions
-- Property-based tests: 20 tests with 100 cases each
+- Coverage threshold (50%+)
 
 ## Project Structure
 

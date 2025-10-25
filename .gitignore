@@ -8,7 +8,7 @@ lemma/fuzz/artifacts/
 lemma/fuzz/corpus/
 lemma/fuzz/target/
 
-# DeepSource coverage
+# Coverage artifacts
 coverage/
 *.info
 *.profraw

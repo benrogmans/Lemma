@@ -215,11 +215,3 @@ jobs:
       - name: Verify coverage threshold
         run: cargo llvm-cov --all-features --workspace --fail-under-lines 50
 
-      - name: Upload coverage to DeepSource
-        if: github.event_name == 'push' || github.event_name == 'pull_request'
-        run: |
-          curl https://deepsource.io/cli | sh
-          ./bin/deepsource report --analyzer test-coverage --key rust --value-file ./lcov.info
-        env:
-          DEEPSOURCE_DSN: ${{ secrets.DEEPSOURCE_DSN }}
-

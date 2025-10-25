@@ -332,154 +332,234 @@ impl Validator {
     ) -> LemmaResult<()> {
         match &expr.kind {
             ExpressionKind::FactReference(fact_ref) => {
-                let ref_name = fact_ref.reference.join(".");
-
-                // Single-segment reference: just a local fact or rule name
-                if fact_ref.reference.len() == 1 {
-                    let name = &fact_ref.reference[0];
-                    if !self.is_rule_in_doc(name, current_doc) {
-                        return Ok(());
-                    }
-                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                        message: format!("Reference error: '{}' is a rule and must be referenced with '?' (e.g., '{}?')", ref_name, ref_name),
-                        span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                        source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                        source_text: Arc::from(""),
-                        doc_name: current_doc.name.clone(),
-                        doc_start_line: current_doc.start_line,
-                        suggestion: Some(format!("Use '{}?' to reference the rule '{}'", ref_name, ref_name)),
-            })));
-                }
-
-                // Multi-segment reference: document.field
-                if fact_ref.reference.len() < 2 {
-                    return Ok(());
-                }
-
-                let doc_ref = &fact_ref.reference[0];
-                let field_name = fact_ref.reference[1..].join(".");
-
-                // Check if first segment is a fact that references a document
-                if let Some(referenced_doc) = self.get_referenced_doc(doc_ref, current_doc, all_docs) {
-                    if !self.is_rule_in_doc(&field_name, referenced_doc) {
-                        return Ok(());
-                    }
-                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                        message: format!("Reference error: '{}' references a rule in document '{}' and must use '?' (e.g., '{}?')", ref_name, referenced_doc.name, ref_name),
-                        span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                        source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                        source_text: Arc::from(""),
-                        doc_name: current_doc.name.clone(),
-                        doc_start_line: current_doc.start_line,
-                        suggestion: Some(format!("Use '{}?' to reference the rule '{}' in document '{}'", ref_name, field_name, referenced_doc.name)),
-            })));
-                }
-
-                // Check if it's a rule in the current document
-                if !self.is_rule_in_doc(&field_name, current_doc) {
-                    return Ok(());
-                }
-                return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                    message: format!("Reference error: '{}' appears to reference a rule and must use '?' (e.g., '{}?')", ref_name, ref_name),
-                    span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                    source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                    source_text: Arc::from(""),
-                    doc_name: current_doc.name.clone(),
-                    doc_start_line: current_doc.start_line,
-                    suggestion: Some(format!("Use '{}?' to reference the rule '{}'", ref_name, ref_name)),
-            })));
+                self.validate_fact_reference(fact_ref, expr, current_doc, all_docs)
             }
             ExpressionKind::RuleReference(rule_ref) => {
-                let ref_name = rule_ref.reference.join(".");
-
-                // Single-segment reference: just a local fact or rule name
-                if rule_ref.reference.len() == 1 {
-                    let name = &rule_ref.reference[0];
-                    if !self.is_fact_in_doc(name, current_doc) {
-                        return Ok(());
-                    }
-                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                        message: format!("Reference error: '{}' is a fact and should not use '?' (use '{}' instead of '{}?')", ref_name, ref_name, ref_name),
-                        span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                        source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                        source_text: Arc::from(""),
-                        doc_name: current_doc.name.clone(),
-                        doc_start_line: current_doc.start_line,
-                        suggestion: Some(format!("Use '{}' to reference the fact '{}' (remove the '?')", ref_name, ref_name)),
-            })));
-                }
-
-                // Multi-segment reference: document.field
-                if rule_ref.reference.len() < 2 {
-                    return Ok(());
-                }
-
-                let doc_ref = &rule_ref.reference[0];
-                let field_name = rule_ref.reference[1..].join(".");
-
-                // Check if first segment is a fact that references a document
-                if let Some(referenced_doc) = self.get_referenced_doc(doc_ref, current_doc, all_docs) {
-                    if !self.is_fact_in_doc(&field_name, referenced_doc) {
-                        return Ok(());
-                    }
-                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                        message: format!("Reference error: '{}' references a fact in document '{}' and should not use '?' (use '{}' instead of '{}?')", ref_name, referenced_doc.name, ref_name, ref_name),
-                        span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                        source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                        source_text: Arc::from(""),
-                        doc_name: current_doc.name.clone(),
-                        doc_start_line: current_doc.start_line,
-                        suggestion: Some(format!("Use '{}' to reference the fact '{}' in document '{}' (remove the '?')", ref_name, field_name, referenced_doc.name)),
-            })));
-                }
-
-                // Check if it's a fact in the current document
-                if !self.is_fact_in_doc(&field_name, current_doc) {
-                    return Ok(());
-                }
-                return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                    message: format!("Reference error: '{}' appears to reference a fact and should not use '?' (use '{}' instead of '{}?')", ref_name, ref_name, ref_name),
-                    span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                    source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                    source_text: Arc::from(""),
-                    doc_name: current_doc.name.clone(),
-                    doc_start_line: current_doc.start_line,
-                    suggestion: Some(format!("Use '{}' to reference the fact '{}' (remove the '?')", ref_name, ref_name)),
-            })));
+                self.validate_rule_reference(rule_ref, expr, current_doc, all_docs)
             }
             // Recursively validate nested expressions
-            ExpressionKind::LogicalAnd(left, right) => {
+            ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
                 self.validate_expression_references(left, current_doc, all_docs)?;
-                self.validate_expression_references(right, current_doc, all_docs)?;
+                self.validate_expression_references(right, current_doc, all_docs)
             }
-            ExpressionKind::LogicalOr(left, right) => {
+            ExpressionKind::Arithmetic(left, _, right)
+            | ExpressionKind::Comparison(left, _, right) => {
                 self.validate_expression_references(left, current_doc, all_docs)?;
-                self.validate_expression_references(right, current_doc, all_docs)?;
+                self.validate_expression_references(right, current_doc, all_docs)
             }
-            ExpressionKind::Arithmetic(left, _op, right) => {
-                self.validate_expression_references(left, current_doc, all_docs)?;
-                self.validate_expression_references(right, current_doc, all_docs)?;
-            }
-            ExpressionKind::Comparison(left, _op, right) => {
-                self.validate_expression_references(left, current_doc, all_docs)?;
-                self.validate_expression_references(right, current_doc, all_docs)?;
-            }
-            ExpressionKind::LogicalNegation(inner, _negation_type) => {
-                self.validate_expression_references(inner, current_doc, all_docs)?;
-            }
-            ExpressionKind::MathematicalOperator(_op, operand) => {
-                self.validate_expression_references(operand, current_doc, all_docs)?;
-            }
-            ExpressionKind::UnitConversion(value, _target) => {
-                self.validate_expression_references(value, current_doc, all_docs)?;
+            ExpressionKind::LogicalNegation(inner, _)
+            | ExpressionKind::MathematicalOperator(_, inner)
+            | ExpressionKind::UnitConversion(inner, _) => {
+                self.validate_expression_references(inner, current_doc, all_docs)
             }
             ExpressionKind::FactHasAnyValue(_fact_ref) => {
-                // For "have" expressions, we don't validate the fact reference
-                // as it's a dynamic check
+                // For "have" expressions, we don't validate the fact reference as it's a dynamic check
+                Ok(())
             }
-            _ => {}
+            _ => Ok(()),
+        }
+    }
+
+    /// Validate a fact reference (without '?')
+    fn validate_fact_reference(
+        &self,
+        fact_ref: &crate::FactReference,
+        expr: &Expression,
+        current_doc: &LemmaDoc,
+        all_docs: &[LemmaDoc],
+    ) -> LemmaResult<()> {
+        let ref_name = fact_ref.reference.join(".");
+
+        // Single-segment reference
+        if fact_ref.reference.len() == 1 {
+            return self.validate_single_segment_fact_ref(&ref_name, expr, current_doc);
+        }
+
+        // Multi-segment reference
+        if fact_ref.reference.len() < 2 {
+            return Ok(());
+        }
+
+        let doc_ref = &fact_ref.reference[0];
+        let field_name = fact_ref.reference[1..].join(".");
+
+        self.validate_multi_segment_fact_ref(
+            &ref_name,
+            doc_ref,
+            &field_name,
+            expr,
+            current_doc,
+            all_docs,
+        )
+    }
+
+    /// Validate a single-segment fact reference
+    fn validate_single_segment_fact_ref(
+        &self,
+        ref_name: &str,
+        expr: &Expression,
+        current_doc: &LemmaDoc,
+    ) -> LemmaResult<()> {
+        if self.is_rule_in_doc(ref_name, current_doc) {
+            return Err(self.create_reference_error(
+                format!(
+                    "Reference error: '{}' is a rule and must be referenced with '?' (e.g., '{}?')",
+                    ref_name, ref_name
+                ),
+                format!("Use '{}?' to reference the rule '{}'", ref_name, ref_name),
+                expr,
+                current_doc,
+            ));
         }
         Ok(())
+    }
+
+    /// Validate a multi-segment fact reference
+    fn validate_multi_segment_fact_ref(
+        &self,
+        ref_name: &str,
+        doc_ref: &str,
+        field_name: &str,
+        expr: &Expression,
+        current_doc: &LemmaDoc,
+        all_docs: &[LemmaDoc],
+    ) -> LemmaResult<()> {
+        // Check if first segment is a fact that references a document
+        if let Some(referenced_doc) = self.get_referenced_doc(doc_ref, current_doc, all_docs) {
+            if self.is_rule_in_doc(field_name, referenced_doc) {
+                return Err(self.create_reference_error(
+                    format!("Reference error: '{}' references a rule in document '{}' and must use '?' (e.g., '{}?')", ref_name, referenced_doc.name, ref_name),
+                    format!("Use '{}?' to reference the rule '{}' in document '{}'", ref_name, field_name, referenced_doc.name),
+                    expr,
+                    current_doc,
+                ));
+            }
+            return Ok(());
+        }
+
+        // Check if it's a rule in the current document
+        if self.is_rule_in_doc(field_name, current_doc) {
+            return Err(self.create_reference_error(
+                format!("Reference error: '{}' appears to reference a rule and must use '?' (e.g., '{}?')", ref_name, ref_name),
+                format!("Use '{}?' to reference the rule '{}'", ref_name, ref_name),
+                expr,
+                current_doc,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate a rule reference (with '?')
+    fn validate_rule_reference(
+        &self,
+        rule_ref: &crate::RuleReference,
+        expr: &Expression,
+        current_doc: &LemmaDoc,
+        all_docs: &[LemmaDoc],
+    ) -> LemmaResult<()> {
+        let ref_name = rule_ref.reference.join(".");
+
+        // Single-segment reference
+        if rule_ref.reference.len() == 1 {
+            return self.validate_single_segment_rule_ref(&ref_name, expr, current_doc);
+        }
+
+        // Multi-segment reference
+        if rule_ref.reference.len() < 2 {
+            return Ok(());
+        }
+
+        let doc_ref = &rule_ref.reference[0];
+        let field_name = rule_ref.reference[1..].join(".");
+
+        self.validate_multi_segment_rule_ref(
+            &ref_name,
+            doc_ref,
+            &field_name,
+            expr,
+            current_doc,
+            all_docs,
+        )
+    }
+
+    /// Validate a single-segment rule reference
+    fn validate_single_segment_rule_ref(
+        &self,
+        ref_name: &str,
+        expr: &Expression,
+        current_doc: &LemmaDoc,
+    ) -> LemmaResult<()> {
+        if self.is_fact_in_doc(ref_name, current_doc) {
+            return Err(self.create_reference_error(
+                format!("Reference error: '{}' is a fact and should not use '?' (use '{}' instead of '{}?')", ref_name, ref_name, ref_name),
+                format!("Use '{}' to reference the fact '{}' (remove the '?')", ref_name, ref_name),
+                expr,
+                current_doc,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate a multi-segment rule reference
+    fn validate_multi_segment_rule_ref(
+        &self,
+        ref_name: &str,
+        doc_ref: &str,
+        field_name: &str,
+        expr: &Expression,
+        current_doc: &LemmaDoc,
+        all_docs: &[LemmaDoc],
+    ) -> LemmaResult<()> {
+        // Check if first segment is a fact that references a document
+        if let Some(referenced_doc) = self.get_referenced_doc(doc_ref, current_doc, all_docs) {
+            if self.is_fact_in_doc(field_name, referenced_doc) {
+                return Err(self.create_reference_error(
+                    format!("Reference error: '{}' references a fact in document '{}' and should not use '?' (use '{}' instead of '{}?')", ref_name, referenced_doc.name, ref_name, ref_name),
+                    format!("Use '{}' to reference the fact '{}' in document '{}' (remove the '?')", ref_name, field_name, referenced_doc.name),
+                    expr,
+                    current_doc,
+                ));
+            }
+            return Ok(());
+        }
+
+        // Check if it's a fact in the current document
+        if self.is_fact_in_doc(field_name, current_doc) {
+            return Err(self.create_reference_error(
+                format!("Reference error: '{}' appears to reference a fact and should not use '?' (use '{}' instead of '{}?')", ref_name, ref_name, ref_name),
+                format!("Use '{}' to reference the fact '{}' (remove the '?')", ref_name, ref_name),
+                expr,
+                current_doc,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Helper to create a semantic error for reference validation
+    fn create_reference_error(
+        &self,
+        message: String,
+        suggestion: String,
+        expr: &Expression,
+        current_doc: &LemmaDoc,
+    ) -> LemmaError {
+        LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+            message,
+            span: expr.span.clone().unwrap_or(Span {
+                start: 0,
+                end: 0,
+                line: 0,
+                col: 0,
+            }),
+            source_id: current_doc
+                .source
+                .clone()
+                .unwrap_or_else(|| "<input>".to_string()),
+            source_text: Arc::from(""),
+            doc_name: current_doc.name.clone(),
+            doc_start_line: current_doc.start_line,
+            suggestion: Some(suggestion),
+        }))
     }
 
     /// Check for circular dependencies in rules (moved from document transpiler)
@@ -870,7 +950,9 @@ impl Validator {
             (ExpressionType::Number, ConversionTarget::Length(_)) => ExpressionType::Length,
             (ExpressionType::Number, ConversionTarget::Volume(_)) => ExpressionType::Volume,
             (ExpressionType::Number, ConversionTarget::Duration(_)) => ExpressionType::Duration,
-            (ExpressionType::Number, ConversionTarget::Temperature(_)) => ExpressionType::Temperature,
+            (ExpressionType::Number, ConversionTarget::Temperature(_)) => {
+                ExpressionType::Temperature
+            }
             (ExpressionType::Number, ConversionTarget::Power(_)) => ExpressionType::Power,
             (ExpressionType::Number, ConversionTarget::Force(_)) => ExpressionType::Force,
             (ExpressionType::Number, ConversionTarget::Pressure(_)) => ExpressionType::Pressure,
