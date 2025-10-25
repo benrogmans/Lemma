@@ -7,7 +7,12 @@ fact name = "John"
 fact age = 25
 rule is_adult = age >= 18"#;
 
-    let docs = parse(input, Some("test.lemma".to_string())).unwrap();
+    let docs = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &lemma::ResourceLimits::default(),
+    )
+    .unwrap();
     let validator = Validator::new();
     let result = validator.validate_all(docs);
 
@@ -24,7 +29,12 @@ fn test_semantic_validator_duplicate_facts() {
 fact name = "John"
 fact name = "Jane""#;
 
-    let docs = parse(input, Some("test.lemma".to_string())).unwrap();
+    let docs = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &lemma::ResourceLimits::default(),
+    )
+    .unwrap();
     let validator = Validator::new();
     let result = validator.validate_all(docs);
 
@@ -43,7 +53,12 @@ fn test_semantic_validator_duplicate_rules() {
 rule is_adult = age >= 18
 rule is_adult = age >= 21"#;
 
-    let docs = parse(input, Some("test.lemma".to_string())).unwrap();
+    let docs = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &lemma::ResourceLimits::default(),
+    )
+    .unwrap();
     let validator = Validator::new();
     let result = validator.validate_all(docs);
 
@@ -62,7 +77,12 @@ fn test_semantic_validator_circular_dependency() {
 rule a = b?
 rule b = a?"#;
 
-    let docs = parse(input, Some("test.lemma".to_string())).unwrap();
+    let docs = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &lemma::ResourceLimits::default(),
+    )
+    .unwrap();
     let validator = Validator::new();
     let result = validator.validate_all(docs);
 
@@ -84,7 +104,12 @@ rule is_adult = age >= 18
 rule test1 = age?
 rule test2 = is_adult"#;
 
-    let docs = parse(input, Some("test.lemma".to_string())).unwrap();
+    let docs = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &lemma::ResourceLimits::default(),
+    )
+    .unwrap();
     let validator = Validator::new();
     let result = validator.validate_all(docs);
 
@@ -106,7 +131,12 @@ doc company
 fact name = "Acme Corp"
 fact employee = doc person"#;
 
-    let docs = parse(input, Some("test.lemma".to_string())).unwrap();
+    let docs = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &lemma::ResourceLimits::default(),
+    )
+    .unwrap();
     let validator = Validator::new();
     let result = validator.validate_all(docs);
 
@@ -123,7 +153,12 @@ fn test_semantic_validator_invalid_document_reference() {
 fact name = "John"
 fact contract = doc nonexistent"#;
 
-    let docs = parse(input, Some("test.lemma".to_string())).unwrap();
+    let docs = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &lemma::ResourceLimits::default(),
+    )
+    .unwrap();
     let validator = Validator::new();
     let result = validator.validate_all(docs);
 
@@ -142,7 +177,12 @@ fn test_semantic_validator_fact_rule_name_conflict() {
 fact price = 100
 rule price = 200"#;
 
-    let docs = parse(input, Some("test.lemma".to_string())).unwrap();
+    let docs = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &lemma::ResourceLimits::default(),
+    )
+    .unwrap();
     let validator = Validator::new();
     let result = validator.validate_all(docs);
 
@@ -162,7 +202,12 @@ fact price = 100
 rule price = 200
 rule total = price + 50"#;
 
-    let docs = parse(input, Some("test.lemma".to_string())).unwrap();
+    let docs = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &lemma::ResourceLimits::default(),
+    )
+    .unwrap();
     let validator = Validator::new();
     let result = validator.validate_all(docs);
 

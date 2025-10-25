@@ -262,6 +262,21 @@ impl LiteralValue {
         self.to_string()
     }
 
+    /// Get the byte size of this literal value for resource limiting
+    pub fn byte_size(&self) -> usize {
+        match self {
+            LiteralValue::Text(s) | LiteralValue::Regex(s) => s.len(),
+            LiteralValue::Number(d) | LiteralValue::Percentage(d) => {
+                // Decimal internal representation size
+                std::mem::size_of_val(d)
+            }
+            LiteralValue::Boolean(_) => std::mem::size_of::<bool>(),
+            LiteralValue::Date(_) => std::mem::size_of::<DateTimeValue>(),
+            LiteralValue::Time(_) => std::mem::size_of::<TimeValue>(),
+            LiteralValue::Unit(_) => std::mem::size_of::<NumericUnit>(),
+        }
+    }
+
     /// Convert a LiteralValue to its corresponding LemmaType
     pub fn to_type(&self) -> LemmaType {
         match self {
@@ -647,6 +662,25 @@ impl LemmaDoc {
     pub fn add_rule(mut self, rule: LemmaRule) -> Self {
         self.rules.push(rule);
         self
+    }
+
+    /// Get the expected type for a fact by name
+    /// Returns None if the fact is not found in this document
+    pub fn get_fact_type(&self, fact_name: &str) -> Option<LemmaType> {
+        self.facts
+            .iter()
+            .find(|fact| crate::analysis::fact_display_name(fact) == fact_name)
+            .map(|fact| match &fact.value {
+                FactValue::Literal(lit) => lit.to_type(),
+                FactValue::TypeAnnotation(TypeAnnotation::LemmaType(lemma_type)) => {
+                    lemma_type.clone()
+                }
+                FactValue::DocumentReference(_) => {
+                    // Document references don't have a single type
+                    // They import all facts from the referenced document
+                    panic!("Cannot get type for document reference fact")
+                }
+            })
     }
 }
 
@@ -1141,5 +1175,154 @@ impl fmt::Display for DateTimeValue {
             write!(f, "{}", tz)?;
         }
         Ok(())
+    }
+}
+
+/// A structured path to a fact, avoiding string allocations
+///
+/// Instead of storing facts as "base.base.price" strings, we store them
+/// as structured paths ["base", "base", "price"]. This is more efficient
+/// and semantically clearer.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FactPath {
+    segments: Vec<String>,
+}
+
+impl FactPath {
+    /// Create a new fact path from a vector of segments
+    pub fn new(segments: Vec<String>) -> Self {
+        Self { segments }
+    }
+
+    /// Create a fact path from a slice of segments
+    pub fn from_slice(segments: &[String]) -> Self {
+        Self {
+            segments: segments.to_vec(),
+        }
+    }
+
+    /// Create a fact path with a prefix prepended
+    pub fn with_prefix(&self, prefix: &[String]) -> Self {
+        let mut new_segments = prefix.to_vec();
+        new_segments.extend_from_slice(&self.segments);
+        Self {
+            segments: new_segments,
+        }
+    }
+
+    /// Get the segments as a slice
+    pub fn segments(&self) -> &[String] {
+        &self.segments
+    }
+
+    /// Get the segments as a mutable slice
+    pub fn segments_mut(&mut self) -> &mut Vec<String> {
+        &mut self.segments
+    }
+
+    /// Check if the path is empty
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    /// Get the length of the path
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
+}
+
+impl std::fmt::Display for FactPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.segments.join("."))
+    }
+}
+
+impl From<Vec<String>> for FactPath {
+    fn from(segments: Vec<String>) -> Self {
+        Self::new(segments)
+    }
+}
+
+impl From<&[String]> for FactPath {
+    fn from(segments: &[String]) -> Self {
+        Self::from_slice(segments)
+    }
+}
+
+/// A segment in a rule path representing one document traversal
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RulePathSegment {
+    pub fact: String,
+    pub doc: String,
+}
+
+/// Uniquely identifies a rule by tracking the complete fact traversal path
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RulePath {
+    pub rule: String,
+    pub segments: Vec<RulePathSegment>,
+}
+
+impl RulePath {
+    pub fn from_reference(
+        reference: &[String],
+        current_doc: &LemmaDoc,
+        all_documents: &std::collections::HashMap<String, LemmaDoc>,
+    ) -> Result<Self, crate::LemmaError> {
+        let mut doc = current_doc;
+        let mut segments = Vec::new();
+
+        for fact_name in &reference[..reference.len() - 1] {
+            let fact = doc
+                .facts
+                .iter()
+                .find(|f| matches!(&f.fact_type, FactType::Local(name) if name == fact_name))
+                .ok_or_else(|| {
+                    crate::LemmaError::Engine(format!(
+                        "Fact {} not found in document {}",
+                        fact_name, doc.name
+                    ))
+                })?;
+
+            let target_doc_name = match &fact.value {
+                FactValue::DocumentReference(name) => name.clone(),
+                _ => {
+                    return Err(crate::LemmaError::Engine(format!(
+                        "Fact {} is not a document reference",
+                        fact_name
+                    )))
+                }
+            };
+
+            segments.push(RulePathSegment {
+                fact: fact_name.clone(),
+                doc: target_doc_name.clone(),
+            });
+
+            doc = all_documents.get(&target_doc_name).ok_or_else(|| {
+                crate::LemmaError::Engine(format!("Document {} not found", target_doc_name))
+            })?;
+        }
+
+        Ok(RulePath {
+            rule: reference.last().unwrap().clone(),
+            segments,
+        })
+    }
+
+    pub fn target_doc<'a>(&'a self, main_doc: &'a str) -> &'a str {
+        self.segments
+            .last()
+            .map(|s| s.doc.as_str())
+            .unwrap_or(main_doc)
+    }
+}
+
+impl fmt::Display for RulePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for seg in &self.segments {
+            write!(f, "{}.", seg.fact)?;
+        }
+        write!(f, "{}", self.rule)
     }
 }

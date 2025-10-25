@@ -25,10 +25,10 @@ pub struct ResourceLimits {
 impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
-            max_file_size_bytes: 5 * 1024 * 1024,  // 5 MB
+            max_file_size_bytes: 5 * 1024 * 1024, // 5 MB
             max_expression_depth: 100,
-            max_fact_value_bytes: 1024,  // 1 KB
-            max_evaluation_time_ms: 1000,  // 1 second
+            max_fact_value_bytes: 1024,   // 1 KB
+            max_evaluation_time_ms: 1000, // 1 second
         }
     }
 }

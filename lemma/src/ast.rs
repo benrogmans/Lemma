@@ -73,7 +73,10 @@ impl ExpressionIdGenerator {
     pub fn push_depth(&mut self) -> Result<(), String> {
         self.depth += 1;
         if self.depth > self.max_depth {
-            return Err(format!("Expression depth {} exceeds maximum of {}", self.depth, self.max_depth));
+            return Err(format!(
+                "Expression depth {} exceeds maximum of {}",
+                self.depth, self.max_depth
+            ));
         }
         Ok(())
     }

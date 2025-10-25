@@ -4,7 +4,7 @@
 
 use super::context::EvaluationContext;
 use crate::{
-    ast::Span, ArithmeticOperation, Expression, ExpressionKind, LemmaError, LiteralValue,
+    ast::Span, ArithmeticOperation, Expression, ExpressionKind, FactPath, LemmaError, LiteralValue,
     MathematicalOperator, OperationRecord, OperationResult,
 };
 use rust_decimal::Decimal;
@@ -14,9 +14,13 @@ use std::sync::Arc;
 ///
 /// This is the core of the evaluator - recursively processes expressions
 /// and records operations for every step.
+///
+/// For cross-document rules, pass the path prefix via `fact_prefix` to qualify
+/// fact lookups. For local rules, pass an empty slice.
 pub fn evaluate_expression(
     expr: &Expression,
     context: &mut EvaluationContext,
+    fact_prefix: &[String],
 ) -> Result<OperationResult, LemmaError> {
     // Check timeout at the start of every expression evaluation
     context.check_timeout()?;
@@ -28,29 +32,39 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::FactReference(fact_ref) => {
-            // Look up fact in context
-            let fact_name = fact_ref.reference.join(".");
+            // Look up fact in context, prepending the prefix for cross-document rules
+            let fact_path = if !fact_prefix.is_empty() {
+                // Cross-document rule: prepend prefix to fact reference
+                FactPath::from_slice(fact_ref.reference.as_slice()).with_prefix(fact_prefix)
+            } else {
+                // Local rule: use fact reference as-is
+                FactPath::from_slice(fact_ref.reference.as_slice())
+            };
+
             let value = context
                 .facts
-                .get(&fact_name)
-                .ok_or_else(|| LemmaError::Engine(format!("Missing fact: {}", fact_name)))?;
+                .get(&fact_path)
+                .ok_or_else(|| LemmaError::Engine(format!("Missing fact: {}", fact_path)))?;
 
-            // Record operation
+            // Record operation (convert path to string for display)
             context.operations.push(OperationRecord::FactUsed {
-                name: fact_name,
+                name: fact_path.to_string(),
                 value: value.clone(),
             });
 
             Ok(OperationResult::Value(value.clone()))
         }
-
         ExpressionKind::RuleReference(rule_ref) => {
             // Look up already-computed rule result
             // Topological sort ensures this rule was computed before us
-            let rule_name = rule_ref.reference.join(".");
+            let rule_path = crate::RulePath::from_reference(
+                &rule_ref.reference,
+                context.current_doc,
+                context.all_documents,
+            )?;
 
             // Check if rule has a result
-            if let Some(result) = context.rule_results.get(&rule_name) {
+            if let Some(result) = context.rule_results.get(&rule_path) {
                 match result {
                     OperationResult::Veto(msg) => {
                         // Rule was vetoed - the veto applies to this rule too
@@ -59,7 +73,7 @@ pub fn evaluate_expression(
                     OperationResult::Value(value) => {
                         // Record operation
                         context.operations.push(OperationRecord::RuleUsed {
-                            name: rule_name,
+                            name: rule_path.to_string(),
                             value: value.clone(),
                         });
                         return Ok(OperationResult::Value(value.clone()));
@@ -68,15 +82,12 @@ pub fn evaluate_expression(
             }
 
             // Rule not computed yet
-            Err(LemmaError::Engine(format!(
-                "Rule {} not yet computed",
-                rule_name
-            )))
+            Err(LemmaError::Engine(format!("Rule {} not found", rule_path)))
         }
 
         ExpressionKind::Arithmetic(left, op, right) => {
-            let left_result = evaluate_expression(left, context)?;
-            let right_result = evaluate_expression(right, context)?;
+            let left_result = evaluate_expression(left, context, fact_prefix)?;
+            let right_result = evaluate_expression(right, context, fact_prefix)?;
 
             // If either operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = left_result {
@@ -114,8 +125,8 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::Comparison(left, op, right) => {
-            let left_result = evaluate_expression(left, context)?;
-            let right_result = evaluate_expression(right, context)?;
+            let left_result = evaluate_expression(left, context, fact_prefix)?;
+            let right_result = evaluate_expression(right, context, fact_prefix)?;
 
             // If either operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = left_result {
@@ -153,8 +164,8 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::LogicalAnd(left, right) => {
-            let left_result = evaluate_expression(left, context)?;
-            let right_result = evaluate_expression(right, context)?;
+            let left_result = evaluate_expression(left, context, fact_prefix)?;
+            let right_result = evaluate_expression(right, context, fact_prefix)?;
 
             // If either operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = left_result {
@@ -179,8 +190,8 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::LogicalOr(left, right) => {
-            let left_result = evaluate_expression(left, context)?;
-            let right_result = evaluate_expression(right, context)?;
+            let left_result = evaluate_expression(left, context, fact_prefix)?;
+            let right_result = evaluate_expression(right, context, fact_prefix)?;
 
             // If either operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = left_result {
@@ -205,7 +216,7 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::LogicalNegation(inner, _negation_type) => {
-            let result = evaluate_expression(inner, context)?;
+            let result = evaluate_expression(inner, context, fact_prefix)?;
 
             // If the operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = result {
@@ -223,7 +234,7 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::UnitConversion(value_expr, target) => {
-            let result = evaluate_expression(value_expr, context)?;
+            let result = evaluate_expression(value_expr, context, fact_prefix)?;
 
             // If the operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = result {
@@ -236,15 +247,19 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::MathematicalOperator(op, operand) => {
-            evaluate_mathematical_operator(op, operand, context)
+            evaluate_mathematical_operator(op, operand, context, fact_prefix)
         }
 
         ExpressionKind::Veto(veto_expr) => Ok(OperationResult::Veto(veto_expr.message.clone())),
 
         ExpressionKind::FactHasAnyValue(fact_ref) => {
-            // Check if fact exists and has a value
-            let fact_name = fact_ref.reference.join(".");
-            let has_value = context.facts.contains_key(&fact_name);
+            // Check if fact exists and has a value, with path prefix applied
+            let fact_path = if !fact_prefix.is_empty() {
+                FactPath::from_slice(fact_ref.reference.as_slice()).with_prefix(fact_prefix)
+            } else {
+                FactPath::from_slice(fact_ref.reference.as_slice())
+            };
+            let has_value = context.facts.contains_key(&fact_path);
             Ok(OperationResult::Value(LiteralValue::Boolean(has_value)))
         }
     }
@@ -255,8 +270,9 @@ fn evaluate_mathematical_operator(
     op: &MathematicalOperator,
     operand: &Expression,
     context: &mut EvaluationContext,
+    fact_prefix: &[String],
 ) -> Result<OperationResult, LemmaError> {
-    let result = evaluate_expression(operand, context)?;
+    let result = evaluate_expression(operand, context, fact_prefix)?;
 
     // If the operand is vetoed, propagate the veto
     if let OperationResult::Veto(msg) = result {

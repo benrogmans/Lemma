@@ -3,8 +3,8 @@
 //! Contains all state needed during evaluation of a single document.
 
 use crate::{
-    FactType, FactValue, LemmaDoc, LemmaFact, LemmaError, LiteralValue, OperationRecord, OperationResult,
-    ResourceLimits,
+    FactPath, FactType, FactValue, LemmaDoc, LemmaError, LemmaFact, LiteralValue, OperationRecord,
+    OperationResult, ResourceLimits,
 };
 use std::collections::HashMap;
 use std::time::Instant;
@@ -28,9 +28,9 @@ pub struct EvaluationContext<'a> {
     pub sources: &'a HashMap<String, String>,
 
     /// Fact values (from document + overrides)
-    /// Maps fact name -> concrete value
+    /// Maps fact path -> concrete value
     /// Only contains facts that have actual values (not TypeAnnotations)
-    pub facts: HashMap<String, LiteralValue>,
+    pub facts: HashMap<FactPath, LiteralValue>,
 
     /// Start time for timeout checking
     pub start_time: Instant,
@@ -39,8 +39,8 @@ pub struct EvaluationContext<'a> {
     pub limits: &'a ResourceLimits,
 
     /// Rule results computed so far (populated during execution)
-    /// Maps rule name -> operation result (either Value or Veto)
-    pub rule_results: HashMap<String, OperationResult>,
+    /// Maps RulePath -> operation result (either Value or Veto)
+    pub rule_results: HashMap<crate::RulePath, OperationResult>,
 
     /// Operation records - records every operation
     pub operations: Vec<OperationRecord>,
@@ -52,7 +52,7 @@ impl<'a> EvaluationContext<'a> {
         current_doc: &'a LemmaDoc,
         all_documents: &'a HashMap<String, LemmaDoc>,
         sources: &'a HashMap<String, String>,
-        facts: HashMap<String, LiteralValue>,
+        facts: HashMap<FactPath, LiteralValue>,
         start_time: Instant,
         limits: &'a ResourceLimits,
     ) -> Self {
@@ -98,26 +98,27 @@ pub fn build_fact_map(
     doc_facts: &[LemmaFact],
     overrides: &[LemmaFact],
     all_documents: &HashMap<String, LemmaDoc>,
-) -> Result<HashMap<String, LiteralValue>, LemmaError> {
+) -> Result<HashMap<FactPath, LiteralValue>, LemmaError> {
     let mut facts = HashMap::new();
 
     // Add document facts
     for fact in doc_facts {
         match &fact.value {
             FactValue::Literal(lit) => {
-                let name = get_fact_name(fact);
-                facts.insert(name, lit.clone());
+                let path = get_fact_path(fact);
+                facts.insert(path, lit.clone());
             }
             FactValue::DocumentReference(doc_name) => {
-                // Resolve document reference by importing all facts from referenced doc
+                // Resolve document reference by recursively importing all facts from referenced doc
                 if let Some(referenced_doc) = all_documents.get(doc_name) {
-                    let fact_prefix = get_fact_name(fact);
-                    for ref_fact in &referenced_doc.facts {
-                        if let FactValue::Literal(lit) = &ref_fact.value {
-                            let ref_fact_name = get_fact_name(ref_fact);
-                            let qualified_name = format!("{}.{}", fact_prefix, ref_fact_name);
-                            facts.insert(qualified_name, lit.clone());
-                        }
+                    let fact_prefix = get_fact_path(fact);
+                    // Recursively build fact map for the referenced document
+                    let referenced_facts =
+                        build_fact_map(referenced_doc, &referenced_doc.facts, &[], all_documents)?;
+                    for (ref_fact_path, lit) in referenced_facts {
+                        // Prepend the prefix to create the qualified path
+                        let qualified_path = ref_fact_path.with_prefix(fact_prefix.segments());
+                        facts.insert(qualified_path, lit);
                     }
                 }
             }
@@ -130,9 +131,11 @@ pub fn build_fact_map(
     // Apply overrides with type validation
     for fact in overrides {
         if let FactValue::Literal(lit) = &fact.value {
-            let name = get_fact_name(fact);
+            let path = get_fact_path(fact);
 
             // Check if this fact exists in the document and validate type
+            // Note: get_fact_type expects a string for now, we'll keep using Display for validation
+            let name = path.to_string();
             if let Some(expected_type) = doc.get_fact_type(&name) {
                 let actual_type = lit.to_type();
                 if expected_type != actual_type {
@@ -143,17 +146,17 @@ pub fn build_fact_map(
                 }
             }
 
-            facts.insert(name, lit.clone());
+            facts.insert(path, lit.clone());
         }
     }
 
     Ok(facts)
 }
 
-/// Get the display name for a fact (handles local and foreign facts)
-fn get_fact_name(fact: &LemmaFact) -> String {
+/// Get the fact path for a fact (handles local and foreign facts)
+fn get_fact_path(fact: &LemmaFact) -> FactPath {
     match &fact.fact_type {
-        FactType::Local(name) => name.clone(),
-        FactType::Foreign(foreign_ref) => foreign_ref.reference.join("."),
+        FactType::Local(name) => FactPath::new(vec![name.clone()]),
+        FactType::Foreign(foreign_ref) => FactPath::new(foreign_ref.reference.clone()),
     }
 }

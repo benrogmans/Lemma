@@ -593,10 +593,27 @@ impl Validator {
         Ok(())
     }
 
-    /// Build a dependency graph of rules
-    /// Now uses shared analysis module
+    /// Build a dependency graph of rules (local document only)
     fn build_dependency_graph(&self, rules: &[LemmaRule]) -> HashMap<String, HashSet<String>> {
-        crate::analysis::build_dependency_graph(rules)
+        let mut graph = HashMap::new();
+
+        for rule in rules {
+            let mut dependencies = HashSet::new();
+            let refs = crate::analysis::extract_references(&rule.expression);
+            for rule_ref in refs.rules {
+                dependencies.insert(rule_ref.join("."));
+            }
+            for uc in &rule.unless_clauses {
+                let cond_refs = crate::analysis::extract_references(&uc.condition);
+                let res_refs = crate::analysis::extract_references(&uc.result);
+                for rule_ref in cond_refs.rules.into_iter().chain(res_refs.rules) {
+                    dependencies.insert(rule_ref.join("."));
+                }
+            }
+            graph.insert(rule.name.clone(), dependencies);
+        }
+
+        graph
     }
 
     /// Detect cycles in the dependency graph using DFS (moved from document transpiler)

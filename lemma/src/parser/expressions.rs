@@ -95,7 +95,11 @@ pub(crate) fn parse_expression(
         return Err(LemmaError::ResourceLimitExceeded {
             limit_name: "max_expression_depth".to_string(),
             limit_value: "100".to_string(),
-            actual_value: msg.split_whitespace().nth(2).unwrap_or("unknown").to_string(),
+            actual_value: msg
+                .split_whitespace()
+                .nth(2)
+                .unwrap_or("unknown")
+                .to_string(),
             suggestion: "Simplify nested expressions to reduce depth".to_string(),
         });
     }

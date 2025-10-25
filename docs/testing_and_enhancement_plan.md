@@ -5,15 +5,6 @@ title: Testing and Enhancement
 
 # Lemma Testing and Enhancement Plan
 
-## Overview
-
-Transform Lemma into a production-ready system:
-
-- **Reliability** - Comprehensive test coverage and benchmarking
-- **Robustness** - Security hardening and resource limits
-
-**Note**: Logic tracing is now implemented and complete.
-
 ## Phase 1: Reliability and Robustness
 
 ### Error Recovery Testing
@@ -26,40 +17,14 @@ Test robustness against:
 - Invalid fact overrides
 - Missing required facts
 - Circular document references (should be caught by semantic validator)
+- **Cross-document rule references** - Currently not properly implemented and cause evaluation failures
 - Invalid type conversions
 - Evaluation failures
 - Resource exhaustion scenarios
 
 Target: All errors produce helpful messages with source locations
 
-### Resource Limits Implementation
-
-Create new module: `lemma/src/resource_limits.rs`
-
-Implement configurable limits:
-
-```rust
-pub struct ResourceLimits {
-    pub max_file_size: usize,        // 10MB default
-    pub max_expression_depth: usize, // 100 default
-    pub max_query_time_ms: u64,      // 30000 default
-    pub max_documents: usize,        // 1000 default
-    pub max_identifier_length: usize,// 256 default
-    pub max_string_length: usize,    // 1MB default
-}
-```
-
-Integration points:
-
-- **Parser**: Check expression depth during parsing
-- **Engine**: Enforce file size, document count limits
-- **Evaluation**: Add timeout mechanism
-
-Create test file: `lemma/tests/resource_limits_test.rs`
-
-- Test each limit is enforced
-- Test graceful failures with helpful error messages
-
+**Known Issue**: Cross-document rule references are not fully supported and may cause runtime errors during evaluation. This needs investigation and proper implementation or explicit error handling.
 
 ### Security Audit
 
@@ -86,45 +51,6 @@ Create test file: `lemma/tests/security_test.rs`
 - Code injection-style patterns
 - Code injection attempts
 - Path traversal attempts in document names
-
-### CI/CD Pipeline
-
-Create `.github/workflows/ci.yml`:
-
-- Run tests on PRs and main branch
-- Multiple Rust versions (stable, beta)
-- Clippy linting with deny warnings
-- Formatting check
-- Fuzzing quick-run (30 seconds per target, using existing 5 fuzz targets in `lemma/fuzz/`)
-- Build release artifacts
-- Coverage reporting (codecov)
-
-Create `.github/workflows/release.yml`:
-
-- Triggered on version tags
-- Build cross-platform binaries
-- Publish to crates.io
-- Create GitHub release
-
-Add badges to README.md:
-
-- Build status
-- Crates.io version
-- Docs.rs link
-- Coverage percentage
-
-### Property-Based Testing Expansion
-
-Expand `property_based_test.rs` (currently 8 cases) to cover:
-
-- **Rule evaluation properties**: Commutativity, associativity, distributivity
-- **Unless clause ordering**: Verify "last matching wins" semantics holds
-- **Type conversions**: Roundtrip conversions between units of same type
-- **Document composition**: Override behavior, fact shadowing
-- **Edge cases**: Division by zero, overflow, underflow, NaN handling
-- **Date arithmetic**: Adding/subtracting durations, leap years
-
-Target: 50+ property tests with 100 cases each
 
 ### Stress and Scale Testing
 
@@ -170,36 +96,3 @@ Create `docs/testing.md`:
 - How to use fuzzing
 - How to run benchmarks
 - Testing best practices
-
-## Success Metrics
-
-**Reliability:**
-
-- Test coverage > 90%
-- 50+ property-based tests
-- Comprehensive benchmark suite
-- All known issues resolved
-
-**Robustness:**
-
-- All resource limits configurable and enforced
-- Security audit complete with no vulnerabilities
-- CI/CD pipeline operational
-- Fuzzing integrated into CI
-
-## Timeline Estimate
-
-- Phase 1 (Reliability and Robustness): 5-7 days
-- Phase 2 (Documentation): 1 day
-
-**Total: 6-8 days of development**
-
-## Relationship to Roadmap Features
-
-This plan is orthogonal to roadmap features (User Types, Multi Facts):
-
-- **This plan**: Focus on testing, security, and tracing for the current feature set
-- **Roadmap features**: Add new language capabilities
-
-Complete this testing and enhancement plan before implementing major new features to ensure a solid foundation.
-

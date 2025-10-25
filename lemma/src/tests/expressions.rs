@@ -1,19 +1,26 @@
 use crate::evaluator::context::EvaluationContext;
 use crate::evaluator::expression::evaluate_expression;
 use crate::{
-    ArithmeticOperation, Expression, ExpressionId, ExpressionKind, FactReference, LemmaDoc,
-    LiteralValue, OperationResult,
+    ArithmeticOperation, Expression, ExpressionId, ExpressionKind, FactPath, FactReference,
+    LemmaDoc, LiteralValue, OperationResult, ResourceLimits,
 };
 use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::time::Instant;
+
+/// Helper to create an evaluation context for testing
+fn create_test_context(facts: HashMap<FactPath, LiteralValue>) -> EvaluationContext<'static> {
+    let docs = Box::leak(Box::new(HashMap::new()));
+    let sources = Box::leak(Box::new(HashMap::new()));
+    let doc = Box::leak(Box::new(LemmaDoc::new("test".to_string())));
+    let limits = Box::leak(Box::new(ResourceLimits::default()));
+
+    EvaluationContext::new(doc, docs, sources, facts, Instant::now(), limits)
+}
 
 #[test]
 fn test_evaluate_literal() {
-    let docs = HashMap::new();
-    let sources = HashMap::new();
-    let doc = LemmaDoc::new("test".to_string());
-    let facts = HashMap::new();
-    let mut context = EvaluationContext::new(&doc, &docs, &sources, facts);
+    let mut context = create_test_context(HashMap::new());
 
     let expr = Expression::new(
         ExpressionKind::Literal(LiteralValue::Number(Decimal::from(42))),
@@ -21,7 +28,7 @@ fn test_evaluate_literal() {
         ExpressionId::new(0),
     );
 
-    let result = evaluate_expression(&expr, &mut context).unwrap();
+    let result = evaluate_expression(&expr, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(42)))
@@ -30,17 +37,13 @@ fn test_evaluate_literal() {
 
 #[test]
 fn test_evaluate_fact_reference() {
-    let docs = HashMap::new();
-    let sources = HashMap::new();
-    let doc = LemmaDoc::new("test".to_string());
-
     let mut facts = HashMap::new();
     facts.insert(
-        "price".to_string(),
+        FactPath::new(vec!["price".to_string()]),
         LiteralValue::Number(Decimal::from(100)),
     );
 
-    let mut context = EvaluationContext::new(&doc, &docs, &sources, facts);
+    let mut context = create_test_context(facts);
 
     let expr = Expression::new(
         ExpressionKind::FactReference(FactReference {
@@ -50,7 +53,7 @@ fn test_evaluate_fact_reference() {
         ExpressionId::new(0),
     );
 
-    let result = evaluate_expression(&expr, &mut context).unwrap();
+    let result = evaluate_expression(&expr, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(100)))
@@ -62,11 +65,7 @@ fn test_evaluate_fact_reference() {
 
 #[test]
 fn test_evaluate_simple_arithmetic() {
-    let docs = HashMap::new();
-    let sources = HashMap::new();
-    let doc = LemmaDoc::new("test".to_string());
-    let facts = HashMap::new();
-    let mut context = EvaluationContext::new(&doc, &docs, &sources, facts);
+    let mut context = create_test_context(HashMap::new());
 
     // 10 + 5
     let expr = Expression::new(
@@ -87,7 +86,7 @@ fn test_evaluate_simple_arithmetic() {
         ExpressionId::new(2),
     );
 
-    let result = evaluate_expression(&expr, &mut context).unwrap();
+    let result = evaluate_expression(&expr, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(15)))

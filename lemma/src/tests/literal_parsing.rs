@@ -26,7 +26,7 @@ fn test_literal_expressions_comprehensive() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None);
+        let result = parse(&input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -50,7 +50,7 @@ fn test_percentage_literals() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nfact discount = {}", expr);
-        let result = parse(&input, None);
+        let result = parse(&input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} in fact ({}): {:?}",
@@ -60,7 +60,7 @@ fn test_percentage_literals() {
         );
 
         let input = format!("doc test\nrule discount = {}", expr);
-        let result = parse(&input, None);
+        let result = parse(&input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} in rule ({}): {:?}",
@@ -84,7 +84,7 @@ fn test_regex_literals() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nfact pattern = {}", expr);
-        let result = parse(&input, None);
+        let result = parse(&input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} in fact ({}): {:?}",
@@ -94,7 +94,7 @@ fn test_regex_literals() {
         );
 
         let input = format!("doc test\nrule pattern = {}", expr);
-        let result = parse(&input, None);
+        let result = parse(&input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} in rule ({}): {:?}",
@@ -121,7 +121,7 @@ fn test_date_literals_comprehensive() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nfact birth_date = {}", expr);
-        let result = parse(&input, None);
+        let result = parse(&input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} in fact ({}): {:?}",
@@ -131,7 +131,7 @@ fn test_date_literals_comprehensive() {
         );
 
         let input = format!("doc test\nrule date_value = {}", expr);
-        let result = parse(&input, None);
+        let result = parse(&input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} in rule ({}): {:?}",
@@ -157,7 +157,7 @@ fn test_scientific_notation() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None);
+        let result = parse(&input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -180,7 +180,7 @@ fn test_number_with_underscores() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None);
+        let result = parse(&input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -203,7 +203,7 @@ fn test_accept_reject_literals() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None);
+        let result = parse(&input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -243,7 +243,7 @@ fn test_edge_cases_comprehensive() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None);
+        let result = parse(&input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
