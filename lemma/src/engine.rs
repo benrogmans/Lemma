@@ -1,16 +1,28 @@
 use crate::evaluator::Evaluator;
-use crate::{parse, LemmaDoc, LemmaResult, Response, Validator};
+use crate::{parse, LemmaDoc, LemmaError, LemmaResult, ResourceLimits, Response, Validator};
 use std::collections::HashMap;
 
 /// The Lemma evaluation engine.
 ///
 /// Pure Rust implementation that evaluates Lemma documents directly from the AST.
-#[derive(Default)]
 pub struct Engine {
     documents: HashMap<String, LemmaDoc>,
     sources: HashMap<String, String>,
     validator: Validator,
     evaluator: Evaluator,
+    limits: ResourceLimits,
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self {
+            documents: HashMap::new(),
+            sources: HashMap::new(),
+            validator: Validator,
+            evaluator: Evaluator,
+            limits: ResourceLimits::default(),
+        }
+    }
 }
 
 impl Engine {
@@ -18,9 +30,25 @@ impl Engine {
         Self::default()
     }
 
+    /// Create an engine with custom resource limits
+    pub fn with_limits(limits: ResourceLimits) -> Self {
+        Self {
+            documents: HashMap::new(),
+            sources: HashMap::new(),
+            validator: Validator,
+            evaluator: Evaluator,
+            limits,
+        }
+    }
+
+    /// Get the current resource limits
+    pub fn limits(&self) -> &ResourceLimits {
+        &self.limits
+    }
+
     pub fn add_lemma_code(&mut self, lemma_code: &str, source: &str) -> LemmaResult<()> {
         // Parse the documents
-        let new_docs = parse(lemma_code, Some(source.to_string()))?;
+        let new_docs = parse(lemma_code, Some(source.to_string()), &self.limits)?;
 
         // Store source text for all new documents
         for doc in &new_docs {
@@ -85,12 +113,33 @@ impl Engine {
         fact_overrides: Option<Vec<crate::LemmaFact>>,
     ) -> LemmaResult<Response> {
         let overrides = fact_overrides.unwrap_or_default();
+
+        // Check ALL fact value sizes against limit
+        for fact in &overrides {
+            if let crate::FactValue::Literal(lit) = &fact.value {
+                let size = lit.byte_size();
+
+                if size > self.limits.max_fact_value_bytes {
+                    return Err(LemmaError::ResourceLimitExceeded {
+                        limit_name: "max_fact_value_bytes".to_string(),
+                        limit_value: self.limits.max_fact_value_bytes.to_string(),
+                        actual_value: size.to_string(),
+                        suggestion: format!(
+                            "Reduce the size of fact values to {} bytes or less",
+                            self.limits.max_fact_value_bytes
+                        ),
+                    });
+                }
+            }
+        }
+
         self.evaluator.evaluate_document(
             doc_name,
             &self.documents,
             &self.sources,
             overrides,
             rule_names,
+            &self.limits,
         )
     }
 

@@ -3,9 +3,11 @@
 //! Contains all state needed during evaluation of a single document.
 
 use crate::{
-    FactType, FactValue, LemmaDoc, LemmaFact, LiteralValue, OperationRecord, OperationResult,
+    FactType, FactValue, LemmaDoc, LemmaFact, LemmaError, LiteralValue, OperationRecord, OperationResult,
+    ResourceLimits,
 };
 use std::collections::HashMap;
+use std::time::Instant;
 
 /// Context for evaluating a Lemma document
 ///
@@ -13,6 +15,7 @@ use std::collections::HashMap;
 /// - Facts (inputs)
 /// - Rule results (computed values)
 /// - Operation records (execution log)
+/// - Timeout tracking
 pub struct EvaluationContext<'a> {
     /// Document being evaluated
     pub current_doc: &'a LemmaDoc,
@@ -29,6 +32,12 @@ pub struct EvaluationContext<'a> {
     /// Only contains facts that have actual values (not TypeAnnotations)
     pub facts: HashMap<String, LiteralValue>,
 
+    /// Start time for timeout checking
+    pub start_time: Instant,
+
+    /// Resource limits including timeout
+    pub limits: &'a ResourceLimits,
+
     /// Rule results computed so far (populated during execution)
     /// Maps rule name -> operation result (either Value or Veto)
     pub rule_results: HashMap<String, OperationResult>,
@@ -44,6 +53,8 @@ impl<'a> EvaluationContext<'a> {
         all_documents: &'a HashMap<String, LemmaDoc>,
         sources: &'a HashMap<String, String>,
         facts: HashMap<String, LiteralValue>,
+        start_time: Instant,
+        limits: &'a ResourceLimits,
     ) -> Self {
         Self {
             current_doc,
@@ -52,7 +63,26 @@ impl<'a> EvaluationContext<'a> {
             facts,
             rule_results: HashMap::new(),
             operations: Vec::new(),
+            start_time,
+            limits,
         }
+    }
+
+    /// Check if evaluation has exceeded timeout
+    pub fn check_timeout(&self) -> Result<(), crate::LemmaError> {
+        let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
+        if elapsed_ms > self.limits.max_evaluation_time_ms {
+            return Err(crate::LemmaError::ResourceLimitExceeded {
+                limit_name: "max_evaluation_time_ms".to_string(),
+                limit_value: self.limits.max_evaluation_time_ms.to_string(),
+                actual_value: elapsed_ms.to_string(),
+                suggestion: format!(
+                    "Evaluation took {}ms, exceeding the limit of {}ms. Simplify the document or increase the timeout.",
+                    elapsed_ms, self.limits.max_evaluation_time_ms
+                ),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -61,11 +91,14 @@ impl<'a> EvaluationContext<'a> {
 /// Includes facts with concrete values (FactValue::Literal) and expands
 /// DocumentReference facts by importing all facts from the referenced document.
 /// Facts with TypeAnnotation are missing and will cause evaluation errors.
+///
+/// Validates that fact overrides match the expected types declared in the document.
 pub fn build_fact_map(
+    doc: &LemmaDoc,
     doc_facts: &[LemmaFact],
     overrides: &[LemmaFact],
     all_documents: &HashMap<String, LemmaDoc>,
-) -> HashMap<String, LiteralValue> {
+) -> Result<HashMap<String, LiteralValue>, LemmaError> {
     let mut facts = HashMap::new();
 
     // Add document facts
@@ -94,15 +127,27 @@ pub fn build_fact_map(
         }
     }
 
-    // Apply overrides
+    // Apply overrides with type validation
     for fact in overrides {
         if let FactValue::Literal(lit) = &fact.value {
             let name = get_fact_name(fact);
+
+            // Check if this fact exists in the document and validate type
+            if let Some(expected_type) = doc.get_fact_type(&name) {
+                let actual_type = lit.to_type();
+                if expected_type != actual_type {
+                    return Err(LemmaError::Engine(format!(
+                        "Type mismatch for fact '{}': expected {}, got {}",
+                        name, expected_type, actual_type
+                    )));
+                }
+            }
+
             facts.insert(name, lit.clone());
         }
     }
 
-    facts
+    Ok(facts)
 }
 
 /// Get the display name for a fact (handles local and foreign facts)

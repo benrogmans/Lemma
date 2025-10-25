@@ -1,5 +1,6 @@
 use crate::ast::{ExpressionIdGenerator, Span};
 use crate::error::LemmaError;
+use crate::resource_limits::ResourceLimits;
 use crate::semantic::*;
 use pest::iterators::Pair;
 use pest::Parser;
@@ -16,8 +17,22 @@ pub mod units;
 #[grammar = "src/parser/lemma.pest"]
 pub struct LemmaParser;
 
-pub fn parse(content: &str, filename: Option<String>) -> Result<Vec<LemmaDoc>, LemmaError> {
-    let mut id_gen = ExpressionIdGenerator::new();
+pub fn parse(
+    content: &str,
+    filename: Option<String>,
+    limits: &ResourceLimits,
+) -> Result<Vec<LemmaDoc>, LemmaError> {
+    // Check file size limit
+    if content.len() > limits.max_file_size_bytes {
+        return Err(LemmaError::ResourceLimitExceeded {
+            limit_name: "max_file_size_bytes".to_string(),
+            limit_value: format!("{} bytes ({} MB)", limits.max_file_size_bytes, limits.max_file_size_bytes / (1024 * 1024)),
+            actual_value: format!("{} bytes ({:.2} MB)", content.len(), content.len() as f64 / (1024.0 * 1024.0)),
+            suggestion: "Reduce file size or split into multiple documents".to_string(),
+        });
+    }
+
+    let mut id_gen = ExpressionIdGenerator::with_max_depth(limits.max_expression_depth);
     let filename = filename.unwrap_or_else(|| "<input>".to_string());
 
     match LemmaParser::parse(Rule::lemma_file, content) {

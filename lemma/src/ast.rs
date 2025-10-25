@@ -45,9 +45,10 @@ impl fmt::Display for ExpressionId {
 }
 
 /// Counter for generating unique expression IDs
-#[derive(Default)]
 pub struct ExpressionIdGenerator {
     next_id: u64,
+    depth: usize,
+    max_depth: usize,
 }
 
 impl ExpressionIdGenerator {
@@ -55,9 +56,41 @@ impl ExpressionIdGenerator {
         Self::default()
     }
 
+    pub fn with_max_depth(max_depth: usize) -> Self {
+        Self {
+            next_id: 0,
+            depth: 0,
+            max_depth,
+        }
+    }
+
     pub fn next_id(&mut self) -> ExpressionId {
         let id = ExpressionId(self.next_id);
         self.next_id += 1;
         id
+    }
+
+    pub fn push_depth(&mut self) -> Result<(), String> {
+        self.depth += 1;
+        if self.depth > self.max_depth {
+            return Err(format!("Expression depth {} exceeds maximum of {}", self.depth, self.max_depth));
+        }
+        Ok(())
+    }
+
+    pub fn pop_depth(&mut self) {
+        if self.depth > 0 {
+            self.depth -= 1;
+        }
+    }
+}
+
+impl Default for ExpressionIdGenerator {
+    fn default() -> Self {
+        Self {
+            next_id: 0,
+            depth: 0,
+            max_depth: 100, // Default limit
+        }
     }
 }

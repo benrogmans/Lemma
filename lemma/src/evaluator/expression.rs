@@ -18,6 +18,9 @@ pub fn evaluate_expression(
     expr: &Expression,
     context: &mut EvaluationContext,
 ) -> Result<OperationResult, LemmaError> {
+    // Check timeout at the start of every expression evaluation
+    context.check_timeout()?;
+
     match &expr.kind {
         ExpressionKind::Literal(lit) => {
             // Literals evaluate to themselves

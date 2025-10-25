@@ -13,9 +13,10 @@ pub mod operations;
 pub mod rules;
 pub mod units;
 
-use crate::{LemmaDoc, LemmaError, LemmaFact, LemmaResult, Response, RuleResult};
+use crate::{LemmaDoc, LemmaError, LemmaFact, LemmaResult, ResourceLimits, Response, RuleResult};
 use context::{build_fact_map, EvaluationContext};
 use std::collections::HashMap;
+use std::time::Instant;
 
 /// Evaluates Lemma rules within their document context
 #[derive(Default)]
@@ -37,19 +38,22 @@ impl Evaluator {
         sources: &HashMap<String, String>,
         fact_overrides: Vec<LemmaFact>,
         requested_rules: Option<Vec<String>>,
+        limits: &ResourceLimits,
     ) -> LemmaResult<Response> {
+        let start_time = Instant::now();
+
         let doc = documents
             .get(doc_name)
             .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
 
-        // Phase 1: Build fact map (resolving document references)
-        let facts = build_fact_map(&doc.facts, &fact_overrides, documents);
+        // Phase 1: Build fact map (resolving document references and validating types)
+        let facts = build_fact_map(doc, &doc.facts, &fact_overrides, documents)?;
 
         // Phase 2: Build execution plan (topological sort of rules)
         let execution_order = build_execution_plan(&doc.rules)?;
 
         // Phase 3: Build evaluation context
-        let mut context = EvaluationContext::new(doc, documents, sources, facts);
+        let mut context = EvaluationContext::new(doc, documents, sources, facts, start_time, limits);
 
         // Phase 4: Execute rules in dependency order
         let mut response = Response::new(doc_name.to_string());
@@ -135,6 +139,14 @@ impl Evaluator {
         if let Some(rule_names) = requested_rules {
             response.filter_rules(&rule_names);
         }
+
+        // Log evaluation time for performance monitoring
+        let elapsed = context.start_time.elapsed();
+        eprintln!("[PERF] Document '{}' evaluated in {:.2}ms ({} rules)",
+            doc_name,
+            elapsed.as_secs_f64() * 1000.0,
+            doc.rules.len()
+        );
 
         Ok(response)
     }

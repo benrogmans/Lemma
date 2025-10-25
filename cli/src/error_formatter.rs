@@ -61,6 +61,17 @@ pub fn format_error(error: &LemmaError) -> String {
         }
         LemmaError::Engine(msg) => format!("Engine error: {}", msg),
         LemmaError::CircularDependency(msg) => format!("Circular dependency: {}", msg),
+        LemmaError::ResourceLimitExceeded {
+            limit_name,
+            limit_value,
+            actual_value,
+            suggestion,
+        } => {
+            format!(
+                "Resource limit exceeded: {}\n  Limit: {}\n  Actual: {}\n  {}",
+                limit_name, limit_value, actual_value, suggestion
+            )
+        }
         LemmaError::MultipleErrors(errors) => {
             let mut result = String::from("Multiple errors occurred:\n\n");
             for error in errors {
