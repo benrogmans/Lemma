@@ -1012,6 +1012,41 @@ impl fmt::Display for TypeAnnotation {
     }
 }
 
+impl LemmaType {
+    /// Get an example value string for this type, suitable for UI help text
+    pub fn example_value(&self) -> &'static str {
+        match self {
+            LemmaType::Text => "\"hello world\"",
+            LemmaType::Number => "3.14",
+            LemmaType::Boolean => "true",
+            LemmaType::Money => "99.99 EUR",
+            LemmaType::Date => "2023-12-25T14:30:00Z",
+            LemmaType::Duration => "90 minutes",
+            LemmaType::Mass => "5.5 kilograms",
+            LemmaType::Length => "10 meters",
+            LemmaType::Percentage => "50%",
+            LemmaType::Temperature => "25 celsius",
+            LemmaType::Regex => "/pattern/",
+            LemmaType::Volume => "1.2 liter",
+            LemmaType::Power => "100 watts",
+            LemmaType::Energy => "1000 joules",
+            LemmaType::Force => "10 newtons",
+            LemmaType::Pressure => "101325 pascals",
+            LemmaType::Frequency => "880 hertz",
+            LemmaType::Data => "800 megabytes",
+        }
+    }
+}
+
+impl TypeAnnotation {
+    /// Get an example value string for this type annotation, suitable for UI help text
+    pub fn example_value(&self) -> &'static str {
+        match self {
+            TypeAnnotation::LemmaType(lemma_type) => lemma_type.example_value(),
+        }
+    }
+}
+
 impl fmt::Display for FactValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

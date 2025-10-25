@@ -1,3 +1,4 @@
+mod error_formatter;
 mod formatter;
 mod interactive;
 mod mcp;
@@ -102,10 +103,10 @@ enum Commands {
     },
 }
 
-fn main() -> Result<()> {
+fn main() {
     let cli = Cli::parse();
 
-    match &cli.command {
+    let result = match &cli.command {
         Commands::Run {
             workdir,
             doc_name,
@@ -121,6 +122,16 @@ fn main() -> Result<()> {
             port,
         } => server_command(workdir, host, *port),
         Commands::Mcp { workdir } => mcp_command(workdir),
+    };
+
+    if let Err(e) = result {
+        // Check if it's a LemmaError and format it nicely, otherwise use default
+        if let Some(lemma_err) = e.downcast_ref::<lemma::LemmaError>() {
+            eprintln!("{}", error_formatter::format_error(lemma_err));
+        } else {
+            eprintln!("Error: {}", e);
+        }
+        std::process::exit(1);
     }
 }
 

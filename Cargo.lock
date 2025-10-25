@@ -864,6 +864,7 @@ name = "lemma-cli"
 version = "0.6.4"
 dependencies = [
  "anyhow",
+ "ariadne",
  "assert_cmd",
  "axum",
  "chrono",
@@ -889,7 +890,6 @@ dependencies = [
 name = "lemma-engine"
 version = "0.6.4"
 dependencies = [
- "ariadne",
  "chrono",
  "console_error_panic_hook",
  "pest",

@@ -195,7 +195,7 @@ pub fn find_missing_dependencies(
             .find(|f| fact_display_name(f) == fact_name)
         {
             if let FactValue::TypeAnnotation(type_ann) = &fact.value {
-                let formatted = format!("{} [{}]", fact_name, format_type_annotation(type_ann));
+                let formatted = format!("{} [{}]", fact_name, type_ann);
                 missing_facts.push(formatted);
             }
         }
@@ -314,33 +314,6 @@ fn collect_required_facts_recursive(
                 visited_rules,
             );
         }
-    }
-}
-
-/// Format a type annotation for display
-fn format_type_annotation(type_ann: &crate::TypeAnnotation) -> String {
-    use crate::{LemmaType, TypeAnnotation};
-    match type_ann {
-        TypeAnnotation::LemmaType(lemma_type) => match lemma_type {
-            LemmaType::Boolean => "boolean".to_string(),
-            LemmaType::Number => "number".to_string(),
-            LemmaType::Money => "money".to_string(),
-            LemmaType::Text => "text".to_string(),
-            LemmaType::Date => "date".to_string(),
-            LemmaType::Duration => "duration".to_string(),
-            LemmaType::Percentage => "percentage".to_string(),
-            LemmaType::Mass => "mass".to_string(),
-            LemmaType::Length => "length".to_string(),
-            LemmaType::Volume => "volume".to_string(),
-            LemmaType::Data => "datasize".to_string(),
-            LemmaType::Energy => "energy".to_string(),
-            LemmaType::Power => "power".to_string(),
-            LemmaType::Pressure => "pressure".to_string(),
-            LemmaType::Temperature => "temperature".to_string(),
-            LemmaType::Force => "force".to_string(),
-            LemmaType::Frequency => "frequency".to_string(),
-            LemmaType::Regex => "regex".to_string(),
-        },
     }
 }
 

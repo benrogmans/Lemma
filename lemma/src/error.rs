@@ -1,5 +1,4 @@
 use crate::ast::Span;
-use ariadne::{Color, Label, Report, ReportKind, Source};
 use std::fmt;
 use std::sync::Arc;
 
@@ -125,124 +124,50 @@ impl fmt::Display for LemmaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LemmaError::Parse(details) => {
-                let context = ErrorContext {
-                    error_type: "Parse error",
-                    message: &details.message,
-                    span: &details.span,
-                    source_id: &details.source_id,
-                    source_text: &details.source_text,
-                    doc_name: &details.doc_name,
-                    doc_start_line: details.doc_start_line,
-                    suggestion: details.suggestion.as_deref(),
-                    note: None,
-                };
-                format_error_with_ariadne(f, &context)
+                write!(f, "Parse error: {}", details.message)?;
+                if let Some(suggestion) = &details.suggestion {
+                    write!(f, " (suggestion: {})", suggestion)?;
+                }
+                write!(
+                    f,
+                    " at {}:{}:{}",
+                    details.source_id, details.span.line, details.span.col
+                )
             }
             LemmaError::Semantic(details) => {
-                let context = ErrorContext {
-                    error_type: "Semantic error",
-                    message: &details.message,
-                    span: &details.span,
-                    source_id: &details.source_id,
-                    source_text: &details.source_text,
-                    doc_name: &details.doc_name,
-                    doc_start_line: details.doc_start_line,
-                    suggestion: details.suggestion.as_deref(),
-                    note: None,
-                };
-                format_error_with_ariadne(f, &context)
+                write!(f, "Semantic error: {}", details.message)?;
+                if let Some(suggestion) = &details.suggestion {
+                    write!(f, " (suggestion: {})", suggestion)?;
+                }
+                write!(
+                    f,
+                    " at {}:{}:{}",
+                    details.source_id, details.span.line, details.span.col
+                )
             }
             LemmaError::Runtime(details) => {
-                let context = ErrorContext {
-                    error_type: "Runtime error",
-                    message: &details.message,
-                    span: &details.span,
-                    source_id: &details.source_id,
-                    source_text: &details.source_text,
-                    doc_name: &details.doc_name,
-                    doc_start_line: details.doc_start_line,
-                    suggestion: details.suggestion.as_deref(),
-                    note: None,
-                };
-                format_error_with_ariadne(f, &context)
+                write!(f, "Runtime error: {}", details.message)?;
+                if let Some(suggestion) = &details.suggestion {
+                    write!(f, " (suggestion: {})", suggestion)?;
+                }
+                write!(
+                    f,
+                    " at {}:{}:{}",
+                    details.source_id, details.span.line, details.span.col
+                )
             }
             LemmaError::Engine(msg) => write!(f, "Engine error: {}", msg),
             LemmaError::CircularDependency(msg) => write!(f, "Circular dependency: {}", msg),
             LemmaError::MultipleErrors(errors) => {
-                writeln!(f, "Multiple errors occurred:")?;
-                for error in errors {
-                    writeln!(f, "\n{}", error)?;
+                writeln!(f, "Multiple errors:")?;
+                for (i, error) in errors.iter().enumerate() {
+                    write!(f, "  {}. {}", i + 1, error)?;
+                    if i < errors.len() - 1 {
+                        writeln!(f)?;
+                    }
                 }
                 Ok(())
             }
-        }
-    }
-}
-
-struct ErrorContext<'a> {
-    error_type: &'a str,
-    message: &'a str,
-    span: &'a Span,
-    source_id: &'a str,
-    source_text: &'a str,
-    doc_name: &'a str,
-    doc_start_line: usize,
-    suggestion: Option<&'a str>,
-    note: Option<&'a str>,
-}
-
-fn format_error_with_ariadne(f: &mut fmt::Formatter<'_>, context: &ErrorContext) -> fmt::Result {
-    let mut output = Vec::new();
-
-    let doc_line = if context.span.line >= context.doc_start_line {
-        context.span.line - context.doc_start_line + 1
-    } else {
-        context.span.line // Fallback if something is off
-    };
-
-    // Enhanced error message showing both doc and file context
-    let enhanced_message = format!(
-        "{}: {} (in doc '{}' at line {}, file {}:{})",
-        context.error_type,
-        context.message,
-        context.doc_name,
-        doc_line,
-        context.source_id,
-        context.span.line
-    );
-
-    let mut report = Report::build(ReportKind::Error, context.source_id, context.span.start)
-        .with_message(enhanced_message)
-        .with_label(
-            Label::new((context.source_id, context.span.start..context.span.end))
-                .with_message("")
-                .with_color(Color::Red),
-        );
-
-    if let Some(help) = context.suggestion {
-        report = report.with_help(help);
-    }
-
-    if let Some(note_text) = context.note {
-        report = report.with_note(note_text);
-    }
-
-    match report.finish().write(
-        (context.source_id, Source::from(context.source_text)),
-        &mut output,
-    ) {
-        Ok(_) => write!(f, "{}", String::from_utf8_lossy(&output)),
-        Err(_) => {
-            // Fallback if ariadne fails
-            write!(
-                f,
-                "{}: {} at {}:{}:{}",
-                context.error_type,
-                context.message,
-                context.source_id,
-                context.span.line,
-                context.span.col
-            )
         }
     }
 }

@@ -337,53 +337,57 @@ impl Validator {
                 // Single-segment reference: just a local fact or rule name
                 if fact_ref.reference.len() == 1 {
                     let name = &fact_ref.reference[0];
-                    if self.is_rule_in_doc(name, current_doc) {
-                        return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                            message: format!("Reference error: '{}' is a rule and must be referenced with '?' (e.g., '{}?')", ref_name, ref_name),
-                            span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                            source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                            source_text: Arc::from(""),
-                            doc_name: current_doc.name.clone(),
-                            doc_start_line: current_doc.start_line,
-                            suggestion: Some(format!("Use '{}?' to reference the rule '{}'", ref_name, ref_name)),
-            })));
+                    if !self.is_rule_in_doc(name, current_doc) {
+                        return Ok(());
                     }
+                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                        message: format!("Reference error: '{}' is a rule and must be referenced with '?' (e.g., '{}?')", ref_name, ref_name),
+                        span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
+                        source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                        source_text: Arc::from(""),
+                        doc_name: current_doc.name.clone(),
+                        doc_start_line: current_doc.start_line,
+                        suggestion: Some(format!("Use '{}?' to reference the rule '{}'", ref_name, ref_name)),
+            })));
                 }
-                // Multi-segment reference: document.field
-                else if fact_ref.reference.len() >= 2 {
-                    let doc_ref = &fact_ref.reference[0];
-                    let field_name = fact_ref.reference[1..].join(".");
 
-                    // Check if first segment is a fact that references a document
-                    if let Some(referenced_doc) =
-                        self.get_referenced_doc(doc_ref, current_doc, all_docs)
-                    {
-                        // Check if the field in the referenced document is a rule
-                        if self.is_rule_in_doc(&field_name, referenced_doc) {
-                            return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                                message: format!("Reference error: '{}' references a rule in document '{}' and must use '?' (e.g., '{}?')", ref_name, referenced_doc.name, ref_name),
-                                span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                                source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                                source_text: Arc::from(""),
-                                doc_name: current_doc.name.clone(),
-                                doc_start_line: current_doc.start_line,
-                                suggestion: Some(format!("Use '{}?' to reference the rule '{}' in document '{}'", ref_name, field_name, referenced_doc.name)),
-            })));
-                        }
-                    }
-                    // Otherwise, check if it's a rule in the current document
-                    else if self.is_rule_in_doc(&field_name, current_doc) {
-                        return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                            message: format!("Reference error: '{}' appears to reference a rule and must use '?' (e.g., '{}?')", ref_name, ref_name),
-                            span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                            source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                            source_text: Arc::from(""),
-                            doc_name: current_doc.name.clone(),
-                            doc_start_line: current_doc.start_line,
-                            suggestion: Some(format!("Use '{}?' to reference the rule '{}'", ref_name, ref_name)),
-            })));
-                    }
+                // Multi-segment reference: document.field
+                if fact_ref.reference.len() < 2 {
+                    return Ok(());
                 }
+
+                let doc_ref = &fact_ref.reference[0];
+                let field_name = fact_ref.reference[1..].join(".");
+
+                // Check if first segment is a fact that references a document
+                if let Some(referenced_doc) = self.get_referenced_doc(doc_ref, current_doc, all_docs) {
+                    if !self.is_rule_in_doc(&field_name, referenced_doc) {
+                        return Ok(());
+                    }
+                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                        message: format!("Reference error: '{}' references a rule in document '{}' and must use '?' (e.g., '{}?')", ref_name, referenced_doc.name, ref_name),
+                        span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
+                        source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                        source_text: Arc::from(""),
+                        doc_name: current_doc.name.clone(),
+                        doc_start_line: current_doc.start_line,
+                        suggestion: Some(format!("Use '{}?' to reference the rule '{}' in document '{}'", ref_name, field_name, referenced_doc.name)),
+            })));
+                }
+
+                // Check if it's a rule in the current document
+                if !self.is_rule_in_doc(&field_name, current_doc) {
+                    return Ok(());
+                }
+                return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                    message: format!("Reference error: '{}' appears to reference a rule and must use '?' (e.g., '{}?')", ref_name, ref_name),
+                    span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
+                    source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                    source_text: Arc::from(""),
+                    doc_name: current_doc.name.clone(),
+                    doc_start_line: current_doc.start_line,
+                    suggestion: Some(format!("Use '{}?' to reference the rule '{}'", ref_name, ref_name)),
+            })));
             }
             ExpressionKind::RuleReference(rule_ref) => {
                 let ref_name = rule_ref.reference.join(".");
@@ -391,53 +395,57 @@ impl Validator {
                 // Single-segment reference: just a local fact or rule name
                 if rule_ref.reference.len() == 1 {
                     let name = &rule_ref.reference[0];
-                    if self.is_fact_in_doc(name, current_doc) {
-                        return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                            message: format!("Reference error: '{}' is a fact and should not use '?' (use '{}' instead of '{}?')", ref_name, ref_name, ref_name),
-                            span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                            source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                            source_text: Arc::from(""),
-                            doc_name: current_doc.name.clone(),
-                            doc_start_line: current_doc.start_line,
-                            suggestion: Some(format!("Use '{}' to reference the fact '{}' (remove the '?')", ref_name, ref_name)),
-            })));
+                    if !self.is_fact_in_doc(name, current_doc) {
+                        return Ok(());
                     }
+                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                        message: format!("Reference error: '{}' is a fact and should not use '?' (use '{}' instead of '{}?')", ref_name, ref_name, ref_name),
+                        span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
+                        source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                        source_text: Arc::from(""),
+                        doc_name: current_doc.name.clone(),
+                        doc_start_line: current_doc.start_line,
+                        suggestion: Some(format!("Use '{}' to reference the fact '{}' (remove the '?')", ref_name, ref_name)),
+            })));
                 }
-                // Multi-segment reference: document.field
-                else if rule_ref.reference.len() >= 2 {
-                    let doc_ref = &rule_ref.reference[0];
-                    let field_name = rule_ref.reference[1..].join(".");
 
-                    // Check if first segment is a fact that references a document
-                    if let Some(referenced_doc) =
-                        self.get_referenced_doc(doc_ref, current_doc, all_docs)
-                    {
-                        // Check if the field in the referenced document is a fact
-                        if self.is_fact_in_doc(&field_name, referenced_doc) {
-                            return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                                message: format!("Reference error: '{}' references a fact in document '{}' and should not use '?' (use '{}' instead of '{}?')", ref_name, referenced_doc.name, ref_name, ref_name),
-                                span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                                source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                                source_text: Arc::from(""),
-                                doc_name: current_doc.name.clone(),
-                                doc_start_line: current_doc.start_line,
-                                suggestion: Some(format!("Use '{}' to reference the fact '{}' in document '{}' (remove the '?')", ref_name, field_name, referenced_doc.name)),
-            })));
-                        }
-                    }
-                    // Otherwise, check if it's a fact in the current document
-                    else if self.is_fact_in_doc(&field_name, current_doc) {
-                        return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                            message: format!("Reference error: '{}' appears to reference a fact and should not use '?' (use '{}' instead of '{}?')", ref_name, ref_name, ref_name),
-                            span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                            source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                            source_text: Arc::from(""),
-                            doc_name: current_doc.name.clone(),
-                            doc_start_line: current_doc.start_line,
-                            suggestion: Some(format!("Use '{}' to reference the fact '{}' (remove the '?')", ref_name, ref_name)),
-            })));
-                    }
+                // Multi-segment reference: document.field
+                if rule_ref.reference.len() < 2 {
+                    return Ok(());
                 }
+
+                let doc_ref = &rule_ref.reference[0];
+                let field_name = rule_ref.reference[1..].join(".");
+
+                // Check if first segment is a fact that references a document
+                if let Some(referenced_doc) = self.get_referenced_doc(doc_ref, current_doc, all_docs) {
+                    if !self.is_fact_in_doc(&field_name, referenced_doc) {
+                        return Ok(());
+                    }
+                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                        message: format!("Reference error: '{}' references a fact in document '{}' and should not use '?' (use '{}' instead of '{}?')", ref_name, referenced_doc.name, ref_name, ref_name),
+                        span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
+                        source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                        source_text: Arc::from(""),
+                        doc_name: current_doc.name.clone(),
+                        doc_start_line: current_doc.start_line,
+                        suggestion: Some(format!("Use '{}' to reference the fact '{}' in document '{}' (remove the '?')", ref_name, field_name, referenced_doc.name)),
+            })));
+                }
+
+                // Check if it's a fact in the current document
+                if !self.is_fact_in_doc(&field_name, current_doc) {
+                    return Ok(());
+                }
+                return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                    message: format!("Reference error: '{}' appears to reference a fact and should not use '?' (use '{}' instead of '{}?')", ref_name, ref_name, ref_name),
+                    span: expr.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
+                    source_id: current_doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                    source_text: Arc::from(""),
+                    doc_name: current_doc.name.clone(),
+                    doc_start_line: current_doc.start_line,
+                    suggestion: Some(format!("Use '{}' to reference the fact '{}' (remove the '?')", ref_name, ref_name)),
+            })));
             }
             // Recursively validate nested expressions
             ExpressionKind::LogicalAnd(left, right) => {
@@ -595,77 +603,14 @@ impl Validator {
     fn validate_expression_type(&self, expr: &Expression, doc: &LemmaDoc) -> LemmaResult<()> {
         match &expr.kind {
             ExpressionKind::LogicalAnd(left, right) => {
-                let left_type = self.infer_expression_type(left)?;
-                let right_type = self.infer_expression_type(right)?;
-
-                // Only validate if we know the type (not Unknown)
-                // Unknown means it's a reference we can't type-check at validation time
-                if left_type != ExpressionType::Unknown && !left_type.is_boolean() {
-                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                        message: format!(
-                            "Type error: Logical operator 'and' requires boolean operands, but left operand has type {}",
-                            left_type.name()
-                        ),
-                        span: left.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                        source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                        source_text: Arc::from(""),
-                        doc_name: doc.name.clone(),
-                        doc_start_line: doc.start_line,
-                        suggestion: Some("Use a boolean expression or comparison for logical operations".to_string()),
-            })));
-                }
-                if right_type != ExpressionType::Unknown && !right_type.is_boolean() {
-                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                        message: format!(
-                            "Type error: Logical operator 'and' requires boolean operands, but right operand has type {}",
-                            right_type.name()
-                        ),
-                        span: right.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                        source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                        source_text: Arc::from(""),
-                        doc_name: doc.name.clone(),
-                        doc_start_line: doc.start_line,
-                        suggestion: Some("Use a boolean expression or comparison for logical operations".to_string()),
-            })));
-                }
-
+                self.validate_logical_operand(left, doc, "and")?;
+                self.validate_logical_operand(right, doc, "and")?;
                 self.validate_expression_type(left, doc)?;
                 self.validate_expression_type(right, doc)?;
             }
             ExpressionKind::LogicalOr(left, right) => {
-                let left_type = self.infer_expression_type(left)?;
-                let right_type = self.infer_expression_type(right)?;
-
-                // Only validate if we know the type (not Unknown)
-                if left_type != ExpressionType::Unknown && !left_type.is_boolean() {
-                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                        message: format!(
-                            "Type error: Logical operator 'or' requires boolean operands, but left operand has type {}",
-                            left_type.name()
-                        ),
-                        span: left.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                        source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                        source_text: Arc::from(""),
-                        doc_name: doc.name.clone(),
-                        doc_start_line: doc.start_line,
-                        suggestion: Some("Use a boolean expression or comparison for logical operations".to_string()),
-            })));
-                }
-                if right_type != ExpressionType::Unknown && !right_type.is_boolean() {
-                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                        message: format!(
-                            "Type error: Logical operator 'or' requires boolean operands, but right operand has type {}",
-                            right_type.name()
-                        ),
-                        span: right.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                        source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                        source_text: Arc::from(""),
-                        doc_name: doc.name.clone(),
-                        doc_start_line: doc.start_line,
-                        suggestion: Some("Use a boolean expression or comparison for logical operations".to_string()),
-            })));
-                }
-
+                self.validate_logical_operand(left, doc, "or")?;
+                self.validate_logical_operand(right, doc, "or")?;
                 self.validate_expression_type(left, doc)?;
                 self.validate_expression_type(right, doc)?;
             }
@@ -691,6 +636,35 @@ impl Validator {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Helper to validate that an operand is boolean for logical operators
+    fn validate_logical_operand(
+        &self,
+        operand: &Expression,
+        doc: &LemmaDoc,
+        operator: &str,
+    ) -> LemmaResult<()> {
+        let operand_type = self.infer_expression_type(operand)?;
+
+        // Only validate if we know the type (not Unknown)
+        if operand_type == ExpressionType::Unknown || operand_type.is_boolean() {
+            return Ok(());
+        }
+
+        Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+            message: format!(
+                "Type error: Logical operator '{}' requires boolean operands, but operand has type {}",
+                operator,
+                operand_type.name()
+            ),
+            span: operand.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
+            source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+            source_text: Arc::from(""),
+            doc_name: doc.name.clone(),
+            doc_start_line: doc.start_line,
+            suggestion: Some("Use a boolean expression or comparison for logical operations".to_string()),
+        })))
     }
 
     /// Validate that all branches of a rule return compatible types
@@ -847,15 +821,18 @@ impl Validator {
             ExpressionKind::Veto(_) => Ok(ExpressionType::Never),
             ExpressionKind::FactReference(fact_ref) => {
                 // Try to resolve fact type from document
-                if let Some(d) = doc {
-                    let ref_name = fact_ref.reference.join(".");
-                    for fact in &d.facts {
-                        let fact_name = crate::analysis::fact_display_name(fact);
-                        if fact_name == ref_name {
-                            if let FactValue::Literal(lit) = &fact.value {
-                                return Ok(ExpressionType::from_literal(lit));
-                            }
-                        }
+                let Some(d) = doc else {
+                    return Ok(ExpressionType::Unknown);
+                };
+
+                let ref_name = fact_ref.reference.join(".");
+                for fact in &d.facts {
+                    let fact_name = crate::analysis::fact_display_name(fact);
+                    if fact_name != ref_name {
+                        continue;
+                    }
+                    if let FactValue::Literal(lit) = &fact.value {
+                        return Ok(ExpressionType::from_literal(lit));
                     }
                 }
                 Ok(ExpressionType::Unknown)
@@ -868,74 +845,44 @@ impl Validator {
                 let left_type = self.infer_expression_type_with_context(left, doc)?;
                 let right_type = self.infer_expression_type_with_context(right, doc)?;
                 if left_type == ExpressionType::Unknown || right_type == ExpressionType::Unknown {
-                    Ok(ExpressionType::Unknown)
-                } else {
-                    // Division of numbers (or other compatible types) produces a number
-                    Ok(ExpressionType::Number)
+                    return Ok(ExpressionType::Unknown);
                 }
+                // Division of numbers (or other compatible types) produces a number
+                Ok(ExpressionType::Number)
             }
             ExpressionKind::MathematicalOperator(_, _) => Ok(ExpressionType::Number),
             ExpressionKind::UnitConversion(value_expr, target) => {
                 let value_type = self.infer_expression_type_with_context(value_expr, doc)?;
-
-                // Unit → Number: all physical units convert to Number
-                // Number → Unit: creates the appropriate unit type
-                match (&value_type, target) {
-                    // Number to Unit conversions
-                    (ExpressionType::Number, ConversionTarget::Mass(_)) => Ok(ExpressionType::Mass),
-                    (ExpressionType::Number, ConversionTarget::Length(_)) => {
-                        Ok(ExpressionType::Length)
-                    }
-                    (ExpressionType::Number, ConversionTarget::Volume(_)) => {
-                        Ok(ExpressionType::Volume)
-                    }
-                    (ExpressionType::Number, ConversionTarget::Duration(_)) => {
-                        Ok(ExpressionType::Duration)
-                    }
-                    (ExpressionType::Number, ConversionTarget::Temperature(_)) => {
-                        Ok(ExpressionType::Temperature)
-                    }
-                    (ExpressionType::Number, ConversionTarget::Power(_)) => {
-                        Ok(ExpressionType::Power)
-                    }
-                    (ExpressionType::Number, ConversionTarget::Force(_)) => {
-                        Ok(ExpressionType::Force)
-                    }
-                    (ExpressionType::Number, ConversionTarget::Pressure(_)) => {
-                        Ok(ExpressionType::Pressure)
-                    }
-                    (ExpressionType::Number, ConversionTarget::Energy(_)) => {
-                        Ok(ExpressionType::Energy)
-                    }
-                    (ExpressionType::Number, ConversionTarget::Frequency(_)) => {
-                        Ok(ExpressionType::Frequency)
-                    }
-                    (ExpressionType::Number, ConversionTarget::Data(_)) => Ok(ExpressionType::Data),
-                    (ExpressionType::Number, ConversionTarget::Money(_)) => {
-                        Ok(ExpressionType::Money)
-                    }
-                    (ExpressionType::Number, ConversionTarget::Percentage) => {
-                        Ok(ExpressionType::Percentage)
-                    }
-
-                    // Unit to Number conversions (all physical units)
-                    (_, ConversionTarget::Mass(_))
-                    | (_, ConversionTarget::Length(_))
-                    | (_, ConversionTarget::Volume(_))
-                    | (_, ConversionTarget::Duration(_))
-                    | (_, ConversionTarget::Temperature(_))
-                    | (_, ConversionTarget::Power(_))
-                    | (_, ConversionTarget::Force(_))
-                    | (_, ConversionTarget::Pressure(_))
-                    | (_, ConversionTarget::Energy(_))
-                    | (_, ConversionTarget::Frequency(_))
-                    | (_, ConversionTarget::Data(_))
-                    | (_, ConversionTarget::Money(_)) => Ok(ExpressionType::Number),
-
-                    // Percentage conversions
-                    (_, ConversionTarget::Percentage) => Ok(ExpressionType::Percentage),
-                }
+                Ok(self.infer_conversion_result_type(&value_type, target))
             }
+        }
+    }
+
+    /// Helper to infer the result type of a unit conversion
+    fn infer_conversion_result_type(
+        &self,
+        value_type: &ExpressionType,
+        target: &ConversionTarget,
+    ) -> ExpressionType {
+        match (value_type, target) {
+            // Number to Unit conversions
+            (ExpressionType::Number, ConversionTarget::Mass(_)) => ExpressionType::Mass,
+            (ExpressionType::Number, ConversionTarget::Length(_)) => ExpressionType::Length,
+            (ExpressionType::Number, ConversionTarget::Volume(_)) => ExpressionType::Volume,
+            (ExpressionType::Number, ConversionTarget::Duration(_)) => ExpressionType::Duration,
+            (ExpressionType::Number, ConversionTarget::Temperature(_)) => ExpressionType::Temperature,
+            (ExpressionType::Number, ConversionTarget::Power(_)) => ExpressionType::Power,
+            (ExpressionType::Number, ConversionTarget::Force(_)) => ExpressionType::Force,
+            (ExpressionType::Number, ConversionTarget::Pressure(_)) => ExpressionType::Pressure,
+            (ExpressionType::Number, ConversionTarget::Energy(_)) => ExpressionType::Energy,
+            (ExpressionType::Number, ConversionTarget::Frequency(_)) => ExpressionType::Frequency,
+            (ExpressionType::Number, ConversionTarget::Data(_)) => ExpressionType::Data,
+            (ExpressionType::Number, ConversionTarget::Money(_)) => ExpressionType::Money,
+            (ExpressionType::Number, ConversionTarget::Percentage) => ExpressionType::Percentage,
+
+            // Unit to Number conversions (all physical units) and Percentage conversions
+            (_, ConversionTarget::Percentage) => ExpressionType::Percentage,
+            _ => ExpressionType::Number,
         }
     }
 }

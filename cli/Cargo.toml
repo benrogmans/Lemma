@@ -15,6 +15,7 @@ path = "src/main.rs"
 lemma = { package = "lemma-engine", version = "0.6.4", path = "../lemma" }
 clap.workspace = true
 anyhow.workspace = true
+ariadne.workspace = true
 chrono.workspace = true
 walkdir = "2.4"
 crossterm = "0.27"

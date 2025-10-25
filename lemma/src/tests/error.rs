@@ -27,14 +27,12 @@ fn test_error_creation_and_display() {
     let parse_error = create_test_error(LemmaError::parse);
     let parse_error_display = format!("{}", parse_error);
     assert!(parse_error_display.contains("Parse error: Invalid currency"));
-    assert!(parse_error_display.contains("in doc 'test_doc' at line 1"));
-    assert!(parse_error_display.contains("test.lemma:1"));
+    assert!(parse_error_display.contains("test.lemma:1:15"));
 
     let semantic_error = create_test_error(LemmaError::semantic);
     let semantic_error_display = format!("{}", semantic_error);
     assert!(semantic_error_display.contains("Semantic error: Invalid currency"));
-    assert!(semantic_error_display.contains("in doc 'test_doc' at line 1"));
-    assert!(semantic_error_display.contains("test.lemma:1"));
+    assert!(semantic_error_display.contains("test.lemma:1:15"));
 
     let source_text = "fact amont = 100";
     let span = Span {
@@ -84,7 +82,7 @@ fn test_error_creation_and_display() {
     let multiple_errors =
         LemmaError::MultipleErrors(vec![parse_error, semantic_error, engine_error]);
     let multiple_errors_display = format!("{}", multiple_errors);
-    assert!(multiple_errors_display.contains("Multiple errors occurred:"));
+    assert!(multiple_errors_display.contains("Multiple errors:"));
     assert!(multiple_errors_display.contains("Parse error: Invalid currency"));
     assert!(multiple_errors_display.contains("Semantic error: Invalid currency"));
     assert!(multiple_errors_display.contains("Engine error: Something went wrong"));
