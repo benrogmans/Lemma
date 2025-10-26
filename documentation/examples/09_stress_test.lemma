@@ -188,9 +188,9 @@ rule processing_days = config.standard_processing_days
 
 rule estimated_total_days = processing_days? + order.estimated_delivery_days?
 
-rule discount_within_cap = savings_percent? <= config.max_discount_cap
+rule discount_within_cap = order.savings_percent? <= config.max_discount_cap
 
-rule margin = ((order.grand_total? - subtotal?) / order.grand_total?) in percentage
+rule margin = ((order.grand_total? - order.subtotal?) / order.grand_total?) in percentage
 
 rule is_profitable = margin? >= config.min_profitable_margin
 
