@@ -31,10 +31,10 @@ Business rules are traditionally encoded in either natural language documents th
 
 Lemma bridges this gap—eliminating the translation layer and unifying business logic.
 
-### What about AI
-AI models operate on probability. By design, they approximate—they don't calculate. This makes them great at language, but bad at math.
+### What about AI?
+AI models operate on probability. By design, they approximate—they don't calculate. This makes them great at language, but not reliable for math or following protocol.
 
-**Lemma provides certainty**. Every answer is exact, delivered in milliseconds, and the reasoning is verifiable.
+**Lemma provides certainty**. Every answer is exact, delivered in microseconds, and the reasoning is verifiable.
 
 Pro tip: use Lemma's MCP server to make your LLMs deterministic. Use LLMs as a friendly interface for your Lemma docs.
 
