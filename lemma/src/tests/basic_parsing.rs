@@ -6,7 +6,7 @@ fn test_parse_simple_document() {
     let input = r#"doc person
 fact name = "John"
 fact age = 25"#;
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].name, "person");
     assert_eq!(result[0].facts.len(), 2);
@@ -16,7 +16,7 @@ fact age = 25"#;
 fn test_parse_document_with_inheritance() {
     let input = r#"doc contracts/employment/jack
 fact name = "Jack""#;
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].name, "contracts/employment/jack");
 }
@@ -29,7 +29,7 @@ This is a markdown comment
 with **bold** text
 """
 fact name = "John""#;
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 1);
     assert!(result[0].commentary.is_some());
     assert!(result[0].commentary.as_ref().unwrap().contains("**bold**"));
@@ -39,7 +39,7 @@ fact name = "John""#;
 fn test_parse_document_with_rule() {
     let input = r#"doc person
 rule is_adult = age >= 18"#;
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].rules.len(), 1);
     assert_eq!(result[0].rules[0].name, "is_adult");
@@ -52,7 +52,7 @@ fact name = "John"
 
 doc company
 fact name = "Acme Corp""#;
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].name, "person");
     assert_eq!(result[1].name, "company");
@@ -63,7 +63,7 @@ fn test_parse_error_duplicate_fact_names() {
     let input = r#"doc person
 fact name = "John"
 fact name = "Jane""#;
-    let result = parse(input, None);
+    let result = parse(input, None, &crate::ResourceLimits::default());
     assert!(
         result.is_ok(),
         "Parser should succeed even with duplicate facts"
@@ -75,7 +75,7 @@ fn test_parse_error_duplicate_rule_names() {
     let input = r#"doc person
 rule is_adult = age >= 18
 rule is_adult = age >= 21"#;
-    let result = parse(input, None);
+    let result = parse(input, None, &crate::ResourceLimits::default());
     assert!(
         result.is_ok(),
         "Parser should succeed even with duplicate rules"
@@ -85,14 +85,14 @@ rule is_adult = age >= 21"#;
 #[test]
 fn test_parse_error_malformed_input() {
     let input = "invalid syntax here";
-    let result = parse(input, None);
+    let result = parse(input, None, &crate::ResourceLimits::default());
     assert!(result.is_err());
 }
 
 #[test]
 fn test_parse_empty_input() {
     let input = "";
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 0);
 }
 
@@ -101,7 +101,7 @@ fn test_parse_document_with_unless_clause() {
     let input = r#"doc person
 rule is_active = service_started? and not service_ended?
 unless maintenance_mode then false"#;
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].rules.len(), 1);
     assert_eq!(result[0].rules[0].unless_clauses.len(), 1);
@@ -112,7 +112,7 @@ fn test_parse_workspace_file() {
     let input = r#"doc person
 fact name = "John Doe"
 rule adult = true"#;
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].name, "person");
     assert_eq!(result[0].facts.len(), 1);
@@ -127,7 +127,7 @@ rule is_eligible = age >= 18 and have license
 unless emergency_mode then true
 unless system_override then accept"#;
 
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].rules.len(), 1);
     assert_eq!(result[0].rules[0].unless_clauses.len(), 2);
@@ -141,7 +141,7 @@ rule is_senior = age >= 65
 rule is_minor = age < 18
 rule can_vote = age >= 18 and is_citizen"#;
 
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].rules.len(), 4);
     assert_eq!(result[0].rules[0].name, "is_adult");
@@ -160,7 +160,7 @@ rule can_drink = age >= 21
 fact status = "active"
 rule is_eligible = is_adult and status == "active""#;
 
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].facts.len(), 3);
     assert_eq!(result[0].rules.len(), 3);
@@ -178,7 +178,7 @@ fact discount = [percentage]
 fact weight = [weight]
 fact height = [length]"#;
 
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].facts.len(), 8);
 }
@@ -197,7 +197,7 @@ fact freq = [frequency]
 fact data = [data_size]
 fact price = [money]"#;
 
-    let result = parse(input, None).unwrap();
+    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].facts.len(), 10);
 }
@@ -222,7 +222,7 @@ fn test_whitespace_handling_comprehensive() {
     ];
 
     for (input, description) in test_cases {
-        let result = parse(input, None);
+        let result = parse(input, None, &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",

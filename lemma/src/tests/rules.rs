@@ -1,19 +1,27 @@
 use crate::evaluator::context::EvaluationContext;
 use crate::evaluator::rules::evaluate_rule;
+use crate::evaluator::timeout::TimeoutTracker;
 use crate::{
-    Expression, ExpressionId, ExpressionKind, LemmaDoc, LemmaRule, LiteralValue, OperationResult,
-    UnlessClause,
+    Expression, ExpressionId, ExpressionKind, FactPath, LemmaDoc, LemmaRule, LiteralValue,
+    OperationResult, ResourceLimits, UnlessClause,
 };
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
+/// Helper to create an evaluation context for testing
+fn create_test_context(facts: HashMap<FactPath, LiteralValue>) -> EvaluationContext<'static> {
+    let docs = Box::leak(Box::new(HashMap::new()));
+    let sources = Box::leak(Box::new(HashMap::new()));
+    let doc = Box::leak(Box::new(LemmaDoc::new("test".to_string())));
+    let limits = Box::leak(Box::new(ResourceLimits::default()));
+    let timeout_tracker = Box::leak(Box::new(TimeoutTracker::new()));
+
+    EvaluationContext::new(doc, docs, sources, facts, timeout_tracker, limits)
+}
+
 #[test]
 fn test_evaluate_rule_no_unless() {
-    let docs = HashMap::new();
-    let sources = HashMap::new();
-    let doc = LemmaDoc::new("test".to_string());
-    let facts = HashMap::new();
-    let mut context = EvaluationContext::new(&doc, &docs, &sources, facts);
+    let mut context = create_test_context(HashMap::new());
 
     let rule = LemmaRule {
         name: "test_rule".to_string(),
@@ -26,7 +34,7 @@ fn test_evaluate_rule_no_unless() {
         span: None,
     };
 
-    let result = evaluate_rule(&rule, &mut context).unwrap();
+    let result = evaluate_rule(&rule, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(42)))
@@ -35,11 +43,7 @@ fn test_evaluate_rule_no_unless() {
 
 #[test]
 fn test_evaluate_rule_with_unless_no_match() {
-    let docs = HashMap::new();
-    let sources = HashMap::new();
-    let doc = LemmaDoc::new("test".to_string());
-    let facts = HashMap::new();
-    let mut context = EvaluationContext::new(&doc, &docs, &sources, facts);
+    let mut context = create_test_context(HashMap::new());
 
     let rule = LemmaRule {
         name: "test_rule".to_string(),
@@ -64,7 +68,7 @@ fn test_evaluate_rule_with_unless_no_match() {
         span: None,
     };
 
-    let result = evaluate_rule(&rule, &mut context).unwrap();
+    let result = evaluate_rule(&rule, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(100)))
@@ -73,11 +77,7 @@ fn test_evaluate_rule_with_unless_no_match() {
 
 #[test]
 fn test_evaluate_rule_with_unless_match() {
-    let docs = HashMap::new();
-    let sources = HashMap::new();
-    let doc = LemmaDoc::new("test".to_string());
-    let facts = HashMap::new();
-    let mut context = EvaluationContext::new(&doc, &docs, &sources, facts);
+    let mut context = create_test_context(HashMap::new());
 
     let rule = LemmaRule {
         name: "test_rule".to_string(),
@@ -102,7 +102,7 @@ fn test_evaluate_rule_with_unless_match() {
         span: None,
     };
 
-    let result = evaluate_rule(&rule, &mut context).unwrap();
+    let result = evaluate_rule(&rule, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(200)))
@@ -111,11 +111,7 @@ fn test_evaluate_rule_with_unless_match() {
 
 #[test]
 fn test_evaluate_rule_last_matching_wins() {
-    let docs = HashMap::new();
-    let sources = HashMap::new();
-    let doc = LemmaDoc::new("test".to_string());
-    let facts = HashMap::new();
-    let mut context = EvaluationContext::new(&doc, &docs, &sources, facts);
+    let mut context = create_test_context(HashMap::new());
 
     let rule = LemmaRule {
         name: "test_rule".to_string(),
@@ -155,7 +151,7 @@ fn test_evaluate_rule_last_matching_wins() {
         span: None,
     };
 
-    let result = evaluate_rule(&rule, &mut context).unwrap();
+    let result = evaluate_rule(&rule, &mut context, &[]).unwrap();
     // Last unless clause wins
     assert_eq!(
         result,

@@ -2,7 +2,7 @@
 
 Lemma is a declarative programming language for expressing business rules. This WebAssembly build for JavaScript and TypeScript provides an embeddable runtime, so that Lemma code can be evaluated anywhere.
 
-**New to Lemma?** Check out the [language introduction](https://github.com/benrogmans/lemma#quick-start) and [examples](https://github.com/benrogmans/lemma/tree/main/docs/examples).
+**New to Lemma?** Check out the [language introduction](https://github.com/benrogmans/lemma#quick-start) and [examples](https://github.com/benrogmans/lemma/tree/main/documentation/examples).
 
 ## Installation
 
@@ -156,7 +156,7 @@ async function calculatePricing() {
       unless promo_discount? >= bulk_discount?   then promo_discount?
       unless member_discount? >= promo_discount? then member_discount?
       unless promo_discount? >= member_discount? then promo_discount?
-    
+
     rule final_price = base_price * quantity * (1 - best_discount?)
   `;
 
@@ -296,6 +296,6 @@ Apache-2.0
 ## Links
 
 - [GitHub Repository](https://github.com/benrogmans/lemma)
-- [Lemma Language Guide](https://github.com/benrogmans/lemma/tree/main/docs)
-- [Examples](https://github.com/benrogmans/lemma/tree/main/docs/examples)
+- [Lemma Language Guide](https://github.com/benrogmans/lemma/tree/main/documentation)
+- [Examples](https://github.com/benrogmans/lemma/tree/main/documentation/examples)
 - [Report Issues](https://github.com/benrogmans/lemma/issues)

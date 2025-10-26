@@ -150,6 +150,27 @@ fn prompt_facts(
 
                 format!("{}T00:00:00Z", date.format("%Y-%m-%d"))
             }
+            TypeAnnotation::LemmaType(LemmaType::Boolean) => {
+                let options = vec!["true", "false"];
+
+                let default_index = if let Some(default) = &default_value {
+                    if default == "true" || default == "yes" || default == "accept" {
+                        0
+                    } else {
+                        1
+                    }
+                } else {
+                    0
+                };
+
+                let selected = Select::new(&format!("{} [boolean]", fact_name), options)
+                    .with_help_message("Use arrow keys to select, Enter to confirm")
+                    .with_starting_cursor(default_index)
+                    .prompt()
+                    .context(format!("Failed to get boolean value for {}", fact_name))?;
+
+                selected.to_string()
+            }
             _ => {
                 let prompt_message = format!("{} [{}]", fact_name, type_str);
 

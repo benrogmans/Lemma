@@ -66,7 +66,7 @@ lemma run pricing -i
 lemma run pricing:total,tax -i
 
 # Interactive mode with date picker for date fields
-lemma run examples/date_handling -i -d docs/examples
+lemma run examples/date_handling -i -d documentation/examples
 
 # Using long form flags
 lemma run pricing --dir ./policies --raw

@@ -28,15 +28,15 @@ struct Cli {
 enum Commands {
     /// Evaluate rules and display results (try: doc:rule1,rule2)
     ///
-    /// Loads all .lemma files from the workspace, evaluates the specified document with optional fact overrides,
+    /// Loads all .lemma files from the workspace, evaluates the specified doc with optional fact overrides,
     /// and displays the computed results. Use this for command-line evaluation and testing.
     ///
-    /// Syntax: document or document:rule1,rule2,rule3
+    /// Syntax: doc or doc:rule1,rule2,rule3
     Run {
-        /// Document and optional rules to evaluate (format: doc or doc:rule1,rule2)
+        /// Doc and optional rules to evaluate (format: doc or doc:rule1,rule2)
         ///
         /// Examples:
-        ///   pricing              - evaluate all rules in pricing document
+        ///   pricing              - evaluate all rules in pricing doc
         ///   pricing:total        - evaluate only the total rule
         ///   pricing:total,tax    - evaluate total and tax rules
         #[arg(value_name = "[DOC[:RULES]]")]
@@ -77,7 +77,7 @@ enum Commands {
     },
     /// Start HTTP REST API server (default: localhost:3000)
     ///
-    /// Runs a server that evaluates Lemma documents via HTTP POST requests.
+    /// Runs a server that evaluates Lemma docs via HTTP POST requests.
     /// Useful for integrating Lemma rules into web applications and microservices.
     /// API: POST /evaluate with {code, facts}
     Server {

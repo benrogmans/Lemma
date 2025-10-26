@@ -32,6 +32,14 @@ pub enum LemmaError {
     /// Circular dependency error
     CircularDependency(String),
 
+    /// Resource limit exceeded
+    ResourceLimitExceeded {
+        limit_name: String,
+        limit_value: String,
+        actual_value: String,
+        suggestion: String,
+    },
+
     /// Multiple errors collected together
     MultipleErrors(Vec<LemmaError>),
 }
@@ -158,6 +166,18 @@ impl fmt::Display for LemmaError {
             }
             LemmaError::Engine(msg) => write!(f, "Engine error: {}", msg),
             LemmaError::CircularDependency(msg) => write!(f, "Circular dependency: {}", msg),
+            LemmaError::ResourceLimitExceeded {
+                limit_name,
+                limit_value,
+                actual_value,
+                suggestion,
+            } => {
+                write!(
+                    f,
+                    "Resource limit exceeded: {} (limit: {}, actual: {}). {}",
+                    limit_name, limit_value, actual_value, suggestion
+                )
+            }
             LemmaError::MultipleErrors(errors) => {
                 writeln!(f, "Multiple errors:")?;
                 for (i, error) in errors.iter().enumerate() {

@@ -5,7 +5,10 @@
 //!
 //! Used by both semantic validation and evaluation.
 
-use crate::{Expression, ExpressionKind, FactType, FactValue, LemmaFact, LemmaRule, RuleResult};
+use crate::{
+    Expression, ExpressionKind, FactType, FactValue, LemmaDoc, LemmaFact, LemmaResult, LemmaRule,
+    RulePath,
+};
 use std::collections::{HashMap, HashSet};
 
 /// References extracted from an expression
@@ -83,142 +86,34 @@ fn collect_references(
 
 /// Build a dependency graph showing which rules depend on which other rules.
 ///
-/// Returns a map: rule_name -> set of rule names it depends on.
+/// Returns a map: RulePath -> set of RulePaths it depends on.
 /// This graph is used for topological sorting to determine execution order
 /// and for detecting circular dependencies.
-///
-/// # Examples
-/// ```text
-/// Given rules:
-///   rule total = subtotal?
-///   rule subtotal = price * quantity
-///
-/// Returns:
-///   {"total": {"subtotal"}, "subtotal": {}}
-/// ```
-pub fn build_dependency_graph(rules: &[LemmaRule]) -> HashMap<String, HashSet<String>> {
+pub fn build_dependency_graph(
+    rules: &[(RulePath, &LemmaRule)],
+    main_doc_name: &str,
+    all_documents: &HashMap<String, LemmaDoc>,
+) -> LemmaResult<HashMap<RulePath, HashSet<RulePath>>> {
     let mut graph = HashMap::new();
 
-    for rule in rules {
+    for (rule_path, rule) in rules {
         let mut dependencies = HashSet::new();
 
-        // Extract rule references from the main expression
-        extract_rule_references(&rule.expression, &mut dependencies);
+        let doc_name = rule_path.target_doc(main_doc_name);
+        let rule_doc = all_documents
+            .get(doc_name)
+            .ok_or_else(|| crate::LemmaError::Engine(format!("Document {} not found", doc_name)))?;
 
-        // Extract rule references from unless clauses
-        for unless_clause in &rule.unless_clauses {
-            extract_rule_references(&unless_clause.condition, &mut dependencies);
-            extract_rule_references(&unless_clause.result, &mut dependencies);
+        extract_rule_paths(&rule.expression, rule_doc, all_documents, &mut dependencies)?;
+        for uc in &rule.unless_clauses {
+            extract_rule_paths(&uc.condition, rule_doc, all_documents, &mut dependencies)?;
+            extract_rule_paths(&uc.result, rule_doc, all_documents, &mut dependencies)?;
         }
 
-        graph.insert(rule.name.clone(), dependencies);
+        graph.insert(rule_path.clone(), dependencies);
     }
 
-    graph
-}
-
-/// Extract only rule references from an expression
-fn extract_rule_references(expr: &Expression, references: &mut HashSet<String>) {
-    match &expr.kind {
-        ExpressionKind::RuleReference(rule_ref) => {
-            let rule_name = if rule_ref.reference.len() > 1 {
-                rule_ref.reference.join(".")
-            } else {
-                rule_ref.reference.last().cloned().unwrap_or_default()
-            };
-            references.insert(rule_name);
-        }
-        ExpressionKind::LogicalAnd(left, right)
-        | ExpressionKind::LogicalOr(left, right)
-        | ExpressionKind::Arithmetic(left, _, right)
-        | ExpressionKind::Comparison(left, _, right) => {
-            extract_rule_references(left, references);
-            extract_rule_references(right, references);
-        }
-        ExpressionKind::UnitConversion(inner, _)
-        | ExpressionKind::LogicalNegation(inner, _)
-        | ExpressionKind::MathematicalOperator(_, inner) => {
-            extract_rule_references(inner, references);
-        }
-        ExpressionKind::Veto(_)
-        | ExpressionKind::FactHasAnyValue(_)
-        | ExpressionKind::FactReference(_)
-        | ExpressionKind::Literal(_) => {}
-    }
-}
-
-/// Find all missing facts and rules for a rule.
-///
-/// Returns (missing_facts, missing_rules) where:
-/// - missing_facts: Facts that have type annotations (not provided)
-/// - missing_rules: Rules that this rule depends on that couldn't be evaluated
-///
-/// Used to provide helpful error messages about what inputs are needed
-/// to successfully evaluate a rule.
-///
-/// # Examples
-/// ```text
-/// Given:
-///   fact price: number
-///   rule total = price * 2
-///
-/// Returns: (["price [number]"], [])
-/// ```
-pub fn find_missing_dependencies(
-    rule: &LemmaRule,
-    document_facts: &[LemmaFact],
-    evaluated_results: &[RuleResult],
-) -> (Vec<String>, Vec<String>) {
-    let refs = extract_references(&rule.expression);
-
-    // Also collect from unless clauses
-    let mut all_fact_refs = refs.facts;
-    let mut all_rule_refs = refs.rules;
-
-    for unless_clause in &rule.unless_clauses {
-        let unless_refs = extract_references(&unless_clause.condition);
-        all_fact_refs.extend(unless_refs.facts);
-        all_rule_refs.extend(unless_refs.rules);
-
-        let result_refs = extract_references(&unless_clause.result);
-        all_fact_refs.extend(result_refs.facts);
-        all_rule_refs.extend(result_refs.rules);
-    }
-
-    // Find missing facts (have type annotations)
-    let mut missing_facts = Vec::new();
-    for fact_ref in all_fact_refs {
-        let fact_name = fact_ref.join(".");
-
-        if let Some(fact) = document_facts
-            .iter()
-            .find(|f| fact_display_name(f) == fact_name)
-        {
-            if let FactValue::TypeAnnotation(type_ann) = &fact.value {
-                let formatted = format!("{} [{}]", fact_name, type_ann);
-                missing_facts.push(formatted);
-            }
-        }
-    }
-
-    // Find missing rules (couldn't be evaluated or have missing facts)
-    let mut missing_rules = Vec::new();
-    for rule_ref in all_rule_refs {
-        let rule_name = rule_ref.join(".");
-
-        // Check if this rule was evaluated successfully
-        if let Some(result) = evaluated_results.iter().find(|r| r.rule_name == rule_name) {
-            // If it has no result or has missing_facts, it couldn't be evaluated
-            if result.result.is_none() {
-                missing_rules.push(rule_name);
-            }
-        }
-    }
-
-    missing_facts.sort();
-    missing_rules.sort();
-
-    (missing_facts, missing_rules)
+    Ok(graph)
 }
 
 /// Recursively find all facts required by a rule, following rule dependencies.
@@ -326,4 +221,36 @@ pub fn fact_display_name(fact: &LemmaFact) -> String {
         FactType::Local(name) => name.clone(),
         FactType::Foreign(foreign_ref) => foreign_ref.reference.join("."),
     }
+}
+
+/// Extract rule paths from an expression for cross-document dependency analysis.
+///
+/// Resolves rule references to `RulePath` instances that include the full
+/// document traversal path. Used by both rule discovery and dependency graph building.
+pub fn extract_rule_paths(
+    expr: &Expression,
+    current_doc: &LemmaDoc,
+    all_documents: &HashMap<String, LemmaDoc>,
+    paths: &mut HashSet<RulePath>,
+) -> LemmaResult<()> {
+    match &expr.kind {
+        ExpressionKind::RuleReference(rule_ref) => {
+            let path = RulePath::from_reference(&rule_ref.reference, current_doc, all_documents)?;
+            paths.insert(path);
+        }
+        ExpressionKind::LogicalAnd(left, right)
+        | ExpressionKind::LogicalOr(left, right)
+        | ExpressionKind::Arithmetic(left, _, right)
+        | ExpressionKind::Comparison(left, _, right) => {
+            extract_rule_paths(left, current_doc, all_documents, paths)?;
+            extract_rule_paths(right, current_doc, all_documents, paths)?;
+        }
+        ExpressionKind::UnitConversion(inner, _)
+        | ExpressionKind::LogicalNegation(inner, _)
+        | ExpressionKind::MathematicalOperator(_, inner) => {
+            extract_rule_paths(inner, current_doc, all_documents, paths)?;
+        }
+        _ => {}
+    }
+    Ok(())
 }

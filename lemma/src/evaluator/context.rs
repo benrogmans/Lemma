@@ -3,9 +3,12 @@
 //! Contains all state needed during evaluation of a single document.
 
 use crate::{
-    FactType, FactValue, LemmaDoc, LemmaFact, LiteralValue, OperationRecord, OperationResult,
+    FactPath, FactType, FactValue, LemmaDoc, LemmaError, LemmaFact, LiteralValue, OperationRecord,
+    OperationResult, ResourceLimits,
 };
 use std::collections::HashMap;
+
+use super::timeout::TimeoutTracker;
 
 /// Context for evaluating a Lemma document
 ///
@@ -13,6 +16,7 @@ use std::collections::HashMap;
 /// - Facts (inputs)
 /// - Rule results (computed values)
 /// - Operation records (execution log)
+/// - Timeout tracking
 pub struct EvaluationContext<'a> {
     /// Document being evaluated
     pub current_doc: &'a LemmaDoc,
@@ -25,13 +29,19 @@ pub struct EvaluationContext<'a> {
     pub sources: &'a HashMap<String, String>,
 
     /// Fact values (from document + overrides)
-    /// Maps fact name -> concrete value
+    /// Maps fact path -> concrete value
     /// Only contains facts that have actual values (not TypeAnnotations)
-    pub facts: HashMap<String, LiteralValue>,
+    pub facts: HashMap<FactPath, LiteralValue>,
+
+    /// Timeout tracker (platform-specific)
+    pub timeout_tracker: &'a TimeoutTracker,
+
+    /// Resource limits including timeout
+    pub limits: &'a ResourceLimits,
 
     /// Rule results computed so far (populated during execution)
-    /// Maps rule name -> operation result (either Value or Veto)
-    pub rule_results: HashMap<String, OperationResult>,
+    /// Maps RulePath -> operation result (either Value or Veto)
+    pub rule_results: HashMap<crate::RulePath, OperationResult>,
 
     /// Operation records - records every operation
     pub operations: Vec<OperationRecord>,
@@ -43,7 +53,9 @@ impl<'a> EvaluationContext<'a> {
         current_doc: &'a LemmaDoc,
         all_documents: &'a HashMap<String, LemmaDoc>,
         sources: &'a HashMap<String, String>,
-        facts: HashMap<String, LiteralValue>,
+        facts: HashMap<FactPath, LiteralValue>,
+        timeout_tracker: &'a TimeoutTracker,
+        limits: &'a ResourceLimits,
     ) -> Self {
         Self {
             current_doc,
@@ -52,7 +64,14 @@ impl<'a> EvaluationContext<'a> {
             facts,
             rule_results: HashMap::new(),
             operations: Vec::new(),
+            timeout_tracker,
+            limits,
         }
+    }
+
+    /// Check if evaluation has exceeded timeout
+    pub fn check_timeout(&self) -> Result<(), crate::LemmaError> {
+        self.timeout_tracker.check_timeout(self.limits)
     }
 }
 
@@ -61,30 +80,34 @@ impl<'a> EvaluationContext<'a> {
 /// Includes facts with concrete values (FactValue::Literal) and expands
 /// DocumentReference facts by importing all facts from the referenced document.
 /// Facts with TypeAnnotation are missing and will cause evaluation errors.
+///
+/// Validates that fact overrides match the expected types declared in the document.
 pub fn build_fact_map(
+    doc: &LemmaDoc,
     doc_facts: &[LemmaFact],
     overrides: &[LemmaFact],
     all_documents: &HashMap<String, LemmaDoc>,
-) -> HashMap<String, LiteralValue> {
+) -> Result<HashMap<FactPath, LiteralValue>, LemmaError> {
     let mut facts = HashMap::new();
 
     // Add document facts
     for fact in doc_facts {
         match &fact.value {
             FactValue::Literal(lit) => {
-                let name = get_fact_name(fact);
-                facts.insert(name, lit.clone());
+                let path = get_fact_path(fact);
+                facts.insert(path, lit.clone());
             }
             FactValue::DocumentReference(doc_name) => {
-                // Resolve document reference by importing all facts from referenced doc
+                // Resolve document reference by recursively importing all facts from referenced doc
                 if let Some(referenced_doc) = all_documents.get(doc_name) {
-                    let fact_prefix = get_fact_name(fact);
-                    for ref_fact in &referenced_doc.facts {
-                        if let FactValue::Literal(lit) = &ref_fact.value {
-                            let ref_fact_name = get_fact_name(ref_fact);
-                            let qualified_name = format!("{}.{}", fact_prefix, ref_fact_name);
-                            facts.insert(qualified_name, lit.clone());
-                        }
+                    let fact_prefix = get_fact_path(fact);
+                    // Recursively build fact map for the referenced document
+                    let referenced_facts =
+                        build_fact_map(referenced_doc, &referenced_doc.facts, &[], all_documents)?;
+                    for (ref_fact_path, lit) in referenced_facts {
+                        // Prepend the prefix to create the qualified path
+                        let qualified_path = ref_fact_path.with_prefix(fact_prefix.segments());
+                        facts.insert(qualified_path, lit);
                     }
                 }
             }
@@ -94,21 +117,33 @@ pub fn build_fact_map(
         }
     }
 
-    // Apply overrides
+    // Apply overrides with type validation
     for fact in overrides {
         if let FactValue::Literal(lit) = &fact.value {
-            let name = get_fact_name(fact);
-            facts.insert(name, lit.clone());
+            let path = get_fact_path(fact);
+
+            // Check if this fact exists in the document and validate type
+            if let Some(expected_type) = doc.get_fact_type(&path) {
+                let actual_type = lit.to_type();
+                if expected_type != actual_type {
+                    return Err(LemmaError::Engine(format!(
+                        "Type mismatch for fact '{}': expected {}, got {}",
+                        path, expected_type, actual_type
+                    )));
+                }
+            }
+
+            facts.insert(path, lit.clone());
         }
     }
 
-    facts
+    Ok(facts)
 }
 
-/// Get the display name for a fact (handles local and foreign facts)
-fn get_fact_name(fact: &LemmaFact) -> String {
+/// Get the fact path for a fact (handles local and foreign facts)
+fn get_fact_path(fact: &LemmaFact) -> FactPath {
     match &fact.fact_type {
-        FactType::Local(name) => name.clone(),
-        FactType::Foreign(foreign_ref) => foreign_ref.reference.join("."),
+        FactType::Local(name) => FactPath::new(vec![name.clone()]),
+        FactType::Foreign(foreign_ref) => FactPath::new(foreign_ref.reference.clone()),
     }
 }

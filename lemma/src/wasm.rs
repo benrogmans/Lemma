@@ -155,6 +155,17 @@ fn format_error(error: &LemmaError) -> String {
         LemmaError::Runtime(details) => format!("Runtime Error: {}", details.message),
         LemmaError::Engine(msg) => format!("Engine Error: {}", msg),
         LemmaError::CircularDependency(msg) => format!("Circular Dependency: {}", msg),
+        LemmaError::ResourceLimitExceeded {
+            limit_name,
+            limit_value,
+            actual_value,
+            suggestion,
+        } => {
+            format!(
+                "Resource Limit Exceeded: {} (limit: {}, actual: {}). {}",
+                limit_name, limit_value, actual_value, suggestion
+            )
+        }
         LemmaError::MultipleErrors(errors) => {
             let error_messages: Vec<String> = errors.iter().map(format_error).collect();
             format!("Multiple Errors:\n{}", error_messages.join("\n"))

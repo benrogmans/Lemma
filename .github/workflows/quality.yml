@@ -23,6 +23,15 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -46,7 +55,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run tests
-        run: cargo nextest run --workspace --all-features
+        run: cargo nextest run --workspace --all-features --run-ignored all
 
   lint:
     name: Lint
@@ -147,35 +156,6 @@ jobs:
             echo "Running $target..."
             cargo +nightly fuzz run $target -- -max_total_time=30 || true
           done
-
-  wasm:
-    name: WASM Build and Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Build WASM
-        run: |
-          cd lemma
-          node wasm/build.js
-
-      - name: Test WASM
-        run: |
-          cd lemma
-          node wasm/test.js
 
   coverage:
     name: Code Coverage

@@ -2,7 +2,7 @@
 
 > **A command-line interface for the Lemma language.**
 
-This package provides the `lemma` CLI for running, inspecting, and serving Lemma documents. It ships alongside the `lemma-engine` crate and exposes the same deterministic, auditable evaluation pipeline from the terminal.
+This package provides the `lemma` CLI for running, inspecting, and serving Lemma docs. It ships alongside the `lemma-engine` crate and exposes the same deterministic, auditable evaluation pipeline from the terminal.
 
 ## Status
 
@@ -35,13 +35,13 @@ lemma run --interactive
 lemma show examples/pricing
 
 # List available documents
-lemma list ./docs/examples
+lemma list ./documentation/examples
 
 # Start the HTTP server
-lemma server --port 3000 --dir ./docs/examples
+lemma server --port 3000 --dir ./documentation/examples
 
 # Start the MCP server (AI assistant integration)
-lemma mcp --dir ./docs/examples
+lemma mcp --dir ./documentation/examples
 ```
 
 Each command supports `--help` for full usage details.
@@ -76,15 +76,15 @@ lemma run examples/shipping --raw > output.json
 
 ## Documentation
 
-- CLI reference: <https://github.com/benrogmans/lemma/blob/main/docs/CLI.md>
+- CLI reference: <https://github.com/benrogmans/lemma/blob/main/documentation/CLI.md>
 - Language guide: <https://benrogmans.github.io/lemma/>
 - API docs (engine): <https://docs.rs/lemma-engine>
-- Examples: <https://github.com/benrogmans/lemma/tree/main/docs/examples>
-- Roadmap: <https://github.com/benrogmans/lemma/blob/main/docs/roadmap.md>
+- Examples: <https://github.com/benrogmans/lemma/tree/main/documentation/examples>
+- Roadmap: <https://github.com/benrogmans/lemma/blob/main/documentation/roadmap.md>
 
 ## Contributing
 
-Contributions are very welcome! See [docs/contributing.md](https://github.com/benrogmans/lemma/blob/main/docs/contributing.md) and the [project roadmap](https://github.com/benrogmans/lemma/blob/main/docs/roadmap.md) for ideas.
+Contributions are very welcome! See [documentation/contributing.md](https://github.com/benrogmans/lemma/blob/main/documentation/contributing.md) and the [project roadmap](https://github.com/benrogmans/lemma/blob/main/documentation/roadmap.md) for ideas.
 
 ## License
 

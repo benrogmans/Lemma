@@ -58,7 +58,7 @@ cargo deny check --config .cargo/deny.toml
 - `cli/` - CLI application
 - `lemma/` - Core parser and evaluator
 - `lemma/fuzz/` - Fuzz testing targets
-- `docs/examples/` - Example `.lemma` files
+- `documentation/examples/` - Example `.lemma` files
 
 ## Testing
 

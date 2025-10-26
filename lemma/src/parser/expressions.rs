@@ -90,6 +90,29 @@ pub(crate) fn parse_expression(
     pair: Pair<Rule>,
     id_gen: &mut ExpressionIdGenerator,
 ) -> Result<Expression, LemmaError> {
+    // Check and increment depth
+    if let Err(msg) = id_gen.push_depth() {
+        return Err(LemmaError::ResourceLimitExceeded {
+            limit_name: "max_expression_depth".to_string(),
+            limit_value: id_gen.max_depth().to_string(),
+            actual_value: msg
+                .split_whitespace()
+                .nth(2)
+                .unwrap_or("unknown")
+                .to_string(),
+            suggestion: "Simplify nested expressions to reduce depth".to_string(),
+        });
+    }
+
+    let result = parse_expression_impl(pair, id_gen);
+    id_gen.pop_depth();
+    result
+}
+
+fn parse_expression_impl(
+    pair: Pair<Rule>,
+    id_gen: &mut ExpressionIdGenerator,
+) -> Result<Expression, LemmaError> {
     // Check the current rule first before descending to children
     match pair.as_rule() {
         Rule::comparable_base => return parse_comparable_base(pair, id_gen),

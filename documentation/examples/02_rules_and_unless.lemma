@@ -14,8 +14,8 @@ condition's result is used. This matches natural language: "X, unless Y, unless 
 means Z takes precedence if it matches.
 """
 
-fact base_price = 100 USD
-fact quantity = 5
+fact base_price = [money]
+fact quantity = [number]
 fact is_premium = true
 fact customer_age = 17
 

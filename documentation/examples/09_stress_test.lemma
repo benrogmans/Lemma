@@ -1,7 +1,7 @@
 doc examples/stress_test
 """
 Comprehensive Lemma Stress Test
-Demonstrates: type annotations, complex rules, rule references with ?, 
+Demonstrates: type annotations, complex rules, rule references with ?,
 unless clauses (last matching wins), arithmetic, comparisons, and veto
 """
 
@@ -92,7 +92,7 @@ rule estimated_delivery_days = 5
 
 rule savings_total = discount_amount? + loyalty_discount?
 
-rule savings_percent = (savings_total? / subtotal?) * 100%
+rule savings_percent = (savings_total? / subtotal?) in percentage
 
 rule is_high_value = price_per_unit? > 50
 
@@ -119,3 +119,84 @@ rule summary = "Low value order"
   unless savings_percent? > 20% then "Great savings!"
   unless savings_percent? > 30% then "Excellent savings!"
 
+
+doc examples/stress_test_config
+"""
+Configuration document - demonstrates document composition
+"""
+
+fact base_tax_rate = 8%
+fact luxury_tax_threshold = 1000
+fact luxury_tax_rate = 15%
+fact expedited_handling_fee = 25
+fact weekend_delivery_surcharge = 10%
+fact international_fee_rate = 20%
+
+fact standard_processing_days = 3
+fact express_processing_days = 1
+fact rush_processing_days = 0
+
+fact max_discount_cap = 40%
+fact min_profitable_margin = 15%
+
+fact customer_tier_points_standard = 1
+fact customer_tier_points_premium = 2
+fact customer_tier_points_vip = 5
+
+fact weight_limit_standard = 50
+fact weight_limit_express = 100
+
+
+doc examples/stress_test_extended
+"""
+Extended stress test with document composition
+Demonstrates: cross-document references, field access, complex dependencies, fact overrides
+"""
+
+fact config = doc examples/stress_test_config
+fact config.luxury_tax_threshold = 1200
+fact config.base_tax_rate = 7%
+fact config.max_discount_cap = 35%
+
+fact order = doc examples/stress_test
+fact order.min_order_value = 100
+fact order.free_shipping_threshold = 600
+
+rule is_luxury_order = order.grand_total? > config.luxury_tax_threshold
+
+rule applicable_tax_rate = config.base_tax_rate
+  unless is_luxury_order? then config.luxury_tax_rate
+
+rule tax_amount = order.grand_total? * applicable_tax_rate?
+
+rule grand_total_with_tax = order.grand_total? + tax_amount?
+
+rule points_earned_base = order.grand_total? * 0.01
+
+rule points_multiplier = config.customer_tier_points_standard
+  unless order.is_premium? then config.customer_tier_points_premium
+  unless order.is_vip? then config.customer_tier_points_vip
+
+rule total_points_earned = points_earned_base? * points_multiplier?
+
+rule weight_within_limits = order.package_weight <= config.weight_limit_standard
+  unless order.is_express then order.package_weight <= config.weight_limit_express
+
+rule processing_days = config.standard_processing_days
+  unless order.is_express then config.express_processing_days
+  unless order.is_rush? then config.rush_processing_days
+
+rule estimated_total_days = processing_days? + order.estimated_delivery_days?
+
+rule discount_within_cap = order.savings_percent? <= config.max_discount_cap
+
+rule margin = ((order.grand_total? - order.subtotal?) / order.grand_total?) in percentage
+
+rule is_profitable = margin? >= config.min_profitable_margin
+
+rule final_status = "APPROVED"
+  unless not weight_within_limits? then veto "Package exceeds weight limit"
+  unless not is_profitable? then veto "Insufficient margin"
+  unless not discount_within_cap? then "WARNING: Discount exceeds cap"
+
+rule order_summary = order.grand_total?

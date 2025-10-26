@@ -101,6 +101,7 @@ fn test_parse_error_with_span() {
         fact age = 25
     "#,
         Some("test.lemma".to_string()),
+        &lemma::ResourceLimits::default(),
     );
 
     match result {
@@ -121,6 +122,7 @@ fn test_parse_error_malformed_input() {
         this is not valid lemma syntax @#$%
     "#,
         Some("test.lemma".to_string()),
+        &lemma::ResourceLimits::default(),
     );
 
     assert!(result.is_err(), "Should fail on malformed input");
