@@ -15,7 +15,7 @@ title: Whitepaper
 
 Business rules are traditionally encoded in either natural language documents that humans can read but machines cannot execute, or in imperative code that machines can execute but humans struggle to read. This creates a fundamental disconnect: legal contracts, compliance policies, and business rules live in one world, while their software implementations live in another. Changes to policies require translation by developers, introducing delay, cost, and the risk of misinterpretation.
 
-Lemma bridges this gap. It is a declarative language designed specifically for expressing business logic in a form that reads like natural language while remaining fully executable. Lemma documents can encode pricing rules, tax calculations, eligibility criteria, contracts, and policies in a syntax that business stakeholders can read and validate, while software systems can directly execute and enforce.
+Lemma bridges this gap. It is a declarative language designed specifically for expressing business logic in a form that flows like natural language. Lemma documents can encode pricing rules, tax calculations, eligibility criteria, contracts, and policies in a way that business stakeholders can read and validate, while software systems can enforce and automate them.
 
 This white paper introduces Lemma's design principles, core features, implementation architecture, and practical applications. We demonstrate how Lemma's unique "default/unless" semantics, rich type system, and compositional design make it an ideal choice for encoding complex business rules in domains ranging from finance and insurance to e-commerce and human resources.
 

@@ -7,7 +7,7 @@
 
 > **A language that means business.**
 
-Lemma is a declarative programming language for business logic. Write business rules, contracts, and policies that both humans and computers can understand.
+Lemma is a declarative language designed specifically for expressing business logic. Lemma documents flow like natural language can encode pricing rules, tax calculations, eligibility criteria, contracts, and policies. Business stakeholders can read and validate Lemma docs, while software systems can enforce and automate them.
 
 ```lemma
 doc pricing
@@ -27,9 +27,9 @@ Note how Lemma automatically deducts the discount percentage in the expression `
 
 ## Why Lemma?
 
-Lemma bridges the gap between business and code. Business rules are traditionally encoded in either natural language documents that humans can read but machines cannot execute, or in imperative code that machines can execute but humans struggle to read. This creates a fundamental disconnect: legal contracts, policies, and business rules live in one world, while their software implementations live in another.
+Business rules are traditionally encoded in either natural language documents that humans can read but machines cannot execute, or in imperative code that machines can execute but humans struggle to read. This creates a fundamental disconnect: legal contracts, compliance policies, and business rules live in one world, while their software implementations live in another. Changes to policies require translation by developers, introducing delay, cost, and the risk of misinterpretation.
 
-Lemma eliminates the translation, by letting you unify business logic.
+Lemma bridges this gap—eliminating the translation layer and unifying business logic.
 
 ### What about AI
 AI models operate on probability. By design, they approximate—they don't calculate. This makes them great at language, but bad at math.
