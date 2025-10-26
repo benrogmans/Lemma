@@ -158,7 +158,9 @@ fn test_05_date_handling() {
 
     // Document will fail due to calendar unit conversion bug in employee_age rule
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("calendar units"));
+    if let Err(e) = result {
+        assert!(e.to_string().contains("calendar units"));
+    }
 }
 #[test]
 fn test_06_tax_calculation() {
@@ -278,7 +280,9 @@ fn test_09_stress_test() {
 
     // Document will fail due to unit conversion bug in savings_percent rule
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("unit"));
+    if let Err(e) = result {
+        assert!(e.to_string().contains("unit"));
+    }
 }
 
 #[test]

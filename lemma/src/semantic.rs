@@ -665,20 +665,20 @@ impl LemmaDoc {
     }
 
     /// Get the expected type for a fact by name
-    /// Returns None if the fact is not found in this document
+    /// Returns None if the fact is not found in this document or if the fact is a document reference
     pub fn get_fact_type(&self, fact_name: &str) -> Option<LemmaType> {
         self.facts
             .iter()
             .find(|fact| crate::analysis::fact_display_name(fact) == fact_name)
-            .map(|fact| match &fact.value {
-                FactValue::Literal(lit) => lit.to_type(),
+            .and_then(|fact| match &fact.value {
+                FactValue::Literal(lit) => Some(lit.to_type()),
                 FactValue::TypeAnnotation(TypeAnnotation::LemmaType(lemma_type)) => {
-                    lemma_type.clone()
+                    Some(lemma_type.clone())
                 }
                 FactValue::DocumentReference(_) => {
                     // Document references don't have a single type
                     // They import all facts from the referenced document
-                    panic!("Cannot get type for document reference fact")
+                    None
                 }
             })
     }

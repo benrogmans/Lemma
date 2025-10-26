@@ -94,7 +94,7 @@ pub(crate) fn parse_expression(
     if let Err(msg) = id_gen.push_depth() {
         return Err(LemmaError::ResourceLimitExceeded {
             limit_name: "max_expression_depth".to_string(),
-            limit_value: "100".to_string(),
+            limit_value: id_gen.max_depth().to_string(),
             actual_value: msg
                 .split_whitespace()
                 .nth(2)

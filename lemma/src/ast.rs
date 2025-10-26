@@ -86,6 +86,10 @@ impl ExpressionIdGenerator {
             self.depth -= 1;
         }
     }
+
+    pub fn max_depth(&self) -> usize {
+        self.max_depth
+    }
 }
 
 impl Default for ExpressionIdGenerator {
