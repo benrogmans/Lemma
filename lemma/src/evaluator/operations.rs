@@ -47,7 +47,12 @@ pub fn arithmetic_operation(
                 let right_converted = convert_to_matching_unit(right, l_unit)?;
                 let r_value = match &right_converted {
                     LiteralValue::Unit(u) => u.value(),
-                    _ => unreachable!(),
+                    _ => {
+                        // This should never happen as convert_to_matching_unit always returns a Unit
+                        return Err(LemmaError::Engine(
+                            "Internal error: unit conversion did not produce a unit".to_string(),
+                        ));
+                    }
                 };
                 let result_value = number_arithmetic(l_unit.value(), op, r_value)?;
                 Ok(LiteralValue::Unit(l_unit.with_value(result_value)))

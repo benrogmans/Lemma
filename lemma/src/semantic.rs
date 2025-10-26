@@ -1304,8 +1304,13 @@ impl RulePath {
             })?;
         }
 
+        // Get the rule name (last element of reference)
+        let rule_name = reference.last().ok_or_else(|| {
+            crate::LemmaError::Engine("Rule reference cannot be empty".to_string())
+        })?;
+
         Ok(RulePath {
-            rule: reference.last().unwrap().clone(),
+            rule: rule_name.clone(),
             segments,
         })
     }

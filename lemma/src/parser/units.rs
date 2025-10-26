@@ -157,7 +157,11 @@ pub(crate) fn duration_to_seconds(value: Decimal, unit: &DurationUnit) -> Decima
         DurationUnit::Day => value * Decimal::from(SECONDS_PER_DAY),
         DurationUnit::Week => value * Decimal::from(SECONDS_PER_WEEK),
         DurationUnit::Month | DurationUnit::Year => {
-            unreachable!("Calendar units (month/year) should be handled by date arithmetic")
+            // Calendar units should be rejected before reaching here, but handle defensively
+            panic!(
+                "Calendar units (month/year) cannot be converted to seconds. \
+                This should have been caught earlier in convert_duration()"
+            )
         }
     }
 }

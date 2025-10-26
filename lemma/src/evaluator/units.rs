@@ -201,9 +201,12 @@ fn seconds_to_unit(seconds: Decimal, to: &DurationUnit) -> LemmaResult<Decimal> 
         DurationUnit::Week => seconds / Decimal::from(604800),
         DurationUnit::Millisecond => seconds * Decimal::from(1000),
         DurationUnit::Microsecond => seconds * Decimal::from(1000000),
-        // Calendar units should never reach here
+        // Calendar units should be rejected before reaching here, but handle defensively
         DurationUnit::Month | DurationUnit::Year => {
-            unreachable!("Calendar units should be rejected in convert_duration")
+            panic!(
+                "Calendar units (month/year) cannot be converted from seconds. \
+                This should have been caught earlier in convert_duration()"
+            )
         }
     };
 

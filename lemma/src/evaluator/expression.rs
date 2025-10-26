@@ -97,8 +97,9 @@ pub fn evaluate_expression(
                 return Ok(OperationResult::Veto(msg));
             }
 
-            let left_val = left_result.value().unwrap();
-            let right_val = right_result.value().unwrap();
+            // Both operands must have values at this point
+            let left_val = left_result.expect_value("arithmetic left operand")?;
+            let right_val = right_result.expect_value("arithmetic right operand")?;
 
             // Convert Engine errors to Runtime errors with source location
             let result = super::operations::arithmetic_operation(left_val, op, right_val)
@@ -136,8 +137,9 @@ pub fn evaluate_expression(
                 return Ok(OperationResult::Veto(msg));
             }
 
-            let left_val = left_result.value().unwrap();
-            let right_val = right_result.value().unwrap();
+            // Both operands must have values at this point
+            let left_val = left_result.expect_value("comparison left operand")?;
+            let right_val = right_result.expect_value("comparison right operand")?;
 
             let result = super::operations::comparison_operation(left_val, op, right_val)?;
 
@@ -175,8 +177,9 @@ pub fn evaluate_expression(
                 return Ok(OperationResult::Veto(msg));
             }
 
-            let left_val = left_result.value().unwrap();
-            let right_val = right_result.value().unwrap();
+            // Both operands must have boolean values at this point
+            let left_val = left_result.expect_value("logical AND left operand")?;
+            let right_val = right_result.expect_value("logical AND right operand")?;
 
             match (left_val, right_val) {
                 (LiteralValue::Boolean(l), LiteralValue::Boolean(r)) => {
@@ -201,8 +204,9 @@ pub fn evaluate_expression(
                 return Ok(OperationResult::Veto(msg));
             }
 
-            let left_val = left_result.value().unwrap();
-            let right_val = right_result.value().unwrap();
+            // Both operands must have boolean values at this point
+            let left_val = left_result.expect_value("logical OR left operand")?;
+            let right_val = right_result.expect_value("logical OR right operand")?;
 
             match (left_val, right_val) {
                 (LiteralValue::Boolean(l), LiteralValue::Boolean(r)) => {
@@ -215,15 +219,16 @@ pub fn evaluate_expression(
             }
         }
 
-        ExpressionKind::LogicalNegation(inner, _negation_type) => {
-            let result = evaluate_expression(inner, context, fact_prefix)?;
+        ExpressionKind::LogicalNegation(operand, _negation_type) => {
+            let result = evaluate_expression(operand, context, fact_prefix)?;
 
             // If the operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = result {
                 return Ok(OperationResult::Veto(msg));
             }
 
-            let value = result.value().unwrap();
+            // Operand must have a value at this point
+            let value = result.expect_value("logical negation operand")?;
 
             match value {
                 LiteralValue::Boolean(b) => Ok(OperationResult::Value(LiteralValue::Boolean(!b))),
@@ -236,12 +241,13 @@ pub fn evaluate_expression(
         ExpressionKind::UnitConversion(value_expr, target) => {
             let result = evaluate_expression(value_expr, context, fact_prefix)?;
 
-            // If the operand is vetoed, propagate the veto
+            // If the value is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = result {
                 return Ok(OperationResult::Veto(msg));
             }
 
-            let value = result.value().unwrap();
+            // Value must exist at this point
+            let value = result.expect_value("unit conversion operand")?;
             let converted = super::units::convert_unit(value, target)?;
             Ok(OperationResult::Value(converted))
         }
@@ -279,7 +285,8 @@ fn evaluate_mathematical_operator(
         return Ok(OperationResult::Veto(msg));
     }
 
-    let value = result.value().unwrap();
+    // Operand must have a numeric value at this point
+    let value = result.expect_value("mathematical operator operand")?;
 
     match value {
         LiteralValue::Number(n) => {
