@@ -31,7 +31,7 @@ pub fn evaluate_rule(
 
         let condition_value = condition_result.value().unwrap();
         let matched = match condition_value {
-            crate::LiteralValue::Boolean(b) => b,
+            crate::LiteralValue::Boolean(b) => *b,
             _ => {
                 return Err(LemmaError::Engine(
                     "Unless condition must evaluate to boolean".to_string(),
@@ -39,7 +39,7 @@ pub fn evaluate_rule(
             }
         };
 
-        if *matched {
+        if matched {
             let result = evaluate_expression(&unless_clause.result, context, fact_prefix)?;
 
             // If result is vetoed, the veto applies to this rule
