@@ -942,8 +942,8 @@ lemma run example income="100000 usd"
 
 Documentation, examples, and source code are available at:
 - Repository: https://github.com/benrogmans/lemma
-- Documentation: https://github.com/benrogmans/lemma/tree/main/docs
-- Examples: https://github.com/benrogmans/lemma/tree/main/docs/examples
+- Documentation: https://github.com/benrogmans/lemma/tree/main/documentation
+- Examples: https://github.com/benrogmans/lemma/tree/main/documentation/examples
 
 ---
 

@@ -2,7 +2,7 @@
 
 > **A language that means business.**
 
-Lemma Engine is the Rust crate behind the Lemma language. It lets you parse, validate, and evaluate Lemma documents from your own applications while keeping the same natural, auditable semantics that the CLI exposes.
+Lemma Engine is the Rust crate behind the Lemma language. It lets you parse, validate, and evaluate Lemma docs from your own applications while keeping the same natural, auditable semantics that the CLI exposes.
 
 ## Status
 
@@ -83,10 +83,10 @@ use lemma::{Engine, serializers};
 let mut engine = Engine::new();
 engine.add_lemma_code(r#"
     doc pricing
-    
+
     fact base_price = 100 USD
     fact discount = 15%
-    
+
     rule final_price = base_price - discount
 
 "#, "pricing.lemma")?;
@@ -139,9 +139,9 @@ npm install @benrogmans/lemma-engine
 
 - Language guide: <https://benrogmans.github.io/lemma/>
 - API documentation: <https://docs.rs/lemma-engine>
-- Examples: <https://github.com/benrogmans/lemma/tree/main/docs/examples>
-- CLI usage: <https://github.com/benrogmans/lemma/blob/main/docs/CLI.md>
-- Roadmap: <https://github.com/benrogmans/lemma/blob/main/docs/roadmap.md>
+- Examples: <https://github.com/benrogmans/lemma/tree/main/documentation/examples>
+- CLI usage: <https://github.com/benrogmans/lemma/blob/main/documentation/CLI.md>
+- Roadmap: <https://github.com/benrogmans/lemma/blob/main/documentation/roadmap.md>
 
 ## Use cases
 
@@ -154,7 +154,7 @@ npm install @benrogmans/lemma-engine
 
 ## Contributing
 
-Contributions are very welcome! See [docs/contributing.md](https://github.com/benrogmans/lemma/blob/main/docs/contributing.md) and the [project roadmap](https://github.com/benrogmans/lemma/blob/main/docs/roadmap.md) for ideas.
+Contributions are very welcome! See [documentation/contributing.md](https://github.com/benrogmans/lemma/blob/main/documentation/contributing.md) and the [project roadmap](https://github.com/benrogmans/lemma/blob/main/documentation/roadmap.md) for ideas.
 
 ## License
 

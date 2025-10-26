@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'docs/**'
+      - 'documentation/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -30,7 +30,7 @@ jobs:
         with:
           ruby-version: '3.1'
           bundler-cache: true
-          working-directory: docs
+          working-directory: documentation
 
       - name: Setup Pages
         id: pages
@@ -38,7 +38,7 @@ jobs:
 
       - name: Build with Jekyll
         run: |
-          cd docs
+          cd documentation
           bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
         env:
           JEKYLL_ENV: production
@@ -46,7 +46,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/_site
+          path: documentation/_site
 
   deploy:
     name: Deploy to GitHub Pages

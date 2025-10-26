@@ -2,9 +2,9 @@ use crate::evaluator::Evaluator;
 use crate::{parse, LemmaDoc, LemmaError, LemmaResult, ResourceLimits, Response, Validator};
 use std::collections::HashMap;
 
-/// The Lemma evaluation engine.
+/// Engine for evaluating Lemma rules
 ///
-/// Pure Rust implementation that evaluates Lemma documents directly from the AST.
+/// Pure Rust implementation that evaluates Lemma docs directly from the AST.
 pub struct Engine {
     documents: HashMap<String, LemmaDoc>,
     sources: HashMap<String, String>,

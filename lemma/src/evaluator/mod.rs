@@ -1,6 +1,8 @@
 //! Pure Rust evaluation engine for Lemma
 //!
-//! Evaluates Lemma documents by:
+//! Rule evaluation
+//!
+//! Evaluates Lemma docs by:
 //! 1. Building a fact map (inputs)
 //! 2. Topologically sorting rules (execution plan)
 //! 3. Executing rules in dependency order
@@ -27,9 +29,9 @@ impl Evaluator {
         Self
     }
 
-    /// Evaluate a Lemma document
+    /// Evaluate a Lemma doc
     ///
-    /// Executes all rules in the document in topological order,
+    /// Executes all rules in the doc in topological order,
     /// applying fact overrides if provided.
     pub fn evaluate_document(
         &self,

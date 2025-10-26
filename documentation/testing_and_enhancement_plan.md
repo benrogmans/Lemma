@@ -89,7 +89,7 @@ Target: Establish performance baselines and detect regressions
 
 ### Write Testing Guide
 
-Create `docs/testing.md`:
+Create `documentation/testing.md`:
 
 - How to run tests
 - How to write property-based tests

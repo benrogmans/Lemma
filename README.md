@@ -7,7 +7,7 @@
 
 > **A language that means business.**
 
-Lemma is a declarative language designed specifically for expressing business logic. Lemma documents flow like natural language can encode pricing rules, tax calculations, eligibility criteria, contracts, and policies. Business stakeholders can read and validate Lemma docs, while software systems can enforce and automate them.
+Lemma is a declarative language designed specifically for expressing business logic. Lemma docs flow like natural language and encode pricing rules, tax calculations, eligibility criteria, contracts, and policies. Business stakeholders can read and validate them, while software systems can enforce and automate them.
 
 ```lemma
 doc pricing
@@ -214,11 +214,11 @@ rule loan_approval = reject
 
 ## Documentation
 
-- **[Language Guide](docs/index.md)** - Complete language reference
-- **[Reference](docs/reference.md)** - All operators, units, and types
-- **[Examples](docs/examples/)** - 10 comprehensive examples
+- **[Language Guide](documentation/index.md)** - Complete language reference
+- **[Reference](documentation/reference.md)** - All operators, units, and types
+- **[Examples](documentation/examples/)** - 10 comprehensive examples
 
-[📚 View Full Documentation](docs/)
+[📚 View Full Documentation](documentation/)
 
 ## CLI Usage
 
@@ -273,11 +273,11 @@ curl -X POST http://localhost:3000/evaluate \
   }'
 ```
 
-The server provides endpoints for document evaluation, fact inspection, and rule validation.
+The server provides endpoints for doc evaluation, fact inspection, and rule validation.
 
 ### MCP Server
 
-The MCP (Model Context Protocol) server enables AI assistants to interact with Lemma documents programmatically, providing tools for document creation, evaluation, and inspection.
+The MCP (Model Context Protocol) server enables AI assistants to interact with Lemma docs programmatically, providing tools for doc creation, evaluation, and inspection.
 
 ### WebAssembly
 
@@ -287,7 +287,7 @@ Lemma also ships as a WebAssembly module (WASM), letting you evaluate rules dire
 npm install @benrogmans/lemma-engine
 ```
 
-See [WASM documentation](docs/wasm.md) for usage examples.
+See [WASM documentation](documentation/wasm.md) for usage examples.
 
 
 ## Status
@@ -314,7 +314,7 @@ lemma/
 │   │   ├── serializers/    # Output serializers (JSON, etc.)
 │   │   └── ...             # Engine modules (analysis, validator, wasm, tests)
 │   └── tests/              # Engine integration tests
-├── docs/                   # Documentation & examples
+├── documentation/                   # Documentation & examples
 │   ├── examples/           # Example .lemma files
 │   └── *.md                # Guides, reference, roadmap, etc.
 └── README.md               # This file
@@ -323,7 +323,7 @@ lemma/
 
 ## Contributing
 
-Contributions are very welcome! See [docs/contributing.md](docs/contributing.md) for setup and workflow, and check the [project roadmap](docs/roadmap.md) for exciting features you can help shape.
+Contributions are very welcome! See [documentation/contributing.md](documentation/contributing.md) for setup and workflow, and check the [project roadmap](documentation/roadmap.md) for exciting features you can help shape.
 
 ## License
 
@@ -331,4 +331,4 @@ Apache 2.0 - see LICENSE file for details.
 
 ---
 
-**[View on GitHub](https://github.com/benrogmans/lemma)** • **[Report Issue](https://github.com/benrogmans/lemma/issues)** • **[Documentation](docs/index.md)** • **[Contributing](docs/contributing.md)** • **[Roadmap](docs/roadmap.md)** • **[WASM](docs/wasm.md)**
+**[View on GitHub](https://github.com/benrogmans/lemma)** • **[Report Issue](https://github.com/benrogmans/lemma/issues)** • **[Documentation](documentation/index.md)** • **[Contributing](documentation/contributing.md)** • **[Roadmap](documentation/roadmap.md)** • **[WASM](documentation/wasm.md)**
