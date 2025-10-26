@@ -1,12 +1,12 @@
 use crate::evaluator::context::EvaluationContext;
 use crate::evaluator::expression::evaluate_expression;
+use crate::evaluator::timeout::TimeoutTracker;
 use crate::{
     ArithmeticOperation, Expression, ExpressionId, ExpressionKind, FactPath, FactReference,
     LemmaDoc, LiteralValue, OperationResult, ResourceLimits,
 };
 use rust_decimal::Decimal;
 use std::collections::HashMap;
-use std::time::Instant;
 
 /// Helper to create an evaluation context for testing
 fn create_test_context(facts: HashMap<FactPath, LiteralValue>) -> EvaluationContext<'static> {
@@ -14,8 +14,9 @@ fn create_test_context(facts: HashMap<FactPath, LiteralValue>) -> EvaluationCont
     let sources = Box::leak(Box::new(HashMap::new()));
     let doc = Box::leak(Box::new(LemmaDoc::new("test".to_string())));
     let limits = Box::leak(Box::new(ResourceLimits::default()));
+    let timeout_tracker = Box::leak(Box::new(TimeoutTracker::new()));
 
-    EvaluationContext::new(doc, docs, sources, facts, Instant::now(), limits)
+    EvaluationContext::new(doc, docs, sources, facts, timeout_tracker, limits)
 }
 
 #[test]

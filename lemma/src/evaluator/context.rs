@@ -7,7 +7,8 @@ use crate::{
     OperationResult, ResourceLimits,
 };
 use std::collections::HashMap;
-use std::time::Instant;
+
+use super::timeout::TimeoutTracker;
 
 /// Context for evaluating a Lemma document
 ///
@@ -32,8 +33,8 @@ pub struct EvaluationContext<'a> {
     /// Only contains facts that have actual values (not TypeAnnotations)
     pub facts: HashMap<FactPath, LiteralValue>,
 
-    /// Start time for timeout checking
-    pub start_time: Instant,
+    /// Timeout tracker (platform-specific)
+    pub timeout_tracker: &'a TimeoutTracker,
 
     /// Resource limits including timeout
     pub limits: &'a ResourceLimits,
@@ -53,7 +54,7 @@ impl<'a> EvaluationContext<'a> {
         all_documents: &'a HashMap<String, LemmaDoc>,
         sources: &'a HashMap<String, String>,
         facts: HashMap<FactPath, LiteralValue>,
-        start_time: Instant,
+        timeout_tracker: &'a TimeoutTracker,
         limits: &'a ResourceLimits,
     ) -> Self {
         Self {
@@ -63,26 +64,14 @@ impl<'a> EvaluationContext<'a> {
             facts,
             rule_results: HashMap::new(),
             operations: Vec::new(),
-            start_time,
+            timeout_tracker,
             limits,
         }
     }
 
     /// Check if evaluation has exceeded timeout
     pub fn check_timeout(&self) -> Result<(), crate::LemmaError> {
-        let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
-        if elapsed_ms > self.limits.max_evaluation_time_ms {
-            return Err(crate::LemmaError::ResourceLimitExceeded {
-                limit_name: "max_evaluation_time_ms".to_string(),
-                limit_value: self.limits.max_evaluation_time_ms.to_string(),
-                actual_value: elapsed_ms.to_string(),
-                suggestion: format!(
-                    "Evaluation took {}ms, exceeding the limit of {}ms. Simplify the document or increase the timeout.",
-                    elapsed_ms, self.limits.max_evaluation_time_ms
-                ),
-            });
-        }
-        Ok(())
+        self.timeout_tracker.check_timeout(self.limits)
     }
 }
 

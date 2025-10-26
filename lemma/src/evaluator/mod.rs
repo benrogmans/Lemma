@@ -13,12 +13,13 @@ pub mod datetime;
 pub mod expression;
 pub mod operations;
 pub mod rules;
+pub mod timeout;
 pub mod units;
 
 use crate::{LemmaDoc, LemmaError, LemmaFact, LemmaResult, ResourceLimits, Response, RuleResult};
 use context::{build_fact_map, EvaluationContext};
 use std::collections::HashMap;
-use std::time::Instant;
+use timeout::TimeoutTracker;
 
 /// Evaluates Lemma rules within their document context
 #[derive(Default)]
@@ -42,7 +43,7 @@ impl Evaluator {
         requested_rules: Option<Vec<String>>,
         limits: &ResourceLimits,
     ) -> LemmaResult<Response> {
-        let start_time = Instant::now();
+        let timeout_tracker = TimeoutTracker::new();
 
         let doc = documents
             .get(doc_name)
@@ -56,7 +57,7 @@ impl Evaluator {
 
         // Phase 3: Build evaluation context
         let mut context =
-            EvaluationContext::new(doc, documents, sources, facts, start_time, limits);
+            EvaluationContext::new(doc, documents, sources, facts, &timeout_tracker, limits);
 
         // Phase 4: Execute rules in dependency order
         let mut response = Response::new(doc_name.to_string());
