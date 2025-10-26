@@ -193,22 +193,22 @@ pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> LemmaRes
 
 /// Convert seconds to a target duration unit (time-based only)
 fn seconds_to_unit(seconds: Decimal, to: &DurationUnit) -> LemmaResult<Decimal> {
-    let result = match to {
-        DurationUnit::Second => seconds,
-        DurationUnit::Minute => seconds / Decimal::from(60),
-        DurationUnit::Hour => seconds / Decimal::from(3600),
-        DurationUnit::Day => seconds / Decimal::from(86400),
-        DurationUnit::Week => seconds / Decimal::from(604800),
-        DurationUnit::Millisecond => seconds * Decimal::from(1000),
-        DurationUnit::Microsecond => seconds * Decimal::from(1000000),
-        // Calendar units should be rejected before reaching here, but handle defensively
-        DurationUnit::Month | DurationUnit::Year => {
-            panic!(
-                "Calendar units (month/year) cannot be converted from seconds. \
+    let result =
+        match to {
+            DurationUnit::Second => seconds,
+            DurationUnit::Minute => seconds / Decimal::from(60),
+            DurationUnit::Hour => seconds / Decimal::from(3600),
+            DurationUnit::Day => seconds / Decimal::from(86400),
+            DurationUnit::Week => seconds / Decimal::from(604800),
+            DurationUnit::Millisecond => seconds * Decimal::from(1000),
+            DurationUnit::Microsecond => seconds * Decimal::from(1000000),
+            // Calendar units should be rejected before reaching here, but handle defensively
+            DurationUnit::Month | DurationUnit::Year => return Err(LemmaError::Engine(
+                "Internal error: Calendar units (month/year) cannot be converted from seconds. \
                 This should have been caught earlier in convert_duration()"
-            )
-        }
-    };
+                    .to_string(),
+            )),
+        };
 
     Ok(result)
 }

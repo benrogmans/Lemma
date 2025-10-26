@@ -123,14 +123,12 @@ pub fn build_fact_map(
             let path = get_fact_path(fact);
 
             // Check if this fact exists in the document and validate type
-            // Note: get_fact_type expects a string for now, we'll keep using Display for validation
-            let name = path.to_string();
-            if let Some(expected_type) = doc.get_fact_type(&name) {
+            if let Some(expected_type) = doc.get_fact_type(&path) {
                 let actual_type = lit.to_type();
                 if expected_type != actual_type {
                     return Err(LemmaError::Engine(format!(
                         "Type mismatch for fact '{}': expected {}, got {}",
-                        name, expected_type, actual_type
+                        path, expected_type, actual_type
                     )));
                 }
             }

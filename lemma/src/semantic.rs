@@ -664,12 +664,18 @@ impl LemmaDoc {
         self
     }
 
-    /// Get the expected type for a fact by name
+    /// Get the expected type for a fact by path
     /// Returns None if the fact is not found in this document or if the fact is a document reference
-    pub fn get_fact_type(&self, fact_name: &str) -> Option<LemmaType> {
+    pub fn get_fact_type(&self, fact_path: &FactPath) -> Option<LemmaType> {
         self.facts
             .iter()
-            .find(|fact| crate::analysis::fact_display_name(fact) == fact_name)
+            .find(|fact| {
+                let segments = fact_path.segments();
+                match &fact.fact_type {
+                    FactType::Local(name) => segments.len() == 1 && segments[0] == *name,
+                    FactType::Foreign(foreign_ref) => segments == foreign_ref.reference.as_slice(),
+                }
+            })
             .and_then(|fact| match &fact.value {
                 FactValue::Literal(lit) => Some(lit.to_type()),
                 FactValue::TypeAnnotation(TypeAnnotation::LemmaType(lemma_type)) => {
