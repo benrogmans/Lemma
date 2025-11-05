@@ -63,7 +63,7 @@ rule base_shipping = 5.99 USD
   unless package_weight > 1 kilogram  then  8.99 USD
   unless package_weight > 5 kilograms then 15.99 USD
 
-rule total_cost = base_shipping + express_fee
+rule total_cost = base_shipping? + express_fee?
 ```
 
 Use spaces and tabs in `unless` expressions to align it like a table, making scanning the rule at a glance really easy.
@@ -121,7 +121,7 @@ rule discount = 0%
   unless quantity > 50 then 20%
   unless is_premium_member then 25%
 
-rule price = base_price * (1 - discount)
+rule price = 100 EUR - discount?
 ```
 
 **The last matching condition wins** - mirroring how business rules, legal documents, and standard operating procedures are written: "In principle X applies, unless [more specific condition] Y, unless [even more specific] Z..."
@@ -171,10 +171,10 @@ fact license_suspended = false
 
 rule is_adult = age >= 18
 
-rule has_license = license_status == "valid"
+rule has_license = license_status is "valid"
 
 rule can_drive = is_adult? and has_license?
-  unless license_suspended? then veto "License suspended"
+  unless license_suspended then veto "License suspended"
 ```
 
 ### Document composition
@@ -204,10 +204,9 @@ fact credit_score = 650
 fact age = 25
 fact bankruptcy_flag = false
 
-rule loan_approval = reject
-  unless credit_score >= 600 then accept
+rule loan_approval = credit_score >= 600
+  unless bankruptcy_flag then reject
   unless age < 18 then veto "Must be 18 or older"
-  unless bankruptcy_flag then veto "Cannot approve due to bankruptcy"
 ```
 
 **Veto blocks the rule entirely**; there will not be any result.
