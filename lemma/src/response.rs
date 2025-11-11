@@ -62,6 +62,7 @@ pub struct RuleResult {
 }
 
 impl Response {
+    #[must_use]
     pub fn new(doc_name: String) -> Self {
         Self {
             doc_name,
@@ -88,6 +89,7 @@ impl Response {
 }
 
 impl RuleResult {
+    #[must_use]
     pub fn success(
         rule_name: String,
         result: LiteralValue,
@@ -103,6 +105,7 @@ impl RuleResult {
         }
     }
 
+    #[must_use]
     pub fn success_with_operations(
         rule_name: String,
         result: LiteralValue,
@@ -119,6 +122,7 @@ impl RuleResult {
         }
     }
 
+    #[must_use]
     pub fn no_match(rule_name: String) -> Self {
         Self {
             rule_name,
@@ -130,6 +134,7 @@ impl RuleResult {
         }
     }
 
+    #[must_use]
     pub fn missing_facts(rule_name: String, facts: Vec<String>) -> Self {
         Self {
             rule_name,
@@ -141,6 +146,7 @@ impl RuleResult {
         }
     }
 
+    #[must_use]
     pub fn veto(rule_name: String, message: Option<String>) -> Self {
         Self {
             rule_name,

@@ -28,15 +28,13 @@ pub(crate) fn find_fact_type(
                         }
                     }
                     Err(LemmaError::Engine(format!(
-                        "Cannot override document reference '{}'",
-                        name
+                        "Cannot override document reference '{name}'"
                     )))
                 }
             };
         }
     }
     Err(LemmaError::Engine(format!(
-        "Fact '{}' not found in document",
-        name
+        "Fact '{name}' not found in document"
     )))
 }

@@ -14,6 +14,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -47,14 +48,17 @@ impl Engine {
         self.documents.remove(doc_name);
     }
 
+    #[must_use]
     pub fn list_documents(&self) -> Vec<String> {
         self.documents.keys().cloned().collect()
     }
 
+    #[must_use]
     pub fn get_document(&self, doc_name: &str) -> Option<&crate::LemmaDoc> {
         self.documents.get(doc_name)
     }
 
+    #[must_use]
     pub fn get_document_facts(&self, doc_name: &str) -> Vec<&crate::LemmaFact> {
         if let Some(doc) = self.documents.get(doc_name) {
             doc.facts.iter().collect()
@@ -63,6 +67,7 @@ impl Engine {
         }
     }
 
+    #[must_use]
     pub fn get_document_rules(&self, doc_name: &str) -> Vec<&crate::LemmaRule> {
         if let Some(doc) = self.documents.get(doc_name) {
             doc.rules.iter().collect()
@@ -95,6 +100,7 @@ impl Engine {
     }
 
     /// Get all documents (needed by serializers for schema resolution)
+    #[must_use]
     pub fn get_all_documents(&self) -> &HashMap<String, crate::LemmaDoc> {
         &self.documents
     }

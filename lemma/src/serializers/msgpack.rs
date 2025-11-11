@@ -1,19 +1,26 @@
 use crate::LemmaDoc;
 use std::collections::HashMap;
 
-/// Convert MsgPack fact overrides to Lemma syntax strings
+/// Convert `MsgPack` fact overrides to Lemma syntax strings
 ///
-/// MsgPack provides typed values, which we convert to Lemma syntax:
+/// `MsgPack` provides typed values, which we convert to Lemma syntax:
 /// - Strings: quoted text
 /// - Numbers: numeric literals
 /// - Booleans: true/false
 /// - Binary data: base64 encoded strings for appropriate types
 ///
-/// This is a stub implementation. Full MsgPack support requires:
+/// This is a stub implementation. Full `MsgPack` support requires:
 /// - Add rmp-serde dependency
-/// - Deserialize MsgPack to intermediate format
+/// - Deserialize `MsgPack` to intermediate format
 /// - Map to Lemma types using schema
 /// - Serialize to Lemma syntax strings
+///
+/// Convert MsgPack bytes for a document to Lemma `name=value` strings.
+///
+/// # Errors
+/// Always returns an error currently — this is a stub implementation pending
+/// proper MsgPack support and mapping to Lemma types.
+#[allow(clippy::implicit_hasher)]
 pub fn to_lemma_syntax(
     _msgpack: &[u8],
     _doc: &LemmaDoc,

@@ -22,6 +22,7 @@ use std::collections::HashMap;
 pub struct Evaluator;
 
 impl Evaluator {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -40,7 +41,7 @@ impl Evaluator {
     ) -> LemmaResult<Response> {
         let doc = documents
             .get(doc_name)
-            .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
+            .ok_or_else(|| LemmaError::Engine(format!("Document '{doc_name}' not found")))?;
 
         // Phase 1: Build fact map (resolving document references)
         let facts = build_fact_map(&doc.facts, &fact_overrides, documents);
@@ -60,7 +61,7 @@ impl Evaluator {
                 .rules
                 .iter()
                 .find(|r| r.name == rule_name)
-                .ok_or_else(|| LemmaError::Engine(format!("Rule {} not found", rule_name)))?;
+                .ok_or_else(|| LemmaError::Engine(format!("Rule {rule_name} not found")))?;
 
             // Check if any dependencies have failed
             let mut all_rule_deps = std::collections::HashSet::new();
@@ -180,7 +181,7 @@ pub(crate) fn topological_sort(
     // Count how many dependencies each node has
     let mut dependency_count: HashMap<String, usize> = HashMap::new();
     for node in &all_nodes {
-        let count = graph.get(node).map_or(0, |deps| deps.len());
+        let count = graph.get(node).map_or(0, std::collections::HashSet::len);
         dependency_count.insert(node.clone(), count);
     }
 

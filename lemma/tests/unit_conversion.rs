@@ -8,11 +8,11 @@ fn test_mass_conversions() {
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test1
 fact weight_kg = 10 kilograms
 rule weight_lbs = weight_kg in pounds
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -31,21 +31,20 @@ rule weight_lbs = weight_kg in pounds
             let diff = (amount - expected).abs();
             assert!(
                 diff < Decimal::from_str("0.01").unwrap(),
-                "Expected ~22.05, got {}",
-                amount
+                "Expected ~22.05, got {amount}"
             );
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test1");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test2
 fact weight_tons = 2 tons
 rule weight_kg = weight_tons in kilograms
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -62,7 +61,7 @@ rule weight_kg = weight_tons in kilograms
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("2000").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test2");
 }
@@ -73,11 +72,11 @@ fn test_length_conversions() {
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test1
 fact distance_km = 100 kilometers
 rule distance_miles = distance_km in miles
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -95,21 +94,20 @@ rule distance_miles = distance_km in miles
             assert!(
                 (amount - Decimal::from_str("62.1371").unwrap()).abs()
                     < Decimal::from_str("0.01").unwrap(),
-                "Expected ~62.14, got {}",
-                amount
+                "Expected ~62.14, got {amount}"
             );
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test1");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test2
 fact distance_yards = 100 yards
 rule distance_meters = distance_yards in meters
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -127,21 +125,20 @@ rule distance_meters = distance_yards in meters
             assert!(
                 (amount - Decimal::from_str("91.44").unwrap()).abs()
                     < Decimal::from_str("0.01").unwrap(),
-                "Expected ~91.44, got {}",
-                amount
+                "Expected ~91.44, got {amount}"
             );
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test2");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test3
 fact length_dm = 50 decimeters
 rule length_cm = length_dm in centimeters
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -158,7 +155,7 @@ rule length_cm = length_dm in centimeters
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("500.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test3");
 }
@@ -169,11 +166,11 @@ fn test_volume_conversions() {
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test1
 fact volume_l = 2 liters
 rule volume_ml = volume_l in milliliters
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -190,17 +187,17 @@ rule volume_ml = volume_l in milliliters
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("2000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test1");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test2
 fact volume_gal = 5 gallons
 rule volume_l = volume_gal in liters
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -218,21 +215,20 @@ rule volume_l = volume_gal in liters
             assert!(
                 (amount - Decimal::from_str("18.927").unwrap()).abs()
                     < Decimal::from_str("0.01").unwrap(),
-                "Expected ~18.93 liters, got {}",
-                amount
+                "Expected ~18.93 liters, got {amount}"
             );
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test2");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test3
 fact volume_qt = 8 quarts
 rule volume_pt = volume_qt in pints
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -249,17 +245,17 @@ rule volume_pt = volume_qt in pints
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("16.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test3");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test4
 fact volume_cl = 75 centiliters
 rule volume_dl = volume_cl in deciliters
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -277,11 +273,10 @@ rule volume_dl = volume_cl in deciliters
             assert!(
                 (amount - Decimal::from_str("7.5").unwrap()).abs()
                     < Decimal::from_str("0.01").unwrap(),
-                "Expected 7.5 deciliters, got {}",
-                amount
+                "Expected 7.5 deciliters, got {amount}"
             );
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test4");
 }
@@ -292,11 +287,11 @@ fn test_duration_conversions() {
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test1
 fact time_h = 3 hours
 rule time_min = time_h in minutes
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -314,17 +309,17 @@ rule time_min = time_h in minutes
             // 3 hours = 180 minutes
             assert_eq!(*n, Decimal::from_str("180.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test1");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test2
 fact time_s = 5 seconds
 rule time_ms = time_s in milliseconds
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -342,17 +337,17 @@ rule time_ms = time_s in milliseconds
             // 5 seconds = 5000 milliseconds
             assert_eq!(*n, Decimal::from_str("5000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test2");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test3
 fact time_ms = 1000 milliseconds
 rule time_us = time_ms in microseconds
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -370,7 +365,7 @@ rule time_us = time_ms in microseconds
             // 1 second = 1000000 microseconds
             assert_eq!(*n, Decimal::from_str("1000000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test3");
 }
@@ -381,11 +376,11 @@ fn test_power_conversions() {
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test1
 fact power_kw = 5 kilowatts
 rule power_w = power_kw in watts
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -402,17 +397,17 @@ rule power_w = power_kw in watts
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("5000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test1");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test2
 fact power_w = 2000 watts
 rule power_mw = power_w in milliwatts
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -429,7 +424,7 @@ rule power_mw = power_w in milliwatts
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("2000000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test2");
 }
@@ -440,11 +435,11 @@ fn test_energy_conversions() {
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test1
 fact energy_kj = 10 kilojoules
 rule energy_j = energy_kj in joules
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -461,17 +456,17 @@ rule energy_j = energy_kj in joules
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("10000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test1");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test2
 fact energy_kwh = 2 kilowatthours
 rule energy_wh = energy_kwh in watthours
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -488,17 +483,17 @@ rule energy_wh = energy_kwh in watthours
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("2000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test2");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test3
 fact energy_kcal = 5 kilocalories
 rule energy_cal = energy_kcal in calories
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -515,7 +510,7 @@ rule energy_cal = energy_kcal in calories
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("5000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test3");
 }
@@ -526,11 +521,11 @@ fn test_pressure_conversions() {
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test1
 fact pressure_kpa = 250 kilopascals
 rule pressure_pa = pressure_kpa in pascals
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -547,17 +542,17 @@ rule pressure_pa = pressure_kpa in pascals
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("250000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test1");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test2
 fact pressure_mpa = 3 megapascals
 rule pressure_kpa = pressure_mpa in kilopascals
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -574,7 +569,7 @@ rule pressure_kpa = pressure_mpa in kilopascals
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("3000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test2");
 }
@@ -585,11 +580,11 @@ fn test_datasize_conversions() {
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test1
 fact size_gb = 10 gigabytes
 rule size_mb = size_gb in megabytes
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -606,17 +601,17 @@ rule size_mb = size_gb in megabytes
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("10000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test1");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test2
 fact size_tb = 2 terabytes
 rule size_gb = size_tb in gigabytes
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -633,17 +628,17 @@ rule size_gb = size_tb in gigabytes
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("2000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test2");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test3
 fact size_pb = 1 petabytes
 rule size_tb = size_pb in terabytes
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -660,17 +655,17 @@ rule size_tb = size_pb in terabytes
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("1000.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test3");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test4
 fact size_gib = 8 gibibytes
 rule size_mib = size_gib in mebibytes
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -687,17 +682,17 @@ rule size_mib = size_gib in mebibytes
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("8192.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test4");
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test5
 fact size_kib = 2048 kibibytes
 rule size_b = size_kib in bytes
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -714,7 +709,7 @@ rule size_b = size_kib in bytes
         LiteralValue::Number(amount) => {
             assert_eq!(*amount, Decimal::from_str("2097152.0").unwrap());
         }
-        _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
+        _ => panic!("Expected Number (from 'in' conversion), got {result:?}"),
     }
     engine.remove_document("test5");
 }
@@ -725,7 +720,7 @@ fn test_complex_multi_unit_scenario() {
 
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc complex
 fact base_price = 100
 fact weight = 5 kilograms
@@ -735,7 +730,7 @@ fact discount = 10%
 rule weight_lbs = weight in pounds
 rule distance_miles = distance in miles
 rule discounted_price = base_price * (1 - discount)
-"#,
+",
             "test.lemma",
         )
         .unwrap();

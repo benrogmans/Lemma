@@ -10,13 +10,13 @@ fn test_cli_run_simple_document() {
 
     fs::write(
         &lemma_file,
-        r#"
+        r"
 doc simple_test
 fact x = 10
 fact y = 5
 rule sum = x + y
 rule product = x * y
-"#,
+",
     )
     .unwrap();
 
@@ -41,11 +41,11 @@ fn test_cli_run_with_fact_override() {
 
     fs::write(
         &lemma_file,
-        r#"
+        r"
 doc override_test
 fact base = [number]
 rule doubled = base * 2
-"#,
+",
     )
     .unwrap();
 
@@ -84,13 +84,13 @@ fn test_cli_run_with_unless_clause() {
 
     fs::write(
         &lemma_file,
-        r#"
+        r"
 doc discount_test
 fact quantity = 15
 rule discount = 0
   unless quantity >= 10 then 10
   unless quantity >= 20 then 20
-"#,
+",
     )
     .unwrap();
 
@@ -141,19 +141,19 @@ fn test_cli_list_summary() {
 
     fs::write(
         temp_dir.path().join("doc1.lemma"),
-        r#"
+        r"
 doc doc1
 fact x = 1
-"#,
+",
     )
     .unwrap();
 
     fs::write(
         temp_dir.path().join("doc2.lemma"),
-        r#"
+        r"
 doc doc2
 fact y = 2
-"#,
+",
     )
     .unwrap();
 
@@ -175,11 +175,11 @@ fn test_cli_run_with_money_units() {
 
     fs::write(
         &lemma_file,
-        r#"
+        r"
 doc money_test
 fact price = 100 USD
 rule with_tax = price * 1.21
-"#,
+",
     )
     .unwrap();
 
@@ -202,10 +202,10 @@ fn test_cli_parse_error_handling() {
 
     fs::write(
         &lemma_file,
-        r#"
+        r"
 doc invalid
 this is not valid lemma syntax
-"#,
+",
     )
     .unwrap();
 

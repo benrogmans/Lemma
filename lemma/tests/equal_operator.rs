@@ -5,7 +5,7 @@ fn test_equal_operator_numbers() {
     let mut engine = Engine::new();
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test_equal_numbers
 
 fact a = 42
@@ -14,7 +14,7 @@ fact c = 100
 
 rule equal_true = a == b
 rule equal_false = a == c
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -76,7 +76,7 @@ fn test_equal_operator_money() {
     let mut engine = Engine::new();
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test_equal_money
 
 fact price_a = 100
@@ -85,7 +85,7 @@ fact price_c = 50
 
 rule same_price = price_a == price_b
 rule different_price = price_a == price_c
-"#,
+",
             "test.lemma",
         )
         .unwrap();
@@ -112,7 +112,7 @@ fn test_equal_operator_booleans() {
     let mut engine = Engine::new();
     engine
         .add_lemma_code(
-            r#"
+            r"
 doc test_equal_booleans
 
 fact flag_a = true
@@ -121,7 +121,7 @@ fact flag_c = false
 
 rule both_true = flag_a == flag_b
 rule mixed = flag_a == flag_c
-"#,
+",
             "test.lemma",
         )
         .unwrap();

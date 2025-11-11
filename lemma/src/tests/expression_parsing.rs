@@ -2,8 +2,8 @@ use crate::parser::parse;
 
 #[test]
 fn test_simple_number() {
-    let input = r#"doc test
-rule number = 42"#;
+    let input = r"doc test
+rule number = 42";
     let result = parse(input, None);
     assert!(
         result.is_ok(),
@@ -14,8 +14,8 @@ rule number = 42"#;
 
 #[test]
 fn test_fact_reference_parsing() {
-    let input = r#"doc test
-rule simple_ref = age"#;
+    let input = r"doc test
+rule simple_ref = age";
     let result = parse(input, None);
     assert!(
         result.is_ok(),
@@ -23,8 +23,8 @@ rule simple_ref = age"#;
         result.err()
     );
 
-    let input = r#"doc test
-rule nested_ref = employee.salary"#;
+    let input = r"doc test
+rule nested_ref = employee.salary";
     let result = parse(input, None);
     assert!(
         result.is_ok(),
@@ -39,7 +39,7 @@ fn test_arithmetic_operations_work() {
         "2 + 3", "2+1", "5 * 6", "5* 6", "7 % 3", "3%2", "2 ^ 3", "2^3",
     ];
     for expr in cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -76,7 +76,7 @@ fn test_arithmetic_expressions_comprehensive() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -116,7 +116,7 @@ fn test_comparison_expressions_comprehensive() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -167,7 +167,7 @@ fn test_logical_expressions_comprehensive() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -200,7 +200,7 @@ fn test_fact_reference_expressions_comprehensive() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -246,7 +246,7 @@ fn test_nested_expressions_comprehensive() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -283,7 +283,7 @@ fn test_operator_precedence_comprehensive() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -313,7 +313,7 @@ fn test_parenthesized_expression_edge_cases() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -337,7 +337,7 @@ fn test_rule_references_comprehensive() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -365,7 +365,7 @@ fn test_complex_real_world_expressions() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),

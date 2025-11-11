@@ -30,7 +30,7 @@ pub fn evaluate_expression(
             let value = context
                 .facts
                 .get(&fact_name)
-                .ok_or_else(|| LemmaError::Engine(format!("Missing fact: {}", fact_name)))?;
+                .ok_or_else(|| LemmaError::Engine(format!("Missing fact: {fact_name}")))?;
 
             // Record operation
             context.operations.push(OperationRecord::FactUsed {
@@ -66,8 +66,7 @@ pub fn evaluate_expression(
 
             // Rule not computed yet
             Err(LemmaError::Engine(format!(
-                "Rule {} not yet computed",
-                rule_name
+                "Rule {rule_name} not yet computed"
             )))
         }
 
@@ -315,15 +314,13 @@ fn convert_engine_error_to_runtime(
             let source_id = context
                 .current_doc
                 .source
-                .as_ref()
-                .cloned()
+                .clone()
                 .unwrap_or_else(|| "<input>".to_string());
 
             let source_text: Arc<str> = context
                 .sources
                 .get(&source_id)
-                .map(|s| Arc::from(s.as_str()))
-                .unwrap_or_else(|| Arc::from(""));
+                .map_or_else(|| Arc::from(""), |s| Arc::from(s.as_str()));
 
             let suggestion = if msg.contains("division") || msg.contains("zero") {
                 Some(

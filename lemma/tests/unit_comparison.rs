@@ -2,14 +2,14 @@ use lemma::*;
 
 #[test]
 fn test_same_unit_mass_comparison() {
-    let code = r#"
+    let code = r"
 doc test
 fact weight1 = 3 kilograms
 fact weight2 = 300 grams
 
 rule heavier = weight1 > weight2
 rule lighter = weight1 < weight2
-"#;
+";
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
@@ -34,14 +34,14 @@ rule lighter = weight1 < weight2
 
 #[test]
 fn test_same_unit_length_comparison() {
-    let code = r#"
+    let code = r"
 doc test
 fact distance1 = 100 meters
 fact distance2 = 1 kilometer
 
 rule shorter = distance1 < distance2
 rule equal = 1000 meters == 1 kilometer
-"#;
+";
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
@@ -66,13 +66,13 @@ rule equal = 1000 meters == 1 kilometer
 
 #[test]
 fn test_same_unit_duration_comparison() {
-    let code = r#"
+    let code = r"
 doc test
 fact time1 = 90 seconds
 fact time2 = 2 minutes
 
 rule less_time = time1 < time2
-"#;
+";
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
@@ -89,13 +89,13 @@ rule less_time = time1 < time2
 
 #[test]
 fn test_cross_category_comparison() {
-    let code = r#"
+    let code = r"
 doc test
 fact weight = 5 kilograms
 fact distance = 3 meters
 
 rule weight_greater = weight > distance
-"#;
+";
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
@@ -112,13 +112,13 @@ rule weight_greater = weight > distance
 
 #[test]
 fn test_unit_vs_number_comparison() {
-    let code = r#"
+    let code = r"
 doc test
 fact weight = 5 kilograms
 
 rule greater_than_3 = weight > 3
 rule less_than_10 = weight < 10
-"#;
+";
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
@@ -143,13 +143,13 @@ rule less_than_10 = weight < 10
 
 #[test]
 fn test_same_unit_arithmetic_preserves_unit() {
-    let code = r#"
+    let code = r"
 doc test
 fact weight1 = 2 kilograms
 fact weight2 = 500 grams
 
 rule total = weight1 + weight2
-"#;
+";
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
@@ -168,13 +168,13 @@ rule total = weight1 + weight2
 
 #[test]
 fn test_cross_category_arithmetic_produces_number() {
-    let code = r#"
+    let code = r"
 doc test
 fact distance = 15 meters
 fact time = 3 seconds
 
 rule speed = distance / time
-"#;
+";
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
@@ -191,13 +191,13 @@ rule speed = distance / time
 
 #[test]
 fn test_temperature_comparison_with_conversion() {
-    let code = r#"
+    let code = r"
 doc test
 fact temp1 = 0 celsius
 fact temp2 = 32 fahrenheit
 
 rule same_temp = temp1 == temp2
-"#;
+";
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
@@ -214,13 +214,13 @@ rule same_temp = temp1 == temp2
 
 #[test]
 fn test_power_comparison_with_conversion() {
-    let code = r#"
+    let code = r"
 doc test
 fact power1 = 500 watts
 fact power2 = 1 kilowatt
 
 rule less_power = power1 < power2
-"#;
+";
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();

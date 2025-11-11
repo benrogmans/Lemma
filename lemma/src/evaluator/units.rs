@@ -58,8 +58,7 @@ pub(crate) fn convert_unit_for_arithmetic(
                 *v
             } else {
                 return Err(LemmaError::Engine(format!(
-                    "Cannot convert between different currencies: {:?} to {:?}",
-                    from, to
+                    "Cannot convert between different currencies: {from:?} to {to:?}"
                 )));
             }
         }
@@ -138,8 +137,7 @@ pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> LemmaRes
                         *v
                     } else {
                         return Err(LemmaError::Engine(format!(
-                            "Cannot convert between different currencies: {:?} to {:?}",
-                            from, to
+                            "Cannot convert between different currencies: {from:?} to {to:?}"
                         )));
                     }
                 }
@@ -368,7 +366,10 @@ pub(crate) fn convert_volume(
     from: &crate::VolumeUnit,
     to: &crate::VolumeUnit,
 ) -> LemmaResult<Decimal> {
-    use crate::VolumeUnit::*;
+    use crate::VolumeUnit::{
+        Centiliter, CubicCentimeter, CubicMeter, Deciliter, FluidOunce, Gallon, Liter, Milliliter,
+        Pint, Quart,
+    };
     if from == to {
         return Ok(value);
     }
@@ -408,7 +409,7 @@ pub(crate) fn convert_force(
     from: &crate::ForceUnit,
     to: &crate::ForceUnit,
 ) -> LemmaResult<Decimal> {
-    use crate::ForceUnit::*;
+    use crate::ForceUnit::{Kilonewton, Lbf, Newton};
     if from == to {
         return Ok(value);
     }
@@ -434,7 +435,7 @@ pub(crate) fn convert_pressure(
     from: &crate::PressureUnit,
     to: &crate::PressureUnit,
 ) -> LemmaResult<Decimal> {
-    use crate::PressureUnit::*;
+    use crate::PressureUnit::{Atmosphere, Bar, Kilopascal, Megapascal, Mmhg, Pascal, Psi, Torr};
     if from == to {
         return Ok(value);
     }
@@ -470,7 +471,9 @@ pub(crate) fn convert_energy(
     from: &crate::EnergyUnit,
     to: &crate::EnergyUnit,
 ) -> LemmaResult<Decimal> {
-    use crate::EnergyUnit::*;
+    use crate::EnergyUnit::{
+        Btu, Calorie, Joule, Kilocalorie, Kilojoule, Kilowatthour, Megajoule, Watthour,
+    };
     if from == to {
         return Ok(value);
     }
@@ -506,7 +509,7 @@ pub(crate) fn convert_frequency(
     from: &crate::FrequencyUnit,
     to: &crate::FrequencyUnit,
 ) -> LemmaResult<Decimal> {
-    use crate::FrequencyUnit::*;
+    use crate::FrequencyUnit::{Gigahertz, Hertz, Kilohertz, Megahertz};
     if from == to {
         return Ok(value);
     }
@@ -534,7 +537,10 @@ pub(crate) fn convert_data_size(
     from: &crate::DataUnit,
     to: &crate::DataUnit,
 ) -> LemmaResult<Decimal> {
-    use crate::DataUnit::*;
+    use crate::DataUnit::{
+        Byte, Gibibyte, Gigabyte, Kibibyte, Kilobyte, Mebibyte, Megabyte, Petabyte, Tebibyte,
+        Terabyte,
+    };
     if from == to {
         return Ok(value);
     }

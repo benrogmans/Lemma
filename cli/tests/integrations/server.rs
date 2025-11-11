@@ -12,12 +12,11 @@ fn test_server_command_available() {
 
 #[test]
 fn test_serve_requires_dir() {
-    // Just verify the server command is recognized in help
-    // We don't actually start the server as it would hang the test
     let mut cmd = Command::cargo_bin("lemma").unwrap();
-    cmd.arg("server").arg("--help");
+    cmd.arg("server")
+        .arg("--dir")
+        .arg("/nonexistent/directory/that/does/not/exist");
 
-    cmd.assert()
-        .success()
-        .stdout(predicates::str::contains("Workspace root directory"));
+    // Serve command should fail if directory doesn't exist
+    cmd.assert().failure();
 }

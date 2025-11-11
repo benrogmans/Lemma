@@ -34,10 +34,7 @@ fn test_comparison_operator_name() {
 fn test_literal_value_to_type() {
     let one = Decimal::from_str("1").unwrap();
 
-    assert_eq!(
-        LiteralValue::Text("".to_string()).to_type(),
-        LemmaType::Text
-    );
+    assert_eq!(LiteralValue::Text(String::new()).to_type(), LemmaType::Text);
     assert_eq!(LiteralValue::Number(one).to_type(), LemmaType::Number);
     assert_eq!(LiteralValue::Boolean(true).to_type(), LemmaType::Boolean);
 
@@ -56,7 +53,7 @@ fn test_literal_value_to_type() {
         LemmaType::Percentage
     );
     assert_eq!(
-        LiteralValue::Regex("".to_string()).to_type(),
+        LiteralValue::Regex(String::new()).to_type(),
         LemmaType::Regex
     );
     assert_eq!(
@@ -178,7 +175,7 @@ fn test_numeric_unit_with_value() {
 
     assert_eq!(updated.value(), fifty);
     assert!(original.same_category(&updated));
-    assert_eq!(format!("{}", updated), "50 kilogram");
+    assert_eq!(format!("{updated}"), "50 kilogram");
 }
 
 #[test]
@@ -350,7 +347,7 @@ fn test_datetime_value_display() {
             offset_minutes: 0,
         }),
     };
-    let display = format!("{}", dt);
+    let display = format!("{dt}");
     assert!(display.contains("2024"));
     assert!(display.contains("12"));
     assert!(display.contains("25"));
@@ -367,7 +364,7 @@ fn test_time_value_display() {
             offset_minutes: 30,
         }),
     };
-    let display = format!("{}", time);
+    let display = format!("{time}");
     assert!(display.contains("14"));
     assert!(display.contains("30"));
     assert!(display.contains("45"));

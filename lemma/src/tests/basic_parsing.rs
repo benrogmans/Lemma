@@ -37,8 +37,8 @@ fact name = "John""#;
 
 #[test]
 fn test_parse_document_with_rule() {
-    let input = r#"doc person
-rule is_adult = age >= 18"#;
+    let input = r"doc person
+rule is_adult = age >= 18";
     let result = parse(input, None).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].rules.len(), 1);
@@ -72,9 +72,9 @@ fact name = "Jane""#;
 
 #[test]
 fn test_parse_error_duplicate_rule_names() {
-    let input = r#"doc person
+    let input = r"doc person
 rule is_adult = age >= 18
-rule is_adult = age >= 21"#;
+rule is_adult = age >= 21";
     let result = parse(input, None);
     assert!(
         result.is_ok(),
@@ -98,9 +98,9 @@ fn test_parse_empty_input() {
 
 #[test]
 fn test_parse_document_with_unless_clause() {
-    let input = r#"doc person
+    let input = r"doc person
 rule is_active = service_started? and not service_ended?
-unless maintenance_mode then false"#;
+unless maintenance_mode then false";
     let result = parse(input, None).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].rules.len(), 1);
@@ -122,10 +122,10 @@ rule adult = true"#;
 
 #[test]
 fn test_multiple_unless_clauses() {
-    let input = r#"doc test
+    let input = r"doc test
 rule is_eligible = age >= 18 and have license
 unless emergency_mode then true
-unless system_override then accept"#;
+unless system_override then accept";
 
     let result = parse(input, None).unwrap();
     assert_eq!(result.len(), 1);
@@ -135,11 +135,11 @@ unless system_override then accept"#;
 
 #[test]
 fn test_multiple_rules_in_document() {
-    let input = r#"doc test
+    let input = r"doc test
 rule is_adult = age >= 18
 rule is_senior = age >= 65
 rule is_minor = age < 18
-rule can_vote = age >= 18 and is_citizen"#;
+rule can_vote = age >= 18 and is_citizen";
 
     let result = parse(input, None).unwrap();
     assert_eq!(result.len(), 1);
@@ -168,7 +168,7 @@ rule is_eligible = is_adult and status == "active""#;
 
 #[test]
 fn test_type_annotations_in_facts() {
-    let input = r#"doc test
+    let input = r"doc test
 fact name = [text]
 fact age = [number]
 fact birth_date = [date]
@@ -176,7 +176,7 @@ fact is_active = [boolean]
 fact pattern = [regex]
 fact discount = [percentage]
 fact weight = [weight]
-fact height = [length]"#;
+fact height = [length]";
 
     let result = parse(input, None).unwrap();
     assert_eq!(result.len(), 1);
@@ -185,7 +185,7 @@ fact height = [length]"#;
 
 #[test]
 fn test_complex_unit_type_annotations() {
-    let input = r#"doc test
+    let input = r"doc test
 fact volume = [volume]
 fact duration = [duration]
 fact temp = [temperature]
@@ -195,7 +195,7 @@ fact force = [force]
 fact pressure = [pressure]
 fact freq = [frequency]
 fact data = [data_size]
-fact price = [money]"#;
+fact price = [money]";
 
     let result = parse(input, None).unwrap();
     assert_eq!(result.len(), 1);

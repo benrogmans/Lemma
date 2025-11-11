@@ -6,7 +6,7 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
 
     // This is shown in the README as a feature - it must work
     engine.add_lemma_code(
-        r#"
+        r"
         doc pricing
 
         fact quantity = 10
@@ -18,7 +18,7 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
             unless is_vip then 25%
 
         rule price = 200 eur - discount?
-        "#,
+        ",
         "pricing.lemma",
     )?;
 
@@ -64,14 +64,14 @@ fn test_unit_add_percentage() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
     engine.add_lemma_code(
-        r#"
+        r"
         doc tax_calculation
 
         fact base_price = 100 usd
         fact tax_rate = 8.5%
 
         rule price_with_tax = base_price + tax_rate
-        "#,
+        ",
         "tax.lemma",
     )?;
 
@@ -103,7 +103,7 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
     engine.add_lemma_code(
-        r#"
+        r"
         doc unit_percentage_ops
 
         fact price = 50 gbp
@@ -113,7 +113,7 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
         rule increased = price + increase
         rule decreased = price - decrease
         rule scaled = price * increase
-        "#,
+        ",
         "ops.lemma",
     )?;
 
@@ -179,7 +179,7 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
     engine.add_lemma_code(
-        r#"
+        r"
         doc complex_pricing
 
         fact base_price = 1000 eur
@@ -188,7 +188,7 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
 
         rule after_bulk = base_price - bulk_discount
         rule final_price = after_bulk? - loyalty_discount
-        "#,
+        ",
         "complex.lemma",
     )?;
 
@@ -244,7 +244,7 @@ fn test_unit_percentage_with_different_currencies() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
     engine.add_lemma_code(
-        r#"
+        r"
         doc multi_currency
 
         fact usd_price = 100 usd
@@ -255,7 +255,7 @@ fn test_unit_percentage_with_different_currencies() -> LemmaResult<()> {
         rule usd_discounted = usd_price - discount
         rule eur_discounted = eur_price - discount
         rule jpy_discounted = jpy_price - discount
-        "#,
+        ",
         "multi.lemma",
     )?;
 

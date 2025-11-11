@@ -1,6 +1,6 @@
 use crate::error::LemmaError;
 use crate::parser::Rule;
-use crate::semantic::*;
+use crate::semantic::{FactValue, LemmaFact, LemmaType, TypeAnnotation};
 use pest::iterators::Pair;
 
 pub(crate) fn parse_fact_definition(pair: Pair<Rule>) -> Result<LemmaFact, LemmaError> {
@@ -34,7 +34,7 @@ pub(crate) fn parse_fact_override(pair: Pair<Rule>) -> Result<LemmaFact, LemmaEr
     for inner_pair in pair.into_inner() {
         match inner_pair.as_rule() {
             Rule::fact_override_name => {
-                fact_override_name = Some(parse_fact_override_name(inner_pair)?)
+                fact_override_name = Some(parse_fact_override_name(inner_pair)?);
             }
             Rule::fact_value => fact_value = Some(parse_fact_value(inner_pair)?),
             _ => {}

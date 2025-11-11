@@ -1,6 +1,7 @@
 use comfy_table::{presets::UTF8_FULL, Attribute, Cell, CellAlignment, ContentArrangement, Table};
 use crossterm::style::Stylize;
 use lemma::{LemmaDoc, LemmaFact, LemmaRule, OperationRecord, Response};
+use std::fmt::Write as _;
 
 pub struct Formatter {
     use_colors: bool,
@@ -51,7 +52,7 @@ impl Formatter {
             let rule_cell = Cell::new(&result.rule_name);
 
             let verdict_cell = if let Some(ref value) = result.result {
-                let mut content = format!("{}\n", value);
+                let mut content = format!("{value}\n");
 
                 if !result.operations.is_empty() {
                     content.push('\n');
@@ -63,10 +64,10 @@ impl Formatter {
                 Cell::new(content.trim_end()).set_alignment(CellAlignment::Left)
             } else if let Some(ref missing) = result.missing_facts {
                 let facts_str = missing.join("\n  - ");
-                Cell::new(format!("Missing facts:\n  - {}", facts_str))
+                Cell::new(format!("Missing facts:\n  - {facts_str}"))
                     .set_alignment(CellAlignment::Left)
             } else if let Some(ref veto_msg) = result.veto_message {
-                Cell::new(format!("✗ {}", veto_msg)).set_alignment(CellAlignment::Left)
+                Cell::new(format!("✗ {veto_msg}")).set_alignment(CellAlignment::Left)
             } else {
                 Cell::new("[no result]").set_alignment(CellAlignment::Left)
             };
@@ -74,16 +75,16 @@ impl Formatter {
             table.add_row(vec![rule_cell, verdict_cell]);
         }
 
-        format!("{}\n", table)
+        format!("{table}\n")
     }
 
     fn format_operation_step(&self, index: usize, step: &OperationRecord) -> String {
         match step {
             OperationRecord::FactUsed { name, value } => {
-                format!("  {:>2}. fact {} = {}\n", index, name, value)
+                format!("  {index:>2}. fact {name} = {value}\n")
             }
             OperationRecord::RuleUsed { name, value } => {
-                format!("  {:>2}. rule {} = {}\n", index, name, value)
+                format!("  {index:>2}. rule {name} = {value}\n")
             }
             OperationRecord::OperationExecuted {
                 operation,
@@ -93,20 +94,16 @@ impl Formatter {
             } => {
                 let inputs_str = inputs
                     .iter()
-                    .map(|v| v.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(", ");
 
                 if let Some(clause_idx) = unless_clause_index {
                     format!(
-                        "  {:>2}. unless #{}: {}({}) → {}\n",
-                        index, clause_idx, operation, inputs_str, result
+                        "  {index:>2}. unless #{clause_idx}: {operation}({inputs_str}) → {result}\n"
                     )
                 } else {
-                    format!(
-                        "  {:>2}. {}({}) → {}\n",
-                        index, operation, inputs_str, result
-                    )
+                    format!("  {index:>2}. {operation}({inputs_str}) → {result}\n")
                 }
             }
             OperationRecord::UnlessClauseEvaluated {
@@ -116,25 +113,19 @@ impl Formatter {
             } => {
                 if *matched {
                     if let Some(value) = result_if_matched {
-                        format!(
-                            "  {:>2}. unless clause {} matched → {}\n",
-                            index, clause_index, value
-                        )
+                        format!("  {index:>2}. unless clause {clause_index} matched → {value}\n")
                     } else {
-                        format!(
-                            "  {:>2}. unless clause {} matched (veto)\n",
-                            index, clause_index
-                        )
+                        format!("  {index:>2}. unless clause {clause_index} matched (veto)\n")
                     }
                 } else {
-                    format!("  {:>2}. unless clause {} skipped\n", index, clause_index)
+                    format!("  {index:>2}. unless clause {clause_index} skipped\n")
                 }
             }
             OperationRecord::DefaultValue { value } => {
-                format!("  {:>2}. default = {}\n", index, value)
+                format!("  {index:>2}. default = {value}\n")
             }
             OperationRecord::FinalResult { value } => {
-                format!("  {:>2}. result = {}\n", index, value)
+                format!("  {index:>2}. result = {value}\n")
             }
         }
     }
@@ -157,19 +148,15 @@ impl Formatter {
             let lines: Vec<&str> = commentary.lines().collect();
             for line in lines {
                 if self.use_colors {
-                    output.push_str(&format!("  {}\n", line.dark_grey()));
+                    let _ = writeln!(output, "  {}", line.dark_grey());
                 } else {
-                    output.push_str(&format!("  {}\n", line));
+                    let _ = writeln!(output, "  {line}");
                 }
             }
             output.push('\n');
         }
 
-        output.push_str(&format!(
-            "  {} facts  {} rules\n\n",
-            facts.len(),
-            rules.len()
-        ));
+        let _ = write!(output, "  {} facts  {} rules\n\n", facts.len(), rules.len());
 
         if !facts.is_empty() {
             output.push_str(&self.subsection_header("Facts"));
@@ -195,19 +182,15 @@ impl Formatter {
                 };
 
                 if self.use_colors {
-                    output.push_str(&format!(
-                        "  {:<width$}  {}\n",
+                    let _ = writeln!(
+                        output,
+                        "  {:<width$}  {}",
                         name.bold(),
                         display,
                         width = max_name_len
-                    ));
+                    );
                 } else {
-                    output.push_str(&format!(
-                        "  {:<width$}  {}\n",
-                        name,
-                        display,
-                        width = max_name_len
-                    ));
+                    let _ = writeln!(output, "  {name:<max_name_len$}  {display}");
                 }
             }
             output.push('\n');
@@ -227,9 +210,9 @@ impl Formatter {
                     if idx < rules.len() {
                         let name = &rules[idx].name;
                         if self.use_colors {
-                            line.push_str(&format!("{:<30}", name.as_str().dark_grey()));
+                            let _ = write!(line, "{:<30}", name.as_str().dark_grey());
                         } else {
-                            line.push_str(&format!("{:<30}", name));
+                            let _ = write!(line, "{name:<30}");
                         }
                     }
                 }
@@ -255,10 +238,7 @@ impl Formatter {
         output.push_str(&self.section_divider());
         output.push('\n');
 
-        output.push_str(&format!(
-            "  {} files  {} documents\n\n",
-            file_count, doc_count
-        ));
+        output.push_str(&format!("  {file_count} files  {doc_count} documents\n\n"));
 
         if !documents.is_empty() {
             output.push_str(&self.subsection_header("Documents"));
@@ -271,7 +251,7 @@ impl Formatter {
                 .unwrap_or(0);
 
             for (name, facts, rules) in documents {
-                let stats = format!("{} facts, {} rules", facts, rules);
+                let stats = format!("{facts} facts, {rules} rules");
 
                 if self.use_colors {
                     output.push_str(&format!(
@@ -281,12 +261,7 @@ impl Formatter {
                         width = max_name_len
                     ));
                 } else {
-                    output.push_str(&format!(
-                        "  {:<width$}  {}\n",
-                        name,
-                        stats,
-                        width = max_name_len
-                    ));
+                    output.push_str(&format!("  {name:<max_name_len$}  {stats}\n"));
                 }
             }
         }
@@ -306,7 +281,7 @@ impl Formatter {
         if self.use_colors {
             format!("{}\n", text.cyan().bold())
         } else {
-            format!("{}\n", text)
+            format!("{text}\n")
         }
     }
 
@@ -314,7 +289,7 @@ impl Formatter {
         if self.use_colors {
             format!("  {}\n", text.bold())
         } else {
-            format!("  {}\n", text)
+            format!("  {text}\n")
         }
     }
 }

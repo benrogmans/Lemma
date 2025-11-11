@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 pub struct References {
     /// Fact references (e.g., ["employee", "name"])
     pub facts: HashSet<Vec<String>>,
-    /// Rule references (e.g., ["employee", "is_eligible"])
+    /// Rule references (e.g., ["employee", "`is_eligible`"])
     pub rules: HashSet<Vec<String>>,
 }
 
@@ -30,6 +30,7 @@ pub struct References {
 /// Expression: base_amount + adjustment?
 /// Returns: facts = ["base_amount"], rules = ["adjustment"]
 /// ```
+#[must_use]
 pub fn extract_references(expr: &Expression) -> References {
     let mut refs = References::default();
     collect_references(expr, &mut refs.facts, &mut refs.rules);
@@ -83,7 +84,7 @@ fn collect_references(
 
 /// Build a dependency graph showing which rules depend on which other rules.
 ///
-/// Returns a map: rule_name -> set of rule names it depends on.
+/// Returns a map: `rule_name` -> set of rule names it depends on.
 /// This graph is used for topological sorting to determine execution order
 /// and for detecting circular dependencies.
 ///
@@ -96,6 +97,7 @@ fn collect_references(
 /// Returns:
 ///   {"total": {"subtotal"}, "subtotal": {}}
 /// ```
+#[must_use]
 pub fn build_dependency_graph(rules: &[LemmaRule]) -> HashMap<String, HashSet<String>> {
     let mut graph = HashMap::new();
 
@@ -149,9 +151,9 @@ fn extract_rule_references(expr: &Expression, references: &mut HashSet<String>) 
 
 /// Find all missing facts and rules for a rule.
 ///
-/// Returns (missing_facts, missing_rules) where:
-/// - missing_facts: Facts that have type annotations (not provided)
-/// - missing_rules: Rules that this rule depends on that couldn't be evaluated
+/// Returns (`missing_facts`, `missing_rules`) where:
+/// - `missing_facts`: Facts that have type annotations (not provided)
+/// - `missing_rules`: Rules that this rule depends on that couldn't be evaluated
 ///
 /// Used to provide helpful error messages about what inputs are needed
 /// to successfully evaluate a rule.
@@ -164,6 +166,7 @@ fn extract_rule_references(expr: &Expression, references: &mut HashSet<String>) 
 ///
 /// Returns: (["price [number]"], [])
 /// ```
+#[must_use]
 pub fn find_missing_dependencies(
     rule: &LemmaRule,
     document_facts: &[LemmaFact],
@@ -240,6 +243,7 @@ pub fn find_missing_dependencies(
 /// For rule "total":
 ///   Returns: {"quantity"} (price and shipping must have values)
 /// ```
+#[must_use]
 pub fn find_required_facts_recursive(
     rule: &LemmaRule,
     all_rules: &[LemmaRule],
@@ -321,6 +325,7 @@ fn collect_required_facts_recursive(
 ///
 /// Local facts use their name directly.
 /// Foreign facts join their reference path with dots.
+#[must_use]
 pub fn fact_display_name(fact: &LemmaFact) -> String {
     match &fact.fact_type {
         FactType::Local(name) => name.clone(),

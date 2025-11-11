@@ -24,7 +24,7 @@ fn test_in_expressions_comprehensive() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -74,7 +74,7 @@ fn test_all_unit_types_comprehensive() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -175,7 +175,7 @@ fn test_unit_literals_in_rules() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),
@@ -221,7 +221,7 @@ fn test_comparison_with_unit_conversions() {
     ];
 
     for (expr, description) in test_cases {
-        let input = format!("doc test\nrule test = {}", expr);
+        let input = format!("doc test\nrule test = {expr}");
         let result = parse(&input, None);
         assert!(
             result.is_ok(),

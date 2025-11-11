@@ -63,7 +63,7 @@ pub mod http {
             .layer(CorsLayer::permissive())
             .with_state(shared_engine);
 
-        let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
+        let addr: SocketAddr = format!("{host}:{port}").parse()?;
         info!("Lemma server listening on {}", addr);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -91,14 +91,16 @@ pub mod http {
             return Err((
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: format!("Document '{}' not found", doc_name),
+                    error: format!("Document '{doc_name}' not found"),
                 }),
             ));
         }
 
-        let facts: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
-        let fact_refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
-        let parsed_facts = if !fact_refs.is_empty() {
+        let facts: Vec<String> = params.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        let fact_refs: Vec<&str> = facts.iter().map(std::string::String::as_str).collect();
+        let parsed_facts = if fact_refs.is_empty() {
+            None
+        } else {
             match lemma::parse_facts(&fact_refs) {
                 Ok(f) => Some(f),
                 Err(e) => {
@@ -106,13 +108,11 @@ pub mod http {
                     return Err((
                         StatusCode::BAD_REQUEST,
                         Json(ErrorResponse {
-                            error: format!("Failed to parse facts: {}", e),
+                            error: format!("Failed to parse facts: {e}"),
                         }),
                     ));
                 }
             }
-        } else {
-            None
         };
 
         let response: Response = engine
@@ -122,7 +122,7 @@ pub mod http {
                 (
                     StatusCode::BAD_REQUEST,
                     Json(ErrorResponse {
-                        error: format!("Evaluation failed: {}", e),
+                        error: format!("Evaluation failed: {e}"),
                     }),
                 )
             })?;
@@ -163,7 +163,7 @@ pub mod http {
                 (
                     StatusCode::BAD_REQUEST,
                     Json(ErrorResponse {
-                        error: format!("Failed to parse code: {}", e),
+                        error: format!("Failed to parse code: {e}"),
                     }),
                 )
             })?;
@@ -183,10 +183,12 @@ pub mod http {
         let facts: Vec<String> = payload
             .facts
             .iter()
-            .map(|(k, v)| format!("{}={}", k, json_value_to_lemma(v)))
+            .map(|(k, v)| format!("{k}={}", json_value_to_lemma(v)))
             .collect();
-        let fact_refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
-        let parsed_facts = if !fact_refs.is_empty() {
+        let fact_refs: Vec<&str> = facts.iter().map(std::string::String::as_str).collect();
+        let parsed_facts = if fact_refs.is_empty() {
+            None
+        } else {
             match lemma::parse_facts(&fact_refs) {
                 Ok(f) => Some(f),
                 Err(e) => {
@@ -194,13 +196,11 @@ pub mod http {
                     return Err((
                         StatusCode::BAD_REQUEST,
                         Json(ErrorResponse {
-                            error: format!("Failed to parse facts: {}", e),
+                            error: format!("Failed to parse facts: {e}"),
                         }),
                     ));
                 }
             }
-        } else {
-            None
         };
 
         let response: Response =
@@ -211,7 +211,7 @@ pub mod http {
                     (
                         StatusCode::BAD_REQUEST,
                         Json(ErrorResponse {
-                            error: format!("Evaluation failed: {}", e),
+                            error: format!("Evaluation failed: {e}"),
                         }),
                     )
                 })?;
@@ -236,7 +236,7 @@ pub mod http {
             .iter()
             .map(|r| RuleResultJson {
                 name: r.rule_name.clone(),
-                value: r.result.as_ref().map(|v| v.to_string()),
+                value: r.result.as_ref().map(std::string::ToString::to_string),
                 veto_reason: r.veto_message.clone(),
             })
             .collect()
@@ -244,10 +244,10 @@ pub mod http {
 
     fn json_value_to_lemma(value: &serde_json::Value) -> String {
         match value {
-            serde_json::Value::String(s) => format!("\"{}\"", s.replace("\"", "\\\"")),
+            serde_json::Value::String(s) => format!("\"{}\"", s.replace('\"', "\\\"")),
             serde_json::Value::Number(n) => n.to_string(),
             serde_json::Value::Bool(b) => b.to_string(),
-            _ => format!("\"{}\"", value.to_string().replace("\"", "\\\"")),
+            _ => format!("\"{}\"", value.to_string().replace('\"', "\\\"")),
         }
     }
 }

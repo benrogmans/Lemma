@@ -83,8 +83,7 @@ pub fn arithmetic_operation(
                     ))
                 }
                 _ => Err(LemmaError::Engine(format!(
-                    "Operation {:?} not supported for percentage and number",
-                    op
+                    "Operation {op:?} not supported for percentage and number"
                 ))),
             }
         }
@@ -109,8 +108,7 @@ pub fn arithmetic_operation(
                     ))
                 }
                 _ => Err(LemmaError::Engine(format!(
-                    "Operation {:?} not supported for number and percentage",
-                    op
+                    "Operation {op:?} not supported for number and percentage"
                 ))),
             }
         }
@@ -135,8 +133,7 @@ pub fn arithmetic_operation(
                 Ok(LiteralValue::Unit(unit.with_value(result_value)))
             }
             _ => Err(LemmaError::Engine(format!(
-                "Operation {:?} not supported for percentage and unit",
-                op
+                "Operation {op:?} not supported for percentage and unit"
             ))),
         },
 

@@ -1,6 +1,6 @@
 use crate::ast::{ExpressionIdGenerator, Span};
 use crate::error::LemmaError;
-use crate::semantic::*;
+use crate::semantic::{LemmaDoc, LemmaFact};
 use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
@@ -16,6 +16,12 @@ pub mod units;
 #[grammar = "src/parser/lemma.pest"]
 pub struct LemmaParser;
 
+/// Parse a Lemma source string into documents.
+///
+/// # Errors
+/// Returns an error if the input does not conform to the Lemma grammar, including
+/// invalid tokens, unexpected structure, or other parse-time issues. Error spans
+/// include line/column information and source context where possible.
 pub fn parse(content: &str, filename: Option<String>) -> Result<Vec<LemmaDoc>, LemmaError> {
     let mut id_gen = ExpressionIdGenerator::new();
     let filename = filename.unwrap_or_else(|| "<input>".to_string());
@@ -62,31 +68,35 @@ pub fn parse(content: &str, filename: Option<String>) -> Result<Vec<LemmaDoc>, L
     }
 }
 
+/// Parse a list of fact override strings (e.g., `name=value`) into Lemma facts.
+///
+/// # Errors
+/// Returns an error if any individual fact string fails to parse or matches an
+/// unexpected grammar rule. The error message will include the offending input.
 pub fn parse_facts(fact_strings: &[&str]) -> Result<Vec<LemmaFact>, LemmaError> {
     let mut facts = Vec::new();
 
     for fact_str in fact_strings {
-        let fact_input = format!("fact {}", fact_str);
-        let pairs = LemmaParser::parse(Rule::fact, &fact_input).map_err(|e| {
-            LemmaError::Engine(format!("Failed to parse fact '{}': {}", fact_str, e))
-        })?;
+        let fact_input = format!("fact {fact_str}");
+        let pairs = LemmaParser::parse(Rule::fact, &fact_input)
+            .map_err(|e| LemmaError::Engine(format!("Failed to parse fact '{fact_str}': {e}")))?;
 
-        let fact_pair = pairs.into_iter().next().ok_or_else(|| {
-            LemmaError::Engine(format!("No parse result for fact '{}'", fact_str))
-        })?;
+        let fact_pair = pairs
+            .into_iter()
+            .next()
+            .ok_or_else(|| LemmaError::Engine(format!("No parse result for fact '{fact_str}'")))?;
 
         let inner_pair = fact_pair
             .into_inner()
             .next()
-            .ok_or_else(|| LemmaError::Engine(format!("No inner rule for fact '{}'", fact_str)))?;
+            .ok_or_else(|| LemmaError::Engine(format!("No inner rule for fact '{fact_str}'")))?;
 
         let fact = match inner_pair.as_rule() {
             Rule::fact_definition => crate::parser::facts::parse_fact_definition(inner_pair)?,
             Rule::fact_override => crate::parser::facts::parse_fact_override(inner_pair)?,
             _ => {
                 return Err(LemmaError::Engine(format!(
-                    "Unexpected rule type for fact '{}'",
-                    fact_str
+                    "Unexpected rule type for fact '{fact_str}'"
                 )))
             }
         };
@@ -158,6 +168,7 @@ fn parse_doc(
     Ok(doc)
 }
 
+#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 fn parse_doc_name(pair: Pair<Rule>) -> Result<String, LemmaError> {
     Ok(pair.as_str().to_string())
 }

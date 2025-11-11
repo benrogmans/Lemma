@@ -1,7 +1,7 @@
 use crate::ast::ExpressionIdGenerator;
 use crate::error::LemmaError;
 use crate::parser::Rule;
-use crate::semantic::*;
+use crate::semantic::{Expression, ExpressionKind, LemmaRule, UnlessClause, VetoExpression};
 use pest::iterators::Pair;
 
 pub(crate) fn parse_rule_definition(
@@ -16,7 +16,7 @@ pub(crate) fn parse_rule_definition(
         match inner_pair.as_rule() {
             Rule::rule_name => rule_name = Some(inner_pair.as_str().to_string()),
             Rule::rule_expression => {
-                rule_expression = Some(parse_rule_expression(inner_pair, id_gen)?)
+                rule_expression = Some(parse_rule_expression(inner_pair, id_gen)?);
             }
             _ => {}
         }

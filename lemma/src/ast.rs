@@ -17,6 +17,7 @@ pub struct Span {
 }
 
 impl Span {
+    #[must_use]
     pub fn from_pest_span(span: pest::Span) -> Self {
         let (line, col) = span.start_pos().line_col();
         Self {
@@ -33,6 +34,7 @@ impl Span {
 pub struct ExpressionId(u64);
 
 impl ExpressionId {
+    #[must_use]
     pub fn new(id: u64) -> Self {
         Self(id)
     }
@@ -51,6 +53,7 @@ pub struct ExpressionIdGenerator {
 }
 
 impl ExpressionIdGenerator {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

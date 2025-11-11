@@ -1,4 +1,4 @@
-//! DateTime operations
+//! `DateTime` operations
 //!
 //! Handles arithmetic and comparisons with dates and datetimes.
 
@@ -24,12 +24,12 @@ const EPOCH_YEAR: i32 = 1970;
 const EPOCH_MONTH: u32 = 1;
 const EPOCH_DAY: u32 = 1;
 
-/// Create a timezone-aware FixedOffset from an optional TimezoneValue.
+/// Create a timezone-aware `FixedOffset` from an optional `TimezoneValue`.
 /// Defaults to UTC if no timezone is specified.
 fn create_timezone_offset(timezone: &Option<TimezoneValue>) -> LemmaResult<FixedOffset> {
     if let Some(tz) = timezone {
-        let offset_seconds = (tz.offset_hours as i32 * SECONDS_PER_HOUR)
-            + (tz.offset_minutes as i32 * SECONDS_PER_MINUTE);
+        let offset_seconds = (i32::from(tz.offset_hours) * SECONDS_PER_HOUR)
+            + (i32::from(tz.offset_minutes) * SECONDS_PER_MINUTE);
         FixedOffset::east_opt(offset_seconds).ok_or_else(|| {
             LemmaError::Engine(format!(
                 "Invalid timezone offset: {}:{}",
@@ -139,13 +139,12 @@ pub fn datetime_arithmetic(
         }
 
         _ => Err(LemmaError::Engine(format!(
-            "DateTime arithmetic operation {:?} not supported for these operand types",
-            op
+            "DateTime arithmetic operation {op:?} not supported for these operand types"
         ))),
     }
 }
 
-/// Convert DateTimeValue to chrono DateTime, handling timezone if present
+/// Convert `DateTimeValue` to chrono `DateTime`, handling timezone if present
 fn datetime_value_to_chrono(date: &DateTimeValue) -> LemmaResult<DateTime<FixedOffset>> {
     let naive_date = NaiveDate::from_ymd_opt(date.year, date.month, date.day).ok_or_else(|| {
         LemmaError::Engine(format!(
@@ -171,7 +170,7 @@ fn datetime_value_to_chrono(date: &DateTimeValue) -> LemmaResult<DateTime<FixedO
         .ok_or_else(|| LemmaError::Engine("Ambiguous or invalid datetime for timezone".to_string()))
 }
 
-/// Convert chrono DateTime back to DateTimeValue
+/// Convert chrono `DateTime` back to `DateTimeValue`
 fn chrono_to_datetime_value(dt: DateTime<FixedOffset>) -> DateTimeValue {
     let offset_seconds = dt.offset().local_minus_utc();
     let offset_hours = (offset_seconds / SECONDS_PER_HOUR) as i8;
@@ -288,24 +287,26 @@ pub fn time_arithmetic(
         }
 
         _ => Err(LemmaError::Engine(format!(
-            "Time arithmetic operation {:?} not supported for these operand types",
-            op
+            "Time arithmetic operation {op:?} not supported for these operand types"
         ))),
     }
 }
 
-/// Convert TimeValue to timezone-aware DateTime (using epoch date for calculation)
+/// Convert `TimeValue` to timezone-aware `DateTime` (using epoch date for calculation)
 fn time_value_to_chrono_datetime(time: &TimeValue) -> LemmaResult<DateTime<FixedOffset>> {
     // Use Unix epoch as reference date for time-only arithmetic
     let naive_date = NaiveDate::from_ymd_opt(EPOCH_YEAR, EPOCH_MONTH, EPOCH_DAY).unwrap();
-    let naive_time =
-        NaiveTime::from_hms_opt(time.hour as u32, time.minute as u32, time.second as u32)
-            .ok_or_else(|| {
-                LemmaError::Engine(format!(
-                    "Invalid time: {}:{}:{}",
-                    time.hour, time.minute, time.second
-                ))
-            })?;
+    let naive_time = NaiveTime::from_hms_opt(
+        u32::from(time.hour),
+        u32::from(time.minute),
+        u32::from(time.second),
+    )
+    .ok_or_else(|| {
+        LemmaError::Engine(format!(
+            "Invalid time: {}:{}:{}",
+            time.hour, time.minute, time.second
+        ))
+    })?;
 
     let naive_dt = NaiveDateTime::new(naive_date, naive_time);
 
@@ -316,7 +317,7 @@ fn time_value_to_chrono_datetime(time: &TimeValue) -> LemmaResult<DateTime<Fixed
         .ok_or_else(|| LemmaError::Engine("Ambiguous or invalid time for timezone".to_string()))
 }
 
-/// Convert chrono DateTime back to TimeValue
+/// Convert chrono `DateTime` back to `TimeValue`
 fn chrono_datetime_to_time_value(dt: DateTime<FixedOffset>) -> TimeValue {
     let offset_seconds = dt.offset().local_minus_utc();
     let offset_hours = (offset_seconds / SECONDS_PER_HOUR) as i8;

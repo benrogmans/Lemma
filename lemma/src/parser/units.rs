@@ -1,10 +1,18 @@
 //! Unit resolution - maps unit strings to Lemma unit types
 
 use crate::error::LemmaError;
-use crate::semantic::*;
+use crate::semantic::{
+    ConversionTarget, DataUnit, DurationUnit, EnergyUnit, ForceUnit, FrequencyUnit, LengthUnit,
+    LiteralValue, MassUnit, MoneyUnit, NumericUnit, PowerUnit, PressureUnit, TemperatureUnit,
+    VolumeUnit,
+};
 use rust_decimal::Decimal;
 
-/// Resolve a unit string and value to a LiteralValue
+/// Resolve a unit string and value to a `LiteralValue`.
+///
+/// # Errors
+/// Returns an error when the unit string cannot be recognized as any supported
+/// unit type across all categories (mass, length, etc.).
 pub fn resolve_unit(value: Decimal, unit_str: &str) -> Result<LiteralValue, LemmaError> {
     let unit_lower = unit_str.to_lowercase();
 
@@ -60,8 +68,7 @@ pub fn resolve_unit(value: Decimal, unit_str: &str) -> Result<LiteralValue, Lemm
     // Unit not recognized
     let suggestion = find_closest_unit(&unit_lower);
     Err(LemmaError::Engine(format!(
-        "Unknown unit: '{}'. {}",
-        unit_str, suggestion
+        "Unknown unit: '{unit_str}'. {suggestion}"
     )))
 }
 
@@ -267,7 +274,11 @@ fn try_parse_money_unit(s: &str) -> Option<MoneyUnit> {
     }
 }
 
-/// Resolve a unit conversion target (for "in" expressions)
+/// Resolve a unit conversion target (for "in" expressions).
+///
+/// # Errors
+/// Returns an error when the unit string cannot be recognized as a supported
+/// conversion target or suggest a likely alternative.
 pub fn resolve_conversion_target(unit_str: &str) -> Result<ConversionTarget, LemmaError> {
     let unit_lower = unit_str.to_lowercase();
 
@@ -328,8 +339,7 @@ pub fn resolve_conversion_target(unit_str: &str) -> Result<ConversionTarget, Lem
     // Conversion target not recognized
     let suggestion = find_closest_unit(&unit_lower);
     Err(LemmaError::Engine(format!(
-        "Unknown conversion target unit: '{}'. {}",
-        unit_str, suggestion
+        "Unknown conversion target unit: '{unit_str}'. {suggestion}"
     )))
 }
 
@@ -350,7 +360,7 @@ fn find_closest_unit(s: &str) -> String {
 
     for (typo, correct) in &suggestions {
         if s == *typo || s.starts_with(typo) {
-            return format!("Did you mean '{}'?", correct);
+            return format!("Did you mean '{correct}'?");
         }
     }
 

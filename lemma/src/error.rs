@@ -156,15 +156,12 @@ impl fmt::Display for LemmaError {
                     details.source_id, details.span.line, details.span.col
                 )
             }
-            LemmaError::Engine(msg) => write!(f, "Engine error: {}", msg),
-            LemmaError::CircularDependency(msg) => write!(f, "Circular dependency: {}", msg),
+            LemmaError::Engine(msg) => write!(f, "Engine error: {msg}"),
+            LemmaError::CircularDependency(msg) => write!(f, "Circular dependency: {msg}"),
             LemmaError::MultipleErrors(errors) => {
-                writeln!(f, "Multiple errors:")?;
-                for (i, error) in errors.iter().enumerate() {
-                    write!(f, "  {}. {}", i + 1, error)?;
-                    if i < errors.len() - 1 {
-                        writeln!(f)?;
-                    }
+                writeln!(f, "Multiple errors occurred:")?;
+                for error in errors {
+                    writeln!(f, "\n{error}")?;
                 }
                 Ok(())
             }
@@ -176,6 +173,6 @@ impl std::error::Error for LemmaError {}
 
 impl From<std::fmt::Error> for LemmaError {
     fn from(err: std::fmt::Error) -> Self {
-        LemmaError::Engine(format!("Format error: {}", err))
+        LemmaError::Engine(format!("Format error: {err}"))
     }
 }

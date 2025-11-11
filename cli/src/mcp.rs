@@ -3,6 +3,7 @@ pub mod server {
     use anyhow::Result;
     use lemma::Engine;
     use serde::{Deserialize, Serialize};
+    use std::fmt::Write as FmtWrite;
     use std::io::{self, BufRead, Write};
     use tracing::{debug, error, info};
 
@@ -55,10 +56,10 @@ pub mod server {
             }
         }
 
-        fn method_not_found(method: String) -> Self {
+        fn method_not_found(method: &str) -> Self {
             Self {
                 code: -32601,
-                message: format!("Method not found: {}", method),
+                message: format!("Method not found: {method}"),
                 data: None,
             }
         }
@@ -107,7 +108,7 @@ pub mod server {
                 "initialize" => self.initialize(),
                 "tools/list" => self.list_tools(),
                 "tools/call" => self.call_tool(request.params),
-                _ => Err(McpError::method_not_found(request.method)),
+                _ => Err(McpError::method_not_found(&request.method)),
             };
 
             match result {
@@ -231,8 +232,7 @@ pub mod server {
                 "inspect" => self.tool_inspect(arguments),
                 "list_documents" => self.tool_list_documents(),
                 _ => Err(McpError::invalid_params(format!(
-                    "Unknown tool: {}",
-                    tool_name
+                    "Unknown tool: {tool_name}"
                 ))),
             }
         }
@@ -251,14 +251,14 @@ pub mod server {
                 ));
             }
 
-            let source_id = args["source_id"]
-                .as_str()
-                .map(String::from)
-                .unwrap_or_else(|| format!("doc_{}", chrono::Utc::now().timestamp_millis()));
+            let source_id = args["source_id"].as_str().map_or_else(
+                || format!("doc_{}", chrono::Utc::now().timestamp_millis()),
+                String::from,
+            );
 
             self.engine.add_lemma_code(code, &source_id).map_err(|e| {
                 error!("Failed to add document: {}", e);
-                McpError::internal_error(format!("Failed to parse document: {}", e))
+                McpError::internal_error(format!("Failed to parse document: {e}"))
             })?;
 
             info!("Document added: {}", source_id);
@@ -287,8 +287,7 @@ pub mod server {
 
             if self.engine.get_document(document).is_none() {
                 return Err(McpError::invalid_params(format!(
-                    "Document '{}' not found. Use list_documents to see available documents.",
-                    document
+                    "Document '{document}' not found. Use list_documents to see available documents."
                 )));
             }
 
@@ -297,13 +296,13 @@ pub mod server {
                 .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
 
-            let parsed_facts = if !facts.is_empty() {
+            let parsed_facts = if facts.is_empty() {
+                None
+            } else {
                 Some(lemma::parse_facts(&facts).map_err(|e| {
                     error!("Failed to parse facts: {}", e);
-                    McpError::internal_error(format!("Failed to parse facts: {}", e))
+                    McpError::internal_error(format!("Failed to parse facts: {e}"))
                 })?)
-            } else {
-                None
             };
 
             let response = self
@@ -311,23 +310,20 @@ pub mod server {
                 .evaluate(document, None, parsed_facts)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
-                    McpError::internal_error(format!("Evaluation failed: {}", e))
+                    McpError::internal_error(format!("Evaluation failed: {e}"))
                 })?;
 
             let mut output = String::default();
-            output.push_str(&format!(
-                "Evaluation complete for document '{}'\n\n",
-                document
-            ));
+            let _ = write!(output, "Evaluation complete for document '{document}'\n\n");
 
             if !response.results.is_empty() {
                 output.push_str("## Results\n\n");
                 for result in &response.results {
-                    output.push_str(&format!("**{}**: ", result.rule_name));
+                    let _ = write!(output, "**{}**: ", result.rule_name);
                     if let Some(ref value) = result.result {
-                        output.push_str(&value.to_string());
+                        let _ = write!(output, "{}", value);
                     } else if let Some(ref veto) = result.veto_message {
-                        output.push_str(&format!("VETO ({})", veto));
+                        let _ = write!(output, "VETO ({veto})");
                     } else {
                         output.push_str("(no value)");
                     }
@@ -338,7 +334,7 @@ pub mod server {
             if !response.warnings.is_empty() {
                 output.push_str("\n## Warnings\n\n");
                 for warning in &response.warnings {
-                    output.push_str(&format!("- {}\n", warning));
+                    let _ = writeln!(output, "- {warning}");
                 }
             }
 
@@ -368,31 +364,31 @@ pub mod server {
             }
 
             self.engine.get_document(document).ok_or_else(|| {
-                McpError::invalid_params(format!("Document '{}' not found", document))
+                McpError::invalid_params(format!("Document '{document}' not found"))
             })?;
 
             let facts = self.engine.get_document_facts(document);
             let rules = self.engine.get_document_rules(document);
 
             let mut output = String::default();
-            output.push_str(&format!("# Document: {}\n\n", document));
+            let _ = write!(output, "# Document: {document}\n\n");
 
-            output.push_str(&format!("## Facts ({})\n\n", facts.len()));
+            let _ = write!(output, "## Facts ({})\n\n", facts.len());
             if facts.is_empty() {
                 output.push_str("(none)\n");
             } else {
                 for fact in &facts {
                     let fact_name = lemma::analysis::fact_display_name(fact);
-                    output.push_str(&format!("- **{}**: {}\n", fact_name, fact.value));
+                    let _ = writeln!(output, "- **{}**: {}", fact_name, fact.value);
                 }
             }
 
-            output.push_str(&format!("\n## Rules ({})\n\n", rules.len()));
+            let _ = write!(output, "\n## Rules ({})\n\n", rules.len());
             if rules.is_empty() {
                 output.push_str("(none)\n");
             } else {
                 for rule in &rules {
-                    output.push_str(&format!("- **{}**\n", rule.name));
+                    let _ = writeln!(output, "- **{}**", rule.name);
                 }
             }
 
@@ -415,7 +411,7 @@ pub mod server {
             } else {
                 let mut s = format!("## Loaded Documents ({})\n\n", documents.len());
                 for doc in &documents {
-                    s.push_str(&format!("- {}\n", doc));
+                    let _ = writeln!(s, "- {doc}");
                 }
                 s
             };
@@ -464,13 +460,13 @@ pub mod server {
                         jsonrpc: "2.0".to_string(),
                         id: None,
                         result: None,
-                        error: Some(McpError::parse_error(format!("Parse error: {}", e))),
+                        error: Some(McpError::parse_error(format!("Parse error: {e}"))),
                     }
                 }
             };
 
             let response_json = serde_json::to_string(&response)?;
-            writeln!(stdout, "{}", response_json)?;
+            writeln!(stdout, "{response_json}")?;
             stdout.flush()?;
 
             debug!("Sent response");

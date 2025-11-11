@@ -38,12 +38,12 @@ rule is_adult = age >= 18
 
 #[test]
 fn test_veto_without_message() {
-    let code = r#"
+    let code = r"
 doc validation
 fact value = -5
 rule is_valid = value > 0
     unless value < 0 then veto
-"#;
+";
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
@@ -483,9 +483,8 @@ fn test_veto_with_very_long_message() {
 doc long_message
 fact value = 0
 rule valid = value > 0
-    unless value == 0 then veto "{}"
-"#,
-        message
+    unless value == 0 then veto "{message}"
+"#
     );
 
     let mut engine = Engine::new();

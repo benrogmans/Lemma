@@ -7,13 +7,13 @@ fn test_evaluate_document_all_rules() {
     let mut engine = Engine::new();
     engine
         .add_lemma_code(
-            r#"
+            r"
         doc test
         fact x = 10
         fact y = 5
         rule sum = x + y
         rule product = x * y
-    "#,
+    ",
             "test.lemma",
         )
         .unwrap();
@@ -51,11 +51,11 @@ fn test_evaluate_empty_facts() {
     let mut engine = Engine::new();
     engine
         .add_lemma_code(
-            r#"
+            r"
         doc test
         fact price = 100
         rule total = price * 2
-    "#,
+    ",
             "test.lemma",
         )
         .unwrap();
@@ -75,11 +75,11 @@ fn test_evaluate_boolean_rule() {
     let mut engine = Engine::new();
     engine
         .add_lemma_code(
-            r#"
+            r"
         doc test
         fact age = 25
         rule is_adult = age >= 18
-    "#,
+    ",
             "test.lemma",
         )
         .unwrap();
@@ -96,12 +96,12 @@ fn test_evaluate_with_unless_clause() {
     let mut engine = Engine::new();
     engine
         .add_lemma_code(
-            r#"
+            r"
         doc test
         fact quantity = 15
         rule discount = 0
           unless quantity >= 10 then 10
-    "#,
+    ",
             "test.lemma",
         )
         .unwrap();
@@ -128,22 +128,22 @@ fn test_multiple_documents() {
     let mut engine = Engine::new();
     engine
         .add_lemma_code(
-            r#"
+            r"
         doc doc1
         fact x = 10
         rule result = x * 2
-    "#,
+    ",
             "doc1.lemma",
         )
         .unwrap();
 
     engine
         .add_lemma_code(
-            r#"
+            r"
         doc doc2
         fact y = 5
         rule result = y * 3
-    "#,
+    ",
             "doc2.lemma",
         )
         .unwrap();
@@ -170,12 +170,12 @@ fn test_runtime_error_mapping() {
     let mut engine = Engine::new();
     engine
         .add_lemma_code(
-            r#"
+            r"
         doc test
         fact numerator = 10
         fact denominator = 0
         rule division = numerator / denominator
-    "#,
+    ",
             "test.lemma",
         )
         .unwrap();

@@ -62,8 +62,8 @@ rule is_adult = age >= 18
 
 #[test]
 fn test_veto_without_message() {
-    let input = r#"doc test
-rule adult = age >= 18 unless age > 150 then veto"#;
+    let input = r"doc test
+rule adult = age >= 18 unless age > 150 then veto";
     let result = parse(input, None);
     assert!(
         result.is_ok(),
@@ -137,8 +137,7 @@ fn test_error_cases_comprehensive() {
         let result = parse(input, None);
         assert!(
             result.is_err(),
-            "Expected error for {} but got success",
-            description
+            "Expected error for {description} but got success"
         );
     }
 }

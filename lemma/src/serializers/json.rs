@@ -6,10 +6,9 @@ use std::collections::HashMap;
 fn serialize_value(value: &Value, fact_type: &LemmaType) -> Result<String, LemmaError> {
     match fact_type {
         LemmaType::Text => match value {
-            Value::String(s) => Ok(format!("\"{}\"", s)),
+            Value::String(s) => Ok(format!("\"{s}\"")),
             _ => Err(LemmaError::Engine(format!(
-                "Expected string for Text, got {:?}",
-                value
+                "Expected string for Text, got {value:?}"
             ))),
         },
         LemmaType::Number => match value {
@@ -18,38 +17,34 @@ fn serialize_value(value: &Value, fact_type: &LemmaType) -> Result<String, Lemma
                 .trim()
                 .parse::<f64>()
                 .map(|_| s.trim().to_string())
-                .map_err(|_| LemmaError::Engine(format!("Invalid number string: '{}'", s))),
+                .map_err(|_| LemmaError::Engine(format!("Invalid number string: '{s}'"))),
             _ => Err(LemmaError::Engine(format!(
-                "Expected number or string for Number, got {:?}",
-                value
+                "Expected number or string for Number, got {value:?}"
             ))),
         },
         LemmaType::Percentage => match value {
             Value::Number(n) => {
                 let decimal = n.as_f64().ok_or_else(|| {
-                    LemmaError::Engine(format!("Invalid number for percentage: {:?}", n))
+                    LemmaError::Engine(format!("Invalid number for percentage: {n:?}"))
                 })?;
                 Ok(format!("{}%", decimal * 100.0))
             }
             Value::String(s) => Ok(s.clone()),
             _ => Err(LemmaError::Engine(format!(
-                "Expected number or string for Percentage, got {:?}",
-                value
+                "Expected number or string for Percentage, got {value:?}"
             ))),
         },
         LemmaType::Boolean => match value {
             Value::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
             Value::String(s) => Ok(s.clone()),
             _ => Err(LemmaError::Engine(format!(
-                "Expected boolean or string for Boolean, got {:?}",
-                value
+                "Expected boolean or string for Boolean, got {value:?}"
             ))),
         },
         LemmaType::Date => match value {
             Value::String(s) => Ok(s.clone()),
             _ => Err(LemmaError::Engine(format!(
-                "Expected string for Date, got {:?}",
-                value
+                "Expected string for Date, got {value:?}"
             ))),
         },
         LemmaType::Regex => match value {
@@ -57,12 +52,11 @@ fn serialize_value(value: &Value, fact_type: &LemmaType) -> Result<String, Lemma
                 if s.starts_with('/') && s.ends_with('/') {
                     Ok(s.clone())
                 } else {
-                    Ok(format!("/{}/", s))
+                    Ok(format!("/{s}/"))
                 }
             }
             _ => Err(LemmaError::Engine(format!(
-                "Expected string for Regex, got {:?}",
-                value
+                "Expected string for Regex, got {value:?}"
             ))),
         },
         LemmaType::Mass
@@ -79,8 +73,7 @@ fn serialize_value(value: &Value, fact_type: &LemmaType) -> Result<String, Lemma
         | LemmaType::Money => match value {
             Value::String(s) => Ok(s.clone()),
             _ => Err(LemmaError::Engine(format!(
-                "Expected string with value and unit for {:?} (e.g., \"100 kilogram\"), got {:?}",
-                fact_type, value
+                "Expected string with value and unit for {fact_type:?} (e.g., \"100 kilogram\"), got {value:?}"
             ))),
         },
     }
@@ -107,20 +100,26 @@ fn serialize_value(value: &Value, fact_type: &LemmaType) -> Result<String, Lemma
 ///   "start_date": "2024-01-15"
 /// }
 /// ```
+/// Convert JSON bytes for a document to Lemma `name=value` strings.
+///
+/// # Errors
+/// Returns an error if the JSON cannot be parsed or if a value cannot be
+/// serialized into a Lemma literal consistent with the document's fact types.
+#[allow(clippy::implicit_hasher)]
 pub fn to_lemma_syntax(
     json: &[u8],
     doc: &LemmaDoc,
     all_docs: &HashMap<String, LemmaDoc>,
 ) -> Result<Vec<String>, crate::LemmaError> {
     let map: HashMap<String, Value> = serde_json::from_slice(json)
-        .map_err(|e| crate::LemmaError::Engine(format!("JSON parse error: {}", e)))?;
+        .map_err(|e| crate::LemmaError::Engine(format!("JSON parse error: {e}")))?;
 
     let mut lemma_strings = Vec::new();
 
     for (name, value) in map {
         let fact_type = super::find_fact_type(&name, doc, all_docs)?;
         let lemma_value = serialize_value(&value, &fact_type)?;
-        lemma_strings.push(format!("{}={}", name, lemma_value));
+        lemma_strings.push(format!("{name}={lemma_value}"));
     }
 
     Ok(lemma_strings)
@@ -135,10 +134,10 @@ mod tests {
     fn test_percentage_as_number() -> LemmaResult<()> {
         let mut engine = Engine::new();
         engine.add_lemma_code(
-            r#"
+            r"
             doc test
             fact discount = 10%
-            "#,
+            ",
             "test.lemma",
         )?;
 
@@ -158,10 +157,10 @@ mod tests {
     fn test_percentage_as_string_with_percent() -> LemmaResult<()> {
         let mut engine = Engine::new();
         engine.add_lemma_code(
-            r#"
+            r"
             doc test
             fact discount = 10%
-            "#,
+            ",
             "test.lemma",
         )?;
 
@@ -181,10 +180,10 @@ mod tests {
     fn test_percentage_as_string_without_percent() -> LemmaResult<()> {
         let mut engine = Engine::new();
         engine.add_lemma_code(
-            r#"
+            r"
             doc test
             fact discount = 10%
-            "#,
+            ",
             "test.lemma",
         )?;
 
@@ -226,10 +225,10 @@ mod tests {
     fn test_number_as_string() -> LemmaResult<()> {
         let mut engine = Engine::new();
         engine.add_lemma_code(
-            r#"
+            r"
             doc test
             fact age = 30
-            "#,
+            ",
             "test.lemma",
         )?;
 
@@ -248,11 +247,11 @@ mod tests {
     fn test_unit_as_string() -> LemmaResult<()> {
         let mut engine = Engine::new();
         engine.add_lemma_code(
-            r#"
+            r"
             doc test
             fact price = 100 USD
             fact weight = 50 kilogram
-            "#,
+            ",
             "test.lemma",
         )?;
 
@@ -272,10 +271,10 @@ mod tests {
     fn test_boolean_values() -> LemmaResult<()> {
         let mut engine = Engine::new();
         engine.add_lemma_code(
-            r#"
+            r"
             doc test
             fact active = false
-            "#,
+            ",
             "test.lemma",
         )?;
 
@@ -294,10 +293,10 @@ mod tests {
     fn test_boolean_as_string() -> LemmaResult<()> {
         let mut engine = Engine::new();
         engine.add_lemma_code(
-            r#"
+            r"
             doc test
             fact status = yes
-            "#,
+            ",
             "test.lemma",
         )?;
 
@@ -316,10 +315,10 @@ mod tests {
     fn test_date_as_string() -> LemmaResult<()> {
         let mut engine = Engine::new();
         engine.add_lemma_code(
-            r#"
+            r"
             doc test
             fact start_date = 2024-01-01
-            "#,
+            ",
             "test.lemma",
         )?;
 
@@ -375,10 +374,10 @@ mod tests {
         let mut engine = Engine::new();
         engine
             .add_lemma_code(
-                r#"
+                r"
             doc test
             fact age = 30
-            "#,
+            ",
                 "test.lemma",
             )
             .unwrap();
@@ -398,10 +397,10 @@ mod tests {
         let mut engine = Engine::new();
         engine
             .add_lemma_code(
-                r#"
+                r"
             doc test
             fact age = 30
-            "#,
+            ",
                 "test.lemma",
             )
             .unwrap();

@@ -64,6 +64,7 @@ pub struct Expression {
 
 impl Expression {
     /// Create a new expression with kind, span, and ID
+    #[must_use]
     pub fn new(kind: ExpressionKind, span: Option<Span>, id: ExpressionId) -> Self {
         Self { kind, span, id }
     }
@@ -115,6 +116,7 @@ pub enum ArithmeticOperation {
 
 impl ArithmeticOperation {
     /// Returns a human-readable name for the operation
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             ArithmeticOperation::Add => "addition",
@@ -142,6 +144,7 @@ pub enum ComparisonOperator {
 
 impl ComparisonOperator {
     /// Returns a human-readable name for the operator
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             ComparisonOperator::GreaterThan => "greater than",
@@ -258,17 +261,18 @@ pub enum LiteralValue {
 
 impl LiteralValue {
     /// Get the display value as a string (uses the Display implementation)
+    #[must_use]
     pub fn display_value(&self) -> String {
         self.to_string()
     }
 
-    /// Convert a LiteralValue to its corresponding LemmaType
+    /// Convert a `LiteralValue` to its corresponding `LemmaType`
+    #[must_use]
     pub fn to_type(&self) -> LemmaType {
         match self {
             LiteralValue::Text(_) => LemmaType::Text,
             LiteralValue::Number(_) => LemmaType::Number,
-            LiteralValue::Date(_) => LemmaType::Date,
-            LiteralValue::Time(_) => LemmaType::Date,
+            LiteralValue::Date(_) | LiteralValue::Time(_) => LemmaType::Date,
             LiteralValue::Boolean(_) => LemmaType::Boolean,
             LiteralValue::Percentage(_) => LemmaType::Percentage,
             LiteralValue::Regex(_) => LemmaType::Regex,
@@ -506,6 +510,7 @@ pub enum NumericUnit {
 
 impl NumericUnit {
     /// Extract the numeric value from any unit
+    #[must_use]
     pub fn value(&self) -> Decimal {
         match self {
             NumericUnit::Mass(v, _)
@@ -524,12 +529,14 @@ impl NumericUnit {
     }
 
     /// Check if two units are the same category
+    #[must_use]
     pub fn same_category(&self, other: &NumericUnit) -> bool {
         std::mem::discriminant(self) == std::mem::discriminant(other)
     }
 
-    /// Create a new NumericUnit with the same unit type but different value
+    /// Create a new `NumericUnit` with the same unit type but different value
     /// This is the key method that eliminates type enumeration in operations
+    #[must_use]
     pub fn with_value(&self, new_value: Decimal) -> NumericUnit {
         match self {
             NumericUnit::Mass(_, u) => NumericUnit::Mass(new_value, u.clone()),
@@ -553,8 +560,7 @@ impl NumericUnit {
         if let (NumericUnit::Money(_, l_curr), NumericUnit::Money(_, r_curr)) = (self, other) {
             if l_curr != r_curr {
                 return Err(crate::LemmaError::Engine(format!(
-                    "Cannot operate on different currencies: {:?} and {:?}",
-                    l_curr, r_curr
+                    "Cannot operate on different currencies: {l_curr:?} and {r_curr:?}"
                 )));
             }
         }
@@ -565,23 +571,24 @@ impl NumericUnit {
 impl fmt::Display for NumericUnit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NumericUnit::Mass(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Length(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Volume(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Duration(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Temperature(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Power(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Force(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Pressure(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Energy(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Frequency(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Data(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Money(v, u) => write!(f, "{} {}", v, u),
+            NumericUnit::Mass(v, u) => write!(f, "{v} {u}"),
+            NumericUnit::Length(v, u) => write!(f, "{v} {u}"),
+            NumericUnit::Volume(v, u) => write!(f, "{v} {u}"),
+            NumericUnit::Duration(v, u) => write!(f, "{v} {u}"),
+            NumericUnit::Temperature(v, u) => write!(f, "{v} {u}"),
+            NumericUnit::Power(v, u) => write!(f, "{v} {u}"),
+            NumericUnit::Force(v, u) => write!(f, "{v} {u}"),
+            NumericUnit::Pressure(v, u) => write!(f, "{v} {u}"),
+            NumericUnit::Energy(v, u) => write!(f, "{v} {u}"),
+            NumericUnit::Frequency(v, u) => write!(f, "{v} {u}"),
+            NumericUnit::Data(v, u) => write!(f, "{v} {u}"),
+            NumericUnit::Money(v, u) => write!(f, "{v} {u}"),
         }
     }
 }
 
 impl LemmaRule {
+    #[must_use]
     pub fn new(name: String, expression: Expression) -> Self {
         Self {
             name,
@@ -591,6 +598,7 @@ impl LemmaRule {
         }
     }
 
+    #[must_use]
     pub fn add_unless_clause(mut self, unless_clause: UnlessClause) -> Self {
         self.unless_clauses.push(unless_clause);
         self
@@ -598,6 +606,7 @@ impl LemmaRule {
 }
 
 impl LemmaFact {
+    #[must_use]
     pub fn new(fact_type: FactType, value: FactValue) -> Self {
         Self {
             fact_type,
@@ -606,6 +615,7 @@ impl LemmaFact {
         }
     }
 
+    #[must_use]
     pub fn with_span(mut self, span: Span) -> Self {
         self.span = Some(span);
         self
@@ -613,6 +623,7 @@ impl LemmaFact {
 }
 
 impl LemmaDoc {
+    #[must_use]
     pub fn new(name: String) -> Self {
         Self {
             name,
@@ -624,26 +635,31 @@ impl LemmaDoc {
         }
     }
 
+    #[must_use]
     pub fn with_source(mut self, source: String) -> Self {
         self.source = Some(source);
         self
     }
 
+    #[must_use]
     pub fn with_start_line(mut self, start_line: usize) -> Self {
         self.start_line = start_line;
         self
     }
 
+    #[must_use]
     pub fn set_commentary(mut self, commentary: String) -> Self {
         self.commentary = Some(commentary);
         self
     }
 
+    #[must_use]
     pub fn add_fact(mut self, fact: LemmaFact) -> Self {
         self.facts.push(fact);
         self
     }
 
+    #[must_use]
     pub fn add_rule(mut self, rule: LemmaRule) -> Self {
         self.rules.push(rule);
         self
@@ -656,16 +672,16 @@ impl fmt::Display for LemmaDoc {
         writeln!(f)?;
 
         if let Some(ref commentary) = self.commentary {
-            writeln!(f, "\"\"\"{}", commentary)?;
+            writeln!(f, "\"\"\"{commentary}")?;
             writeln!(f, "\"\"\"")?;
         }
 
         for fact in &self.facts {
-            write!(f, "{}", fact)?;
+            write!(f, "{fact}")?;
         }
 
         for rule in &self.rules {
-            write!(f, "{}", rule)?;
+            write!(f, "{rule}")?;
         }
 
         Ok(())
@@ -698,20 +714,20 @@ impl fmt::Display for LemmaRule {
 impl fmt::Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            ExpressionKind::Literal(lit) => write!(f, "{}", lit),
-            ExpressionKind::FactReference(fact_ref) => write!(f, "{}", fact_ref),
-            ExpressionKind::RuleReference(rule_ref) => write!(f, "{}", rule_ref),
+            ExpressionKind::Literal(lit) => write!(f, "{lit}"),
+            ExpressionKind::FactReference(fact_ref) => write!(f, "{fact_ref}"),
+            ExpressionKind::RuleReference(rule_ref) => write!(f, "{rule_ref}"),
             ExpressionKind::Arithmetic(left, op, right) => {
-                write!(f, "{} {} {}", left, op, right)
+                write!(f, "{left} {op} {right}")
             }
             ExpressionKind::Comparison(left, op, right) => {
-                write!(f, "{} {} {}", left, op, right)
+                write!(f, "{left} {op} {right}")
             }
             ExpressionKind::FactHasAnyValue(fact_ref) => {
-                write!(f, "have {}", fact_ref)
+                write!(f, "have {fact_ref}")
             }
             ExpressionKind::UnitConversion(value, target) => {
-                write!(f, "{} in {}", value, target)
+                write!(f, "{value} in {target}")
             }
             ExpressionKind::LogicalNegation(expr, negation_type) => {
                 let prefix = match negation_type {
@@ -719,13 +735,13 @@ impl fmt::Display for Expression {
                     NegationType::HaveNot => "have not",
                     NegationType::NotHave => "not have",
                 };
-                write!(f, "{} {}", prefix, expr)
+                write!(f, "{prefix} {expr}")
             }
             ExpressionKind::LogicalAnd(left, right) => {
-                write!(f, "{} and {}", left, right)
+                write!(f, "{left} and {right}")
             }
             ExpressionKind::LogicalOr(left, right) => {
-                write!(f, "{} or {}", left, right)
+                write!(f, "{left} or {right}")
             }
             ExpressionKind::MathematicalOperator(op, operand) => {
                 let op_name = match op {
@@ -739,10 +755,10 @@ impl fmt::Display for Expression {
                     MathematicalOperator::Log => "log",
                     MathematicalOperator::Exp => "exp",
                 };
-                write!(f, "{} {}", op_name, operand)
+                write!(f, "{op_name} {operand}")
             }
             ExpressionKind::Veto(veto) => match &veto.message {
-                Some(msg) => write!(f, "veto \"{}\"", msg),
+                Some(msg) => write!(f, "veto \"{msg}\""),
                 None => write!(f, "veto"),
             },
         }
@@ -752,13 +768,13 @@ impl fmt::Display for Expression {
 impl fmt::Display for LiteralValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LiteralValue::Number(n) => write!(f, "{}", n),
-            LiteralValue::Text(s) => write!(f, "\"{}\"", s),
-            LiteralValue::Date(dt) => write!(f, "{}", dt),
-            LiteralValue::Boolean(b) => write!(f, "{}", b),
-            LiteralValue::Percentage(p) => write!(f, "{}%", p),
-            LiteralValue::Unit(unit) => write!(f, "{}", unit),
-            LiteralValue::Regex(s) => write!(f, "{}", s),
+            LiteralValue::Number(n) => write!(f, "{n}"),
+            LiteralValue::Text(s) => write!(f, "\"{s}\""),
+            LiteralValue::Date(dt) => write!(f, "{dt}"),
+            LiteralValue::Boolean(b) => write!(f, "{b}"),
+            LiteralValue::Percentage(p) => write!(f, "{p}%"),
+            LiteralValue::Unit(unit) => write!(f, "{unit}"),
+            LiteralValue::Regex(s) => write!(f, "{s}"),
             LiteralValue::Time(time) => {
                 write!(f, "time({}, {}, {})", time.hour, time.minute, time.second)
             }
@@ -768,12 +784,13 @@ impl fmt::Display for LiteralValue {
 
 impl LiteralValue {
     /// Provides a descriptive string for error messages and debugging
+    #[must_use]
     pub fn describe(&self) -> String {
         match self {
-            LiteralValue::Text(s) => format!("text value \"{}\"", s),
-            LiteralValue::Number(n) => format!("number {}", n),
-            LiteralValue::Boolean(b) => format!("boolean {}", b),
-            LiteralValue::Percentage(p) => format!("percentage {}%", p),
+            LiteralValue::Text(s) => format!("text value \"{s}\""),
+            LiteralValue::Number(n) => format!("number {n}"),
+            LiteralValue::Boolean(b) => format!("boolean {b}"),
+            LiteralValue::Percentage(p) => format!("percentage {p}%"),
             LiteralValue::Date(_) => "date value".to_string(),
             LiteralValue::Unit(unit) => {
                 format!(
@@ -782,7 +799,7 @@ impl LiteralValue {
                     unit
                 )
             }
-            LiteralValue::Regex(s) => format!("regex value {}", s),
+            LiteralValue::Regex(s) => format!("regex value {s}"),
             LiteralValue::Time(time) => {
                 format!("time value {}:{}:{}", time.hour, time.minute, time.second)
             }
@@ -962,18 +979,18 @@ impl fmt::Display for MoneyUnit {
 impl fmt::Display for ConversionTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConversionTarget::Mass(unit) => write!(f, "{}", unit),
-            ConversionTarget::Length(unit) => write!(f, "{}", unit),
-            ConversionTarget::Volume(unit) => write!(f, "{}", unit),
-            ConversionTarget::Duration(unit) => write!(f, "{}", unit),
-            ConversionTarget::Temperature(unit) => write!(f, "{}", unit),
-            ConversionTarget::Power(unit) => write!(f, "{}", unit),
-            ConversionTarget::Force(unit) => write!(f, "{}", unit),
-            ConversionTarget::Pressure(unit) => write!(f, "{}", unit),
-            ConversionTarget::Energy(unit) => write!(f, "{}", unit),
-            ConversionTarget::Frequency(unit) => write!(f, "{}", unit),
-            ConversionTarget::Data(unit) => write!(f, "{}", unit),
-            ConversionTarget::Money(unit) => write!(f, "{}", unit),
+            ConversionTarget::Mass(unit) => write!(f, "{unit}"),
+            ConversionTarget::Length(unit) => write!(f, "{unit}"),
+            ConversionTarget::Volume(unit) => write!(f, "{unit}"),
+            ConversionTarget::Duration(unit) => write!(f, "{unit}"),
+            ConversionTarget::Temperature(unit) => write!(f, "{unit}"),
+            ConversionTarget::Power(unit) => write!(f, "{unit}"),
+            ConversionTarget::Force(unit) => write!(f, "{unit}"),
+            ConversionTarget::Pressure(unit) => write!(f, "{unit}"),
+            ConversionTarget::Energy(unit) => write!(f, "{unit}"),
+            ConversionTarget::Frequency(unit) => write!(f, "{unit}"),
+            ConversionTarget::Data(unit) => write!(f, "{unit}"),
+            ConversionTarget::Money(unit) => write!(f, "{unit}"),
             ConversionTarget::Percentage => write!(f, "percentage"),
         }
     }
@@ -1007,7 +1024,7 @@ impl fmt::Display for LemmaType {
 impl fmt::Display for TypeAnnotation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TypeAnnotation::LemmaType(lemma_type) => write!(f, "{}", lemma_type),
+            TypeAnnotation::LemmaType(lemma_type) => write!(f, "{lemma_type}"),
         }
     }
 }
@@ -1050,9 +1067,9 @@ impl TypeAnnotation {
 impl fmt::Display for FactValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FactValue::Literal(lit) => write!(f, "{}", lit),
-            FactValue::TypeAnnotation(type_ann) => write!(f, "[{}]", type_ann),
-            FactValue::DocumentReference(doc_name) => write!(f, "doc {}", doc_name),
+            FactValue::Literal(lit) => write!(f, "{lit}"),
+            FactValue::TypeAnnotation(type_ann) => write!(f, "[{type_ann}]"),
+            FactValue::DocumentReference(doc_name) => write!(f, "doc {doc_name}"),
         }
     }
 }
@@ -1072,8 +1089,8 @@ impl fmt::Display for ForeignFact {
 impl fmt::Display for FactType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FactType::Local(name) => write!(f, "{}", name),
-            FactType::Foreign(foreign_ref) => write!(f, "{}", foreign_ref),
+            FactType::Local(name) => write!(f, "{name}"),
+            FactType::Foreign(foreign_ref) => write!(f, "{foreign_ref}"),
         }
     }
 }
@@ -1138,7 +1155,7 @@ impl fmt::Display for DateTimeValue {
             self.year, self.month, self.day, self.hour, self.minute, self.second
         )?;
         if let Some(tz) = &self.timezone {
-            write!(f, "{}", tz)?;
+            write!(f, "{tz}")?;
         }
         Ok(())
     }

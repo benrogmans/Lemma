@@ -39,9 +39,9 @@ fact name = "Jane""#;
 
 #[test]
 fn test_semantic_validator_duplicate_rules() {
-    let input = r#"doc person
+    let input = r"doc person
 rule is_adult = age >= 18
-rule is_adult = age >= 21"#;
+rule is_adult = age >= 21";
 
     let docs = parse(input, Some("test.lemma".to_string())).unwrap();
     let validator = Validator::new();
@@ -58,9 +58,9 @@ rule is_adult = age >= 21"#;
 
 #[test]
 fn test_semantic_validator_circular_dependency() {
-    let input = r#"doc test
+    let input = r"doc test
 rule a = b?
-rule b = a?"#;
+rule b = a?";
 
     let docs = parse(input, Some("test.lemma".to_string())).unwrap();
     let validator = Validator::new();
@@ -78,11 +78,11 @@ rule b = a?"#;
 
 #[test]
 fn test_semantic_validator_reference_type_errors() {
-    let input = r#"doc test
+    let input = r"doc test
 fact age = 25
 rule is_adult = age >= 18
 rule test1 = age?
-rule test2 = is_adult"#;
+rule test2 = is_adult";
 
     let docs = parse(input, Some("test.lemma".to_string())).unwrap();
     let validator = Validator::new();
@@ -138,9 +138,9 @@ fact contract = doc nonexistent"#;
 
 #[test]
 fn test_semantic_validator_fact_rule_name_conflict() {
-    let input = r#"doc test
+    let input = r"doc test
 fact price = 100
-rule price = 200"#;
+rule price = 200";
 
     let docs = parse(input, Some("test.lemma".to_string())).unwrap();
     let validator = Validator::new();
@@ -157,10 +157,10 @@ rule price = 200"#;
 
 #[test]
 fn test_semantic_validator_fact_rule_name_conflict_usage() {
-    let input = r#"doc test
+    let input = r"doc test
 fact price = 100
 rule price = 200
-rule total = price + 50"#;
+rule total = price + 50";
 
     let docs = parse(input, Some("test.lemma".to_string())).unwrap();
     let validator = Validator::new();

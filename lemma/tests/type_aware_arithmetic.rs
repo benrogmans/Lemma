@@ -4,7 +4,7 @@ use lemma::Engine;
 fn test_money_minus_percentage() {
     let mut engine = Engine::new();
 
-    let code = r#"
+    let code = r"
 doc test_money_minus_percentage
 
 fact base_price = 200
@@ -14,7 +14,7 @@ rule price_after_discount = base_price - discount_rate
 rule expected = 150
 
 rule test_passes = price_after_discount? == expected?
-"#;
+";
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
@@ -43,7 +43,7 @@ rule test_passes = price_after_discount? == expected?
 fn test_money_plus_percentage() {
     let mut engine = Engine::new();
 
-    let code = r#"
+    let code = r"
 doc test_money_plus_percentage
 
 fact base = 100
@@ -53,7 +53,7 @@ rule price_with_markup = base + markup
 rule expected = 110
 
 rule test_passes = price_with_markup? == expected?
-"#;
+";
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
@@ -82,7 +82,7 @@ rule test_passes = price_with_markup? == expected?
 fn test_number_times_percentage() {
     let mut engine = Engine::new();
 
-    let code = r#"
+    let code = r"
 doc test_number_times_percentage
 
 fact amount = 1000
@@ -92,7 +92,7 @@ rule result = amount * rate
 rule expected = 150
 
 rule test_passes = result? == expected?
-"#;
+";
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
@@ -118,7 +118,7 @@ rule test_passes = result? == expected?
 fn test_money_minus_percentage_with_rule_reference() {
     let mut engine = Engine::new();
 
-    let code = r#"
+    let code = r"
 doc test_with_rule_reference
 
 fact base_price = 200
@@ -129,7 +129,7 @@ rule final_price = base_price - discount_amount?
 rule expected = 150
 
 rule test_passes = final_price? == expected?
-"#;
+";
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
@@ -155,7 +155,7 @@ rule test_passes = final_price? == expected?
 fn test_chained_percentage_operations() {
     let mut engine = Engine::new();
 
-    let code = r#"
+    let code = r"
 doc test_chained_percentages
 
 fact original_price = 100
@@ -168,7 +168,7 @@ rule after_second = after_first? - second_discount
 rule expected = 72
 
 rule test_passes = after_second? == expected?
-"#;
+";
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine

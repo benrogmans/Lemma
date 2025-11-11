@@ -1,6 +1,6 @@
 use crate::error::LemmaError;
 use crate::parser::Rule;
-use crate::semantic::*;
+use crate::semantic::{DateTimeValue, LiteralValue, TimeValue, TimezoneValue};
 
 use chrono::{Datelike, Timelike};
 use pest::iterators::Pair;
@@ -45,6 +45,7 @@ fn parse_number_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
     Ok(LiteralValue::Number(number))
 }
 
+#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 fn parse_string_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
     let content = pair.as_str();
     let unquoted = &content[1..content.len() - 1];
@@ -53,6 +54,7 @@ fn parse_string_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
 
 /// Parse boolean literals.
 /// Accepts: true, false, yes, no, accept, reject (case-sensitive)
+#[allow(clippy::needless_pass_by_value)]
 fn parse_boolean_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
     let boolean = match pair.as_str() {
         "true" | "yes" | "accept" => true,
@@ -101,9 +103,8 @@ fn parse_regex_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
     match regex::Regex::new(&pattern) {
         Ok(_) => Ok(LiteralValue::Regex(regex_str)),
         Err(e) => Err(LemmaError::Engine(format!(
-            "Invalid regex pattern in '{}': {}\n\
-             Note: Use /pattern/ syntax, escape forward slashes as \\/",
-            regex_str, e
+            "Invalid regex pattern in '{regex_str}': {e}\n\
+             Note: Use /pattern/ syntax, escape forward slashes as \\/"
         ))),
     }
 }
@@ -146,8 +147,13 @@ fn parse_unit_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
 /// Parse date/time literals with comprehensive error messages.
 /// Supports formats:
 /// - Date only: YYYY-MM-DD (e.g., 2024-01-15)
-/// - DateTime: YYYY-MM-DDTHH:MM:SS (e.g., 2024-01-15T14:30:00)
+/// - `DateTime`: YYYY-MM-DDTHH:MM:SS (e.g., 2024-01-15T14:30:00)
 /// - With timezone: YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS+HH:MM
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn parse_datetime_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
     let datetime_str = pair.as_str();
 
@@ -196,13 +202,12 @@ fn parse_datetime_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> 
 
     // Provide helpful error message
     Err(LemmaError::Engine(format!(
-        "Invalid date/time format: '{}'\n\
+        "Invalid date/time format: '{datetime_str}'\n\
          Expected one of:\n\
          - Date: YYYY-MM-DD (e.g., 2024-01-15)\n\
          - DateTime: YYYY-MM-DDTHH:MM:SS (e.g., 2024-01-15T14:30:00)\n\
          - With timezone: YYYY-MM-DDTHH:MM:SSZ or +HH:MM (e.g., 2024-01-15T14:30:00Z)\n\
-         Note: Month must be 1-12, day must be valid for the month (no Feb 30), hours 0-23, minutes/seconds 0-59",
-        datetime_str
+         Note: Month must be 1-12, day must be valid for the month (no Feb 30), hours 0-23, minutes/seconds 0-59"
     )))
 }
 
@@ -210,6 +215,11 @@ fn parse_datetime_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> 
 /// Supports formats:
 /// - Time: HH:MM or HH:MM:SS (e.g., 14:30 or 14:30:00)
 /// - With timezone: HH:MM:SSZ or HH:MM:SS+HH:MM
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn parse_time_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
     let time_str = pair.as_str();
 
@@ -239,11 +249,10 @@ fn parse_time_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
 
     // Provide helpful error message
     Err(LemmaError::Engine(format!(
-        "Invalid time format: '{}'\n\
+        "Invalid time format: '{time_str}'\n\
          Expected: HH:MM or HH:MM:SS (e.g., 14:30 or 14:30:00)\n\
          With timezone: HH:MM:SSZ or +HH:MM (e.g., 14:30:00Z or 14:30:00+01:00)\n\
-         Note: Hours must be 0-23, minutes and seconds must be 0-59",
-        time_str
+         Note: Hours must be 0-23, minutes and seconds must be 0-59"
     )))
 }
 
@@ -276,9 +285,8 @@ fn parse_scientific_number(pair: Pair<Rule>) -> Result<Decimal, LemmaError> {
 
     let power_of_ten = decimal_pow10(exponent).ok_or_else(|| {
         LemmaError::Engine(format!(
-            "Exponent {} is out of range\n\
-             Maximum supported exponent is ±{} (values up to ~10^28)",
-            exponent, MAX_DECIMAL_EXPONENT
+            "Exponent {exponent} is out of range\n\
+             Maximum supported exponent is ±{MAX_DECIMAL_EXPONENT} (values up to ~10^28)"
         ))
     })?;
 
@@ -287,15 +295,13 @@ fn parse_scientific_number(pair: Pair<Rule>) -> Result<Decimal, LemmaError> {
     if exponent >= 0 {
         mantissa.checked_mul(power_of_ten).ok_or_else(|| {
             LemmaError::Engine(format!(
-                "Number overflow: result of {}e{} exceeds maximum value (~10^28)",
-                mantissa, exponent
+                "Number overflow: result of {mantissa}e{exponent} exceeds maximum value (~10^28)"
             ))
         })
     } else {
         mantissa.checked_div(power_of_ten).ok_or_else(|| {
             LemmaError::Engine(format!(
-                "Precision error: result of {}e{} has too many decimal places (max 28)",
-                mantissa, exponent
+                "Precision error: result of {mantissa}e{exponent} has too many decimal places (max 28)"
             ))
         })
     }
@@ -320,15 +326,14 @@ fn decimal_pow10(exp: i32) -> Option<Decimal> {
 }
 
 /// Parse a decimal number, supporting underscores as digit separators.
-/// Examples: 42, 3.14, 1_000_000, -5.5
+/// Examples: 42, 3.14, `1_000_000`, -5.5
 fn parse_decimal_number(number_str: &str) -> Result<Decimal, LemmaError> {
     let clean_number = number_str.replace('_', "");
     Decimal::from_str(&clean_number).map_err(|_| {
         LemmaError::Engine(format!(
-            "Invalid number: '{}'\n\
+            "Invalid number: '{number_str}'\n\
              Expected a valid decimal number (e.g., 42, 3.14, 1_000_000)\n\
-             Note: Use underscores as thousand separators if needed",
-            number_str
+             Note: Use underscores as thousand separators if needed"
         ))
     })
 }

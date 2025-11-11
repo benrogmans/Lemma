@@ -17,12 +17,12 @@ fn get_rule_value(engine: &Engine, doc_name: &str, rule_name: &str) -> lemma::Li
 #[test]
 fn test_timezone_comparison_same_instant() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact time_nyc = 2024-03-15T10:00:00-05:00
 fact time_london = 2024-03-15T15:00:00+00:00
 rule are_equal = time_nyc == time_london
-    "#;
+    ";
 
     engine
         .add_lemma_code(code, "test.lemma")
@@ -38,12 +38,12 @@ rule are_equal = time_nyc == time_london
 #[test]
 fn test_timezone_comparison_different_instants() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact time_nyc = 2024-03-15T10:00:00-05:00
 fact time_tokyo = 2024-03-15T10:00:00+09:00
 rule nyc_is_later = time_nyc > time_tokyo
-    "#;
+    ";
 
     engine
         .add_lemma_code(code, "test.lemma")
@@ -59,11 +59,11 @@ rule nyc_is_later = time_nyc > time_tokyo
 #[test]
 fn test_timezone_arithmetic_preserved() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact start_time = 2024-03-15T10:00:00+01:00
 rule later = start_time + 2 hours
-    "#;
+    ";
 
     engine
         .add_lemma_code(code, "test.lemma")
@@ -90,11 +90,11 @@ rule later = start_time + 2 hours
 #[test]
 fn test_negative_timezone_offset() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact west_coast = 2024-03-15T09:00:00-08:00
 rule later = west_coast + 3 hours
-    "#;
+    ";
 
     engine
         .add_lemma_code(code, "test.lemma")
@@ -116,11 +116,11 @@ rule later = west_coast + 3 hours
 #[test]
 fn test_timezone_crossing_midnight() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact evening = 2024-03-15T23:00:00+05:30
 rule next_day = evening + 2 hours
-    "#;
+    ";
 
     engine
         .add_lemma_code(code, "test.lemma")
@@ -146,12 +146,12 @@ rule next_day = evening + 2 hours
 #[test]
 fn test_timezone_date_difference() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact time1 = 2024-03-15T10:00:00-05:00
 fact time2 = 2024-03-15T16:00:00+01:00
 rule hours_diff = time2 - time1
-    "#;
+    ";
 
     engine
         .add_lemma_code(code, "test.lemma")
@@ -172,11 +172,11 @@ rule hours_diff = time2 - time1
 #[test]
 fn test_timezone_30_minute_offset() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact india_time = 2024-03-15T14:30:00+05:30
 rule utc_equivalent = india_time
-    "#;
+    ";
 
     engine
         .add_lemma_code(code, "test.lemma")
@@ -197,11 +197,11 @@ rule utc_equivalent = india_time
 #[test]
 fn test_timezone_45_minute_offset() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact nepal_time = 2024-03-15T14:30:00+05:45
 rule preserved = nepal_time
-    "#;
+    ";
 
     engine
         .add_lemma_code(code, "test.lemma")
@@ -229,11 +229,11 @@ rule preserved = nepal_time
 #[test]
 fn test_extreme_western_timezone() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact hawaii = 2024-03-15T12:00:00-10:00
 rule later = hawaii + 1 hour
-    "#;
+    ";
 
     engine
         .add_lemma_code(code, "test.lemma")
@@ -254,11 +254,11 @@ rule later = hawaii + 1 hour
 #[test]
 fn test_extreme_eastern_timezone() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact kiribati = 2024-03-15T12:00:00+14:00
 rule earlier = kiribati - 1 hour
-    "#;
+    ";
 
     engine
         .add_lemma_code(code, "test.lemma")

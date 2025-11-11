@@ -22,11 +22,11 @@ proptest! {
     #[test]
     fn prop_multiplication_by_zero(n in -1000.0..1000.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact x = {}
+fact x = {n}
 rule result = x * 0
-"#, n);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "result") {
@@ -37,11 +37,11 @@ rule result = x * 0
     #[test]
     fn prop_multiplication_identity(n in -100.0..100.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact x = {}
+fact x = {n}
 rule result = x * 1
-"#, n);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "result") {
@@ -54,11 +54,11 @@ rule result = x * 1
     #[test]
     fn prop_addition_identity(n in -100.0..100.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact x = {}
+fact x = {n}
 rule result = x + 0
-"#, n);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "result") {
@@ -71,12 +71,12 @@ rule result = x + 0
     #[test]
     fn prop_comparison_consistency(n in -100.0..100.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact x = {}
+fact x = {n}
 rule eq_self = x == x
 rule lte_self = x <= x
-"#, n);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "eq_self") {
@@ -90,14 +90,14 @@ rule lte_self = x <= x
     #[test]
     fn prop_fact_override_works(n in -100.0..100.0) {
         let mut engine = Engine::new();
-        let code = r#"
+        let code = r"
 doc test
 fact x = [number]
 rule doubled = x * 2
-"#;
+";
         engine.add_lemma_code(code, "test").unwrap();
 
-        let override_fact = format!("x={}", n);
+        let override_fact = format!("x={n}");
         let facts = lemma::parse_facts(&[override_fact.as_str()]).unwrap();
         let response = engine.evaluate("test", None, Some(facts)).unwrap();
 
@@ -113,13 +113,13 @@ rule doubled = x * 2
     #[test]
     fn prop_addition_commutative(a in -100.0..100.0, b in -100.0..100.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact a = {}
-fact b = {}
+fact a = {a}
+fact b = {b}
 rule sum1 = a + b
 rule sum2 = b + a
-"#, a, b);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         let v1 = get_rule_result(&mut engine, "test", "sum1");
@@ -134,13 +134,13 @@ rule sum2 = b + a
     #[test]
     fn prop_multiplication_commutative(a in -50.0..50.0, b in -50.0..50.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact a = {}
-fact b = {}
+fact a = {a}
+fact b = {b}
 rule prod1 = a * b
 rule prod2 = b * a
-"#, a, b);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         let v1 = get_rule_result(&mut engine, "test", "prod1");
@@ -155,14 +155,14 @@ rule prod2 = b * a
     #[test]
     fn prop_addition_associative(a in -50.0..50.0, b in -50.0..50.0, c in -50.0..50.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact a = {}
-fact b = {}
-fact c = {}
+fact a = {a}
+fact b = {b}
+fact c = {c}
 rule sum1 = (a + b) + c
 rule sum2 = a + (b + c)
-"#, a, b, c);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         let v1 = get_rule_result(&mut engine, "test", "sum1");
@@ -177,14 +177,14 @@ rule sum2 = a + (b + c)
     #[test]
     fn prop_multiplication_associative(a in -20.0..20.0, b in -20.0..20.0, c in -20.0..20.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact a = {}
-fact b = {}
-fact c = {}
+fact a = {a}
+fact b = {b}
+fact c = {c}
 rule prod1 = (a * b) * c
 rule prod2 = a * (b * c)
-"#, a, b, c);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         let v1 = get_rule_result(&mut engine, "test", "prod1");
@@ -199,14 +199,14 @@ rule prod2 = a * (b * c)
     #[test]
     fn prop_distributive(a in -50.0..50.0, b in -50.0..50.0, c in -50.0..50.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact a = {}
-fact b = {}
-fact c = {}
+fact a = {a}
+fact b = {b}
+fact c = {c}
 rule dist1 = a * (b + c)
 rule dist2 = (a * b) + (a * c)
-"#, a, b, c);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         let v1 = get_rule_result(&mut engine, "test", "dist1");
@@ -221,11 +221,11 @@ rule dist2 = (a * b) + (a * c)
     #[test]
     fn prop_negation_involution(n in -100.0..100.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact x = {}
+fact x = {n}
 rule double_neg = -(-x)
-"#, n);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "double_neg") {
@@ -238,13 +238,13 @@ rule double_neg = -(-x)
     #[test]
     fn prop_subtraction_as_addition_of_negative(a in -100.0..100.0, b in -100.0..100.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact a = {}
-fact b = {}
+fact a = {a}
+fact b = {b}
 rule sub = a - b
 rule add_neg = a + (-b)
-"#, a, b);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         let v1 = get_rule_result(&mut engine, "test", "sub");
@@ -259,13 +259,13 @@ rule add_neg = a + (-b)
     #[test]
     fn prop_division_inverse_of_multiplication(a in 1.0..100.0, b in 1.0..100.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact a = {}
-fact b = {}
+fact a = {a}
+fact b = {b}
 rule product = a * b
 rule back = product? / b
-"#, a, b);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "back") {
@@ -278,11 +278,11 @@ rule back = product? / b
     #[test]
     fn prop_boolean_not_involution(b in prop::bool::ANY) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact b = {}
+fact b = {b}
 rule double_not = not (not b)
-"#, b);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "double_not") {
@@ -293,13 +293,13 @@ rule double_not = not (not b)
     #[test]
     fn prop_and_commutative(a in prop::bool::ANY, b in prop::bool::ANY) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact a = {}
-fact b = {}
+fact a = {a}
+fact b = {b}
 rule and1 = a and b
 rule and2 = b and a
-"#, a, b);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         let v1 = get_rule_result(&mut engine, "test", "and1");
@@ -313,13 +313,13 @@ rule and2 = b and a
     #[test]
     fn prop_or_commutative(a in prop::bool::ANY, b in prop::bool::ANY) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact a = {}
-fact b = {}
+fact a = {a}
+fact b = {b}
 rule or1 = a or b
 rule or2 = b or a
-"#, a, b);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         let v1 = get_rule_result(&mut engine, "test", "or1");
@@ -333,18 +333,18 @@ rule or2 = b or a
     #[test]
     fn prop_comparison_transitivity(a in 1.0..100.0, b in 1.0..100.0) {
         let (min, max) = if a < b { (a, b) } else { (b, a) };
-        let mid = (min + max) / 2.0;
+        let mid = f64::midpoint(min, max);
 
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact a = {}
-fact b = {}
-fact c = {}
+fact a = {min}
+fact b = {mid}
+fact c = {max}
 rule ab = a < b
 rule bc = b < c
 rule ac = a < c
-"#, min, mid, max);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         let ab = get_rule_result(&mut engine, "test", "ab");
@@ -359,14 +359,14 @@ rule ac = a < c
     #[test]
     fn prop_unless_last_matching_wins(n in 1.0..100.0) {
         let mut engine = Engine::new();
-        let code = format!(r#"
+        let code = format!(r"
 doc test
-fact x = {}
+fact x = {n}
 rule discount = 0
   unless x > 10 then 10
   unless x > 20 then 20
   unless x > 50 then 50
-"#, n);
+");
         engine.add_lemma_code(&code, "test").unwrap();
 
         if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "discount") {
@@ -391,16 +391,15 @@ fn test_arithmetic_properties() {
     for n in test_values {
         let mut engine = Engine::new();
         let code = format!(
-            r#"
+            r"
 doc test
-fact x = {}
+fact x = {n}
 rule zero = x * 0
 rule identity_mul = x * 1
 rule identity_add = x + 0
 rule commutative1 = x + 5
 rule commutative2 = 5 + x
-"#,
-            n
+"
         );
         engine.add_lemma_code(&code, "test").unwrap();
 
@@ -408,8 +407,7 @@ rule commutative2 = 5 + x
             assert_eq!(
                 val,
                 Decimal::from_str("0").unwrap(),
-                "Multiplication by zero failed for {}",
-                n
+                "Multiplication by zero failed for {n}"
             );
         }
 
@@ -419,8 +417,7 @@ rule commutative2 = 5 + x
             let expected = Decimal::from_f64(n).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.001").unwrap(),
-                "Multiplication identity failed for {}",
-                n
+                "Multiplication identity failed for {n}"
             );
         }
 
@@ -430,8 +427,7 @@ rule commutative2 = 5 + x
             let expected = Decimal::from_f64(n).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.001").unwrap(),
-                "Addition identity failed for {}",
-                n
+                "Addition identity failed for {n}"
             );
         }
 
@@ -440,8 +436,7 @@ rule commutative2 = 5 + x
         if let (Some(LiteralValue::Number(v1)), Some(LiteralValue::Number(v2))) = (comm1, comm2) {
             assert!(
                 (v1 - v2).abs() < Decimal::from_str("0.001").unwrap(),
-                "Commutativity failed for {}",
-                n
+                "Commutativity failed for {n}"
             );
         }
     }
@@ -450,7 +445,7 @@ rule commutative2 = 5 + x
 #[test]
 fn test_comparison_properties() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact a = 10
 fact b = 20
@@ -461,7 +456,7 @@ rule a_lt_c = a < c
 rule a_eq_a = a == a
 rule a_lte_a = a <= a
 rule a_gte_a = a >= a
-"#;
+";
     engine.add_lemma_code(code, "test").unwrap();
 
     if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "a_eq_a") {
@@ -493,19 +488,18 @@ rule a_gte_a = a >= a
 #[test]
 fn test_unit_conversion_properties() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact distance = 1000 meters
 rule to_km = distance in kilometers
-"#;
+";
     engine.add_lemma_code(code, "test").unwrap();
 
     // After using `in`, the result is a plain Number, not a Unit
     if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "to_km") {
         assert!(
             (val - Decimal::from_str("1").unwrap()).abs() < Decimal::from_str("0.001").unwrap(),
-            "meters to kilometers conversion failed: got {}",
-            val
+            "meters to kilometers conversion failed: got {val}"
         );
     } else {
         panic!("to_km should be a Number after conversion");
@@ -515,13 +509,13 @@ rule to_km = distance in kilometers
 #[test]
 fn test_money_properties() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact price1 = 50
 fact price2 = 30
 rule total = price1 + price2
 rule difference = price1 - price2
-"#;
+";
     engine.add_lemma_code(code, "test").unwrap();
 
     if let Some(LiteralValue::Unit(NumericUnit::Money(amount, currency))) =
@@ -548,12 +542,12 @@ rule difference = price1 - price2
 #[test]
 fn test_percentage_properties() {
     let mut engine = Engine::new();
-    let code = r#"
+    let code = r"
 doc test
 fact base = 200
 fact rate = 10%
 rule result = base * rate
-"#;
+";
     engine.add_lemma_code(code, "test").unwrap();
 
     if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "result") {
@@ -571,16 +565,15 @@ fn test_inverse_operations() {
     for (a, b) in test_values {
         let mut engine = Engine::new();
         let code = format!(
-            r#"
+            r"
 doc test
-fact a = {}
-fact b = {}
+fact a = {a}
+fact b = {b}
 rule sum = a + b
 rule back_sub = sum? - b
 rule product = a * b
 rule back_div = product? / b
-"#,
-            a, b
+"
         );
         engine.add_lemma_code(&code, "test").unwrap();
 
@@ -588,9 +581,7 @@ rule back_div = product? / b
             let expected = Decimal::from_f64(a).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.001").unwrap(),
-                "Subtraction inverse failed for ({}, {})",
-                a,
-                b
+                "Subtraction inverse failed for ({a}, {b})"
             );
         }
 
@@ -598,9 +589,7 @@ rule back_div = product? / b
             let expected = Decimal::from_f64(a).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.01").unwrap(),
-                "Division inverse failed for ({}, {})",
-                a,
-                b
+                "Division inverse failed for ({a}, {b})"
             );
         }
     }

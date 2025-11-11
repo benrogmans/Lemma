@@ -55,15 +55,14 @@ pub fn evaluate_rule(
                 value: result_value.clone(),
             });
             return Ok(OperationResult::Value(result_value));
-        } else {
-            context
-                .operations
-                .push(OperationRecord::UnlessClauseEvaluated {
-                    index,
-                    matched: false,
-                    result_if_matched: None,
-                });
         }
+        context
+            .operations
+            .push(OperationRecord::UnlessClauseEvaluated {
+                index,
+                matched: false,
+                result_if_matched: None,
+            });
     }
 
     // No unless clause matched - evaluate default expression

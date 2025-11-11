@@ -2,14 +2,14 @@ use lemma::*;
 
 #[test]
 fn test_consistent_number_types() {
-    let code = r#"
+    let code = r"
 doc test
 fact x = 10
 fact condition = true
 
 rule result = 5
     unless condition then 10
-"#;
+";
 
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");
@@ -33,14 +33,14 @@ rule status = "pending"
 
 #[test]
 fn test_consistent_boolean_types() {
-    let code = r#"
+    let code = r"
 doc test
 fact x = 10
 fact y = 20
 
 rule check = x > 5
     unless y > 15 then y < 25
-"#;
+";
 
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");
@@ -85,13 +85,13 @@ rule result = "text"
 
 #[test]
 fn test_mixed_number_and_boolean_rejected() {
-    let code = r#"
+    let code = r"
 doc test
 fact condition = true
 
 rule result = 42
     unless condition then false
-"#;
+";
 
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");
@@ -103,7 +103,7 @@ rule result = 42
 
 #[test]
 fn test_multiple_unless_clauses_consistent() {
-    let code = r#"
+    let code = r"
 doc test
 fact a = true
 fact b = false
@@ -111,7 +111,7 @@ fact b = false
 rule result = 1
     unless a then 2
     unless b then 3
-"#;
+";
 
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");
@@ -194,13 +194,13 @@ rule result = 10
 
 #[test]
 fn test_consistent_money_types() {
-    let code = r#"
+    let code = r"
 doc test
 fact condition = true
 
 rule price = 100 USD
     unless condition then 200 USD
-"#;
+";
 
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");
@@ -209,13 +209,13 @@ rule price = 100 USD
 
 #[test]
 fn test_mixed_money_and_number_rejected() {
-    let code = r#"
+    let code = r"
 doc test
 fact condition = true
 
 rule price = 100 USD
     unless condition then 200
-"#;
+";
 
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");
@@ -227,13 +227,13 @@ rule price = 100 USD
 
 #[test]
 fn test_consistent_mass_types() {
-    let code = r#"
+    let code = r"
 doc test
 fact heavy = true
 
 rule weight = 10 kilograms
     unless heavy then 20 kilograms
-"#;
+";
 
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");
@@ -242,13 +242,13 @@ rule weight = 10 kilograms
 
 #[test]
 fn test_mixed_mass_and_number_rejected() {
-    let code = r#"
+    let code = r"
 doc test
 fact heavy = true
 
 rule weight = 10 kilograms
     unless heavy then 20
-"#;
+";
 
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");
@@ -260,7 +260,7 @@ rule weight = 10 kilograms
 
 #[test]
 fn test_complex_expression_consistent_types() {
-    let code = r#"
+    let code = r"
 doc test
 fact x = 10
 fact y = 20
@@ -268,7 +268,7 @@ fact condition = true
 
 rule result = x + y
     unless condition then x * 2
-"#;
+";
 
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");
@@ -277,14 +277,14 @@ rule result = x + y
 
 #[test]
 fn test_comparison_expression_consistent_types() {
-    let code = r#"
+    let code = r"
 doc test
 fact x = 10
 fact condition = true
 
 rule check = x > 5
     unless condition then x < 20
-"#;
+";
 
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");

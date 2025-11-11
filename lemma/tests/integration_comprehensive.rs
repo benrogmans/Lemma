@@ -4,14 +4,14 @@ use lemma::Engine;
 fn test_employee_contract_comprehensive() {
     let mut engine = Engine::new();
 
-    let base_contract = r#"
+    let base_contract = r"
 doc base_contract
 fact min_salary = 30000
 fact max_salary = 200000
 fact standard_vacation_days = 20 days
 fact probation_period = 90 days
 fact min_age = 18 years
-"#;
+";
 
     let employment_terms = r#"
 doc employment_terms
@@ -66,7 +66,7 @@ rule contract_valid = is_salary_valid? and vacation_days_ok? and is_adult?
 fn test_shipping_calculation_with_units() {
     let mut engine = Engine::new();
 
-    let shipping_doc = r#"
+    let shipping_doc = r"
 doc shipping
 fact package_weight = 5 kilograms
 fact package_dimensions_cm = 50 centimeters
@@ -91,7 +91,7 @@ rule base_shipping = base_rate + total_surcharges?
 rule express_multiplier = 1
   unless is_express then 2
 rule final_cost = (base_shipping? + distance_fee?) * express_multiplier?
-"#;
+";
 
     engine.add_lemma_code(shipping_doc, "test.lemma").unwrap();
 
@@ -126,7 +126,7 @@ rule final_cost = (base_shipping? + distance_fee?) * express_multiplier?
 fn test_tax_calculation_with_percentages() {
     let mut engine = Engine::new();
 
-    let tax_doc = r#"
+    let tax_doc = r"
 doc tax_calculation
 fact income = 80000
 fact deductions = 10000
@@ -148,7 +148,7 @@ rule tax_rate = tax_rate_low
 rule tax_amount = taxable_income? * tax_rate?
 rule net_income = income - tax_amount?
 rule effective_rate = (tax_amount? / income) * 100%
-"#;
+";
 
     engine.add_lemma_code(tax_doc, "test.lemma").unwrap();
 
@@ -187,13 +187,13 @@ rule effective_rate = (tax_amount? / income) * 100%
 fn test_multi_document_with_overrides() {
     let mut engine = Engine::new();
 
-    let config_doc = r#"
+    let config_doc = r"
 doc config
 fact max_temperature = 30 celsius
 fact min_temperature = 15 celsius
 fact alert_threshold = 90%
 fact check_interval = 5 minutes
-"#;
+";
 
     let monitoring_doc = r#"
 doc monitoring
@@ -290,7 +290,7 @@ rule status = "OK"
 fn test_complex_arithmetic_with_multiple_units() {
     let mut engine = Engine::new();
 
-    let physics_doc = r#"
+    let physics_doc = r"
 doc physics_calculation
 fact mass = 10 kilograms
 fact velocity = 15 meters
@@ -311,7 +311,7 @@ rule is_long_distance = distance_in_miles? > 50
 rule is_high_power = power_in_kilowatts? > 0.4
 
 rule trip_summary = is_high_speed? and is_long_distance? and is_high_power?
-"#;
+";
 
     engine.add_lemma_code(physics_doc, "test.lemma").unwrap();
 
@@ -395,7 +395,7 @@ rule status = "LOW"
 fn test_date_arithmetic_comprehensive() {
     let mut engine = Engine::new();
 
-    let timeline_doc = r#"
+    let timeline_doc = r"
 doc project_timeline
 fact project_start = 2024-01-15
 fact phase1_duration = 30 days
@@ -414,7 +414,7 @@ rule days_remaining = phase3_end? - today
 rule is_phase1_complete = today > phase1_end?
 rule is_phase2_complete = today > phase2_end?
 rule is_on_schedule = elapsed_time? <= phase1_duration + phase2_duration
-"#;
+";
 
     engine.add_lemma_code(timeline_doc, "test.lemma").unwrap();
 
@@ -448,12 +448,12 @@ rule is_on_schedule = elapsed_time? <= phase1_duration + phase2_duration
 fn test_date_plus_duration() {
     let mut engine = Engine::new();
 
-    let doc = r#"
+    let doc = r"
 doc test
 fact start = 2024-01-15
 fact duration = 30 days
 rule end_date = start + duration
-"#;
+";
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
     let response = engine.evaluate("test", None, None).unwrap();
@@ -467,19 +467,19 @@ rule end_date = start + duration
     assert!(end_date.result.is_some());
     let result_str = end_date.result.as_ref().unwrap().to_string();
     assert!(result_str.contains("2024"));
-    assert!(result_str.contains("2") && result_str.contains("14"));
+    assert!(result_str.contains('2') && result_str.contains("14"));
 }
 
 #[test]
 fn test_date_minus_duration() {
     let mut engine = Engine::new();
 
-    let doc = r#"
+    let doc = r"
 doc test
 fact end = 2024-02-14
 fact duration = 30 days
 rule start_date = end - duration
-"#;
+";
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
     let response = engine.evaluate("test", None, None).unwrap();
@@ -493,19 +493,19 @@ rule start_date = end - duration
     assert!(start_date.result.is_some());
     let result_str = start_date.result.as_ref().unwrap().to_string();
     assert!(result_str.contains("2024"));
-    assert!(result_str.contains("1") && result_str.contains("15"));
+    assert!(result_str.contains('1') && result_str.contains("15"));
 }
 
 #[test]
 fn test_date_minus_date() {
     let mut engine = Engine::new();
 
-    let doc = r#"
+    let doc = r"
 doc test
 fact start = 2024-01-15
 fact end = 2024-02-14
 rule duration = end - start
-"#;
+";
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
     let response = engine.evaluate("test", None, None).unwrap();
@@ -527,13 +527,13 @@ rule duration = end - start
 fn test_date_comparison() {
     let mut engine = Engine::new();
 
-    let doc = r#"
+    let doc = r"
 doc test
 fact date1 = 2024-01-15
 fact date2 = 2024-02-14
 rule date1_before_date2 = date1 < date2
 rule date1_after_date2 = date1 > date2
-"#;
+";
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
     let response = engine.evaluate("test", None, None).unwrap();
@@ -561,11 +561,11 @@ rule date1_after_date2 = date1 > date2
 fn test_type_validation_boolean_and_number() {
     let mut engine = Engine::new();
 
-    let doc = r#"
+    let doc = r"
 doc test
 fact flag = true
 rule result_true = flag and 100 or 50
-"#;
+";
 
     let result = engine.add_lemma_code(doc, "test.lemma");
     assert!(
@@ -578,11 +578,11 @@ rule result_true = flag and 100 or 50
 fn test_type_validation_boolean_and_money() {
     let mut engine = Engine::new();
 
-    let doc = r#"
+    let doc = r"
 doc test
 fact needs_extra = true
 rule extra_charge = needs_extra and 10 or 0
-"#;
+";
 
     let result = engine.add_lemma_code(doc, "test.lemma");
     assert!(
@@ -595,12 +595,12 @@ rule extra_charge = needs_extra and 10 or 0
 fn test_type_validation_comparison_and_number() {
     let mut engine = Engine::new();
 
-    let doc = r#"
+    let doc = r"
 doc test
 fact value = 100
 rule multiplier = value > 50 and 2 or 1
 rule result = value * multiplier
-"#;
+";
 
     let result = engine.add_lemma_code(doc, "test.lemma");
     assert!(
@@ -710,19 +710,19 @@ rule result = flag or "default"
 fn test_doc_ref_field_access_simple() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
+    let base_doc = r"
 doc base
 fact min_value = 100
 fact max_value = 1000
-"#;
+";
 
-    let child_doc = r#"
+    let child_doc = r"
 doc child
 fact config = doc base
 fact value = 500
 
 rule is_valid = value >= config.min_value and value <= config.max_value
-"#;
+";
 
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(child_doc, "test.lemma").unwrap();
@@ -741,19 +741,19 @@ rule is_valid = value >= config.min_value and value <= config.max_value
 fn test_doc_ref_field_access_with_units() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
+    let base_doc = r"
 doc base
 fact min_salary = 30000
 fact max_salary = 200000
-"#;
+";
 
-    let child_doc = r#"
+    let child_doc = r"
 doc child
 fact base_contract = doc base
 fact salary = 75000
 
 rule is_valid = salary >= base_contract.min_salary and salary <= base_contract.max_salary
-"#;
+";
 
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(child_doc, "test.lemma").unwrap();
@@ -772,18 +772,18 @@ rule is_valid = salary >= base_contract.min_salary and salary <= base_contract.m
 fn test_doc_ref_field_access_arithmetic() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
+    let base_doc = r"
 doc base
 fact project_start = 2024-01-15
 fact probation_period = 90 days
-"#;
+";
 
-    let child_doc = r#"
+    let child_doc = r"
 doc child
 fact base_contract = doc base
 
 rule probation_end = base_contract.project_start + base_contract.probation_period
-"#;
+";
 
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(child_doc, "test.lemma").unwrap();
@@ -799,5 +799,5 @@ rule probation_end = base_contract.project_start + base_contract.probation_perio
     assert!(probation_end.result.is_some());
     let result_str = probation_end.result.as_ref().unwrap().to_string();
     assert!(result_str.contains("2024"));
-    assert!(result_str.contains("4") && result_str.contains("14"));
+    assert!(result_str.contains('4') && result_str.contains("14"));
 }

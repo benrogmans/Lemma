@@ -14,6 +14,13 @@ use std::collections::HashMap;
 /// - Define .proto message formats
 /// - Generate Rust code from .proto files
 /// - Implement deserialization and mapping logic
+///
+/// Convert Protobuf bytes for a document to Lemma `name=value` strings.
+///
+/// # Errors
+/// Always returns an error currently — this is a stub implementation pending
+/// proper Protobuf support and mapping to Lemma types.
+#[allow(clippy::implicit_hasher)]
 pub fn to_lemma_syntax(
     _protobuf: &[u8],
     _doc: &LemmaDoc,

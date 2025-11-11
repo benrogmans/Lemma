@@ -41,12 +41,12 @@ fn test_json_to_lemma_syntax_units() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
     engine.add_lemma_code(
-        r#"
+        r"
         doc test
         fact weight = 50 kilogram
         fact price = 100 USD
         fact distance = 10 kilometer
-        "#,
+        ",
         "test.lemma",
     )?;
 
@@ -75,10 +75,10 @@ fn test_json_to_lemma_syntax_type_mismatch() {
 
     engine
         .add_lemma_code(
-            r#"
+            r"
         doc test
         fact age = 30
-        "#,
+        ",
             "test.lemma",
         )
         .unwrap();
@@ -101,7 +101,7 @@ fn test_json_to_lemma_syntax_end_to_end() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
     engine.add_lemma_code(
-        r#"
+        r"
         doc pricing
         fact base_price = 100 USD
         fact quantity = 1
@@ -109,7 +109,7 @@ fn test_json_to_lemma_syntax_end_to_end() -> LemmaResult<()> {
         rule subtotal = base_price * quantity
         rule tax = subtotal? * tax_rate
         rule total = subtotal? + tax?
-        "#,
+        ",
         "pricing.lemma",
     )?;
 
@@ -123,7 +123,12 @@ fn test_json_to_lemma_syntax_end_to_end() -> LemmaResult<()> {
     }"#;
 
     let lemma_strings = lemma::serializers::from_json(json.as_bytes(), doc, all_docs)?;
-    let facts = lemma::parse_facts(&lemma_strings.iter().map(|s| s.as_str()).collect::<Vec<_>>())?;
+    let facts = lemma::parse_facts(
+        &lemma_strings
+            .iter()
+            .map(std::string::String::as_str)
+            .collect::<Vec<_>>(),
+    )?;
 
     let response = engine.evaluate("pricing", None, Some(facts))?;
 

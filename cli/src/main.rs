@@ -41,9 +41,9 @@ enum Commands {
         ///   pricing:total,tax    - evaluate total and tax rules
         #[arg(value_name = "[DOC[:RULES]]")]
         doc_name: Option<String>,
-        /// Facts to override (format: name=value or ref_doc.fact=value)
+        /// Facts to override (format: name=value or `ref_doc.fact=value`)
         ///
-        /// Examples: price=100, quantity=5, config.tax_rate=0.21
+        /// Examples: price=100, quantity=5, `config.tax_rate=0.21`
         facts: Vec<String>,
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
@@ -182,11 +182,14 @@ fn run_command(
     };
 
     // Parse facts
-    let facts = if !final_facts.is_empty() {
-        let refs: Vec<&str> = final_facts.iter().map(|s| s.as_str()).collect();
-        Some(lemma::parse_facts(&refs)?)
-    } else {
+    let facts = if final_facts.is_empty() {
         None
+    } else {
+        let refs: Vec<&str> = final_facts
+            .iter()
+            .map(std::string::String::as_str)
+            .collect();
+        Some(lemma::parse_facts(&refs)?)
     };
 
     // Evaluate
@@ -195,7 +198,7 @@ fn run_command(
     print!("{}", formatter.format_response(&response, raw));
 
     for warning in &response.warnings {
-        eprintln!("Warning: {}", warning);
+        eprintln!("Warning: {warning}");
     }
 
     Ok(())
@@ -215,7 +218,7 @@ fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
             formatter.format_document_inspection(doc, &facts, &rules)
         );
     } else {
-        eprintln!("Error: Document '{}' not found", doc_name);
+        eprintln!("Error: Document '{doc_name}' not found");
         std::process::exit(1);
     }
 

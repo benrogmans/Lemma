@@ -103,6 +103,7 @@ pub struct Validator;
 
 impl Validator {
     /// Create a new validator
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -149,8 +150,8 @@ impl Validator {
                     };
 
                     let error_message = match fact.fact_type {
-                        FactType::Local(_) => format!("Duplicate fact definition: '{}'", fact_name),
-                        FactType::Foreign(_) => format!("Duplicate fact override: '{}'", fact_name),
+                        FactType::Local(_) => format!("Duplicate fact definition: '{fact_name}'"),
+                        FactType::Foreign(_) => format!("Duplicate fact override: '{fact_name}'"),
                     };
 
                     let suggestion = match fact.fact_type {
@@ -255,15 +256,14 @@ impl Validator {
                     // Check if the referenced document exists
                     if !docs.iter().any(|d| d.name == *ref_doc_name) {
                         return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                            message: format!("Document reference error: '{}' does not exist", ref_doc_name),
+                            message: format!("Document reference error: '{ref_doc_name}' does not exist"),
                             span: fact.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
                             source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
                             source_text: Arc::from(""),
                             doc_name: doc.name.clone(),
                             doc_start_line: doc.start_line,
                             suggestion: Some(format!(
-                                "Document '{}' is referenced but not defined. Make sure the document exists in your workspace.",
-                                ref_doc_name
+                                "Document '{ref_doc_name}' is referenced but not defined. Make sure the document exists in your workspace."
                             )),
             })));
                     }
@@ -583,8 +583,7 @@ impl Validator {
                 {
                     let cycle_display = cycle.join(" -> ");
                     return Err(LemmaError::CircularDependency(format!(
-                        "Circular dependency detected: {}. Rules cannot depend on themselves directly or indirectly.",
-                        cycle_display
+                        "Circular dependency detected: {cycle_display}. Rules cannot depend on themselves directly or indirectly."
                     )));
                 }
             }
@@ -822,8 +821,7 @@ impl Validator {
         if let (Some(left_curr), Some(right_curr)) = (left_currency, right_currency) {
             if left_curr != right_curr {
                 return Err(LemmaError::Engine(format!(
-                    "Cannot perform arithmetic with different currencies: {} and {}",
-                    left_curr, right_curr
+                    "Cannot perform arithmetic with different currencies: {left_curr} and {right_curr}"
                 )));
             }
         }
@@ -844,8 +842,7 @@ impl Validator {
         if let (Some(left_curr), Some(right_curr)) = (left_currency, right_currency) {
             if left_curr != right_curr {
                 return Err(LemmaError::Engine(format!(
-                    "Cannot compare different currencies: {} and {}",
-                    left_curr, right_curr
+                    "Cannot compare different currencies: {left_curr} and {right_curr}"
                 )));
             }
         }

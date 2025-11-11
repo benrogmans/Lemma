@@ -1,7 +1,10 @@
 use crate::ast::{ExpressionIdGenerator, Span};
 use crate::error::LemmaError;
 use crate::parser::Rule;
-use crate::semantic::*;
+use crate::semantic::{
+    ArithmeticOperation, ComparisonOperator, Expression, ExpressionKind, FactReference,
+    LiteralValue, MathematicalOperator, NegationType, RuleReference,
+};
 use pest::iterators::Pair;
 
 // Helper to create a traceable Expression with source span and unique ID
@@ -18,7 +21,7 @@ fn traceable_expr(
 }
 
 /// Helper function to parse any literal rule into an Expression.
-/// Handles both wrapped literals (Rule::literal) and direct literal types.
+/// Handles both wrapped literals (`Rule::literal`) and direct literal types.
 fn parse_literal_expression(
     pair: Pair<Rule>,
     id_gen: &mut ExpressionIdGenerator,
@@ -609,7 +612,6 @@ fn parse_logical_expression(
                     if inner.as_rule() == Rule::reference_expression {
                         let negated_expr = parse_reference_expression(inner, id_gen)?;
                         let negation_type = match rule_type {
-                            Rule::not_expr => NegationType::Not,
                             Rule::have_not_expr => NegationType::HaveNot,
                             Rule::not_have_expr => NegationType::NotHave,
                             _ => NegationType::Not,
@@ -620,7 +622,6 @@ fn parse_logical_expression(
                     } else if inner.as_rule() == Rule::primary {
                         let negated_expr = parse_primary(inner, id_gen)?;
                         let negation_type = match rule_type {
-                            Rule::not_expr => NegationType::Not,
                             Rule::have_not_expr => NegationType::HaveNot,
                             Rule::not_have_expr => NegationType::NotHave,
                             _ => NegationType::Not,
@@ -631,7 +632,6 @@ fn parse_logical_expression(
                     } else if inner.as_rule() == Rule::literal {
                         let negated_expr = parse_expression(inner, id_gen)?;
                         let negation_type = match rule_type {
-                            Rule::not_expr => NegationType::Not,
                             Rule::have_not_expr => NegationType::HaveNot,
                             Rule::not_have_expr => NegationType::NotHave,
                             _ => NegationType::Not,

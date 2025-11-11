@@ -21,12 +21,12 @@ pub struct EvaluationContext<'a> {
     pub all_documents: &'a HashMap<String, LemmaDoc>,
 
     /// Source text for all documents (for error reporting)
-    /// Maps source_id -> source text
+    /// Maps `source_id` -> source text
     pub sources: &'a HashMap<String, String>,
 
     /// Fact values (from document + overrides)
     /// Maps fact name -> concrete value
-    /// Only contains facts that have actual values (not TypeAnnotations)
+    /// Only contains facts that have actual values (not `TypeAnnotations`)
     pub facts: HashMap<String, LiteralValue>,
 
     /// Rule results computed so far (populated during execution)
@@ -39,6 +39,7 @@ pub struct EvaluationContext<'a> {
 
 impl<'a> EvaluationContext<'a> {
     /// Create a new evaluation context
+    #[must_use]
     pub fn new(
         current_doc: &'a LemmaDoc,
         all_documents: &'a HashMap<String, LemmaDoc>,
@@ -58,9 +59,10 @@ impl<'a> EvaluationContext<'a> {
 
 /// Build a fact map from document facts and overrides
 ///
-/// Includes facts with concrete values (FactValue::Literal) and expands
-/// DocumentReference facts by importing all facts from the referenced document.
-/// Facts with TypeAnnotation are missing and will cause evaluation errors.
+/// Includes facts with concrete values (`FactValue::Literal`) and expands
+/// `DocumentReference` facts by importing all facts from the referenced document.
+/// Facts with `TypeAnnotation` are missing and will cause evaluation errors.
+#[must_use]
 pub fn build_fact_map(
     doc_facts: &[LemmaFact],
     overrides: &[LemmaFact],
@@ -82,7 +84,7 @@ pub fn build_fact_map(
                     for ref_fact in &referenced_doc.facts {
                         if let FactValue::Literal(lit) = &ref_fact.value {
                             let ref_fact_name = get_fact_name(ref_fact);
-                            let qualified_name = format!("{}.{}", fact_prefix, ref_fact_name);
+                            let qualified_name = format!("{fact_prefix}.{ref_fact_name}");
                             facts.insert(qualified_name, lit.clone());
                         }
                     }
