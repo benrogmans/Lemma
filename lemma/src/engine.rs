@@ -47,23 +47,18 @@ impl Engine {
     }
 
     pub fn add_lemma_code(&mut self, lemma_code: &str, source: &str) -> LemmaResult<()> {
-        // Parse the documents
-        let new_docs = parse(lemma_code, Some(source.to_string()), &self.limits)?;
+        let new_docs = parse(lemma_code, Some(source.to_owned()), &self.limits)?;
 
-        // Store source text for all new documents
         for doc in &new_docs {
-            let source_id = doc.source.clone().unwrap_or_else(|| "<input>".to_string());
-            self.sources.insert(source_id, lemma_code.to_string());
+            let source_id = doc.source.clone().unwrap_or_else(|| "<input>".to_owned());
+            self.sources.insert(source_id, lemma_code.to_owned());
         }
 
-        // Combine existing documents with new documents for semantic validation
         let mut all_docs: Vec<crate::LemmaDoc> = self.documents.values().cloned().collect();
         all_docs.extend(new_docs);
 
-        // Run semantic validation on all documents
         let validated = self.validator.validate_all(all_docs)?;
 
-        // Store the validated documents
         for doc in validated.documents {
             self.documents.insert(doc.name.clone(), doc);
         }
@@ -114,11 +109,9 @@ impl Engine {
     ) -> LemmaResult<Response> {
         let overrides = fact_overrides.unwrap_or_default();
 
-        // Check ALL fact value sizes against limit
         for fact in &overrides {
             if let crate::FactValue::Literal(lit) = &fact.value {
                 let size = lit.byte_size();
-
                 if size > self.limits.max_fact_value_bytes {
                     return Err(LemmaError::ResourceLimitExceeded {
                         limit_name: "max_fact_value_bytes".to_string(),
@@ -146,5 +139,29 @@ impl Engine {
     /// Get all documents (needed by serializers for schema resolution)
     pub fn get_all_documents(&self) -> &HashMap<String, crate::LemmaDoc> {
         &self.documents
+    }
+
+    /// Invert a rule to find input domains that produce a desired outcome
+    ///
+    /// Returns a vector of solutions, where each solution is a map from
+    /// fact paths to their valid domains. Multiple solutions represent different
+    /// ways to satisfy the target outcome (disjunction).
+    ///
+    /// Use `given_facts` to constrain the search to specific known values.
+    pub fn invert(
+        &self,
+        document: &str,
+        rule: &str,
+        target: crate::Target,
+        given_facts: HashMap<String, crate::LiteralValue>,
+    ) -> LemmaResult<Vec<HashMap<crate::FactReference, crate::Domain>>> {
+        let shape = crate::inversion::inverter::invert(
+            document,
+            rule,
+            target,
+            given_facts,
+            &self.documents,
+        )?;
+        crate::inversion::domain_extraction::shape_to_domains(&shape)
     }
 }

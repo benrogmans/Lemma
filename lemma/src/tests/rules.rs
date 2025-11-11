@@ -2,14 +2,14 @@ use crate::evaluator::context::EvaluationContext;
 use crate::evaluator::rules::evaluate_rule;
 use crate::evaluator::timeout::TimeoutTracker;
 use crate::{
-    Expression, ExpressionId, ExpressionKind, FactPath, LemmaDoc, LemmaRule, LiteralValue,
+    Expression, ExpressionId, ExpressionKind, FactReference, LemmaDoc, LemmaRule, LiteralValue,
     OperationResult, ResourceLimits, UnlessClause,
 };
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 /// Helper to create an evaluation context for testing
-fn create_test_context(facts: HashMap<FactPath, LiteralValue>) -> EvaluationContext<'static> {
+fn create_test_context(facts: HashMap<FactReference, LiteralValue>) -> EvaluationContext<'static> {
     let docs = Box::leak(Box::new(HashMap::new()));
     let sources = Box::leak(Box::new(HashMap::new()));
     let doc = Box::leak(Box::new(LemmaDoc::new("test".to_string())));

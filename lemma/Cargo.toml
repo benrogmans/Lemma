@@ -24,6 +24,8 @@ regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rust_decimal.workspace = true
+# BDD-based boolean simplification for inversion
+boolean_expression = "0.4"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen.workspace = true

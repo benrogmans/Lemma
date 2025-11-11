@@ -2,14 +2,14 @@ use crate::evaluator::context::EvaluationContext;
 use crate::evaluator::expression::evaluate_expression;
 use crate::evaluator::timeout::TimeoutTracker;
 use crate::{
-    ArithmeticOperation, Expression, ExpressionId, ExpressionKind, FactPath, FactReference,
-    LemmaDoc, LiteralValue, OperationResult, ResourceLimits,
+    ArithmeticOperation, Expression, ExpressionId, ExpressionKind, FactReference, LemmaDoc,
+    LiteralValue, OperationResult, ResourceLimits,
 };
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 /// Helper to create an evaluation context for testing
-fn create_test_context(facts: HashMap<FactPath, LiteralValue>) -> EvaluationContext<'static> {
+fn create_test_context(facts: HashMap<FactReference, LiteralValue>) -> EvaluationContext<'static> {
     let docs = Box::leak(Box::new(HashMap::new()));
     let sources = Box::leak(Box::new(HashMap::new()));
     let doc = Box::leak(Box::new(LemmaDoc::new("test".to_string())));
@@ -40,7 +40,9 @@ fn test_evaluate_literal() {
 fn test_evaluate_fact_reference() {
     let mut facts = HashMap::new();
     facts.insert(
-        FactPath::new(vec!["price".to_string()]),
+        FactReference {
+            reference: vec!["price".to_string()],
+        },
         LiteralValue::Number(Decimal::from(100)),
     );
 

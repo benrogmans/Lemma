@@ -123,6 +123,20 @@ fn parse_expression_impl(
         Rule::arithmetic_expression => return parse_arithmetic_expression(pair, id_gen),
         Rule::comparison_expression => return parse_comparison_expression(pair, id_gen),
         Rule::boolean_expression => return parse_logical_expression(pair, id_gen),
+        // Directly handle mathematical operator nodes here so they don't get flattened
+        Rule::sqrt_expr
+        | Rule::sin_expr
+        | Rule::cos_expr
+        | Rule::tan_expr
+        | Rule::asin_expr
+        | Rule::acos_expr
+        | Rule::atan_expr
+        | Rule::log_expr
+        | Rule::exp_expr
+        | Rule::abs_expr
+        | Rule::floor_expr
+        | Rule::ceil_expr
+        | Rule::round_expr => return parse_logical_expression(pair, id_gen),
         Rule::and_expression => return parse_and_expression(pair, id_gen),
         Rule::or_expression => return parse_or_expression(pair, id_gen),
         Rule::and_operand => return parse_and_operand(pair, id_gen),
@@ -191,7 +205,11 @@ fn parse_expression_impl(
             | Rule::acos_expr
             | Rule::atan_expr
             | Rule::log_expr
-            | Rule::exp_expr => {
+            | Rule::exp_expr
+            | Rule::abs_expr
+            | Rule::floor_expr
+            | Rule::ceil_expr
+            | Rule::round_expr => {
                 return parse_logical_expression(inner_pair, id_gen);
             }
 
@@ -608,6 +626,53 @@ fn parse_logical_expression(
     pair: Pair<Rule>,
     id_gen: &mut ExpressionIdGenerator,
 ) -> Result<Expression, LemmaError> {
+    // Handle direct mathematical operator nodes (abs, floor, etc.)
+    match pair.as_rule() {
+        Rule::sqrt_expr
+        | Rule::sin_expr
+        | Rule::cos_expr
+        | Rule::tan_expr
+        | Rule::asin_expr
+        | Rule::acos_expr
+        | Rule::atan_expr
+        | Rule::log_expr
+        | Rule::exp_expr
+        | Rule::abs_expr
+        | Rule::floor_expr
+        | Rule::ceil_expr
+        | Rule::round_expr => {
+            let operator = match pair.as_rule() {
+                Rule::sqrt_expr => MathematicalOperator::Sqrt,
+                Rule::sin_expr => MathematicalOperator::Sin,
+                Rule::cos_expr => MathematicalOperator::Cos,
+                Rule::tan_expr => MathematicalOperator::Tan,
+                Rule::asin_expr => MathematicalOperator::Asin,
+                Rule::acos_expr => MathematicalOperator::Acos,
+                Rule::atan_expr => MathematicalOperator::Atan,
+                Rule::log_expr => MathematicalOperator::Log,
+                Rule::exp_expr => MathematicalOperator::Exp,
+                Rule::abs_expr => MathematicalOperator::Abs,
+                Rule::floor_expr => MathematicalOperator::Floor,
+                Rule::ceil_expr => MathematicalOperator::Ceil,
+                Rule::round_expr => MathematicalOperator::Round,
+                _ => unreachable!(),
+            };
+
+            for inner in pair.clone().into_inner() {
+                if inner.as_rule() == Rule::arithmetic_expression
+                    || inner.as_rule() == Rule::primary
+                {
+                    let operand = parse_expression(inner, id_gen)?;
+                    let kind = ExpressionKind::MathematicalOperator(operator, Box::new(operand));
+                    return Ok(traceable_expr(kind, &pair, id_gen));
+                }
+            }
+            return Err(LemmaError::Engine(
+                "Mathematical operator missing operand".to_string(),
+            ));
+        }
+        _ => {}
+    }
     if let Some(node) = pair.into_inner().next() {
         match node.as_rule() {
             Rule::reference_expression => return parse_reference_expression(node, id_gen),
@@ -676,7 +741,11 @@ fn parse_logical_expression(
             | Rule::acos_expr
             | Rule::atan_expr
             | Rule::log_expr
-            | Rule::exp_expr => {
+            | Rule::exp_expr
+            | Rule::abs_expr
+            | Rule::floor_expr
+            | Rule::ceil_expr
+            | Rule::round_expr => {
                 let operator = match node.as_rule() {
                     Rule::sqrt_expr => MathematicalOperator::Sqrt,
                     Rule::sin_expr => MathematicalOperator::Sin,
@@ -687,6 +756,10 @@ fn parse_logical_expression(
                     Rule::atan_expr => MathematicalOperator::Atan,
                     Rule::log_expr => MathematicalOperator::Log,
                     Rule::exp_expr => MathematicalOperator::Exp,
+                    Rule::abs_expr => MathematicalOperator::Abs,
+                    Rule::floor_expr => MathematicalOperator::Floor,
+                    Rule::ceil_expr => MathematicalOperator::Ceil,
+                    Rule::round_expr => MathematicalOperator::Round,
                     _ => {
                         return Err(LemmaError::Engine(
                             "Unknown mathematical operator".to_string(),

@@ -93,7 +93,7 @@ commentary_content = { (!"\"\"\"" ~ ANY)* }
 reserved_keyword = _{
     (^"doc" | ^"fact" | ^"rule" | ^"then" | ^"unless" |
      ^"have" | ^"not" | ^"in" | ^"and" | ^"or" |
-     ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" |
+    ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" | ^"abs" | ^"floor" | ^"ceil" | ^"round" |
      ^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject" |
      ^"percent" | ^"percentage" | ^"veto") ~
     !(ASCII_ALPHANUMERIC | "_")
@@ -216,7 +216,7 @@ unary_minus = { "-" }
 // Factor: unary operators and math functions apply to primary expressions
 // Primary is FIRST to avoid backtracking on parentheses
 factor = {
-    (unary_plus | unary_minus)? ~ (primary | sqrt_expr | sin_expr | cos_expr | tan_expr | asin_expr | acos_expr | atan_expr | log_expr | exp_expr)
+    (unary_plus | unary_minus)? ~ (primary | sqrt_expr | sin_expr | cos_expr | tan_expr | asin_expr | acos_expr | atan_expr | log_expr | exp_expr | abs_expr | floor_expr | ceil_expr | round_expr)
 }
 
 power = { factor ~ (SPACE* ~ pow_caret ~ SPACE* ~ power)? }
@@ -264,6 +264,10 @@ acos_expr     = { ^"acos" ~ (SPACE+ ~ arithmetic_expression | primary) }
 atan_expr     = { ^"atan" ~ (SPACE+ ~ arithmetic_expression | primary) }
 log_expr      = { ^"log" ~ (SPACE+ ~ arithmetic_expression | primary) }
 exp_expr      = { ^"exp" ~ (SPACE+ ~ arithmetic_expression | primary) }
+abs_expr      = { ^"abs" ~ (SPACE+ ~ arithmetic_expression | primary) }
+floor_expr    = { ^"floor" ~ (SPACE+ ~ arithmetic_expression | primary) }
+ceil_expr     = { ^"ceil" ~ (SPACE+ ~ arithmetic_expression | primary) }
+round_expr    = { ^"round" ~ (SPACE+ ~ arithmetic_expression | primary) }
 
 boolean_expression = { have_not_expr | not_have_expr | have_expr | not_expr }
 

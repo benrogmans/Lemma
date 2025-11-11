@@ -3,8 +3,8 @@
 //! Contains all state needed during evaluation of a single document.
 
 use crate::{
-    FactPath, FactType, FactValue, LemmaDoc, LemmaError, LemmaFact, LiteralValue, OperationRecord,
-    OperationResult, ResourceLimits,
+    FactReference, FactType, FactValue, LemmaDoc, LemmaError, LemmaFact, LiteralValue,
+    OperationRecord, OperationResult, ResourceLimits,
 };
 use std::collections::HashMap;
 
@@ -21,7 +21,7 @@ pub struct EvaluationContext<'a> {
     /// Document being evaluated
     pub current_doc: &'a LemmaDoc,
 
-    /// All loaded documents (for cross-document references)
+    /// All loaded documents (needed when facts reference other documents)
     pub all_documents: &'a HashMap<String, LemmaDoc>,
 
     /// Source text for all documents (for error reporting)
@@ -31,7 +31,7 @@ pub struct EvaluationContext<'a> {
     /// Fact values (from document + overrides)
     /// Maps fact path -> concrete value
     /// Only contains facts that have actual values (not TypeAnnotations)
-    pub facts: HashMap<FactPath, LiteralValue>,
+    pub facts: HashMap<FactReference, LiteralValue>,
 
     /// Timeout tracker (platform-specific)
     pub timeout_tracker: &'a TimeoutTracker,
@@ -53,7 +53,7 @@ impl<'a> EvaluationContext<'a> {
         current_doc: &'a LemmaDoc,
         all_documents: &'a HashMap<String, LemmaDoc>,
         sources: &'a HashMap<String, String>,
-        facts: HashMap<FactPath, LiteralValue>,
+        facts: HashMap<FactReference, LiteralValue>,
         timeout_tracker: &'a TimeoutTracker,
         limits: &'a ResourceLimits,
     ) -> Self {
@@ -87,7 +87,7 @@ pub fn build_fact_map(
     doc_facts: &[LemmaFact],
     overrides: &[LemmaFact],
     all_documents: &HashMap<String, LemmaDoc>,
-) -> Result<HashMap<FactPath, LiteralValue>, LemmaError> {
+) -> Result<HashMap<FactReference, LiteralValue>, LemmaError> {
     let mut facts = HashMap::new();
 
     // Add document facts
@@ -106,7 +106,11 @@ pub fn build_fact_map(
                         build_fact_map(referenced_doc, &referenced_doc.facts, &[], all_documents)?;
                     for (ref_fact_path, lit) in referenced_facts {
                         // Prepend the prefix to create the qualified path
-                        let qualified_path = ref_fact_path.with_prefix(fact_prefix.segments());
+                        let mut qualified_reference = fact_prefix.reference.clone();
+                        qualified_reference.extend_from_slice(&ref_fact_path.reference);
+                        let qualified_path = FactReference {
+                            reference: qualified_reference,
+                        };
                         facts.insert(qualified_path, lit);
                     }
                 }
@@ -140,10 +144,14 @@ pub fn build_fact_map(
     Ok(facts)
 }
 
-/// Get the fact path for a fact (handles local and foreign facts)
-fn get_fact_path(fact: &LemmaFact) -> FactPath {
+/// Get the fact reference for a fact (handles local and foreign facts)
+fn get_fact_path(fact: &LemmaFact) -> FactReference {
     match &fact.fact_type {
-        FactType::Local(name) => FactPath::new(vec![name.clone()]),
-        FactType::Foreign(foreign_ref) => FactPath::new(foreign_ref.reference.clone()),
+        FactType::Local(name) => FactReference {
+            reference: vec![name.clone()],
+        },
+        FactType::Foreign(foreign_ref) => FactReference {
+            reference: foreign_ref.reference.clone(),
+        },
     }
 }

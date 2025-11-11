@@ -240,6 +240,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "boolean_expression"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52a13b46d1f5df9cd15e0215e96839bda5eb21a8718ca7e8c9e3ee168cb7e7c0"
+dependencies = [
+ "itertools",
+ "smallvec",
+]
+
+[[package]]
 name = "borsh"
 version = "1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -546,6 +556,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "either"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -838,6 +854,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
+name = "itertools"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -861,7 +886,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lemma-cli"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -875,6 +900,7 @@ dependencies = [
  "lemma-engine",
  "predicates",
  "proptest",
+ "rust_decimal",
  "serde",
  "serde_json",
  "tempfile",
@@ -888,8 +914,9 @@ dependencies = [
 
 [[package]]
 name = "lemma-engine"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
+ "boolean_expression",
  "chrono",
  "console_error_panic_hook",
  "pest",
