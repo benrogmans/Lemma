@@ -256,21 +256,48 @@ pub fn build_dependency_graph(
             continue;
         }
 
-        // Extract dependencies for this rule (single traversal)
-        let mut dependencies = HashSet::new();
-        extract_rule_paths(&rule.expression, rule_doc, documents, &mut dependencies)?;
+        // Extract dependencies for this rule (relative to rule_doc)
+        let mut relative_dependencies = HashSet::new();
+        extract_rule_paths(
+            &rule.expression,
+            rule_doc,
+            documents,
+            &mut relative_dependencies,
+        )?;
         for uc in &rule.unless_clauses {
-            extract_rule_paths(&uc.condition, rule_doc, documents, &mut dependencies)?;
-            extract_rule_paths(&uc.result, rule_doc, documents, &mut dependencies)?;
+            extract_rule_paths(
+                &uc.condition,
+                rule_doc,
+                documents,
+                &mut relative_dependencies,
+            )?;
+            extract_rule_paths(&uc.result, rule_doc, documents, &mut relative_dependencies)?;
         }
 
-        // Store in graph
-        graph.insert(path.clone(), dependencies.clone());
+        // Transform to full paths (prepend parent segments)
+        let full_dependencies: HashSet<_> = relative_dependencies
+            .iter()
+            .map(|dep_path| {
+                if path.segments.is_empty() {
+                    dep_path.clone()
+                } else {
+                    let mut full_segments = path.segments.clone();
+                    full_segments.extend_from_slice(&dep_path.segments);
+                    crate::RulePath {
+                        rule: dep_path.rule.clone(),
+                        segments: full_segments,
+                    }
+                }
+            })
+            .collect();
+
+        // Store full paths in graph
+        graph.insert(path.clone(), full_dependencies.clone());
 
         // Queue dependencies for discovery
-        for dep_path in dependencies {
-            if !graph.contains_key(&dep_path) {
-                let target_doc_name = dep_path.target_doc(&doc.name);
+        for full_dep_path in full_dependencies {
+            if !graph.contains_key(&full_dep_path) {
+                let target_doc_name = full_dep_path.target_doc(&doc.name);
                 let target_doc = documents.get(target_doc_name).ok_or_else(|| {
                     crate::LemmaError::Engine(format!(
                         "Rule {} references document '{}' which does not exist",
@@ -281,15 +308,15 @@ pub fn build_dependency_graph(
                 let target_rule = target_doc
                     .rules
                     .iter()
-                    .find(|r| r.name == dep_path.rule)
+                    .find(|r| r.name == full_dep_path.rule)
                     .ok_or_else(|| {
                         crate::LemmaError::Engine(format!(
                             "Rule {} references rule '{}' in document '{}' which does not exist",
-                            path, dep_path.rule, target_doc_name
+                            path, full_dep_path.rule, target_doc_name
                         ))
                     })?;
 
-                queue.push_back((dep_path, target_rule, target_doc));
+                queue.push_back((full_dep_path, target_rule, target_doc));
             }
         }
     }

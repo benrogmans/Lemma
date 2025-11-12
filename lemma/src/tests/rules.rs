@@ -22,6 +22,7 @@ fn create_test_context(facts: HashMap<FactReference, LiteralValue>) -> Evaluatio
 #[test]
 fn test_evaluate_rule_no_unless() {
     let mut context = create_test_context(HashMap::new());
+    let test_doc = LemmaDoc::new("test".to_string());
 
     let rule = LemmaRule {
         name: "test_rule".to_string(),
@@ -34,7 +35,7 @@ fn test_evaluate_rule_no_unless() {
         span: None,
     };
 
-    let result = evaluate_rule(&rule, &mut context, &[]).unwrap();
+    let result = evaluate_rule(&rule, &test_doc, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(42)))
@@ -44,6 +45,7 @@ fn test_evaluate_rule_no_unless() {
 #[test]
 fn test_evaluate_rule_with_unless_no_match() {
     let mut context = create_test_context(HashMap::new());
+    let test_doc = LemmaDoc::new("test".to_string());
 
     let rule = LemmaRule {
         name: "test_rule".to_string(),
@@ -68,7 +70,7 @@ fn test_evaluate_rule_with_unless_no_match() {
         span: None,
     };
 
-    let result = evaluate_rule(&rule, &mut context, &[]).unwrap();
+    let result = evaluate_rule(&rule, &test_doc, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(100)))
@@ -78,6 +80,7 @@ fn test_evaluate_rule_with_unless_no_match() {
 #[test]
 fn test_evaluate_rule_with_unless_match() {
     let mut context = create_test_context(HashMap::new());
+    let test_doc = LemmaDoc::new("test".to_string());
 
     let rule = LemmaRule {
         name: "test_rule".to_string(),
@@ -102,7 +105,7 @@ fn test_evaluate_rule_with_unless_match() {
         span: None,
     };
 
-    let result = evaluate_rule(&rule, &mut context, &[]).unwrap();
+    let result = evaluate_rule(&rule, &test_doc, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(200)))
@@ -112,6 +115,7 @@ fn test_evaluate_rule_with_unless_match() {
 #[test]
 fn test_evaluate_rule_last_matching_wins() {
     let mut context = create_test_context(HashMap::new());
+    let test_doc = LemmaDoc::new("test".to_string());
 
     let rule = LemmaRule {
         name: "test_rule".to_string(),
@@ -151,7 +155,7 @@ fn test_evaluate_rule_last_matching_wins() {
         span: None,
     };
 
-    let result = evaluate_rule(&rule, &mut context, &[]).unwrap();
+    let result = evaluate_rule(&rule, &test_doc, &mut context, &[]).unwrap();
     // Last unless clause wins
     assert_eq!(
         result,

@@ -19,6 +19,7 @@ fn load_examples() -> Engine {
         "../documentation/examples/08_rule_references.lemma",
         "../documentation/examples/09_stress_test.lemma",
         "../documentation/examples/10_compensation_policy.lemma",
+        "../documentation/examples/11_document_composition.lemma",
     ];
 
     for path in examples {
@@ -315,9 +316,12 @@ fn test_09_stress_test_extended() {
 
     let result = engine.evaluate("examples/stress_test_extended", None, Some(facts));
 
-    // Document will fail due to cross-document rule reference bugs
+    // Document has a unit type mismatch error
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("does not exist"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Mismatched unit type"));
 }
 
 #[test]
@@ -346,15 +350,109 @@ fn test_10_compensation_policy() {
         .iter()
         .any(|r| r.rule_name == "total_package"));
 
-    // Test senior_engineer document - has cross-document rule reference bugs
-    let result = engine.evaluate("examples/compensation/senior_engineer", None, None);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("does not exist"));
+    // Test senior_engineer document - now works after fixing cross-document rule reference bugs!
+    let response = engine
+        .evaluate("examples/compensation/senior_engineer", None, None)
+        .unwrap();
+    assert_eq!(response.doc_name, "examples/compensation/senior_engineer");
+    assert!(!response.results.is_empty());
 
-    // Test principal_engineer document - also has cross-document rule reference bugs
-    let result = engine.evaluate("examples/compensation/principal_engineer", None, None);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("does not exist"));
+    // Test principal_engineer document - now works after fixing cross-document rule reference bugs!
+    let response = engine
+        .evaluate("examples/compensation/principal_engineer", None, None)
+        .unwrap();
+    assert_eq!(
+        response.doc_name,
+        "examples/compensation/principal_engineer"
+    );
+    assert!(!response.results.is_empty());
+}
+
+#[test]
+fn test_11_document_composition() {
+    let engine = load_examples();
+
+    // Test base pricing configuration
+    let response = engine
+        .evaluate("examples/pricing/base_config", None, None)
+        .expect("Failed to evaluate base_config");
+    assert_eq!(response.doc_name, "examples/pricing/base_config");
+    assert!(response
+        .results
+        .iter()
+        .any(|r| r.rule_name == "final_price"));
+
+    // Test wholesale pricing with overrides
+    let response = engine
+        .evaluate("examples/pricing/wholesale", None, None)
+        .expect("Failed to evaluate wholesale");
+    assert_eq!(response.doc_name, "examples/pricing/wholesale");
+    assert!(response
+        .results
+        .iter()
+        .any(|r| r.rule_name == "wholesale_final"));
+
+    // Test multi-level nested references
+    let response = engine
+        .evaluate("examples/order/wholesale_order", None, None)
+        .expect("Failed to evaluate wholesale_order");
+    assert_eq!(response.doc_name, "examples/order/wholesale_order");
+    let order_total = response
+        .results
+        .iter()
+        .find(|r| r.rule_name == "order_total");
+    assert!(order_total.is_some(), "order_total rule should exist");
+    assert!(
+        order_total.unwrap().result.is_some(),
+        "order_total should have a value"
+    );
+
+    // Test comparison document with multiple references
+    let response = engine
+        .evaluate("examples/order/comparison", None, None)
+        .expect("Failed to evaluate comparison");
+    assert_eq!(response.doc_name, "examples/order/comparison");
+    assert!(response
+        .results
+        .iter()
+        .any(|r| r.rule_name == "wholesale_total"));
+    assert!(response
+        .results
+        .iter()
+        .any(|r| r.rule_name == "retail_total"));
+    assert!(response
+        .results
+        .iter()
+        .any(|r| r.rule_name == "price_difference"));
+
+    // Test deep nested overrides
+    let response = engine
+        .evaluate("examples/order/custom_wholesale", None, None)
+        .expect("Failed to evaluate custom_wholesale");
+    assert_eq!(response.doc_name, "examples/order/custom_wholesale");
+    assert!(response
+        .results
+        .iter()
+        .any(|r| r.rule_name == "custom_total"));
+
+    // Test multiple independent references
+    let response = engine
+        .evaluate("examples/complex/multi_reference", None, None)
+        .expect("Failed to evaluate multi_reference");
+    assert_eq!(response.doc_name, "examples/complex/multi_reference");
+
+    // Check avg_discount calculation works (tests percentage arithmetic)
+    let avg_discount = response
+        .results
+        .iter()
+        .find(|r| r.rule_name == "avg_discount");
+    assert!(avg_discount.is_some(), "avg_discount rule should exist");
+    // avg_discount = (15% + 0% + 5%) / 3 = 20% / 3 = 6.666...
+
+    assert!(response
+        .results
+        .iter()
+        .any(|r| r.rule_name == "price_range"));
 }
 
 #[test]

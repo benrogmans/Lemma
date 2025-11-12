@@ -15,6 +15,7 @@ use crate::{LemmaError, LemmaRule, OperationResult};
 /// via `fact_prefix` to qualify fact lookups. For local rules, pass an empty slice.
 pub fn evaluate_rule(
     rule: &LemmaRule,
+    rule_doc: &crate::LemmaDoc,
     context: &mut EvaluationContext,
     fact_prefix: &[String],
 ) -> Result<OperationResult, LemmaError> {
@@ -22,7 +23,8 @@ pub fn evaluate_rule(
 
     // Evaluate unless clauses in reverse order (last matching wins)
     for (index, unless_clause) in rule.unless_clauses.iter().enumerate().rev() {
-        let condition_result = evaluate_expression(&unless_clause.condition, context, fact_prefix)?;
+        let condition_result =
+            evaluate_expression(&unless_clause.condition, rule_doc, context, fact_prefix)?;
 
         // If condition is vetoed, the veto applies to this rule
         if let OperationResult::Veto(msg) = condition_result {
@@ -40,7 +42,8 @@ pub fn evaluate_rule(
         };
 
         if matched {
-            let result = evaluate_expression(&unless_clause.result, context, fact_prefix)?;
+            let result =
+                evaluate_expression(&unless_clause.result, rule_doc, context, fact_prefix)?;
 
             // If result is vetoed, the veto applies to this rule
             if let OperationResult::Veto(msg) = result {
@@ -71,7 +74,7 @@ pub fn evaluate_rule(
     }
 
     // No unless clause matched - evaluate default expression
-    let default_result = evaluate_expression(&rule.expression, context, fact_prefix)?;
+    let default_result = evaluate_expression(&rule.expression, rule_doc, context, fact_prefix)?;
 
     // If default is vetoed, the veto applies to this rule
     if let OperationResult::Veto(msg) = default_result {

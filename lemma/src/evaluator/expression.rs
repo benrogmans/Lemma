@@ -20,6 +20,7 @@ use std::sync::Arc;
 /// to qualify fact lookups within that rule. For local rules, pass an empty slice.
 pub fn evaluate_expression(
     expr: &Expression,
+    rule_doc: &crate::LemmaDoc,
     context: &mut EvaluationContext,
     fact_prefix: &[String],
 ) -> Result<OperationResult, LemmaError> {
@@ -63,14 +64,66 @@ pub fn evaluate_expression(
         ExpressionKind::RuleReference(rule_ref) => {
             // Look up already-computed rule result
             // Topological sort ensures this rule was computed before us
-            let rule_path = crate::RulePath::from_reference(
+            let relative_rule_path = crate::RulePath::from_reference(
                 &rule_ref.reference,
-                context.current_doc,
+                rule_doc,
                 context.all_documents,
             )?;
 
+            // If evaluating a nested rule, prepend fact_prefix to create full path
+            let lookup_path = if fact_prefix.is_empty() {
+                relative_rule_path.clone()
+            } else {
+                // Build prefix segments by traversing the fact chain
+                let mut prefix_segments = Vec::new();
+                let mut current_doc = context.current_doc;
+
+                for fact_name in fact_prefix {
+                    // Find the fact in the current document
+                    let fact = current_doc
+                        .facts
+                        .iter()
+                        .find(|f| matches!(&f.fact_type, crate::FactType::Local(name) if name == fact_name))
+                        .ok_or_else(|| {
+                            crate::LemmaError::Engine(format!(
+                                "Fact {} not found in document {}",
+                                fact_name, current_doc.name
+                            ))
+                        })?;
+
+                    // Get the target document name
+                    let target_doc_name = match &fact.value {
+                        crate::FactValue::DocumentReference(name) => name.clone(),
+                        _ => {
+                            return Err(crate::LemmaError::Engine(format!(
+                                "Fact {} is not a document reference",
+                                fact_name
+                            )))
+                        }
+                    };
+
+                    prefix_segments.push(crate::RulePathSegment {
+                        fact: fact_name.clone(),
+                        doc: target_doc_name.clone(),
+                    });
+
+                    // Move to the next document
+                    current_doc = context.all_documents.get(&target_doc_name).ok_or_else(|| {
+                        crate::LemmaError::Engine(format!("Document {} not found", target_doc_name))
+                    })?;
+                }
+
+                let mut full_segments = prefix_segments;
+                full_segments.extend_from_slice(&relative_rule_path.segments);
+
+                crate::RulePath {
+                    rule: relative_rule_path.rule.clone(),
+                    segments: full_segments,
+                }
+            };
+
             // Check if rule has a result
-            if let Some(result) = context.rule_results.get(&rule_path) {
+            if let Some(result) = context.rule_results.get(&lookup_path) {
                 match result {
                     OperationResult::Veto(msg) => {
                         // Rule was vetoed - the veto applies to this rule too
@@ -79,7 +132,7 @@ pub fn evaluate_expression(
                     OperationResult::Value(value) => {
                         // Record operation
                         context.operations.push(OperationRecord::RuleUsed {
-                            name: rule_path.to_string(),
+                            name: lookup_path.to_string(),
                             value: value.clone(),
                         });
                         return Ok(OperationResult::Value(value.clone()));
@@ -88,12 +141,15 @@ pub fn evaluate_expression(
             }
 
             // Rule not computed yet
-            Err(LemmaError::Engine(format!("Rule {} not found", rule_path)))
+            Err(LemmaError::Engine(format!(
+                "Rule {} not found",
+                lookup_path
+            )))
         }
 
         ExpressionKind::Arithmetic(left, op, right) => {
-            let left_result = evaluate_expression(left, context, fact_prefix)?;
-            let right_result = evaluate_expression(right, context, fact_prefix)?;
+            let left_result = evaluate_expression(left, rule_doc, context, fact_prefix)?;
+            let right_result = evaluate_expression(right, rule_doc, context, fact_prefix)?;
 
             // If either operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = left_result {
@@ -132,8 +188,8 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::Comparison(left, op, right) => {
-            let left_result = evaluate_expression(left, context, fact_prefix)?;
-            let right_result = evaluate_expression(right, context, fact_prefix)?;
+            let left_result = evaluate_expression(left, rule_doc, context, fact_prefix)?;
+            let right_result = evaluate_expression(right, rule_doc, context, fact_prefix)?;
 
             // If either operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = left_result {
@@ -172,8 +228,8 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::LogicalAnd(left, right) => {
-            let left_result = evaluate_expression(left, context, fact_prefix)?;
-            let right_result = evaluate_expression(right, context, fact_prefix)?;
+            let left_result = evaluate_expression(left, rule_doc, context, fact_prefix)?;
+            let right_result = evaluate_expression(right, rule_doc, context, fact_prefix)?;
 
             // If either operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = left_result {
@@ -199,8 +255,8 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::LogicalOr(left, right) => {
-            let left_result = evaluate_expression(left, context, fact_prefix)?;
-            let right_result = evaluate_expression(right, context, fact_prefix)?;
+            let left_result = evaluate_expression(left, rule_doc, context, fact_prefix)?;
+            let right_result = evaluate_expression(right, rule_doc, context, fact_prefix)?;
 
             // If either operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = left_result {
@@ -226,7 +282,7 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::LogicalNegation(operand, _negation_type) => {
-            let result = evaluate_expression(operand, context, fact_prefix)?;
+            let result = evaluate_expression(operand, rule_doc, context, fact_prefix)?;
 
             // If the operand is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = result {
@@ -245,7 +301,7 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::UnitConversion(value_expr, target) => {
-            let result = evaluate_expression(value_expr, context, fact_prefix)?;
+            let result = evaluate_expression(value_expr, rule_doc, context, fact_prefix)?;
 
             // If the value is vetoed, propagate the veto
             if let OperationResult::Veto(msg) = result {
@@ -259,7 +315,7 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::MathematicalOperator(op, operand) => {
-            evaluate_mathematical_operator(op, operand, context, fact_prefix)
+            evaluate_mathematical_operator(op, operand, rule_doc, context, fact_prefix)
         }
 
         ExpressionKind::Veto(veto_expr) => Ok(OperationResult::Veto(veto_expr.message.clone())),
@@ -285,10 +341,11 @@ pub fn evaluate_expression(
 fn evaluate_mathematical_operator(
     op: &MathematicalOperator,
     operand: &Expression,
+    rule_doc: &crate::LemmaDoc,
     context: &mut EvaluationContext,
     fact_prefix: &[String],
 ) -> Result<OperationResult, LemmaError> {
-    let result = evaluate_expression(operand, context, fact_prefix)?;
+    let result = evaluate_expression(operand, rule_doc, context, fact_prefix)?;
 
     // If the operand is vetoed, propagate the veto
     if let OperationResult::Veto(msg) = result {

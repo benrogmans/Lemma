@@ -113,7 +113,7 @@ impl Evaluator {
                 // Local rule: empty prefix
                 Vec::new()
             };
-            let eval_result = rules::evaluate_rule(rule, &mut context, &path_prefix);
+            let eval_result = rules::evaluate_rule(rule, rule_doc, &mut context, &path_prefix);
 
             match eval_result {
                 Ok(result) => {
