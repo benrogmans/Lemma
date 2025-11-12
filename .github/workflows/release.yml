@@ -45,33 +45,16 @@ jobs:
           # Get the latest tag (last published version)
           LATEST_TAG=$(git describe --tags --abbrev=0 --match "cli-v*" 2>/dev/null || echo "cli-v0.0.0")
           TAG_VERSION=${LATEST_TAG#cli-v}
-          
+
           echo "Current version: $CURRENT_VERSION"
           echo "Latest tag version: $TAG_VERSION"
 
           # Check if workspace version changed compared to latest tag
           if [ "$CURRENT_VERSION" != "$TAG_VERSION" ]; then
             echo "version_changed=true" >> $GITHUB_OUTPUT
-
-            # For version changes, check what components changed since the last tag
-            if git diff $LATEST_TAG HEAD -- lemma/src/ lemma/Cargo.toml | grep -q .; then
-              echo "lemma_changed=true" >> $GITHUB_OUTPUT
-            else
-              echo "lemma_changed=false" >> $GITHUB_OUTPUT
-            fi
-
-            if git diff $LATEST_TAG HEAD -- cli/src/ cli/Cargo.toml | grep -q .; then
-              echo "cli_changed=true" >> $GITHUB_OUTPUT
-            else
-              echo "cli_changed=false" >> $GITHUB_OUTPUT
-            fi
-
-            # WASM changes when lemma changes
-            if git diff $LATEST_TAG HEAD -- lemma/src/ lemma/Cargo.toml lemma/package.json | grep -q .; then
-              echo "wasm_changed=true" >> $GITHUB_OUTPUT
-            else
-              echo "wasm_changed=false" >> $GITHUB_OUTPUT
-            fi
+            echo "lemma_changed=true" >> $GITHUB_OUTPUT
+            echo "cli_changed=true" >> $GITHUB_OUTPUT
+            echo "wasm_changed=true" >> $GITHUB_OUTPUT
           else
             echo "version_changed=false" >> $GITHUB_OUTPUT
             echo "lemma_changed=false" >> $GITHUB_OUTPUT
@@ -166,9 +149,6 @@ jobs:
       - name: Run tests
         run: cargo nextest run --workspace --all-features
 
-      - name: Publish CLI to crates.io
-        run: cargo publish -p lemma-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
       - name: Build release binary
         run: cargo build --release -p lemma-cli
 
@@ -200,3 +180,6 @@ jobs:
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish CLI to crates.io
+        run: cargo publish -p lemma-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
