@@ -52,26 +52,9 @@ jobs:
           # Check if workspace version changed compared to latest tag
           if [ "$CURRENT_VERSION" != "$TAG_VERSION" ]; then
             echo "version_changed=true" >> $GITHUB_OUTPUT
-
-            # For version changes, check what components changed since the last tag
-            if git diff $LATEST_TAG HEAD -- lemma/src/ lemma/Cargo.toml | grep -q .; then
-              echo "lemma_changed=true" >> $GITHUB_OUTPUT
-            else
-              echo "lemma_changed=false" >> $GITHUB_OUTPUT
-            fi
-
-            if git diff $LATEST_TAG HEAD -- cli/src/ cli/Cargo.toml | grep -q .; then
-              echo "cli_changed=true" >> $GITHUB_OUTPUT
-            else
-              echo "cli_changed=false" >> $GITHUB_OUTPUT
-            fi
-
-            # WASM changes when lemma changes
-            if git diff $LATEST_TAG HEAD -- lemma/src/ lemma/Cargo.toml lemma/package.json | grep -q .; then
-              echo "wasm_changed=true" >> $GITHUB_OUTPUT
-            else
-              echo "wasm_changed=false" >> $GITHUB_OUTPUT
-            fi
+            echo "lemma_changed=true" >> $GITHUB_OUTPUT
+            echo "cli_changed=true" >> $GITHUB_OUTPUT
+            echo "wasm_changed=true" >> $GITHUB_OUTPUT
           else
             echo "version_changed=false" >> $GITHUB_OUTPUT
             echo "lemma_changed=false" >> $GITHUB_OUTPUT
