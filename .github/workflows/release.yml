@@ -45,7 +45,7 @@ jobs:
           # Get the latest tag (last published version)
           LATEST_TAG=$(git describe --tags --abbrev=0 --match "cli-v*" 2>/dev/null || echo "cli-v0.0.0")
           TAG_VERSION=${LATEST_TAG#cli-v}
-          
+
           echo "Current version: $CURRENT_VERSION"
           echo "Latest tag version: $TAG_VERSION"
 
@@ -166,9 +166,6 @@ jobs:
       - name: Run tests
         run: cargo nextest run --workspace --all-features
 
-      - name: Publish CLI to crates.io
-        run: cargo publish -p lemma-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
       - name: Build release binary
         run: cargo build --release -p lemma-cli
 
@@ -200,3 +197,6 @@ jobs:
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish CLI to crates.io
+        run: cargo publish -p lemma-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
