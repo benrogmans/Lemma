@@ -1,0 +1,159 @@
+doc examples/pricing/base_config
+"""
+Base Pricing Configuration
+
+Foundation pricing rules that can be referenced and customized.
+"""
+
+fact base_price = 100
+fact tax_rate = 21%
+fact standard_discount = 5%
+
+rule price_with_tax = base_price * (1 + tax_rate)
+
+rule discounted_price = base_price * (1 - standard_discount)
+
+rule final_price = base_price * (1 - standard_discount) * (1 + tax_rate)
+
+
+doc examples/pricing/wholesale
+"""
+Wholesale Pricing
+
+References base pricing and overrides with wholesale-specific values.
+Demonstrates fact overrides affecting rule calculations.
+"""
+
+fact config = doc examples/pricing/base_config
+fact config.base_price = 75
+fact config.standard_discount = 15%
+
+rule wholesale_final = config.final_price?
+
+rule margin_savings = 100 - config.base_price
+
+
+doc examples/pricing/retail
+"""
+Retail Pricing
+
+Another variant of base pricing for retail customers.
+Shows how the same base document can be reused with different overrides.
+"""
+
+fact config = doc examples/pricing/base_config
+fact config.base_price = 120
+fact config.standard_discount = 0%
+
+rule retail_final = config.final_price?
+
+rule premium_multiplier = config.base_price / 100
+
+
+doc examples/order/line_item
+"""
+Order Line Item
+
+Combines pricing with quantity calculations.
+Demonstrates nested document references and multi-level fact access.
+"""
+
+fact pricing = doc examples/pricing/base_config
+fact quantity = 10
+
+rule line_total = pricing.final_price? * quantity
+
+rule has_discount = pricing.standard_discount > 0%
+
+
+doc examples/order/wholesale_order
+"""
+Wholesale Order
+
+Uses wholesale pricing configuration for bulk orders.
+Shows how to reference a document that itself references another document.
+"""
+
+fact line = doc examples/order/line_item
+fact line.pricing = doc examples/pricing/wholesale
+fact line.quantity = 100
+
+rule order_total = line.line_total?
+
+rule effective_unit_price = order_total? / line.quantity
+
+
+doc examples/order/retail_order
+"""
+Retail Order
+
+Uses retail pricing for individual customer orders.
+Demonstrates different fact paths producing different results.
+"""
+
+fact line = doc examples/order/line_item
+fact line.pricing = doc examples/pricing/retail
+fact line.quantity = 5
+
+rule order_total = line.line_total?
+
+rule effective_unit_price = order_total? / line.quantity
+
+
+doc examples/order/comparison
+"""
+Order Comparison
+
+Compares wholesale and retail orders side-by-side.
+Shows how the same rule evaluated through different fact paths yields different results.
+"""
+
+fact wholesale = doc examples/order/wholesale_order
+fact retail = doc examples/order/retail_order
+
+rule wholesale_total = wholesale.order_total?
+
+rule retail_total = retail.order_total?
+
+rule price_difference = retail_total? - wholesale_total?
+
+rule retail_is_more_expensive = retail_total? > wholesale_total?
+
+
+doc examples/order/custom_wholesale
+"""
+Custom Wholesale Order
+
+Demonstrates fine-grained overrides through nested paths.
+Shows overriding facts deep in the reference chain.
+"""
+
+fact order = doc examples/order/wholesale_order
+fact order.line.pricing.tax_rate = 19%
+fact order.line.quantity = 250
+
+rule custom_total = order.order_total?
+
+rule savings_vs_standard = order.order_total?
+
+
+doc examples/complex/multi_reference
+"""
+Multiple Document References
+
+Shows multiple independent document references in a single document.
+Demonstrates mixing different base documents for complex scenarios.
+"""
+
+fact wholesale_config = doc examples/pricing/wholesale
+fact retail_config = doc examples/pricing/retail
+fact base_config = doc examples/pricing/base_config
+
+rule avg_discount = (wholesale_config.config.standard_discount + retail_config.config.standard_discount + base_config.standard_discount) / 3
+
+rule price_range = retail_config.retail_final? - wholesale_config.wholesale_final?
+
+rule all_configs_loaded = wholesale_config.wholesale_final? > 0
+  and retail_config.retail_final? > 0
+  and base_config.final_price? > 0
+
