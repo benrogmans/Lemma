@@ -313,3 +313,148 @@ fn test_unit_percentage_with_different_currencies() -> LemmaResult<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_percentage_arithmetic() -> LemmaResult<()> {
+    let mut engine = Engine::new();
+
+    engine.add_lemma_code(
+        r#"
+        doc percentage_ops
+
+        fact discount_a = 5%
+        fact discount_b = 10%
+        fact tax_rate = 15%
+        fact compound_rate = 20%
+
+        rule combined_discount = discount_a + discount_b
+        rule net_rate = tax_rate - discount_a
+        rule compound = compound_rate * compound_rate
+        rule ratio = compound_rate / discount_a
+        "#,
+        "percentage.lemma",
+    )?;
+
+    let response = engine.evaluate("percentage_ops", None, None)?;
+
+    // Check combined_discount (5% + 10% = 15%)
+    let combined_result = response
+        .results
+        .iter()
+        .find(|r| r.rule_name == "combined_discount")
+        .expect("combined_discount rule not found");
+
+    match &combined_result.result {
+        Some(LiteralValue::Percentage(p)) => {
+            assert_eq!(p.to_string(), "15", "5% + 10% should be 15%");
+        }
+        _ => panic!(
+            "Expected percentage for combined_discount, got {:?}",
+            combined_result.result
+        ),
+    }
+
+    // Check net_rate (15% - 5% = 10%)
+    let net_rate_result = response
+        .results
+        .iter()
+        .find(|r| r.rule_name == "net_rate")
+        .expect("net_rate rule not found");
+
+    match &net_rate_result.result {
+        Some(LiteralValue::Percentage(p)) => {
+            assert_eq!(p.to_string(), "10", "15% - 5% should be 10%");
+        }
+        _ => panic!(
+            "Expected percentage for net_rate, got {:?}",
+            net_rate_result.result
+        ),
+    }
+
+    // Check compound (20% * 20% = 4%)
+    let compound_result = response
+        .results
+        .iter()
+        .find(|r| r.rule_name == "compound")
+        .expect("compound rule not found");
+
+    match &compound_result.result {
+        Some(LiteralValue::Percentage(p)) => {
+            assert_eq!(p.to_string(), "4", "20% * 20% should be 4%");
+        }
+        _ => panic!(
+            "Expected percentage for compound, got {:?}",
+            compound_result.result
+        ),
+    }
+
+    // Check ratio (20% / 5% = 4)
+    let ratio_result = response
+        .results
+        .iter()
+        .find(|r| r.rule_name == "ratio")
+        .expect("ratio rule not found");
+
+    match &ratio_result.result {
+        Some(LiteralValue::Number(n)) => {
+            assert_eq!(n.to_string(), "4", "20% / 5% should be 4");
+        }
+        _ => panic!("Expected number for ratio, got {:?}", ratio_result.result),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_averaging_percentages() -> LemmaResult<()> {
+    let mut engine = Engine::new();
+
+    engine.add_lemma_code(
+        r#"
+        doc avg_percentages
+
+        fact rate_a = 10%
+        fact rate_b = 20%
+        fact rate_c = 15%
+
+        rule sum = rate_a + rate_b + rate_c
+        rule average = sum? / 3
+        "#,
+        "avg.lemma",
+    )?;
+
+    let response = engine.evaluate("avg_percentages", None, None)?;
+
+    // Check sum (10% + 20% + 15% = 45%)
+    let sum_result = response
+        .results
+        .iter()
+        .find(|r| r.rule_name == "sum")
+        .expect("sum rule not found");
+
+    match &sum_result.result {
+        Some(LiteralValue::Percentage(p)) => {
+            assert_eq!(p.to_string(), "45", "10% + 20% + 15% should be 45%");
+        }
+        _ => panic!("Expected percentage for sum, got {:?}", sum_result.result),
+    }
+
+    // Check average (45% / 3 = 15%)
+    let avg_result = response
+        .results
+        .iter()
+        .find(|r| r.rule_name == "average")
+        .expect("average rule not found");
+
+    match &avg_result.result {
+        Some(LiteralValue::Percentage(p)) => {
+            assert_eq!(p.to_string(), "15", "45% / 3 should be 15%");
+        }
+        _ => panic!(
+            "Expected percentage for average, got {:?}",
+            avg_result.result
+        ),
+    }
+
+    Ok(())
+}

@@ -87,6 +87,13 @@ pub fn arithmetic_operation(
                         p * n / Decimal::from(PERCENT_DENOMINATOR),
                     ))
                 }
+                ArithmeticOperation::Divide => {
+                    if *n == Decimal::ZERO {
+                        return Err(LemmaError::Engine("Division by zero".to_string()));
+                    }
+                    // 45% / 3 = 15% (scale percentage down)
+                    Ok(LiteralValue::Percentage(p / n))
+                }
                 _ => Err(LemmaError::Engine(format!(
                     "Operation {:?} not supported for percentage and number",
                     op
@@ -153,6 +160,37 @@ pub fn arithmetic_operation(
         // Time arithmetic with duration
         (LiteralValue::Time(_), _) | (_, LiteralValue::Time(_)) => {
             super::datetime::time_arithmetic(left, op, right)
+        }
+
+        // Percentage + Percentage: combine percentages
+        (LiteralValue::Percentage(l), LiteralValue::Percentage(r)) => {
+            match op {
+                ArithmeticOperation::Add => {
+                    // 5% + 10% = 15%
+                    Ok(LiteralValue::Percentage(l + r))
+                }
+                ArithmeticOperation::Subtract => {
+                    // 15% - 5% = 10%
+                    Ok(LiteralValue::Percentage(l - r))
+                }
+                ArithmeticOperation::Multiply => {
+                    // 20% * 50% = 10% (compound percentage: 0.20 * 0.50 = 0.10)
+                    Ok(LiteralValue::Percentage(
+                        l * r / Decimal::from(PERCENT_DENOMINATOR),
+                    ))
+                }
+                ArithmeticOperation::Divide => {
+                    if *r == Decimal::ZERO {
+                        return Err(LemmaError::Engine("Division by zero".to_string()));
+                    }
+                    // 20% / 5% = 4 (ratio of percentages becomes a number)
+                    Ok(LiteralValue::Number(l / r))
+                }
+                _ => Err(LemmaError::Engine(format!(
+                    "Operation {:?} not supported for percentage and percentage",
+                    op
+                ))),
+            }
         }
 
         _ => Err(LemmaError::Engine(format!(
