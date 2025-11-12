@@ -11,8 +11,8 @@ use crate::{LemmaError, LemmaRule, OperationResult};
 /// Unless clauses are evaluated in reverse order (last matching wins).
 /// If no unless clause matches, evaluate the default expression.
 ///
-/// For cross-document rules, pass the path prefix via `fact_prefix` to qualify
-/// fact lookups. For local rules, pass an empty slice.
+/// When evaluating a rule from a document referenced by a fact, pass the fact path
+/// via `fact_prefix` to qualify fact lookups. For local rules, pass an empty slice.
 pub fn evaluate_rule(
     rule: &LemmaRule,
     context: &mut EvaluationContext,

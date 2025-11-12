@@ -1,6 +1,7 @@
 use crate::evaluator::context::build_fact_map;
 use crate::{
-    FactPath, FactType, FactValue, LemmaDoc, LemmaFact, LemmaType, LiteralValue, TypeAnnotation,
+    FactReference, FactType, FactValue, LemmaDoc, LemmaFact, LemmaType, LiteralValue,
+    TypeAnnotation,
 };
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -17,7 +18,9 @@ fn test_build_fact_map_basic() {
     let fact_map = build_fact_map(&doc, &facts, &[], &documents).unwrap();
 
     assert_eq!(fact_map.len(), 1);
-    assert!(fact_map.contains_key(&FactPath::new(vec!["price".to_string()])));
+    assert!(fact_map.contains_key(&FactReference {
+        reference: vec!["price".to_string()]
+    }));
 }
 
 #[test]
@@ -39,8 +42,9 @@ fn test_build_fact_map_with_overrides() {
 
     assert_eq!(fact_map.len(), 1);
     // Override should replace original
-    if let Some(LiteralValue::Number(val)) = fact_map.get(&FactPath::new(vec!["price".to_string()]))
-    {
+    if let Some(LiteralValue::Number(val)) = fact_map.get(&FactReference {
+        reference: vec!["price".to_string()],
+    }) {
         assert_eq!(*val, Decimal::from(200));
     } else {
         panic!("Expected number value");
@@ -66,8 +70,12 @@ fn test_build_fact_map_skips_type_annotations() {
 
     // Only price should be in the map, not quantity
     assert_eq!(fact_map.len(), 1);
-    assert!(fact_map.contains_key(&FactPath::new(vec!["price".to_string()])));
-    assert!(!fact_map.contains_key(&FactPath::new(vec!["quantity".to_string()])));
+    assert!(fact_map.contains_key(&FactReference {
+        reference: vec!["price".to_string()]
+    }));
+    assert!(!fact_map.contains_key(&FactReference {
+        reference: vec!["quantity".to_string()]
+    }));
 }
 
 #[test]
@@ -95,7 +103,9 @@ fn test_build_fact_map_type_validation_success() {
     assert!(fact_map.is_ok(), "Should accept correct money type");
     let fact_map = fact_map.unwrap();
     assert_eq!(fact_map.len(), 1);
-    assert!(fact_map.contains_key(&FactPath::new(vec!["price".to_string()])));
+    assert!(fact_map.contains_key(&FactReference {
+        reference: vec!["price".to_string()]
+    }));
 }
 
 #[test]

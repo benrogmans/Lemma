@@ -4,8 +4,8 @@
 
 use super::context::EvaluationContext;
 use crate::{
-    ast::Span, ArithmeticOperation, Expression, ExpressionKind, FactPath, LemmaError, LiteralValue,
-    MathematicalOperator, OperationRecord, OperationResult,
+    ast::Span, ArithmeticOperation, Expression, ExpressionKind, FactReference, LemmaError,
+    LiteralValue, MathematicalOperator, OperationRecord, OperationResult,
 };
 use rust_decimal::Decimal;
 use std::sync::Arc;
@@ -15,8 +15,9 @@ use std::sync::Arc;
 /// This is the core of the evaluator - recursively processes expressions
 /// and records operations for every step.
 ///
-/// For cross-document rules, pass the path prefix via `fact_prefix` to qualify
-/// fact lookups. For local rules, pass an empty slice.
+/// When evaluating a rule from a document referenced by a fact (e.g., `employee.some_rule?`
+/// where `employee` is a fact with value `doc other_doc`), pass the fact path via `fact_prefix`
+/// to qualify fact lookups within that rule. For local rules, pass an empty slice.
 pub fn evaluate_expression(
     expr: &Expression,
     context: &mut EvaluationContext,
@@ -32,23 +33,28 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::FactReference(fact_ref) => {
-            // Look up fact in context, prepending the prefix for cross-document rules
-            let fact_path = if !fact_prefix.is_empty() {
-                // Cross-document rule: prepend prefix to fact reference
-                FactPath::from_slice(fact_ref.reference.as_slice()).with_prefix(fact_prefix)
+            // Look up fact in context, prepending the prefix when evaluating a rule from a referenced document
+            let lookup_ref = if !fact_prefix.is_empty() {
+                // Evaluating a rule from a document referenced by a fact: prepend the fact path
+                // E.g., if `employee` references `doc hr_doc` and we're evaluating `employee.salary?`,
+                // fact references within that rule need the `employee` prefix
+                let mut qualified_reference = fact_prefix.to_vec();
+                qualified_reference.extend_from_slice(&fact_ref.reference);
+                FactReference {
+                    reference: qualified_reference,
+                }
             } else {
                 // Local rule: use fact reference as-is
-                FactPath::from_slice(fact_ref.reference.as_slice())
+                fact_ref.clone()
             };
 
-            let value = context
-                .facts
-                .get(&fact_path)
-                .ok_or_else(|| LemmaError::Engine(format!("Missing fact: {}", fact_path)))?;
+            let value = context.facts.get(&lookup_ref).ok_or_else(|| {
+                LemmaError::Engine(format!("Missing fact: {}", lookup_ref.reference.join(".")))
+            })?;
 
             // Record operation (convert path to string for display)
             context.operations.push(OperationRecord::FactUsed {
-                name: fact_path.to_string(),
+                name: lookup_ref.reference.join("."),
                 value: value.clone(),
             });
 
@@ -260,12 +266,16 @@ pub fn evaluate_expression(
 
         ExpressionKind::FactHasAnyValue(fact_ref) => {
             // Check if fact exists and has a value, with path prefix applied
-            let fact_path = if !fact_prefix.is_empty() {
-                FactPath::from_slice(fact_ref.reference.as_slice()).with_prefix(fact_prefix)
+            let lookup_ref = if !fact_prefix.is_empty() {
+                let mut qualified_reference = fact_prefix.to_vec();
+                qualified_reference.extend_from_slice(&fact_ref.reference);
+                FactReference {
+                    reference: qualified_reference,
+                }
             } else {
-                FactPath::from_slice(fact_ref.reference.as_slice())
+                fact_ref.clone()
             };
-            let has_value = context.facts.contains_key(&fact_path);
+            let has_value = context.facts.contains_key(&lookup_ref);
             Ok(OperationResult::Value(LiteralValue::Boolean(has_value)))
         }
     }
@@ -295,25 +305,51 @@ fn evaluate_mathematical_operator(
                 LemmaError::Engine("Cannot convert to float for mathematical operation".to_string())
             })?;
 
-            let math_result = match op {
-                MathematicalOperator::Sqrt => float_val.sqrt(),
-                MathematicalOperator::Sin => float_val.sin(),
-                MathematicalOperator::Cos => float_val.cos(),
-                MathematicalOperator::Tan => float_val.tan(),
-                MathematicalOperator::Asin => float_val.asin(),
-                MathematicalOperator::Acos => float_val.acos(),
-                MathematicalOperator::Atan => float_val.atan(),
-                MathematicalOperator::Log => float_val.ln(),
-                MathematicalOperator::Exp => float_val.exp(),
-            };
-
-            let decimal_result = Decimal::from_f64_retain(math_result).ok_or_else(|| {
-                LemmaError::Engine(
-                    "Mathematical operation result cannot be represented".to_string(),
-                )
-            })?;
-
-            Ok(OperationResult::Value(LiteralValue::Number(decimal_result)))
+            match op {
+                // Float-based functions
+                MathematicalOperator::Sqrt
+                | MathematicalOperator::Sin
+                | MathematicalOperator::Cos
+                | MathematicalOperator::Tan
+                | MathematicalOperator::Asin
+                | MathematicalOperator::Acos
+                | MathematicalOperator::Atan
+                | MathematicalOperator::Log
+                | MathematicalOperator::Exp => {
+                    let math_result = match op {
+                        MathematicalOperator::Sqrt => float_val.sqrt(),
+                        MathematicalOperator::Sin => float_val.sin(),
+                        MathematicalOperator::Cos => float_val.cos(),
+                        MathematicalOperator::Tan => float_val.tan(),
+                        MathematicalOperator::Asin => float_val.asin(),
+                        MathematicalOperator::Acos => float_val.acos(),
+                        MathematicalOperator::Atan => float_val.atan(),
+                        MathematicalOperator::Log => float_val.ln(),
+                        MathematicalOperator::Exp => float_val.exp(),
+                        _ => unreachable!(),
+                    };
+                    let decimal_result =
+                        Decimal::from_f64_retain(math_result).ok_or_else(|| {
+                            LemmaError::Engine(
+                                "Mathematical operation result cannot be represented".to_string(),
+                            )
+                        })?;
+                    Ok(OperationResult::Value(LiteralValue::Number(decimal_result)))
+                }
+                // Decimal-native functions
+                MathematicalOperator::Abs => {
+                    Ok(OperationResult::Value(LiteralValue::Number(n.abs())))
+                }
+                MathematicalOperator::Floor => {
+                    Ok(OperationResult::Value(LiteralValue::Number(n.floor())))
+                }
+                MathematicalOperator::Ceil => {
+                    Ok(OperationResult::Value(LiteralValue::Number(n.ceil())))
+                }
+                MathematicalOperator::Round => {
+                    Ok(OperationResult::Value(LiteralValue::Number(n.round())))
+                }
+            }
         }
         _ => Err(LemmaError::Engine(
             "Mathematical operators require number operands".to_string(),

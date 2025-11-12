@@ -98,7 +98,7 @@ This document tracks planned improvements and known issues for the Lemma project
 - Doc-scoped types prevent namespace pollution
 - Enables currency conversion with custom exchange rates
 
-**Implementation**: See [user_types.md](user_types.md) for implementation plan.
+**Implementation**: See [plans/user_types.md](plans/user_types.md) for implementation plan.
 
 **Estimated Effort**: 10 days
 
@@ -113,7 +113,7 @@ This document tracks planned improvements and known issues for the Lemma project
 - Indexed access to list items
 - Type-safe operations on collections
 
-**Implementation**: See [multi_facts.md](multi_facts.md) for details.
+**Implementation**: See [plans/multi_facts.md](plans/multi_facts.md) for details.
 
 **Estimated Effort**: 20 days
 

@@ -1,6 +1,7 @@
 use comfy_table::{presets::UTF8_FULL, Attribute, Cell, CellAlignment, ContentArrangement, Table};
 use crossterm::style::Stylize;
-use lemma::{LemmaDoc, LemmaFact, LemmaRule, OperationRecord, Response};
+use lemma::{Domain, FactReference, LemmaDoc, LemmaFact, LemmaRule, OperationRecord, Response};
+use std::collections::HashMap;
 
 pub struct Formatter {
     use_colors: bool,
@@ -315,6 +316,118 @@ impl Formatter {
             format!("  {}\n", text.bold())
         } else {
             format!("  {}\n", text)
+        }
+    }
+
+    pub fn format_inversion_result(&self, solutions: &[HashMap<FactReference, Domain>]) -> String {
+        let mut output = String::default();
+
+        output.push_str(&self.section_divider());
+        output.push_str(&self.style_header("  Inversion Result"));
+        output.push('\n');
+        output.push_str(&self.section_divider());
+        output.push('\n');
+
+        if solutions.is_empty() {
+            output.push_str("  No valid solutions found.\n");
+            return output;
+        }
+
+        output.push_str(&format!(
+            "  {} solution{}\n\n",
+            solutions.len(),
+            if solutions.len() == 1 { "" } else { "s" }
+        ));
+
+        for (i, solution) in solutions.iter().enumerate() {
+            if solutions.len() > 1 {
+                output.push_str(&self.subsection_header(&format!("Solution {}", i + 1)));
+                output.push('\n');
+            }
+
+            if solution.is_empty() {
+                output.push_str("  (unconstrained)\n\n");
+                continue;
+            }
+
+            // Find max fact name length for alignment
+            let max_fact_len = solution
+                .keys()
+                .map(|fp| fp.to_string().len())
+                .max()
+                .unwrap_or(0);
+
+            for (fact_path, domain) in solution {
+                let fact_str = fact_path.to_string();
+                let domain_str = self.format_domain(domain);
+
+                if self.use_colors {
+                    output.push_str(&format!(
+                        "  {:<width$}  {}\n",
+                        fact_str.bold(),
+                        domain_str,
+                        width = max_fact_len
+                    ));
+                } else {
+                    output.push_str(&format!(
+                        "  {:<width$}  {}\n",
+                        fact_str,
+                        domain_str,
+                        width = max_fact_len
+                    ));
+                }
+            }
+
+            if i < solutions.len() - 1 {
+                output.push('\n');
+            }
+        }
+
+        output
+    }
+
+    fn format_domain(&self, domain: &Domain) -> String {
+        use lemma::{Bound, Domain};
+
+        match domain {
+            Domain::Range { min, max } => {
+                let lower_str = match min {
+                    Bound::Inclusive(v) => format!("[{}", v),
+                    Bound::Exclusive(v) => format!("({}", v),
+                    Bound::Unbounded => "(-∞".to_string(),
+                };
+                let upper_str = match max {
+                    Bound::Inclusive(v) => format!("{}]", v),
+                    Bound::Exclusive(v) => format!("{})", v),
+                    Bound::Unbounded => "∞)".to_string(),
+                };
+                format!("{}, {}", lower_str, upper_str)
+            }
+            Domain::Enumeration(values) => {
+                if values.is_empty() {
+                    "(empty set)".to_string()
+                } else if values.len() <= 5 {
+                    let vals: Vec<String> = values.iter().map(|v| v.to_string()).collect();
+                    format!("{{ {} }}", vals.join(", "))
+                } else {
+                    let vals: Vec<String> = values.iter().take(5).map(|v| v.to_string()).collect();
+                    format!("{{ {}, ... ({} total) }}", vals.join(", "), values.len())
+                }
+            }
+            Domain::Union(domains) => {
+                let parts: Vec<String> = domains.iter().map(|d| self.format_domain(d)).collect();
+                parts.join(" OR ")
+            }
+            Domain::Complement(inner) => {
+                format!("NOT ({})", self.format_domain(inner))
+            }
+            Domain::Unconstrained => {
+                if self.use_colors {
+                    "(any value)".dark_grey().to_string()
+                } else {
+                    "(any value)".to_string()
+                }
+            }
         }
     }
 }

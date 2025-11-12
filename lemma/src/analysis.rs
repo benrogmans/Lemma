@@ -6,17 +6,18 @@
 //! Used by both semantic validation and evaluation.
 
 use crate::{
-    Expression, ExpressionKind, FactType, FactValue, LemmaDoc, LemmaFact, LemmaResult, LemmaRule,
-    RulePath,
+    Expression, ExpressionKind, FactReference, FactType, FactValue, LemmaDoc, LemmaFact,
+    LemmaResult, LemmaRule, RulePath,
 };
 use std::collections::{HashMap, HashSet};
 
 /// References extracted from an expression
 #[derive(Debug, Clone, Default)]
 pub struct References {
-    /// Fact references (e.g., ["employee", "name"])
-    pub facts: HashSet<Vec<String>>,
-    /// Rule references (e.g., ["employee", "is_eligible"])
+    /// Fact references (e.g., FactReference with reference ["employee", "name"])
+    pub facts: HashSet<FactReference>,
+    /// Rule references as raw segments (e.g., ["employee", "is_eligible"])
+    /// Note: These are syntactic references, not yet resolved to RulePath which requires semantic context
     pub rules: HashSet<Vec<String>>,
 }
 
@@ -42,12 +43,12 @@ pub fn extract_references(expr: &Expression) -> References {
 /// Recursively collect all fact and rule references from an expression
 fn collect_references(
     expr: &Expression,
-    fact_refs: &mut HashSet<Vec<String>>,
+    fact_refs: &mut HashSet<FactReference>,
     rule_refs: &mut HashSet<Vec<String>>,
 ) {
     match &expr.kind {
         ExpressionKind::FactReference(fact_ref) => {
-            fact_refs.insert(fact_ref.reference.clone());
+            fact_refs.insert(fact_ref.clone());
         }
         ExpressionKind::RuleReference(rule_ref) => {
             rule_refs.insert(rule_ref.reference.clone());
@@ -78,42 +79,10 @@ fn collect_references(
             collect_references(operand, fact_refs, rule_refs);
         }
         ExpressionKind::FactHasAnyValue(fact_ref) => {
-            fact_refs.insert(fact_ref.reference.clone());
+            fact_refs.insert(fact_ref.clone());
         }
         ExpressionKind::Veto(_) | ExpressionKind::Literal(_) => {}
     }
-}
-
-/// Build a dependency graph showing which rules depend on which other rules.
-///
-/// Returns a map: RulePath -> set of RulePaths it depends on.
-/// This graph is used for topological sorting to determine execution order
-/// and for detecting circular dependencies.
-pub fn build_dependency_graph(
-    rules: &[(RulePath, &LemmaRule)],
-    main_doc_name: &str,
-    all_documents: &HashMap<String, LemmaDoc>,
-) -> LemmaResult<HashMap<RulePath, HashSet<RulePath>>> {
-    let mut graph = HashMap::new();
-
-    for (rule_path, rule) in rules {
-        let mut dependencies = HashSet::new();
-
-        let doc_name = rule_path.target_doc(main_doc_name);
-        let rule_doc = all_documents
-            .get(doc_name)
-            .ok_or_else(|| crate::LemmaError::Engine(format!("Document {} not found", doc_name)))?;
-
-        extract_rule_paths(&rule.expression, rule_doc, all_documents, &mut dependencies)?;
-        for uc in &rule.unless_clauses {
-            extract_rule_paths(&uc.condition, rule_doc, all_documents, &mut dependencies)?;
-            extract_rule_paths(&uc.result, rule_doc, all_documents, &mut dependencies)?;
-        }
-
-        graph.insert(rule_path.clone(), dependencies);
-    }
-
-    Ok(graph)
 }
 
 /// Recursively find all facts required by a rule, following rule dependencies.
@@ -186,7 +155,7 @@ fn collect_required_facts_recursive(
 
     // Add direct fact references (only those with type annotations - requiring values)
     for fact_ref in all_fact_refs {
-        let fact_name = fact_ref.join(".");
+        let fact_name = fact_ref.reference.join(".");
         if let Some(fact) = document_facts
             .iter()
             .find(|f| fact_display_name(f) == fact_name)
@@ -223,11 +192,12 @@ pub fn fact_display_name(fact: &LemmaFact) -> String {
     }
 }
 
-/// Extract rule paths from an expression for cross-document dependency analysis.
+/// Extract rule paths from an expression for dependency analysis across document references.
 ///
 /// Resolves rule references to `RulePath` instances that include the full
-/// document traversal path. Used by both rule discovery and dependency graph building.
-pub fn extract_rule_paths(
+/// fact traversal path (e.g., `employee.salary?` where `employee` is a fact
+/// referencing another document). Used internally by dependency graph building.
+fn extract_rule_paths(
     expr: &Expression,
     current_doc: &LemmaDoc,
     all_documents: &HashMap<String, LemmaDoc>,
@@ -253,4 +223,76 @@ pub fn extract_rule_paths(
         _ => {}
     }
     Ok(())
+}
+
+/// Build dependency graph for all reachable rules
+///
+/// Starting from the document being evaluated, discovers all rules
+/// (local + rules from documents referenced by facts) and extracts dependencies in a single traversal.
+///
+/// Returns: RulePath -> Set of RulePaths it depends on
+pub fn build_dependency_graph(
+    doc: &LemmaDoc,
+    documents: &HashMap<String, LemmaDoc>,
+) -> LemmaResult<HashMap<RulePath, HashSet<RulePath>>> {
+    use std::collections::VecDeque;
+
+    let mut graph = HashMap::new();
+    let mut queue = VecDeque::new();
+
+    // Start with rules from document being evaluated
+    for rule in &doc.rules {
+        let path = RulePath {
+            rule: rule.name.clone(),
+            segments: vec![],
+        };
+        queue.push_back((path, rule, doc));
+    }
+
+    // BFS: discover rules and build dependencies simultaneously
+    while let Some((path, rule, rule_doc)) = queue.pop_front() {
+        // Skip if already processed
+        if graph.contains_key(&path) {
+            continue;
+        }
+
+        // Extract dependencies for this rule (single traversal)
+        let mut dependencies = HashSet::new();
+        extract_rule_paths(&rule.expression, rule_doc, documents, &mut dependencies)?;
+        for uc in &rule.unless_clauses {
+            extract_rule_paths(&uc.condition, rule_doc, documents, &mut dependencies)?;
+            extract_rule_paths(&uc.result, rule_doc, documents, &mut dependencies)?;
+        }
+
+        // Store in graph
+        graph.insert(path.clone(), dependencies.clone());
+
+        // Queue dependencies for discovery
+        for dep_path in dependencies {
+            if !graph.contains_key(&dep_path) {
+                let target_doc_name = dep_path.target_doc(&doc.name);
+                let target_doc = documents.get(target_doc_name).ok_or_else(|| {
+                    crate::LemmaError::Engine(format!(
+                        "Rule {} references document '{}' which does not exist",
+                        path, target_doc_name
+                    ))
+                })?;
+
+                let target_rule = target_doc
+                    .rules
+                    .iter()
+                    .find(|r| r.name == dep_path.rule)
+                    .ok_or_else(|| {
+                        crate::LemmaError::Engine(format!(
+                            "Rule {} references rule '{}' in document '{}' which does not exist",
+                            path, dep_path.rule, target_doc_name
+                        ))
+                    })?;
+
+                queue.push_back((dep_path, target_rule, target_doc));
+            }
+        }
+    }
+
+    Ok(graph)
 }

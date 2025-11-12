@@ -95,8 +95,9 @@ pub struct FactReference {
 /// Reference to a rule
 ///
 /// Rule references use a question mark suffix to distinguish them from fact references.
-/// Example: `has_license?` references the `has_license` rule.
-/// Cross-document example: `employee.is_eligible?` references the `is_eligible` rule from the `employee` document.
+/// Example: `has_license?` references the `has_license` rule in the current document.
+/// Cross-document example: `employee.is_eligible?` where `employee` is a fact with value `doc some_doc`,
+/// references the `is_eligible` rule from the document referenced by the `employee` fact.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RuleReference {
     pub reference: Vec<String>, // ["employee", "is_eligible"] or just ["is_eligible"]
@@ -197,15 +198,19 @@ pub struct VetoExpression {
 /// Mathematical operators
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MathematicalOperator {
-    Sqrt, // Square root
-    Sin,  // Sine
-    Cos,  // Cosine
-    Tan,  // Tangent
-    Asin, // Arc sine
-    Acos, // Arc cosine
-    Atan, // Arc tangent
-    Log,  // Natural logarithm
-    Exp,  // Exponential (e^x)
+    Sqrt,  // Square root
+    Sin,   // Sine
+    Cos,   // Cosine
+    Tan,   // Tangent
+    Asin,  // Arc sine
+    Acos,  // Arc cosine
+    Atan,  // Arc tangent
+    Log,   // Natural logarithm
+    Exp,   // Exponential (e^x)
+    Abs,   // Absolute value
+    Floor, // Round down
+    Ceil,  // Round up
+    Round, // Round to nearest
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -666,15 +671,14 @@ impl LemmaDoc {
 
     /// Get the expected type for a fact by path
     /// Returns None if the fact is not found in this document or if the fact is a document reference
-    pub fn get_fact_type(&self, fact_path: &FactPath) -> Option<LemmaType> {
+    pub fn get_fact_type(&self, fact_ref: &FactReference) -> Option<LemmaType> {
         self.facts
             .iter()
-            .find(|fact| {
-                let segments = fact_path.segments();
-                match &fact.fact_type {
-                    FactType::Local(name) => segments.len() == 1 && segments[0] == *name,
-                    FactType::Foreign(foreign_ref) => segments == foreign_ref.reference.as_slice(),
+            .find(|fact| match &fact.fact_type {
+                FactType::Local(name) => {
+                    fact_ref.reference.len() == 1 && fact_ref.reference[0] == *name
                 }
+                FactType::Foreign(foreign_ref) => fact_ref.reference == foreign_ref.reference,
             })
             .and_then(|fact| match &fact.value {
                 FactValue::Literal(lit) => Some(lit.to_type()),
@@ -778,6 +782,10 @@ impl fmt::Display for Expression {
                     MathematicalOperator::Atan => "atan",
                     MathematicalOperator::Log => "log",
                     MathematicalOperator::Exp => "exp",
+                    MathematicalOperator::Abs => "abs",
+                    MathematicalOperator::Floor => "floor",
+                    MathematicalOperator::Ceil => "ceil",
+                    MathematicalOperator::Round => "round",
                 };
                 write!(f, "{} {}", op_name, operand)
             }
@@ -1184,78 +1192,10 @@ impl fmt::Display for DateTimeValue {
     }
 }
 
-/// A structured path to a fact, avoiding string allocations
+/// A segment in a rule path representing one fact-to-document traversal
 ///
-/// Instead of storing facts as "base.base.price" strings, we store them
-/// as structured paths ["base", "base", "price"]. This is more efficient
-/// and semantically clearer.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FactPath {
-    segments: Vec<String>,
-}
-
-impl FactPath {
-    /// Create a new fact path from a vector of segments
-    pub fn new(segments: Vec<String>) -> Self {
-        Self { segments }
-    }
-
-    /// Create a fact path from a slice of segments
-    pub fn from_slice(segments: &[String]) -> Self {
-        Self {
-            segments: segments.to_vec(),
-        }
-    }
-
-    /// Create a fact path with a prefix prepended
-    pub fn with_prefix(&self, prefix: &[String]) -> Self {
-        let mut new_segments = prefix.to_vec();
-        new_segments.extend_from_slice(&self.segments);
-        Self {
-            segments: new_segments,
-        }
-    }
-
-    /// Get the segments as a slice
-    pub fn segments(&self) -> &[String] {
-        &self.segments
-    }
-
-    /// Get the segments as a mutable slice
-    pub fn segments_mut(&mut self) -> &mut Vec<String> {
-        &mut self.segments
-    }
-
-    /// Check if the path is empty
-    pub fn is_empty(&self) -> bool {
-        self.segments.is_empty()
-    }
-
-    /// Get the length of the path
-    pub fn len(&self) -> usize {
-        self.segments.len()
-    }
-}
-
-impl std::fmt::Display for FactPath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.segments.join("."))
-    }
-}
-
-impl From<Vec<String>> for FactPath {
-    fn from(segments: Vec<String>) -> Self {
-        Self::new(segments)
-    }
-}
-
-impl From<&[String]> for FactPath {
-    fn from(segments: &[String]) -> Self {
-        Self::from_slice(segments)
-    }
-}
-
-/// A segment in a rule path representing one document traversal
+/// E.g., for `employee.is_eligible?` where `employee` is a fact with value `doc hr_doc`,
+/// the segment would be `RulePathSegment { fact: "employee", doc: "hr_doc" }`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RulePathSegment {
     pub fact: String,
@@ -1263,6 +1203,9 @@ pub struct RulePathSegment {
 }
 
 /// Uniquely identifies a rule by tracking the complete fact traversal path
+///
+/// E.g., `employee.department.head.salary?` would have segments for each fact
+/// in the chain (employee, department, head) leading to the final rule (salary)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RulePath {
     pub rule: String,

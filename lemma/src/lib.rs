@@ -51,6 +51,7 @@ pub mod ast;
 pub mod engine;
 pub mod error;
 pub mod evaluator;
+pub mod inversion;
 pub mod operation_result;
 pub mod parser;
 pub mod resource_limits;
@@ -64,7 +65,11 @@ pub mod wasm;
 
 pub use ast::{ExpressionId, ExpressionIdGenerator, Span};
 pub use engine::Engine;
+/// Temporary alias to align with the Inversion plan's unified naming.
+/// Workspace is functionally identical to Engine and will eventually replace it.
+pub type Workspace = Engine;
 pub use error::LemmaError;
+pub use inversion::{Bound, BranchOutcome, Domain, Shape, ShapeBranch, Target, TargetOp};
 pub use operation_result::OperationResult;
 pub use parser::{parse, parse_facts};
 pub use resource_limits::ResourceLimits;

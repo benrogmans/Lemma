@@ -49,11 +49,12 @@ impl Evaluator {
             .get(doc_name)
             .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
 
-        // Phase 1: Build fact map (resolving document references and validating types)
-        let facts = build_fact_map(doc, &doc.facts, &fact_overrides, documents)?;
+        // Phase 1: Build dependency graph and execution plan
+        let graph = crate::analysis::build_dependency_graph(doc, documents)?;
+        let execution_order = topological_sort(&graph)?;
 
-        // Phase 2: Build execution plan (topological sort of rules)
-        let execution_order = build_execution_plan(doc, documents)?;
+        // Phase 2: Build fact map (resolving document references and validating types)
+        let facts = build_fact_map(doc, &doc.facts, &fact_overrides, documents)?;
 
         // Phase 3: Build evaluation context
         let mut context =
@@ -82,31 +83,7 @@ impl Evaluator {
                 })?;
 
             // Check if any dependencies have failed
-            let mut all_rule_deps = std::collections::HashSet::new();
-
-            // Extract from main expression
-            crate::analysis::extract_rule_paths(
-                &rule.expression,
-                rule_doc,
-                documents,
-                &mut all_rule_deps,
-            )?;
-
-            // Extract from unless clauses
-            for uc in &rule.unless_clauses {
-                crate::analysis::extract_rule_paths(
-                    &uc.condition,
-                    rule_doc,
-                    documents,
-                    &mut all_rule_deps,
-                )?;
-                crate::analysis::extract_rule_paths(
-                    &uc.result,
-                    rule_doc,
-                    documents,
-                    &mut all_rule_deps,
-                )?;
-            }
+            let all_rule_deps = graph.get(&rule_path).cloned().unwrap_or_default();
 
             let missing_deps: Vec<String> = all_rule_deps
                 .iter()
@@ -126,9 +103,11 @@ impl Evaluator {
             // Clear operation records for this rule
             context.operations.clear();
 
-            // Evaluate the rule with path prefix for cross-document rules
+            // Evaluate the rule with path prefix when the rule is from a document referenced by a fact
             let path_prefix: Vec<String> = if target_doc_name != doc_name {
-                // Cross-document rule: use path prefix from segments
+                // Rule from referenced document: use the fact path as prefix
+                // E.g., if evaluating `employee.salary?` where `employee = doc hr_doc`,
+                // the prefix is ["employee"] so facts in the rule are looked up as ["employee", "field"]
                 rule_path.segments.iter().map(|s| s.fact.clone()).collect()
             } else {
                 // Local rule: empty prefix
@@ -180,98 +159,6 @@ impl Evaluator {
 
         Ok(response)
     }
-}
-
-/// Discover all reachable rules (local + cross-document) using BFS
-///
-/// Starts with rules from the main document, then traverses
-/// rule references to discover cross-document access paths.
-fn discover_all_rules<'a>(
-    main_doc: &'a crate::LemmaDoc,
-    all_documents: &'a HashMap<String, crate::LemmaDoc>,
-) -> LemmaResult<Vec<(crate::RulePath, &'a crate::LemmaRule)>> {
-    use std::collections::{HashSet, VecDeque};
-
-    let mut discovered = Vec::new();
-    let mut seen = HashSet::new();
-    let mut queue = VecDeque::new();
-
-    // Start with rules from the main document only (as local access)
-    for rule in &main_doc.rules {
-        let path = crate::RulePath {
-            rule: rule.name.clone(),
-            segments: vec![],
-        };
-        if seen.insert(path.clone()) {
-            queue.push_back((path, rule, main_doc));
-        }
-    }
-
-    // BFS: discover cross-document rule references
-    while let Some((path, rule, rule_doc)) = queue.pop_front() {
-        discovered.push((path.clone(), rule));
-
-        let mut referenced_paths = HashSet::new();
-        crate::analysis::extract_rule_paths(
-            &rule.expression,
-            rule_doc,
-            all_documents,
-            &mut referenced_paths,
-        )?;
-        for uc in &rule.unless_clauses {
-            crate::analysis::extract_rule_paths(
-                &uc.condition,
-                rule_doc,
-                all_documents,
-                &mut referenced_paths,
-            )?;
-            crate::analysis::extract_rule_paths(
-                &uc.result,
-                rule_doc,
-                all_documents,
-                &mut referenced_paths,
-            )?;
-        }
-
-        for ref_path in referenced_paths {
-            if seen.insert(ref_path.clone()) {
-                let target_doc_name = ref_path.target_doc(&main_doc.name);
-                let target_doc = all_documents.get(target_doc_name).ok_or_else(|| {
-                    LemmaError::Engine(format!(
-                        "Rule {} references document '{}' which does not exist",
-                        path, target_doc_name
-                    ))
-                })?;
-
-                let target_rule = target_doc
-                    .rules
-                    .iter()
-                    .find(|r| r.name == ref_path.rule)
-                    .ok_or_else(|| {
-                        LemmaError::Engine(format!(
-                            "Rule {} references rule '{}' in document '{}' which does not exist",
-                            path, ref_path.rule, target_doc_name
-                        ))
-                    })?;
-
-                queue.push_back((ref_path, target_rule, target_doc));
-            }
-        }
-    }
-
-    Ok(discovered)
-}
-
-/// Build an execution plan for rules using topological sort
-///
-/// Returns rules in dependency order (dependencies before dependents)
-fn build_execution_plan(
-    doc: &crate::LemmaDoc,
-    all_documents: &HashMap<String, crate::LemmaDoc>,
-) -> LemmaResult<Vec<crate::RulePath>> {
-    let all_rules = discover_all_rules(doc, all_documents)?;
-    let graph = crate::analysis::build_dependency_graph(&all_rules, &doc.name, all_documents)?;
-    topological_sort(&graph)
 }
 
 /// Topological sort of rules to get execution order.

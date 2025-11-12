@@ -101,6 +101,33 @@ enum Commands {
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
     },
+    /// Invert a rule to find what inputs produce desired outputs
+    ///
+    /// Uses symbolic inversion to derive input constraints from rule definitions.
+    /// Returns domains (valid ranges/values) for each fact that satisfies the target.
+    Invert {
+        /// Document name
+        doc_name: String,
+        /// Rule name to invert
+        rule_name: String,
+        /// Target to invert for (default: any non-veto value)
+        ///
+        /// Examples:
+        ///   any                - any non-veto value (default)
+        ///   veto               - any veto
+        ///   100                - specific value
+        ///   >50                - greater than 50
+        ///   >=50               - greater than or equal to 50
+        /// > <100               - less than 100
+        /// > <=100              - less than or equal to 100
+        #[arg(short = 't', long, default_value = "any")]
+        target: String,
+        /// Facts to provide as given (format: name=value)
+        facts: Vec<String>,
+        /// Workspace root directory containing .lemma files
+        #[arg(short = 'd', long = "dir", default_value = ".")]
+        workdir: PathBuf,
+    },
 }
 
 fn main() {
@@ -122,6 +149,13 @@ fn main() {
             port,
         } => server_command(workdir, host, *port),
         Commands::Mcp { workdir } => mcp_command(workdir),
+        Commands::Invert {
+            workdir,
+            doc_name,
+            rule_name,
+            target,
+            facts,
+        } => invert_command(workdir, doc_name, rule_name, target, facts),
     };
 
     if let Err(e) = result {
@@ -307,6 +341,112 @@ fn mcp_command(workdir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn invert_command(
+    workdir: &Path,
+    doc_name: &str,
+    rule_name: &str,
+    target_str: &str,
+    facts: &[String],
+) -> Result<()> {
+    let mut engine = Engine::new();
+    load_workspace(&mut engine, workdir)?;
+
+    // Parse target
+    let target = parse_target(target_str)?;
+
+    // Parse facts
+    let given_facts = if !facts.is_empty() {
+        let refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
+        let parsed_facts = lemma::parse_facts(&refs)?;
+
+        // Convert Vec<LemmaFact> to HashMap<String, LiteralValue>
+        let mut fact_map = std::collections::HashMap::new();
+        for fact in parsed_facts {
+            if let lemma::FactValue::Literal(value) = fact.value {
+                let fact_name = match &fact.fact_type {
+                    lemma::FactType::Local(name) => format!("{}.{}", doc_name, name),
+                    lemma::FactType::Foreign(foreign) => foreign.reference.join("."),
+                };
+                fact_map.insert(fact_name, value);
+            }
+        }
+        fact_map
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    // Perform inversion
+    let solutions = engine.invert(doc_name, rule_name, target, given_facts)?;
+
+    // Format output
+    let formatter = Formatter::default();
+    print!("{}", formatter.format_inversion_result(&solutions));
+
+    Ok(())
+}
+
+fn parse_target(target_str: &str) -> Result<lemma::Target> {
+    use lemma::{OperationResult, Target, TargetOp};
+
+    match target_str {
+        "any" => Ok(Target::any_value()),
+        "veto" => Ok(Target::any_veto()),
+        s if s.starts_with(">=") => {
+            let value_str = &s[2..];
+            let value = parse_literal_value(value_str)?;
+            Ok(Target::with_op(
+                TargetOp::Gte,
+                OperationResult::Value(value),
+            ))
+        }
+        s if s.starts_with("<=") => {
+            let value_str = &s[2..];
+            let value = parse_literal_value(value_str)?;
+            Ok(Target::with_op(
+                TargetOp::Lte,
+                OperationResult::Value(value),
+            ))
+        }
+        s if s.starts_with(">") => {
+            let value_str = &s[1..];
+            let value = parse_literal_value(value_str)?;
+            Ok(Target::with_op(TargetOp::Gt, OperationResult::Value(value)))
+        }
+        s if s.starts_with("<") => {
+            let value_str = &s[1..];
+            let value = parse_literal_value(value_str)?;
+            Ok(Target::with_op(TargetOp::Lt, OperationResult::Value(value)))
+        }
+        _ => {
+            // Try to parse as a specific value
+            let value = parse_literal_value(target_str)?;
+            Ok(Target::value(value))
+        }
+    }
+}
+
+fn parse_literal_value(s: &str) -> Result<lemma::LiteralValue> {
+    use lemma::LiteralValue;
+    use rust_decimal::Decimal;
+
+    // Try parsing as various types
+    if s == "true" {
+        Ok(LiteralValue::Boolean(true))
+    } else if s == "false" {
+        Ok(LiteralValue::Boolean(false))
+    } else if let Ok(num) = s.parse::<Decimal>() {
+        Ok(LiteralValue::Number(num))
+    } else if let Some(s_without_percent) = s.strip_suffix('%') {
+        if let Ok(num) = s_without_percent.parse::<Decimal>() {
+            Ok(LiteralValue::Percentage(num))
+        } else {
+            Err(anyhow::anyhow!("Invalid percentage: {}", s))
+        }
+    } else {
+        Ok(LiteralValue::Text(s.to_string()))
+    }
 }
 
 /// Load all .lemma files from the workspace directory
