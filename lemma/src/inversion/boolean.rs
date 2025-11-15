@@ -94,7 +94,7 @@ fn to_bool_expr(
         EK::Literal(_)
         | EK::Arithmetic(_, _, _)
         | EK::UnitConversion(_, _)
-        | EK::MathematicalOperator(_, _)
+        | EK::MathematicalComputation(_, _)
         | EK::FactReference(_)
         | EK::RuleReference(_)
         | EK::Veto(_) => None,

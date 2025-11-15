@@ -34,7 +34,7 @@ fn expressions_semantically_equal(a: &Expression, b: &Expression) -> bool {
         (EK::LogicalNegation(e1, _), EK::LogicalNegation(e2, _)) => {
             expressions_semantically_equal(e1, e2)
         }
-        (EK::MathematicalOperator(op1, e1), EK::MathematicalOperator(op2, e2)) => {
+        (EK::MathematicalComputation(op1, e1), EK::MathematicalComputation(op2, e2)) => {
             op1 == op2 && expressions_semantically_equal(e1, e2)
         }
         (EK::UnitConversion(e1, target1), EK::UnitConversion(e2, target2)) => {
@@ -263,7 +263,7 @@ pub fn invert(
                                         None,
                                         crate::ExpressionId::new(0),
                                     )),
-                                    crate::ComparisonOperator::Equal,
+                                    crate::ComparisonComputation::Equal,
                                     Box::new(rhs),
                                 ),
                                 None,
@@ -287,7 +287,7 @@ pub fn invert(
                 let condition = Expression::new(
                     crate::ExpressionKind::Comparison(
                         Box::new(expr_h.clone()),
-                        crate::ComparisonOperator::Equal,
+                        crate::ComparisonComputation::Equal,
                         Box::new(literal_expr(val.clone())),
                     ),
                     None,
@@ -348,7 +348,7 @@ pub fn invert(
                         let eq_condition = Expression::new(
                             crate::ExpressionKind::Comparison(
                                 Box::new(fact_ref),
-                                crate::ComparisonOperator::Equal,
+                                crate::ComparisonComputation::Equal,
                                 Box::new(rhs_final),
                             ),
                             None,
@@ -411,7 +411,7 @@ where
         (BranchOutcome::Value(value_expr), Some(OperationResult::Value(_))) => {
             let mut guard = build_value_target_guard(value_expr, target, literal_expr);
             if let ExpressionKind::Comparison(lhs, op, rhs) = &guard.kind {
-                if matches!(op, crate::ComparisonOperator::Equal) {
+                if matches!(op, crate::ComparisonComputation::Equal) {
                     if let ExpressionKind::RuleReference(rr) = &lhs.kind {
                         let rule_ref_qualified: Vec<String> = if rr.reference.len() > 1 {
                             rr.reference.clone()
@@ -558,12 +558,12 @@ fn build_value_target_guard(
         _ => unreachable!("build_value_target_guard called with non-value target"),
     };
     let op = match target.op {
-        TargetOp::Eq => crate::ComparisonOperator::Equal,
-        TargetOp::Neq => crate::ComparisonOperator::NotEqual,
-        TargetOp::Lt => crate::ComparisonOperator::LessThan,
-        TargetOp::Lte => crate::ComparisonOperator::LessThanOrEqual,
-        TargetOp::Gt => crate::ComparisonOperator::GreaterThan,
-        TargetOp::Gte => crate::ComparisonOperator::GreaterThanOrEqual,
+        TargetOp::Eq => crate::ComparisonComputation::Equal,
+        TargetOp::Neq => crate::ComparisonComputation::NotEqual,
+        TargetOp::Lt => crate::ComparisonComputation::LessThan,
+        TargetOp::Lte => crate::ComparisonComputation::LessThanOrEqual,
+        TargetOp::Gt => crate::ComparisonComputation::GreaterThan,
+        TargetOp::Gte => crate::ComparisonComputation::GreaterThanOrEqual,
     };
     Expression::new(
         ExpressionKind::Comparison(Box::new(expr.clone()), op, Box::new(rhs)),
@@ -575,7 +575,7 @@ fn build_value_target_guard(
 fn extract_fact_equality(cond: &Expression) -> Option<(crate::FactReference, Expression)> {
     use ExpressionKind as EK;
     match &cond.kind {
-        EK::Comparison(l, crate::ComparisonOperator::Equal, r) => {
+        EK::Comparison(l, crate::ComparisonComputation::Equal, r) => {
             if let EK::FactReference(fr) = &l.kind {
                 let fp = if fr.reference.len() == 1 {
                     crate::FactReference {

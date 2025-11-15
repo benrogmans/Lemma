@@ -29,11 +29,11 @@ rule line_total = pricing.final_price? * quantity
     let line_total = response
         .results
         .iter()
-        .find(|r| r.rule_name == "line_total")
+        .find(|r| r.rule.name == "line_total")
         .unwrap();
 
     // Should be: (100 * 1.21) * 10 = 1210
-    assert_eq!(line_total.result.as_ref().unwrap().to_string(), "1210");
+    assert_eq!(line_total.result.as_ref().unwrap().to_string(), "1_210");
 }
 
 /// Bug: Multi-level document references fail
@@ -70,13 +70,13 @@ rule top_calc = middle_ref.middle_calc?
 
     println!("Available rules:");
     for result in &response.results {
-        println!("  - {}: {:?}", result.rule_name, result.result);
+        println!("  - {}: {:?}", result.rule.name, result.result);
     }
 
     let top_calc = response
         .results
         .iter()
-        .find(|r| r.rule_name == "top_calc")
+        .find(|r| r.rule.name == "top_calc")
         .expect("top_calc rule not found in results");
 
     // Should be: ((100 * 2) + 50) = 250
@@ -127,17 +127,17 @@ rule order_total = line.line_total?
 
     println!("Available rules:");
     for result in &response.results {
-        println!("  - {}: {:?}", result.rule_name, result.result);
+        println!("  - {}: {:?}", result.rule.name, result.result);
     }
 
     let order_total = response
         .results
         .iter()
-        .find(|r| r.rule_name == "order_total")
+        .find(|r| r.rule.name == "order_total")
         .expect("order_total rule not found in results");
 
     // Should use wholesale pricing: (75 * 1.1) * 100 = 8250
-    assert_eq!(order_total.result.as_ref().unwrap().to_string(), "8250");
+    assert_eq!(order_total.result.as_ref().unwrap().to_string(), "8_250");
 }
 
 /// Bug: Accessing facts through multi-level document references with nested overrides
@@ -173,7 +173,7 @@ rule final_value = settings.config.value * 2
     let final_value = response
         .results
         .iter()
-        .find(|r| r.rule_name == "final_value")
+        .find(|r| r.rule.name == "final_value")
         .unwrap();
 
     // Should be: 100 * 2 = 200 (using the overridden value from middle)

@@ -19,7 +19,7 @@ rule lighter = weight1 < weight2
     let heavier = response
         .results
         .iter()
-        .find(|r| r.rule_name == "heavier")
+        .find(|r| r.rule.name == "heavier")
         .unwrap();
     assert_eq!(heavier.result.as_ref().unwrap().to_string(), "true");
 
@@ -27,7 +27,7 @@ rule lighter = weight1 < weight2
     let lighter = response
         .results
         .iter()
-        .find(|r| r.rule_name == "lighter")
+        .find(|r| r.rule.name == "lighter")
         .unwrap();
     assert_eq!(lighter.result.as_ref().unwrap().to_string(), "false");
 }
@@ -51,7 +51,7 @@ rule equal = 1000 meters == 1 kilometer
     let shorter = response
         .results
         .iter()
-        .find(|r| r.rule_name == "shorter")
+        .find(|r| r.rule.name == "shorter")
         .unwrap();
     assert_eq!(shorter.result.as_ref().unwrap().to_string(), "true");
 
@@ -59,7 +59,7 @@ rule equal = 1000 meters == 1 kilometer
     let equal = response
         .results
         .iter()
-        .find(|r| r.rule_name == "equal")
+        .find(|r| r.rule.name == "equal")
         .unwrap();
     assert_eq!(equal.result.as_ref().unwrap().to_string(), "true");
 }
@@ -82,7 +82,7 @@ rule less_time = time1 < time2
     let less_time = response
         .results
         .iter()
-        .find(|r| r.rule_name == "less_time")
+        .find(|r| r.rule.name == "less_time")
         .unwrap();
     assert_eq!(less_time.result.as_ref().unwrap().to_string(), "true");
 }
@@ -105,7 +105,7 @@ rule weight_greater = weight > distance
     let weight_greater = response
         .results
         .iter()
-        .find(|r| r.rule_name == "weight_greater")
+        .find(|r| r.rule.name == "weight_greater")
         .unwrap();
     assert_eq!(weight_greater.result.as_ref().unwrap().to_string(), "true");
 }
@@ -128,7 +128,7 @@ rule less_than_10 = weight < 10
     let greater = response
         .results
         .iter()
-        .find(|r| r.rule_name == "greater_than_3")
+        .find(|r| r.rule.name == "greater_than_3")
         .unwrap();
     assert_eq!(greater.result.as_ref().unwrap().to_string(), "true");
 
@@ -136,7 +136,7 @@ rule less_than_10 = weight < 10
     let less = response
         .results
         .iter()
-        .find(|r| r.rule_name == "less_than_10")
+        .find(|r| r.rule.name == "less_than_10")
         .unwrap();
     assert_eq!(less.result.as_ref().unwrap().to_string(), "true");
 }
@@ -159,7 +159,7 @@ rule total = weight1 + weight2
     let total = response
         .results
         .iter()
-        .find(|r| r.rule_name == "total")
+        .find(|r| r.rule.name == "total")
         .unwrap();
     let result_str = total.result.as_ref().unwrap().to_string();
     assert!(result_str.contains("2.5") || result_str.contains("2.50"));
@@ -184,7 +184,7 @@ rule speed = distance / time
     let speed = response
         .results
         .iter()
-        .find(|r| r.rule_name == "speed")
+        .find(|r| r.rule.name == "speed")
         .unwrap();
     assert_eq!(speed.result.as_ref().unwrap().to_string(), "5");
 }
@@ -207,7 +207,7 @@ rule same_temp = temp1 == temp2
     let same_temp = response
         .results
         .iter()
-        .find(|r| r.rule_name == "same_temp")
+        .find(|r| r.rule.name == "same_temp")
         .unwrap();
     assert_eq!(same_temp.result.as_ref().unwrap().to_string(), "true");
 }
@@ -230,7 +230,7 @@ rule less_power = power1 < power2
     let less_power = response
         .results
         .iter()
-        .find(|r| r.rule_name == "less_power")
+        .find(|r| r.rule.name == "less_power")
         .unwrap();
     assert_eq!(less_power.result.as_ref().unwrap().to_string(), "true");
 }

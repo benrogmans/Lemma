@@ -20,7 +20,7 @@ rule weight_lbs = weight_kg in pounds
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "weight_lbs")
+        .find(|r| r.rule.name == "weight_lbs")
         .unwrap()
         .result
         .as_ref()
@@ -53,7 +53,7 @@ rule weight_kg = weight_tons in kilograms
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "weight_kg")
+        .find(|r| r.rule.name == "weight_kg")
         .unwrap()
         .result
         .as_ref()
@@ -85,7 +85,7 @@ rule distance_miles = distance_km in miles
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "distance_miles")
+        .find(|r| r.rule.name == "distance_miles")
         .unwrap()
         .result
         .as_ref()
@@ -117,7 +117,7 @@ rule distance_meters = distance_yards in meters
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "distance_meters")
+        .find(|r| r.rule.name == "distance_meters")
         .unwrap()
         .result
         .as_ref()
@@ -149,7 +149,7 @@ rule length_cm = length_dm in centimeters
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "length_cm")
+        .find(|r| r.rule.name == "length_cm")
         .unwrap()
         .result
         .as_ref()
@@ -181,7 +181,7 @@ rule volume_ml = volume_l in milliliters
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "volume_ml")
+        .find(|r| r.rule.name == "volume_ml")
         .unwrap()
         .result
         .as_ref()
@@ -208,7 +208,7 @@ rule volume_l = volume_gal in liters
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "volume_l")
+        .find(|r| r.rule.name == "volume_l")
         .unwrap()
         .result
         .as_ref()
@@ -240,7 +240,7 @@ rule volume_pt = volume_qt in pints
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "volume_pt")
+        .find(|r| r.rule.name == "volume_pt")
         .unwrap()
         .result
         .as_ref()
@@ -267,7 +267,7 @@ rule volume_dl = volume_cl in deciliters
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "volume_dl")
+        .find(|r| r.rule.name == "volume_dl")
         .unwrap()
         .result
         .as_ref()
@@ -304,7 +304,7 @@ rule time_min = time_h in minutes
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "time_min")
+        .find(|r| r.rule.name == "time_min")
         .unwrap()
         .result
         .as_ref()
@@ -332,7 +332,7 @@ rule time_ms = time_s in milliseconds
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "time_ms")
+        .find(|r| r.rule.name == "time_ms")
         .unwrap()
         .result
         .as_ref()
@@ -360,7 +360,7 @@ rule time_us = time_ms in microseconds
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "time_us")
+        .find(|r| r.rule.name == "time_us")
         .unwrap()
         .result
         .as_ref()
@@ -393,7 +393,7 @@ rule power_w = power_kw in watts
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "power_w")
+        .find(|r| r.rule.name == "power_w")
         .unwrap()
         .result
         .as_ref()
@@ -420,7 +420,7 @@ rule power_mw = power_w in milliwatts
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "power_mw")
+        .find(|r| r.rule.name == "power_mw")
         .unwrap()
         .result
         .as_ref()
@@ -452,7 +452,7 @@ rule energy_j = energy_kj in joules
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "energy_j")
+        .find(|r| r.rule.name == "energy_j")
         .unwrap()
         .result
         .as_ref()
@@ -479,7 +479,7 @@ rule energy_wh = energy_kwh in watthours
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "energy_wh")
+        .find(|r| r.rule.name == "energy_wh")
         .unwrap()
         .result
         .as_ref()
@@ -506,7 +506,7 @@ rule energy_cal = energy_kcal in calories
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "energy_cal")
+        .find(|r| r.rule.name == "energy_cal")
         .unwrap()
         .result
         .as_ref()
@@ -538,7 +538,7 @@ rule pressure_pa = pressure_kpa in pascals
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "pressure_pa")
+        .find(|r| r.rule.name == "pressure_pa")
         .unwrap()
         .result
         .as_ref()
@@ -565,7 +565,7 @@ rule pressure_kpa = pressure_mpa in kilopascals
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "pressure_kpa")
+        .find(|r| r.rule.name == "pressure_kpa")
         .unwrap()
         .result
         .as_ref()
@@ -597,7 +597,7 @@ rule size_mb = size_gb in megabytes
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "size_mb")
+        .find(|r| r.rule.name == "size_mb")
         .unwrap()
         .result
         .as_ref()
@@ -624,7 +624,7 @@ rule size_gb = size_tb in gigabytes
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "size_gb")
+        .find(|r| r.rule.name == "size_gb")
         .unwrap()
         .result
         .as_ref()
@@ -651,7 +651,7 @@ rule size_tb = size_pb in terabytes
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "size_tb")
+        .find(|r| r.rule.name == "size_tb")
         .unwrap()
         .result
         .as_ref()
@@ -678,7 +678,7 @@ rule size_mib = size_gib in mebibytes
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "size_mib")
+        .find(|r| r.rule.name == "size_mib")
         .unwrap()
         .result
         .as_ref()
@@ -705,7 +705,7 @@ rule size_b = size_kib in bytes
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "size_b")
+        .find(|r| r.rule.name == "size_b")
         .unwrap()
         .result
         .as_ref()
@@ -744,7 +744,7 @@ rule discounted_price = base_price * (1 - discount)
     let weight_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "weight_lbs")
+        .find(|r| r.rule.name == "weight_lbs")
         .unwrap()
         .result
         .as_ref()
@@ -762,7 +762,7 @@ rule discounted_price = base_price * (1 - discount)
     let distance_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "distance_miles")
+        .find(|r| r.rule.name == "distance_miles")
         .unwrap()
         .result
         .as_ref()
@@ -780,7 +780,7 @@ rule discounted_price = base_price * (1 - discount)
     let price_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "discounted_price")
+        .find(|r| r.rule.name == "discounted_price")
         .unwrap()
         .result
         .as_ref()

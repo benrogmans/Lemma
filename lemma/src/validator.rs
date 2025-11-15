@@ -348,7 +348,7 @@ impl Validator {
                 self.validate_expression_references(right, current_doc, all_docs)
             }
             ExpressionKind::LogicalNegation(inner, _)
-            | ExpressionKind::MathematicalOperator(_, inner)
+            | ExpressionKind::MathematicalComputation(_, inner)
             | ExpressionKind::UnitConversion(inner, _) => {
                 self.validate_expression_references(inner, current_doc, all_docs)
             }
@@ -639,9 +639,11 @@ impl Validator {
         path.push(node.to_string());
 
         if let Some(dependencies) = graph.get(node) {
-            for dep in dependencies {
-                if graph.contains_key(dep) {
-                    if let Some(cycle) = Self::detect_cycle(graph, dep, visiting, visited, path) {
+            for dependency_rule in dependencies {
+                if graph.contains_key(dependency_rule) {
+                    if let Some(cycle) =
+                        Self::detect_cycle(graph, dependency_rule, visiting, visited, path)
+                    {
                         return Some(cycle);
                     }
                 }
@@ -724,7 +726,7 @@ impl Validator {
             ExpressionKind::LogicalNegation(inner, _negation_type) => {
                 self.validate_expression_type(inner, doc)?;
             }
-            ExpressionKind::MathematicalOperator(_op, operand) => {
+            ExpressionKind::MathematicalComputation(_op, operand) => {
                 self.validate_expression_type(operand, doc)?;
             }
             ExpressionKind::UnitConversion(value, _target) => {
@@ -947,7 +949,7 @@ impl Validator {
                 // Division of numbers (or other compatible types) produces a number
                 Ok(ExpressionType::Number)
             }
-            ExpressionKind::MathematicalOperator(_, _) => Ok(ExpressionType::Number),
+            ExpressionKind::MathematicalComputation(_, _) => Ok(ExpressionType::Number),
             ExpressionKind::UnitConversion(value_expr, target) => {
                 let value_type = self.infer_expression_type_with_context(value_expr, doc)?;
                 Ok(self.infer_conversion_result_type(&value_type, target))

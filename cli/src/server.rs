@@ -29,7 +29,6 @@ pub mod http {
     #[derive(Debug, Serialize)]
     struct EvaluateResponse {
         results: Vec<RuleResultJson>,
-        warnings: Vec<String>,
     }
 
     #[derive(Debug, Serialize)]
@@ -134,10 +133,7 @@ pub mod http {
             results.len()
         );
 
-        Ok(Json(EvaluateResponse {
-            results,
-            warnings: response.warnings,
-        }))
+        Ok(Json(EvaluateResponse { results }))
     }
 
     async fn evaluate_post(
@@ -224,10 +220,7 @@ pub mod http {
             results.len()
         );
 
-        Ok(Json(EvaluateResponse {
-            results,
-            warnings: response.warnings,
-        }))
+        Ok(Json(EvaluateResponse { results }))
     }
 
     fn convert_results(response: &Response) -> Vec<RuleResultJson> {
@@ -235,7 +228,7 @@ pub mod http {
             .results
             .iter()
             .map(|r| RuleResultJson {
-                name: r.rule_name.clone(),
+                name: r.rule.name.clone(),
                 value: r.result.as_ref().map(|v| v.to_string()),
                 veto_reason: r.veto_message.clone(),
             })

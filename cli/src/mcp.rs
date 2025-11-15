@@ -323,7 +323,7 @@ pub mod server {
             if !response.results.is_empty() {
                 output.push_str("## Results\n\n");
                 for result in &response.results {
-                    output.push_str(&format!("**{}**: ", result.rule_name));
+                    output.push_str(&format!("**{}**: ", result.rule.name));
                     if let Some(ref value) = result.result {
                         output.push_str(&value.to_string());
                     } else if let Some(ref veto) = result.veto_message {
@@ -332,13 +332,6 @@ pub mod server {
                         output.push_str("(no value)");
                     }
                     output.push('\n');
-                }
-            }
-
-            if !response.warnings.is_empty() {
-                output.push_str("\n## Warnings\n\n");
-                for warning in &response.warnings {
-                    output.push_str(&format!("- {}\n", warning));
                 }
             }
 

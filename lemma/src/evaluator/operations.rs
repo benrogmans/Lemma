@@ -2,7 +2,7 @@
 //!
 //! Handles operations on different types: Number, Money, Percentage, Duration, etc.
 
-use crate::{ArithmeticOperation, ComparisonOperator, LemmaError, LemmaResult, LiteralValue};
+use crate::{ArithmeticComputation, ComparisonComputation, LemmaError, LemmaResult, LiteralValue};
 use rust_decimal::Decimal;
 
 // Percentage calculations: percentages are stored as numbers (e.g., 20 for 20%)
@@ -28,7 +28,7 @@ const PERCENT_DENOMINATOR: i32 = 100;
 /// ```
 pub fn arithmetic_operation(
     left: &LiteralValue,
-    op: &ArithmeticOperation,
+    op: &ArithmeticComputation,
     right: &LiteralValue,
 ) -> LemmaResult<LiteralValue> {
     match (left, right) {
@@ -81,13 +81,13 @@ pub fn arithmetic_operation(
         // Percentage operations - percentages are operators that apply to values
         (LiteralValue::Percentage(p), LiteralValue::Number(n)) => {
             match op {
-                ArithmeticOperation::Multiply => {
+                ArithmeticComputation::Multiply => {
                     // 20% * 100 = 20 (apply percentage)
                     Ok(LiteralValue::Number(
                         p * n / Decimal::from(PERCENT_DENOMINATOR),
                     ))
                 }
-                ArithmeticOperation::Divide => {
+                ArithmeticComputation::Divide => {
                     if *n == Decimal::ZERO {
                         return Err(LemmaError::Engine("Division by zero".to_string()));
                     }
@@ -102,19 +102,19 @@ pub fn arithmetic_operation(
         }
         (LiteralValue::Number(n), LiteralValue::Percentage(p)) => {
             match op {
-                ArithmeticOperation::Multiply => {
+                ArithmeticComputation::Multiply => {
                     // 100 * 20% = 20 (apply percentage)
                     Ok(LiteralValue::Number(
                         n * p / Decimal::from(PERCENT_DENOMINATOR),
                     ))
                 }
-                ArithmeticOperation::Add => {
+                ArithmeticComputation::Add => {
                     // 100 + 20% = 120 (increase by percentage)
                     Ok(LiteralValue::Number(
                         n + (n * p / Decimal::from(PERCENT_DENOMINATOR)),
                     ))
                 }
-                ArithmeticOperation::Subtract => {
+                ArithmeticComputation::Subtract => {
                     // 100 - 20% = 80 (decrease by percentage)
                     Ok(LiteralValue::Number(
                         n - (n * p / Decimal::from(PERCENT_DENOMINATOR)),
@@ -129,18 +129,18 @@ pub fn arithmetic_operation(
 
         (LiteralValue::Percentage(p), LiteralValue::Unit(unit))
         | (LiteralValue::Unit(unit), LiteralValue::Percentage(p)) => match op {
-            ArithmeticOperation::Multiply => {
+            ArithmeticComputation::Multiply => {
                 // Unit * Percentage = Unit scaled by percentage (e.g., 100 eur * 20% = 20 eur)
                 let result_value = unit.value() * p / Decimal::from(PERCENT_DENOMINATOR);
                 Ok(LiteralValue::Unit(unit.with_value(result_value)))
             }
-            ArithmeticOperation::Add => {
+            ArithmeticComputation::Add => {
                 // Unit + Percentage = Unit increased by percentage (e.g., 100 eur + 20% = 120 eur)
                 let increase = unit.value() * p / Decimal::from(PERCENT_DENOMINATOR);
                 let result_value = unit.value() + increase;
                 Ok(LiteralValue::Unit(unit.with_value(result_value)))
             }
-            ArithmeticOperation::Subtract => {
+            ArithmeticComputation::Subtract => {
                 // Unit - Percentage = Unit decreased by percentage (e.g., 100 eur - 20% = 80 eur)
                 let decrease = unit.value() * p / Decimal::from(PERCENT_DENOMINATOR);
                 let result_value = unit.value() - decrease;
@@ -165,21 +165,21 @@ pub fn arithmetic_operation(
         // Percentage + Percentage: combine percentages
         (LiteralValue::Percentage(l), LiteralValue::Percentage(r)) => {
             match op {
-                ArithmeticOperation::Add => {
+                ArithmeticComputation::Add => {
                     // 5% + 10% = 15%
                     Ok(LiteralValue::Percentage(l + r))
                 }
-                ArithmeticOperation::Subtract => {
+                ArithmeticComputation::Subtract => {
                     // 15% - 5% = 10%
                     Ok(LiteralValue::Percentage(l - r))
                 }
-                ArithmeticOperation::Multiply => {
+                ArithmeticComputation::Multiply => {
                     // 20% * 50% = 10% (compound percentage: 0.20 * 0.50 = 0.10)
                     Ok(LiteralValue::Percentage(
                         l * r / Decimal::from(PERCENT_DENOMINATOR),
                     ))
                 }
-                ArithmeticOperation::Divide => {
+                ArithmeticComputation::Divide => {
                     if *r == Decimal::ZERO {
                         return Err(LemmaError::Engine("Division by zero".to_string()));
                     }
@@ -205,23 +205,23 @@ pub fn arithmetic_operation(
 /// Perform basic number arithmetic, returning the numeric result
 fn number_arithmetic(
     left: Decimal,
-    op: &ArithmeticOperation,
+    op: &ArithmeticComputation,
     right: Decimal,
 ) -> LemmaResult<Decimal> {
     use rust_decimal::prelude::ToPrimitive;
 
     let result = match op {
-        ArithmeticOperation::Add => left + right,
-        ArithmeticOperation::Subtract => left - right,
-        ArithmeticOperation::Multiply => left * right,
-        ArithmeticOperation::Divide => {
+        ArithmeticComputation::Add => left + right,
+        ArithmeticComputation::Subtract => left - right,
+        ArithmeticComputation::Multiply => left * right,
+        ArithmeticComputation::Divide => {
             if right == Decimal::ZERO {
                 return Err(LemmaError::Engine("Division by zero".to_string()));
             }
             left / right
         }
-        ArithmeticOperation::Modulo => left % right,
-        ArithmeticOperation::Power => {
+        ArithmeticComputation::Modulo => left % right,
+        ArithmeticComputation::Power => {
             let base = left
                 .to_f64()
                 .ok_or_else(|| LemmaError::Engine("Cannot convert base to float".to_string()))?;
@@ -256,7 +256,7 @@ fn number_arithmetic(
 /// ```
 pub fn comparison_operation(
     left: &LiteralValue,
-    op: &ComparisonOperator,
+    op: &ComparisonComputation,
     right: &LiteralValue,
 ) -> LemmaResult<bool> {
     match (left, right) {
@@ -296,8 +296,8 @@ pub fn comparison_operation(
 
         // Boolean comparisons
         (LiteralValue::Boolean(l), LiteralValue::Boolean(r)) => match op {
-            ComparisonOperator::Equal | ComparisonOperator::Is => Ok(l == r),
-            ComparisonOperator::NotEqual | ComparisonOperator::IsNot => Ok(l != r),
+            ComparisonComputation::Equal | ComparisonComputation::Is => Ok(l == r),
+            ComparisonComputation::NotEqual | ComparisonComputation::IsNot => Ok(l != r),
             _ => Err(LemmaError::Engine(
                 "Can only use == and != with booleans".to_string(),
             )),
@@ -305,8 +305,8 @@ pub fn comparison_operation(
 
         // Text comparisons
         (LiteralValue::Text(l), LiteralValue::Text(r)) => match op {
-            ComparisonOperator::Equal | ComparisonOperator::Is => Ok(l == r),
-            ComparisonOperator::NotEqual | ComparisonOperator::IsNot => Ok(l != r),
+            ComparisonComputation::Equal | ComparisonComputation::Is => Ok(l == r),
+            ComparisonComputation::NotEqual | ComparisonComputation::IsNot => Ok(l != r),
             _ => Err(LemmaError::Engine(
                 "Can only use == and != with text".to_string(),
             )),
@@ -349,14 +349,14 @@ fn convert_to_matching_unit(
 }
 
 /// Helper to compare two decimal values
-fn compare_decimals(left: Decimal, op: &ComparisonOperator, right: &Decimal) -> bool {
+fn compare_decimals(left: Decimal, op: &ComparisonComputation, right: &Decimal) -> bool {
     match op {
-        ComparisonOperator::GreaterThan => left > *right,
-        ComparisonOperator::LessThan => left < *right,
-        ComparisonOperator::GreaterThanOrEqual => left >= *right,
-        ComparisonOperator::LessThanOrEqual => left <= *right,
-        ComparisonOperator::Equal | ComparisonOperator::Is => left == *right,
-        ComparisonOperator::NotEqual | ComparisonOperator::IsNot => left != *right,
+        ComparisonComputation::GreaterThan => left > *right,
+        ComparisonComputation::LessThan => left < *right,
+        ComparisonComputation::GreaterThanOrEqual => left >= *right,
+        ComparisonComputation::LessThanOrEqual => left <= *right,
+        ComparisonComputation::Equal | ComparisonComputation::Is => left == *right,
+        ComparisonComputation::NotEqual | ComparisonComputation::IsNot => left != *right,
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::inversion::{Bound, Domain, Shape};
 use crate::semantic::FactReference;
 use crate::{
-    ComparisonOperator, Expression, ExpressionKind, LemmaError, LemmaResult, LiteralValue,
+    ComparisonComputation, Expression, ExpressionKind, LemmaError, LemmaResult, LiteralValue,
 };
 use std::collections::HashMap;
 
@@ -50,9 +50,6 @@ fn extract_domain_for_variable(
     condition: &Expression,
     var: &FactReference,
 ) -> LemmaResult<Option<Domain>> {
-    // TODO: This is where the heavy lifting happens
-    // We need to analyze the condition and extract constraints
-
     match &condition.kind {
         // Boolean literal
         ExpressionKind::Literal(lit) => {
@@ -101,7 +98,7 @@ fn extract_domain_for_variable(
 /// Extract domain constraint from a comparison expression
 fn extract_comparison_constraint(
     lhs: &Expression,
-    op: &ComparisonOperator,
+    op: &ComparisonComputation,
     rhs: &Expression,
     var: &FactReference,
 ) -> LemmaResult<Option<Domain>> {
@@ -131,7 +128,7 @@ fn extract_comparison_constraint(
 
 /// Convert a comparison operator and literal to a domain constraint
 fn comparison_to_domain(
-    op: &ComparisonOperator,
+    op: &ComparisonComputation,
     value: &LiteralValue,
     flipped: bool,
 ) -> LemmaResult<Domain> {
@@ -144,27 +141,27 @@ fn comparison_to_domain(
     };
 
     match effective_op {
-        ComparisonOperator::Equal | ComparisonOperator::Is => {
+        ComparisonComputation::Equal | ComparisonComputation::Is => {
             Ok(Domain::Enumeration(vec![value.clone()]))
         }
-        ComparisonOperator::NotEqual => {
+        ComparisonComputation::NotEqual => {
             Ok(Domain::Complement(Box::new(Domain::Enumeration(vec![
                 value.clone(),
             ]))))
         }
-        ComparisonOperator::LessThan => Ok(Domain::Range {
+        ComparisonComputation::LessThan => Ok(Domain::Range {
             min: Bound::Unbounded,
             max: Bound::Exclusive(value.clone()),
         }),
-        ComparisonOperator::LessThanOrEqual => Ok(Domain::Range {
+        ComparisonComputation::LessThanOrEqual => Ok(Domain::Range {
             min: Bound::Unbounded,
             max: Bound::Inclusive(value.clone()),
         }),
-        ComparisonOperator::GreaterThan => Ok(Domain::Range {
+        ComparisonComputation::GreaterThan => Ok(Domain::Range {
             min: Bound::Exclusive(value.clone()),
             max: Bound::Unbounded,
         }),
-        ComparisonOperator::GreaterThanOrEqual => Ok(Domain::Range {
+        ComparisonComputation::GreaterThanOrEqual => Ok(Domain::Range {
             min: Bound::Inclusive(value.clone()),
             max: Bound::Unbounded,
         }),
@@ -176,14 +173,14 @@ fn comparison_to_domain(
 }
 
 /// Flip a comparison operator for when operands are reversed
-fn flip_operator(op: &ComparisonOperator) -> ComparisonOperator {
+fn flip_operator(op: &ComparisonComputation) -> ComparisonComputation {
     match op {
-        ComparisonOperator::Equal => ComparisonOperator::Equal,
-        ComparisonOperator::NotEqual => ComparisonOperator::NotEqual,
-        ComparisonOperator::LessThan => ComparisonOperator::GreaterThan,
-        ComparisonOperator::LessThanOrEqual => ComparisonOperator::GreaterThanOrEqual,
-        ComparisonOperator::GreaterThan => ComparisonOperator::LessThan,
-        ComparisonOperator::GreaterThanOrEqual => ComparisonOperator::LessThanOrEqual,
+        ComparisonComputation::Equal => ComparisonComputation::Equal,
+        ComparisonComputation::NotEqual => ComparisonComputation::NotEqual,
+        ComparisonComputation::LessThan => ComparisonComputation::GreaterThan,
+        ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThanOrEqual,
+        ComparisonComputation::GreaterThan => ComparisonComputation::LessThan,
+        ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThanOrEqual,
         _ => op.clone(),
     }
 }

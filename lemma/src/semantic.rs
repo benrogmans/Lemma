@@ -38,7 +38,7 @@ pub struct ForeignFact {
 /// Unless clauses are evaluated in order, and the last matching condition wins.
 /// This matches natural language: "X unless A then Y, unless B then Z" - if both
 /// A and B are true, Z is returned (the last match).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct UnlessClause {
     pub condition: Expression,
     pub result: Expression,
@@ -46,7 +46,7 @@ pub struct UnlessClause {
 }
 
 /// A rule with a single expression and optional unless clauses
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct LemmaRule {
     pub name: String,
     pub expression: Expression,
@@ -55,7 +55,7 @@ pub struct LemmaRule {
 }
 
 /// An expression that can be evaluated, with source location and unique ID
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Expression {
     pub kind: ExpressionKind,
     pub span: Option<Span>,
@@ -70,19 +70,19 @@ impl Expression {
 }
 
 /// The kind/type of expression
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum ExpressionKind {
     Literal(LiteralValue),
     FactReference(FactReference),
     RuleReference(RuleReference),
     LogicalAnd(Box<Expression>, Box<Expression>),
     LogicalOr(Box<Expression>, Box<Expression>),
-    Arithmetic(Box<Expression>, ArithmeticOperation, Box<Expression>),
-    Comparison(Box<Expression>, ComparisonOperator, Box<Expression>),
+    Arithmetic(Box<Expression>, ArithmeticComputation, Box<Expression>),
+    Comparison(Box<Expression>, ComparisonComputation, Box<Expression>),
     FactHasAnyValue(FactReference),
     UnitConversion(Box<Expression>, ConversionTarget),
     LogicalNegation(Box<Expression>, NegationType),
-    MathematicalOperator(MathematicalOperator, Box<Expression>),
+    MathematicalComputation(MathematicalComputation, Box<Expression>),
     Veto(VetoExpression),
 }
 
@@ -98,14 +98,14 @@ pub struct FactReference {
 /// Example: `has_license?` references the `has_license` rule in the current document.
 /// Cross-document example: `employee.is_eligible?` where `employee` is a fact with value `doc some_doc`,
 /// references the `is_eligible` rule from the document referenced by the `employee` fact.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct RuleReference {
     pub reference: Vec<String>, // ["employee", "is_eligible"] or just ["is_eligible"]
 }
 
-/// Arithmetic operations
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ArithmeticOperation {
+/// Arithmetic computations
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub enum ArithmeticComputation {
     Add,
     Subtract,
     Multiply,
@@ -114,23 +114,23 @@ pub enum ArithmeticOperation {
     Power,
 }
 
-impl ArithmeticOperation {
-    /// Returns a human-readable name for the operation
+impl ArithmeticComputation {
+    /// Returns a human-readable name for the computation
     pub fn name(&self) -> &'static str {
         match self {
-            ArithmeticOperation::Add => "addition",
-            ArithmeticOperation::Subtract => "subtraction",
-            ArithmeticOperation::Multiply => "multiplication",
-            ArithmeticOperation::Divide => "division",
-            ArithmeticOperation::Modulo => "modulo",
-            ArithmeticOperation::Power => "exponentiation",
+            ArithmeticComputation::Add => "addition",
+            ArithmeticComputation::Subtract => "subtraction",
+            ArithmeticComputation::Multiply => "multiplication",
+            ArithmeticComputation::Divide => "division",
+            ArithmeticComputation::Modulo => "modulo",
+            ArithmeticComputation::Power => "exponentiation",
         }
     }
 }
 
-/// Comparison operators
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ComparisonOperator {
+/// Comparison computations
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub enum ComparisonComputation {
     GreaterThan,
     LessThan,
     GreaterThanOrEqual,
@@ -141,24 +141,24 @@ pub enum ComparisonOperator {
     IsNot,
 }
 
-impl ComparisonOperator {
-    /// Returns a human-readable name for the operator
+impl ComparisonComputation {
+    /// Returns a human-readable name for the computation
     pub fn name(&self) -> &'static str {
         match self {
-            ComparisonOperator::GreaterThan => "greater than",
-            ComparisonOperator::LessThan => "less than",
-            ComparisonOperator::GreaterThanOrEqual => "greater than or equal",
-            ComparisonOperator::LessThanOrEqual => "less than or equal",
-            ComparisonOperator::Equal => "equal",
-            ComparisonOperator::NotEqual => "not equal",
-            ComparisonOperator::Is => "is",
-            ComparisonOperator::IsNot => "is not",
+            ComparisonComputation::GreaterThan => "greater than",
+            ComparisonComputation::LessThan => "less than",
+            ComparisonComputation::GreaterThanOrEqual => "greater than or equal",
+            ComparisonComputation::LessThanOrEqual => "less than or equal",
+            ComparisonComputation::Equal => "equal",
+            ComparisonComputation::NotEqual => "not equal",
+            ComparisonComputation::Is => "is",
+            ComparisonComputation::IsNot => "is not",
         }
     }
 }
 
 /// The target unit for unit conversion expressions
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum ConversionTarget {
     Mass(MassUnit),
     Length(LengthUnit),
@@ -176,7 +176,7 @@ pub enum ConversionTarget {
 }
 
 /// Types of logical negation
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum NegationType {
     Not,     // "not expression"
     HaveNot, // "have not expression"
@@ -190,14 +190,14 @@ pub enum NegationType {
 /// validation and constraint enforcement.
 ///
 /// Example: `veto "Must be over 18"` - blocks the rule entirely with a message
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct VetoExpression {
     pub message: Option<String>,
 }
 
-/// Mathematical operators
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MathematicalOperator {
+/// Mathematical computations
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub enum MathematicalComputation {
     Sqrt,  // Square root
     Sin,   // Sine
     Cos,   // Cosine
@@ -771,21 +771,21 @@ impl fmt::Display for Expression {
             ExpressionKind::LogicalOr(left, right) => {
                 write!(f, "{} or {}", left, right)
             }
-            ExpressionKind::MathematicalOperator(op, operand) => {
+            ExpressionKind::MathematicalComputation(op, operand) => {
                 let op_name = match op {
-                    MathematicalOperator::Sqrt => "sqrt",
-                    MathematicalOperator::Sin => "sin",
-                    MathematicalOperator::Cos => "cos",
-                    MathematicalOperator::Tan => "tan",
-                    MathematicalOperator::Asin => "asin",
-                    MathematicalOperator::Acos => "acos",
-                    MathematicalOperator::Atan => "atan",
-                    MathematicalOperator::Log => "log",
-                    MathematicalOperator::Exp => "exp",
-                    MathematicalOperator::Abs => "abs",
-                    MathematicalOperator::Floor => "floor",
-                    MathematicalOperator::Ceil => "ceil",
-                    MathematicalOperator::Round => "round",
+                    MathematicalComputation::Sqrt => "sqrt",
+                    MathematicalComputation::Sin => "sin",
+                    MathematicalComputation::Cos => "cos",
+                    MathematicalComputation::Tan => "tan",
+                    MathematicalComputation::Asin => "asin",
+                    MathematicalComputation::Acos => "acos",
+                    MathematicalComputation::Atan => "atan",
+                    MathematicalComputation::Log => "log",
+                    MathematicalComputation::Exp => "exp",
+                    MathematicalComputation::Abs => "abs",
+                    MathematicalComputation::Floor => "floor",
+                    MathematicalComputation::Ceil => "ceil",
+                    MathematicalComputation::Round => "round",
                 };
                 write!(f, "{} {}", op_name, operand)
             }
@@ -800,11 +800,41 @@ impl fmt::Display for Expression {
 impl fmt::Display for LiteralValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LiteralValue::Number(n) => write!(f, "{}", n.normalize()),
+            LiteralValue::Number(n) => {
+                let normalized = n.normalize();
+                if normalized.fract().is_zero() {
+                    let int_part = normalized.trunc().to_string();
+                    let formatted = int_part
+                        .chars()
+                        .rev()
+                        .enumerate()
+                        .flat_map(|(i, c)| {
+                            if i > 0 && i % 3 == 0 && c != '-' {
+                                vec!['_', c]
+                            } else {
+                                vec![c]
+                            }
+                        })
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>();
+                    write!(f, "{}", formatted)
+                } else {
+                    write!(f, "{}", normalized)
+                }
+            }
             LiteralValue::Text(s) => write!(f, "\"{}\"", s),
             LiteralValue::Date(dt) => write!(f, "{}", dt),
             LiteralValue::Boolean(b) => write!(f, "{}", b),
-            LiteralValue::Percentage(p) => write!(f, "{}%", p),
+            LiteralValue::Percentage(p) => {
+                let rounded = p.round_dp(2);
+                if rounded.fract().is_zero() {
+                    write!(f, "{}%", rounded.trunc())
+                } else {
+                    write!(f, "{}%", rounded)
+                }
+            }
             LiteralValue::Unit(unit) => write!(f, "{}", unit),
             LiteralValue::Regex(s) => write!(f, "{}", s),
             LiteralValue::Time(time) => {
@@ -1132,30 +1162,30 @@ impl fmt::Display for RuleReference {
     }
 }
 
-impl fmt::Display for ArithmeticOperation {
+impl fmt::Display for ArithmeticComputation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ArithmeticOperation::Add => write!(f, "+"),
-            ArithmeticOperation::Subtract => write!(f, "-"),
-            ArithmeticOperation::Multiply => write!(f, "*"),
-            ArithmeticOperation::Divide => write!(f, "/"),
-            ArithmeticOperation::Modulo => write!(f, "%"),
-            ArithmeticOperation::Power => write!(f, "^"),
+            ArithmeticComputation::Add => write!(f, "+"),
+            ArithmeticComputation::Subtract => write!(f, "-"),
+            ArithmeticComputation::Multiply => write!(f, "*"),
+            ArithmeticComputation::Divide => write!(f, "/"),
+            ArithmeticComputation::Modulo => write!(f, "%"),
+            ArithmeticComputation::Power => write!(f, "^"),
         }
     }
 }
 
-impl fmt::Display for ComparisonOperator {
+impl fmt::Display for ComparisonComputation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ComparisonOperator::GreaterThan => write!(f, ">"),
-            ComparisonOperator::LessThan => write!(f, "<"),
-            ComparisonOperator::GreaterThanOrEqual => write!(f, ">="),
-            ComparisonOperator::LessThanOrEqual => write!(f, "<="),
-            ComparisonOperator::Equal => write!(f, "=="),
-            ComparisonOperator::NotEqual => write!(f, "!="),
-            ComparisonOperator::Is => write!(f, "is"),
-            ComparisonOperator::IsNot => write!(f, "is not"),
+            ComparisonComputation::GreaterThan => write!(f, ">"),
+            ComparisonComputation::LessThan => write!(f, "<"),
+            ComparisonComputation::GreaterThanOrEqual => write!(f, ">="),
+            ComparisonComputation::LessThanOrEqual => write!(f, "<="),
+            ComparisonComputation::Equal => write!(f, "=="),
+            ComparisonComputation::NotEqual => write!(f, "!="),
+            ComparisonComputation::Is => write!(f, "is"),
+            ComparisonComputation::IsNot => write!(f, "is not"),
         }
     }
 }

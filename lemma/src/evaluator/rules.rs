@@ -19,10 +19,12 @@ pub fn evaluate_rule(
     context: &mut EvaluationContext,
     fact_prefix: &[String],
 ) -> Result<OperationResult, LemmaError> {
-    use crate::OperationRecord;
-
     // Evaluate unless clauses in reverse order (last matching wins)
     for (index, unless_clause) in rule.unless_clauses.iter().enumerate().rev() {
+        // Extract expression text from source
+        let condition_expr = context.extract_expr_text(&unless_clause.condition, rule_doc);
+        let result_expr = context.extract_expr_text(&unless_clause.result, rule_doc);
+
         let condition_result =
             evaluate_expression(&unless_clause.condition, rule_doc, context, fact_prefix)?;
 
@@ -51,29 +53,27 @@ pub fn evaluate_rule(
             }
 
             let result_value = result.value().unwrap().clone();
-            context
-                .operations
-                .push(OperationRecord::UnlessClauseEvaluated {
-                    index,
-                    matched: true,
-                    result_if_matched: Some(result_value.clone()),
-                });
-            context.operations.push(OperationRecord::FinalResult {
-                value: result_value.clone(),
+            context.push_operation(crate::OperationKind::UnlessClauseEvaluated {
+                index,
+                matched: true,
+                result_if_matched: Some(result_value.clone()),
+                condition_expr,
+                result_expr,
             });
             return Ok(OperationResult::Value(result_value));
         } else {
-            context
-                .operations
-                .push(OperationRecord::UnlessClauseEvaluated {
-                    index,
-                    matched: false,
-                    result_if_matched: None,
-                });
+            context.push_operation(crate::OperationKind::UnlessClauseEvaluated {
+                index,
+                matched: false,
+                result_if_matched: None,
+                condition_expr,
+                result_expr,
+            });
         }
     }
 
     // No unless clause matched - evaluate default expression
+    let default_expr = context.extract_expr_text(&rule.expression, rule_doc);
     let default_result = evaluate_expression(&rule.expression, rule_doc, context, fact_prefix)?;
 
     // If default is vetoed, the veto applies to this rule
@@ -82,11 +82,9 @@ pub fn evaluate_rule(
     }
 
     let default_value = default_result.value().unwrap().clone();
-    context.operations.push(OperationRecord::DefaultValue {
+    context.push_operation(crate::OperationKind::DefaultValue {
         value: default_value.clone(),
-    });
-    context.operations.push(OperationRecord::FinalResult {
-        value: default_value.clone(),
+        expr: default_expr,
     });
     Ok(OperationResult::Value(default_value))
 }

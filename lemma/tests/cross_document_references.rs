@@ -24,7 +24,7 @@ rule total = base_data.price * base_data.quantity
     let total = response
         .results
         .iter()
-        .find(|r| r.rule_name == "total")
+        .find(|r| r.rule.name == "total")
         .unwrap();
 
     assert_eq!(total.result.as_ref().unwrap().to_string(), "500");
@@ -54,7 +54,7 @@ rule derived_value = base_data.doubled? + 10
     let derived_value = response
         .results
         .iter()
-        .find(|r| r.rule_name == "derived_value")
+        .find(|r| r.rule.name == "derived_value")
         .unwrap();
 
     assert_eq!(derived_value.result.as_ref().unwrap().to_string(), "110");
@@ -85,10 +85,10 @@ rule manager_bonus = employee.annual_salary? * 0.15
     let bonus = response
         .results
         .iter()
-        .find(|r| r.rule_name == "manager_bonus")
+        .find(|r| r.rule.name == "manager_bonus")
         .unwrap();
 
-    assert_eq!(bonus.result.as_ref().unwrap().to_string(), "9000");
+    assert_eq!(bonus.result.as_ref().unwrap().to_string(), "9_000");
 }
 
 /// Test fact override with cross-doc rule reference
@@ -118,7 +118,7 @@ rule derived_total = config.total?
     let total = response
         .results
         .iter()
-        .find(|r| r.rule_name == "derived_total")
+        .find(|r| r.rule.name == "derived_total")
         .unwrap();
 
     assert_eq!(total.result.as_ref().unwrap().to_string(), "600");
@@ -157,7 +157,7 @@ rule total_days = settings.standard_processing_days? + order_info.processing_day
     let total = response
         .results
         .iter()
-        .find(|r| r.rule_name == "total_days")
+        .find(|r| r.rule.name == "total_days")
         .unwrap();
 
     assert_eq!(total.result.as_ref().unwrap().to_string(), "8");
@@ -189,7 +189,7 @@ rule status = "invalid"
     let status = response
         .results
         .iter()
-        .find(|r| r.rule_name == "status")
+        .find(|r| r.rule.name == "status")
         .unwrap();
 
     assert_eq!(status.result.as_ref().unwrap().to_string(), "\"valid\"");
@@ -219,7 +219,7 @@ rule combined = base_data.input + base_data.calculated?
     let combined = response
         .results
         .iter()
-        .find(|r| r.rule_name == "combined")
+        .find(|r| r.rule.name == "combined")
         .unwrap();
 
     assert_eq!(combined.result.as_ref().unwrap().to_string(), "150");
@@ -252,7 +252,7 @@ rule sum = data.x + data.y + data.z
     let sum = response
         .results
         .iter()
-        .find(|r| r.rule_name == "sum")
+        .find(|r| r.rule.name == "sum")
         .unwrap();
 
     // x=100 (overridden), y=200 (overridden), z=30 (original)
@@ -286,7 +286,7 @@ rule total = config.price * config.quantity
     let total = response
         .results
         .iter()
-        .find(|r| r.rule_name == "total")
+        .find(|r| r.rule.name == "total")
         .unwrap();
 
     // Should be 200 * 3 = 600 (using overridden fact values)
@@ -329,13 +329,13 @@ rule total2 = base2.base.total?
     let total1 = response
         .results
         .iter()
-        .find(|r| r.rule_name == "total1")
+        .find(|r| r.rule.name == "total1")
         .unwrap();
 
     let total2 = response
         .results
         .iter()
-        .find(|r| r.rule_name == "total2")
+        .find(|r| r.rule.name == "total2")
         .unwrap();
 
     // total1 uses original price: 99 * 1.21 = 119.79

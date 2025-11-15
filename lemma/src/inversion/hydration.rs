@@ -72,8 +72,8 @@ pub fn substitute_fact_with_expr(
             expr.span.clone(),
             expr.id,
         ),
-        EK::MathematicalOperator(op, inner) => Expression::new(
-            EK::MathematicalOperator(
+        EK::MathematicalComputation(op, inner) => Expression::new(
+            EK::MathematicalComputation(
                 op.clone(),
                 Box::new(substitute_fact_with_expr(inner, fact_path, replacement)),
             ),
@@ -204,8 +204,8 @@ where
             expr.span.clone(),
             expr.id,
         ),
-        EK::MathematicalOperator(op, inner) => Expression::new(
-            EK::MathematicalOperator(
+        EK::MathematicalComputation(op, inner) => Expression::new(
+            EK::MathematicalComputation(
                 op.clone(),
                 Box::new(hydrate_expression(
                     inner, doc_name, given, get_rule, is_simple,
@@ -256,7 +256,7 @@ pub fn is_simple_for_expansion(expr: &Expression, _given: &HashMap<String, Liter
         EK::UnitConversion(inner, _) => is_simple_for_expansion(inner, _given),
 
         // Mathematical operators (abs, etc.) are simple if inner is simple
-        EK::MathematicalOperator(_, inner) => is_simple_for_expansion(inner, _given),
+        EK::MathematicalComputation(_, inner) => is_simple_for_expansion(inner, _given),
 
         // Fact references and rule references are NOT simple - keep symbolic
         EK::FactReference(_) | EK::RuleReference(_) => false,

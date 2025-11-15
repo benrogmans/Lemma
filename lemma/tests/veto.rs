@@ -26,7 +26,7 @@ rule is_adult = age >= 18
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_adult")
+        .find(|r| r.rule.name == "is_adult")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -52,7 +52,7 @@ rule is_valid = value > 0
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_valid")
+        .find(|r| r.rule.name == "is_valid")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -75,7 +75,7 @@ rule is_adult = age >= 18
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_adult")
+        .find(|r| r.rule.name == "is_adult")
         .unwrap();
 
     assert_eq!(rule_result.result, Some(LiteralValue::Boolean(true)));
@@ -100,7 +100,7 @@ rule eligible = age >= 18 and score >= 80
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "eligible")
+        .find(|r| r.rule.name == "eligible")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -128,7 +128,7 @@ rule eligible = age >= 18 and score >= 80
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "eligible")
+        .find(|r| r.rule.name == "eligible")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -155,7 +155,7 @@ rule valid_compensation = salary >= 40000
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "valid_compensation")
+        .find(|r| r.rule.name == "valid_compensation")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -185,7 +185,7 @@ rule can_drive = age >= 16
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "can_drive")
+        .find(|r| r.rule.name == "can_drive")
         .unwrap();
 
     assert_eq!(rule_result.result, Some(LiteralValue::Boolean(false)));
@@ -208,7 +208,7 @@ rule can_ship = package_weight <= 50 kilograms
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "can_ship")
+        .find(|r| r.rule.name == "can_ship")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -234,7 +234,7 @@ rule is_affordable = price <= 1000
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_affordable")
+        .find(|r| r.rule.name == "is_affordable")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -261,7 +261,7 @@ rule is_valid_date = event_date >= min_date
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_valid_date")
+        .find(|r| r.rule.name == "is_valid_date")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -287,7 +287,7 @@ rule is_complete = completion >= 95%
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_complete")
+        .find(|r| r.rule.name == "is_complete")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -315,7 +315,7 @@ rule eligible = has_permission
     let eligible_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "eligible")
+        .find(|r| r.rule.name == "eligible")
         .unwrap();
 
     assert_eq!(eligible_result.result, None);
@@ -342,7 +342,7 @@ rule within_budget = expenses < income
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "within_budget")
+        .find(|r| r.rule.name == "within_budget")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -368,7 +368,7 @@ rule is_active = status == "active"
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_active")
+        .find(|r| r.rule.name == "is_active")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -397,7 +397,7 @@ rule double_value = value * 2
     let check_positive = response
         .results
         .iter()
-        .find(|r| r.rule_name == "check_positive")
+        .find(|r| r.rule.name == "check_positive")
         .unwrap();
     assert_eq!(check_positive.result, None);
     assert_eq!(
@@ -408,7 +408,7 @@ rule double_value = value * 2
     let check_negative = response
         .results
         .iter()
-        .find(|r| r.rule_name == "check_negative")
+        .find(|r| r.rule.name == "check_negative")
         .unwrap();
     assert_eq!(check_negative.result, Some(LiteralValue::Boolean(true)));
     assert_eq!(check_negative.veto_message, None);
@@ -416,7 +416,7 @@ rule double_value = value * 2
     let double_value = response
         .results
         .iter()
-        .find(|r| r.rule_name == "double_value")
+        .find(|r| r.rule.name == "double_value")
         .unwrap();
     assert_eq!(
         double_value.result,
@@ -441,7 +441,7 @@ rule is_valid = value > 0
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_valid")
+        .find(|r| r.rule.name == "is_valid")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -464,7 +464,7 @@ rule valid = age >= 18
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "valid")
+        .find(|r| r.rule.name == "valid")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -495,7 +495,7 @@ rule valid = value > 0
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "valid")
+        .find(|r| r.rule.name == "valid")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -519,7 +519,7 @@ rule check = value > 10
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "check")
+        .find(|r| r.rule.name == "check")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -547,7 +547,7 @@ rule eligible = age >= 18 and score >= 80
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "eligible")
+        .find(|r| r.rule.name == "eligible")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -571,7 +571,7 @@ rule eligible = age >= 18
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "eligible")
+        .find(|r| r.rule.name == "eligible")
         .unwrap();
 
     assert_eq!(rule_result.result, None);
@@ -597,7 +597,7 @@ rule can_proceed = true
     let rule_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "can_proceed")
+        .find(|r| r.rule.name == "can_proceed")
         .unwrap();
 
     assert_eq!(rule_result.result, None);

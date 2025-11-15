@@ -60,6 +60,7 @@ pub fn format_error(error: &LemmaError) -> String {
             }
         }
         LemmaError::Engine(msg) => format!("Engine error: {}", msg),
+        LemmaError::MissingFact(fact_ref) => format!("Missing fact: {}", fact_ref),
         LemmaError::CircularDependency(msg) => format!("Circular dependency: {}", msg),
         LemmaError::ResourceLimitExceeded {
             limit_name,

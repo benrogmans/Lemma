@@ -75,7 +75,7 @@ fn collect_references(
         ExpressionKind::UnitConversion(value, _target) => {
             collect_references(value, fact_refs, rule_refs);
         }
-        ExpressionKind::MathematicalOperator(_op, operand) => {
+        ExpressionKind::MathematicalComputation(_op, operand) => {
             collect_references(operand, fact_refs, rule_refs);
         }
         ExpressionKind::FactHasAnyValue(fact_ref) => {
@@ -217,7 +217,7 @@ fn extract_rule_paths(
         }
         ExpressionKind::UnitConversion(inner, _)
         | ExpressionKind::LogicalNegation(inner, _)
-        | ExpressionKind::MathematicalOperator(_, inner) => {
+        | ExpressionKind::MathematicalComputation(_, inner) => {
             extract_rule_paths(inner, current_doc, all_documents, paths)?;
         }
         _ => {}

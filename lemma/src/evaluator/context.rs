@@ -43,8 +43,18 @@ pub struct EvaluationContext<'a> {
     /// Maps RulePath -> operation result (either Value or Veto)
     pub rule_results: HashMap<crate::RulePath, OperationResult>,
 
-    /// Operation records - records every operation
+    /// Operation records for each rule (for nested inclusion)
+    /// Maps RulePath -> operations that computed that rule
+    pub rule_operations: HashMap<crate::RulePath, Vec<OperationRecord>>,
+
+    /// Operation records - records every operation for the current rule
     pub operations: Vec<OperationRecord>,
+
+    /// Counter for generating unique operation IDs
+    next_op_id: usize,
+
+    /// Current parent operation ID (for nesting)
+    pub current_parent_id: Option<crate::OperationId>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -63,15 +73,59 @@ impl<'a> EvaluationContext<'a> {
             sources,
             facts,
             rule_results: HashMap::new(),
+            rule_operations: HashMap::new(),
             operations: Vec::new(),
+            next_op_id: 0,
+            current_parent_id: None,
             timeout_tracker,
             limits,
         }
     }
 
+    /// Generate the next operation ID
+    fn next_id(&mut self) -> crate::OperationId {
+        let id = crate::OperationId(self.next_op_id);
+        self.next_op_id += 1;
+        id
+    }
+
+    /// Push an operation and return its ID
+    pub fn push_operation(&mut self, kind: crate::OperationKind) -> crate::OperationId {
+        let id = self.next_id();
+        let depth = self.current_parent_id.map_or(0, |parent| {
+            // Find parent's depth and add 1
+            self.operations
+                .iter()
+                .find(|op| op.id == parent)
+                .map_or(1, |op| op.depth + 1)
+        });
+        self.operations.push(OperationRecord {
+            id,
+            parent_id: self.current_parent_id,
+            depth,
+            kind,
+        });
+        id
+    }
+
     /// Check if evaluation has exceeded timeout
     pub fn check_timeout(&self) -> Result<(), crate::LemmaError> {
         self.timeout_tracker.check_timeout(self.limits)
+    }
+
+    /// Extract expression text from source using span
+    pub fn extract_expr_text(&self, expr: &crate::Expression, doc: &LemmaDoc) -> Option<String> {
+        let span = expr.span.as_ref()?;
+        let source_id = doc.source.as_ref()?;
+        let source = self.sources.get(source_id)?;
+
+        // Extract substring from source using span
+        let bytes = source.as_bytes();
+        if span.start < bytes.len() && span.end <= bytes.len() {
+            Some(String::from_utf8_lossy(&bytes[span.start..span.end]).to_string())
+        } else {
+            None
+        }
     }
 }
 

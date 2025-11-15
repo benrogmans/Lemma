@@ -4,30 +4,30 @@ use std::str::FromStr;
 
 #[test]
 fn test_arithmetic_operation_name() {
-    assert_eq!(ArithmeticOperation::Add.name(), "addition");
-    assert_eq!(ArithmeticOperation::Subtract.name(), "subtraction");
-    assert_eq!(ArithmeticOperation::Multiply.name(), "multiplication");
-    assert_eq!(ArithmeticOperation::Divide.name(), "division");
-    assert_eq!(ArithmeticOperation::Modulo.name(), "modulo");
-    assert_eq!(ArithmeticOperation::Power.name(), "exponentiation");
+    assert_eq!(ArithmeticComputation::Add.name(), "addition");
+    assert_eq!(ArithmeticComputation::Subtract.name(), "subtraction");
+    assert_eq!(ArithmeticComputation::Multiply.name(), "multiplication");
+    assert_eq!(ArithmeticComputation::Divide.name(), "division");
+    assert_eq!(ArithmeticComputation::Modulo.name(), "modulo");
+    assert_eq!(ArithmeticComputation::Power.name(), "exponentiation");
 }
 
 #[test]
 fn test_comparison_operator_name() {
-    assert_eq!(ComparisonOperator::GreaterThan.name(), "greater than");
-    assert_eq!(ComparisonOperator::LessThan.name(), "less than");
+    assert_eq!(ComparisonComputation::GreaterThan.name(), "greater than");
+    assert_eq!(ComparisonComputation::LessThan.name(), "less than");
     assert_eq!(
-        ComparisonOperator::GreaterThanOrEqual.name(),
+        ComparisonComputation::GreaterThanOrEqual.name(),
         "greater than or equal"
     );
     assert_eq!(
-        ComparisonOperator::LessThanOrEqual.name(),
+        ComparisonComputation::LessThanOrEqual.name(),
         "less than or equal"
     );
-    assert_eq!(ComparisonOperator::Equal.name(), "equal");
-    assert_eq!(ComparisonOperator::NotEqual.name(), "not equal");
-    assert_eq!(ComparisonOperator::Is.name(), "is");
-    assert_eq!(ComparisonOperator::IsNot.name(), "is not");
+    assert_eq!(ComparisonComputation::Equal.name(), "equal");
+    assert_eq!(ComparisonComputation::NotEqual.name(), "not equal");
+    assert_eq!(ComparisonComputation::Is.name(), "is");
+    assert_eq!(ComparisonComputation::IsNot.name(), "is not");
 }
 
 #[test]
@@ -124,8 +124,11 @@ fn test_numeric_unit_validate_same_currency() {
 #[test]
 fn test_display_implementations() {
     let hundred = Decimal::from_str("100").unwrap();
-    assert_eq!(format!("{}", ArithmeticOperation::Add), "+");
-    assert_eq!(format!("{}", ComparisonOperator::GreaterThanOrEqual), ">=");
+    assert_eq!(format!("{}", ArithmeticComputation::Add), "+");
+    assert_eq!(
+        format!("{}", ComparisonComputation::GreaterThanOrEqual),
+        ">="
+    );
     assert_eq!(
         format!(
             "{}",
@@ -200,24 +203,27 @@ fn test_numeric_unit_validate_currency_mismatch() {
 
 #[test]
 fn test_arithmetic_operation_display() {
-    assert_eq!(format!("{}", ArithmeticOperation::Add), "+");
-    assert_eq!(format!("{}", ArithmeticOperation::Subtract), "-");
-    assert_eq!(format!("{}", ArithmeticOperation::Multiply), "*");
-    assert_eq!(format!("{}", ArithmeticOperation::Divide), "/");
-    assert_eq!(format!("{}", ArithmeticOperation::Modulo), "%");
-    assert_eq!(format!("{}", ArithmeticOperation::Power), "^");
+    assert_eq!(format!("{}", ArithmeticComputation::Add), "+");
+    assert_eq!(format!("{}", ArithmeticComputation::Subtract), "-");
+    assert_eq!(format!("{}", ArithmeticComputation::Multiply), "*");
+    assert_eq!(format!("{}", ArithmeticComputation::Divide), "/");
+    assert_eq!(format!("{}", ArithmeticComputation::Modulo), "%");
+    assert_eq!(format!("{}", ArithmeticComputation::Power), "^");
 }
 
 #[test]
 fn test_comparison_operator_display() {
-    assert_eq!(format!("{}", ComparisonOperator::GreaterThan), ">");
-    assert_eq!(format!("{}", ComparisonOperator::LessThan), "<");
-    assert_eq!(format!("{}", ComparisonOperator::GreaterThanOrEqual), ">=");
-    assert_eq!(format!("{}", ComparisonOperator::LessThanOrEqual), "<=");
-    assert_eq!(format!("{}", ComparisonOperator::Equal), "==");
-    assert_eq!(format!("{}", ComparisonOperator::NotEqual), "!=");
-    assert_eq!(format!("{}", ComparisonOperator::Is), "is");
-    assert_eq!(format!("{}", ComparisonOperator::IsNot), "is not");
+    assert_eq!(format!("{}", ComparisonComputation::GreaterThan), ">");
+    assert_eq!(format!("{}", ComparisonComputation::LessThan), "<");
+    assert_eq!(
+        format!("{}", ComparisonComputation::GreaterThanOrEqual),
+        ">="
+    );
+    assert_eq!(format!("{}", ComparisonComputation::LessThanOrEqual), "<=");
+    assert_eq!(format!("{}", ComparisonComputation::Equal), "==");
+    assert_eq!(format!("{}", ComparisonComputation::NotEqual), "!=");
+    assert_eq!(format!("{}", ComparisonComputation::Is), "is");
+    assert_eq!(format!("{}", ComparisonComputation::IsNot), "is not");
 }
 
 #[test]

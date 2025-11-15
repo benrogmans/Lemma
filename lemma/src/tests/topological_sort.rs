@@ -17,9 +17,9 @@ fn test_topological_sort_simple() {
 
     // A depends on B, B depends on nothing
     graph.insert(rule_a.clone(), {
-        let mut deps = HashSet::new();
-        deps.insert(rule_b.clone());
-        deps
+        let mut rule_dependencies = HashSet::new();
+        rule_dependencies.insert(rule_b.clone());
+        rule_dependencies
     });
     graph.insert(rule_b.clone(), HashSet::new());
 
@@ -50,14 +50,14 @@ fn test_topological_sort_chain() {
 
     // C depends on B, B depends on A, A depends on nothing
     graph.insert(rule_c.clone(), {
-        let mut deps = HashSet::new();
-        deps.insert(rule_b.clone());
-        deps
+        let mut rule_dependencies = HashSet::new();
+        rule_dependencies.insert(rule_b.clone());
+        rule_dependencies
     });
     graph.insert(rule_b.clone(), {
-        let mut deps = HashSet::new();
-        deps.insert(rule_a.clone());
-        deps
+        let mut rule_dependencies = HashSet::new();
+        rule_dependencies.insert(rule_a.clone());
+        rule_dependencies
     });
     graph.insert(rule_a.clone(), HashSet::new());
 

@@ -73,7 +73,9 @@ pub use inversion::{Bound, BranchOutcome, Domain, Shape, ShapeBranch, Target, Ta
 pub use operation_result::OperationResult;
 pub use parser::{parse, parse_facts};
 pub use resource_limits::ResourceLimits;
-pub use response::{OperationRecord, Response, RuleResult};
+pub use response::{
+    ComputationKind, Fact, OperationId, OperationKind, OperationRecord, Response, RuleResult,
+};
 pub use semantic::*;
 pub use validator::{ValidatedDocuments, Validator};
 

@@ -26,11 +26,11 @@ rule line_total = pricing.final_price? * quantity
     let line_total = response
         .results
         .iter()
-        .find(|r| r.rule_name == "line_total")
+        .find(|r| r.rule.name == "line_total")
         .unwrap();
 
     // Should be: (100 * 1.21) * 10 = 1210
-    assert_eq!(line_total.result.as_ref().unwrap().to_string(), "1210");
+    assert_eq!(line_total.result.as_ref().unwrap().to_string(), "1_210");
 }
 
 /// Multi-level document rule references should work correctly.
@@ -66,15 +66,21 @@ rule top_calc = middle_ref.middle_calc?
 
     println!("Response results:");
     for r in &response.results {
-        println!("  Rule: {} = {:?}", r.rule_name, r.result);
-        println!("       missing: {:?}", r.missing_facts);
+        println!("  Rule: {} = {:?}", r.rule.name, r.result);
+        let missing: Vec<&str> = r
+            .facts
+            .iter()
+            .filter(|f| f.value.is_none())
+            .map(|f| f.name.as_str())
+            .collect();
+        println!("       missing: {:?}", missing);
         println!("       veto: {:?}", r.veto_message);
     }
 
     let top_calc = response
         .results
         .iter()
-        .find(|r| r.rule_name == "top_calc")
+        .find(|r| r.rule.name == "top_calc")
         .expect("top_calc rule not found in results");
 
     assert_eq!(top_calc.result.as_ref().unwrap().to_string(), "250");
@@ -124,10 +130,10 @@ rule order_total = line.line_total?
     let order_total = response
         .results
         .iter()
-        .find(|r| r.rule_name == "order_total")
+        .find(|r| r.rule.name == "order_total")
         .expect("order_total rule not found in results");
 
-    assert_eq!(order_total.result.as_ref().unwrap().to_string(), "8250");
+    assert_eq!(order_total.result.as_ref().unwrap().to_string(), "8_250");
 }
 
 /// Accessing facts through multi-level document references with nested overrides works correctly.
@@ -160,7 +166,7 @@ rule final_value = settings.config.value * 2
     let final_value = response
         .results
         .iter()
-        .find(|r| r.rule_name == "final_value")
+        .find(|r| r.rule.name == "final_value")
         .unwrap();
 
     // Should be: 100 * 2 = 200 (using the overridden value from middle)
@@ -204,7 +210,7 @@ rule order_total = line.line_total?
     let order_total = response
         .results
         .iter()
-        .find(|r| r.rule_name == "order_total")
+        .find(|r| r.rule.name == "order_total")
         .expect("order_total rule not found");
 
     // base_price=100, tax_rate=10% (overridden), quantity=5
@@ -249,17 +255,17 @@ rule difference = total2? - total1?
     let total1 = response
         .results
         .iter()
-        .find(|r| r.rule_name == "total1")
+        .find(|r| r.rule.name == "total1")
         .unwrap();
     let total2 = response
         .results
         .iter()
-        .find(|r| r.rule_name == "total2")
+        .find(|r| r.rule.name == "total2")
         .unwrap();
     let difference = response
         .results
         .iter()
-        .find(|r| r.rule_name == "difference")
+        .find(|r| r.rule.name == "difference")
         .unwrap();
 
     // path1: 100 * 1.21 = 121
@@ -305,18 +311,18 @@ rule product = c1.value * c2.value
     let sum = response
         .results
         .iter()
-        .find(|r| r.rule_name == "sum")
+        .find(|r| r.rule.name == "sum")
         .unwrap();
     let product = response
         .results
         .iter()
-        .find(|r| r.rule_name == "product")
+        .find(|r| r.rule.name == "product")
         .unwrap();
 
     // sum: (100 * 2) + (50 * 3) = 200 + 150 = 350
     assert_eq!(sum.result.as_ref().unwrap().to_string(), "350");
     // product: 100 * 50 = 5000
-    assert_eq!(product.result.as_ref().unwrap().to_string(), "5000");
+    assert_eq!(product.result.as_ref().unwrap().to_string(), "5_000");
 }
 
 /// Referencing rules from a document that itself has document references.
@@ -353,7 +359,7 @@ rule final_result = middle_config.x_squared_plus_ten? * 2
     let final_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "final_result")
+        .find(|r| r.rule.name == "final_result")
         .unwrap();
 
     // x=20 (overridden), x_squared=400, x_squared_plus_ten=410, final=820
@@ -395,17 +401,17 @@ rule price_difference = retail_final? - wholesale_final?
     let retail_final = response
         .results
         .iter()
-        .find(|r| r.rule_name == "retail_final")
+        .find(|r| r.rule.name == "retail_final")
         .unwrap();
     let wholesale_final = response
         .results
         .iter()
-        .find(|r| r.rule_name == "wholesale_final")
+        .find(|r| r.rule.name == "wholesale_final")
         .unwrap();
     let price_difference = response
         .results
         .iter()
-        .find(|r| r.rule_name == "price_difference")
+        .find(|r| r.rule.name == "price_difference")
         .unwrap();
 
     // retail: 100 * (1 - 0.05) = 95

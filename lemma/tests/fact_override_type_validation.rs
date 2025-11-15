@@ -44,7 +44,7 @@ rule total = price * 1.1
     assert!(result.is_ok());
     let response = result.unwrap();
     assert_eq!(response.results.len(), 1);
-    assert_eq!(response.results[0].rule_name, "total");
+    assert_eq!(response.results[0].rule.name, "total");
 }
 
 #[test]

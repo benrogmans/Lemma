@@ -228,10 +228,6 @@ fn run_command(
     let formatter = Formatter::default();
     print!("{}", formatter.format_response(&response, raw));
 
-    for warning in &response.warnings {
-        eprintln!("Warning: {}", warning);
-    }
-
     Ok(())
 }
 

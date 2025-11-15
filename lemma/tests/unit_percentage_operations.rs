@@ -28,7 +28,7 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
     let discount_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "discount")
+        .find(|r| r.rule.name == "discount")
         .expect("discount rule not found");
 
     match &discount_result.result {
@@ -42,7 +42,7 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
     let price_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "price")
+        .find(|r| r.rule.name == "price")
         .expect("price rule not found");
 
     match &price_result.result {
@@ -80,7 +80,7 @@ fn test_unit_add_percentage() -> LemmaResult<()> {
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "price_with_tax")
+        .find(|r| r.rule.name == "price_with_tax")
         .expect("price_with_tax rule not found");
 
     match &result.result {
@@ -123,7 +123,7 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
     let increased_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "increased")
+        .find(|r| r.rule.name == "increased")
         .expect("increased rule not found");
 
     match &increased_result.result {
@@ -140,7 +140,7 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
     let decreased_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "decreased")
+        .find(|r| r.rule.name == "decreased")
         .expect("decreased rule not found");
 
     match &decreased_result.result {
@@ -161,7 +161,7 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
     let scaled_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "scaled")
+        .find(|r| r.rule.name == "scaled")
         .expect("scaled rule not found");
 
     match &scaled_result.result {
@@ -198,7 +198,7 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
     let after_bulk_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "after_bulk")
+        .find(|r| r.rule.name == "after_bulk")
         .expect("after_bulk rule not found");
 
     match &after_bulk_result.result {
@@ -219,7 +219,7 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
     let final_price_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "final_price")
+        .find(|r| r.rule.name == "final_price")
         .expect("final_price rule not found");
 
     match &final_price_result.result {
@@ -265,7 +265,7 @@ fn test_unit_percentage_with_different_currencies() -> LemmaResult<()> {
     let usd_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "usd_discounted")
+        .find(|r| r.rule.name == "usd_discounted")
         .expect("usd_discounted rule not found");
 
     match &usd_result.result {
@@ -279,7 +279,7 @@ fn test_unit_percentage_with_different_currencies() -> LemmaResult<()> {
     let eur_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "eur_discounted")
+        .find(|r| r.rule.name == "eur_discounted")
         .expect("eur_discounted rule not found");
 
     match &eur_result.result {
@@ -297,7 +297,7 @@ fn test_unit_percentage_with_different_currencies() -> LemmaResult<()> {
     let jpy_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "jpy_discounted")
+        .find(|r| r.rule.name == "jpy_discounted")
         .expect("jpy_discounted rule not found");
 
     match &jpy_result.result {
@@ -341,7 +341,7 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
     let combined_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "combined_discount")
+        .find(|r| r.rule.name == "combined_discount")
         .expect("combined_discount rule not found");
 
     match &combined_result.result {
@@ -358,7 +358,7 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
     let net_rate_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "net_rate")
+        .find(|r| r.rule.name == "net_rate")
         .expect("net_rate rule not found");
 
     match &net_rate_result.result {
@@ -375,7 +375,7 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
     let compound_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "compound")
+        .find(|r| r.rule.name == "compound")
         .expect("compound rule not found");
 
     match &compound_result.result {
@@ -392,7 +392,7 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
     let ratio_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "ratio")
+        .find(|r| r.rule.name == "ratio")
         .expect("ratio rule not found");
 
     match &ratio_result.result {
@@ -429,7 +429,7 @@ fn test_averaging_percentages() -> LemmaResult<()> {
     let sum_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "sum")
+        .find(|r| r.rule.name == "sum")
         .expect("sum rule not found");
 
     match &sum_result.result {
@@ -443,7 +443,7 @@ fn test_averaging_percentages() -> LemmaResult<()> {
     let avg_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "average")
+        .find(|r| r.rule.name == "average")
         .expect("average rule not found");
 
     match &avg_result.result {

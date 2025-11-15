@@ -21,7 +21,7 @@ rule remainder = a % b
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "remainder")
+        .find(|r| r.rule.name == "remainder")
         .unwrap();
 
     match &result.result {
@@ -49,7 +49,7 @@ rule result = base ^ exponent
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "result")
+        .find(|r| r.rule.name == "result")
         .unwrap();
 
     match &result.result {
@@ -78,14 +78,14 @@ rule is_odd = (value % 2) == 1
     let is_even = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_even")
+        .find(|r| r.rule.name == "is_even")
         .unwrap();
     assert_eq!(is_even.result, Some(LiteralValue::Boolean(false)));
 
     let is_odd = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_odd")
+        .find(|r| r.rule.name == "is_odd")
         .unwrap();
     assert_eq!(is_odd.result, Some(LiteralValue::Boolean(true)));
 }
@@ -108,7 +108,7 @@ rule square_root = base ^ 0.5
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "square_root")
+        .find(|r| r.rule.name == "square_root")
         .unwrap();
 
     match &result.result {
@@ -136,7 +136,7 @@ rule calculation = (x % y) + (2 ^ 3)
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "calculation")
+        .find(|r| r.rule.name == "calculation")
         .unwrap();
 
     match &result.result {

@@ -8,7 +8,7 @@
 use std::fmt;
 
 /// Span representing a location in source code
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -29,7 +29,7 @@ impl Span {
 }
 
 /// Unique identifier for each expression in the AST
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct ExpressionId(u64);
 
 impl ExpressionId {

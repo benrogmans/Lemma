@@ -283,7 +283,7 @@ fn parse_and_operand(
     id_gen: &mut ExpressionIdGenerator,
 ) -> Result<Expression, LemmaError> {
     // Grammar: boolean_expression | comparable_base ~ (SPACE* ~ comp_operator ~ SPACE* ~ comparable_base)?
-    let mut pairs = pair.into_inner();
+    let mut pairs = pair.clone().into_inner();
     let first = pairs
         .next()
         .ok_or_else(|| LemmaError::Engine("Empty and_operand".to_string()))?;
@@ -306,14 +306,14 @@ fn parse_and_operand(
                 .next()
                 .ok_or_else(|| LemmaError::Engine("Empty comparison operator".to_string()))?;
             let operator = match inner_pair.as_rule() {
-                Rule::comp_gt => ComparisonOperator::GreaterThan,
-                Rule::comp_lt => ComparisonOperator::LessThan,
-                Rule::comp_gte => ComparisonOperator::GreaterThanOrEqual,
-                Rule::comp_lte => ComparisonOperator::LessThanOrEqual,
-                Rule::comp_eq => ComparisonOperator::Equal,
-                Rule::comp_ne => ComparisonOperator::NotEqual,
-                Rule::comp_is => ComparisonOperator::Is,
-                Rule::comp_is_not => ComparisonOperator::IsNot,
+                Rule::comp_gt => ComparisonComputation::GreaterThan,
+                Rule::comp_lt => ComparisonComputation::LessThan,
+                Rule::comp_gte => ComparisonComputation::GreaterThanOrEqual,
+                Rule::comp_lte => ComparisonComputation::LessThanOrEqual,
+                Rule::comp_eq => ComparisonComputation::Equal,
+                Rule::comp_ne => ComparisonComputation::NotEqual,
+                Rule::comp_is => ComparisonComputation::Is,
+                Rule::comp_is_not => ComparisonComputation::IsNot,
                 _ => {
                     return Err(LemmaError::Engine(format!(
                         "Invalid comparison operator: {:?}",
@@ -328,7 +328,7 @@ fn parse_and_operand(
                 id_gen,
             )?;
             let kind = ExpressionKind::Comparison(Box::new(left), operator, Box::new(right));
-            return Ok(traceable_expr(kind, &op_pair, id_gen));
+            return Ok(traceable_expr(kind, &pair, id_gen));
         }
     }
 
@@ -409,8 +409,8 @@ fn parse_arithmetic_expression(
 
     while let Some(op_pair) = pairs.next() {
         let operation = match op_pair.as_rule() {
-            Rule::add_plus => ArithmeticOperation::Add,
-            Rule::add_minus => ArithmeticOperation::Subtract,
+            Rule::add_plus => ArithmeticComputation::Add,
+            Rule::add_minus => ArithmeticComputation::Subtract,
             _ => {
                 return Err(LemmaError::Engine(format!(
                     "Unexpected operator in arithmetic expression: {:?}",
@@ -447,9 +447,9 @@ fn parse_term(
 
     while let Some(op_pair) = pairs.next() {
         let operation = match op_pair.as_rule() {
-            Rule::mul_star => ArithmeticOperation::Multiply,
-            Rule::mul_slash => ArithmeticOperation::Divide,
-            Rule::mul_percent => ArithmeticOperation::Modulo,
+            Rule::mul_star => ArithmeticComputation::Multiply,
+            Rule::mul_slash => ArithmeticComputation::Divide,
+            Rule::mul_percent => ArithmeticComputation::Modulo,
             _ => {
                 return Err(LemmaError::Engine(format!(
                     "Unexpected operator in term: {:?}",
@@ -495,7 +495,7 @@ fn parse_power(
 
             let kind = ExpressionKind::Arithmetic(
                 Box::new(left),
-                ArithmeticOperation::Power,
+                ArithmeticComputation::Power,
                 Box::new(right),
             );
             return Ok(traceable_expr(kind, &pair, id_gen));
@@ -546,7 +546,7 @@ fn parse_factor(
         );
         let kind = ExpressionKind::Arithmetic(
             Box::new(zero),
-            ArithmeticOperation::Subtract,
+            ArithmeticComputation::Subtract,
             Box::new(expr),
         );
         Ok(traceable_expr(kind, &pair, id_gen))
@@ -576,14 +576,14 @@ fn parse_comparison_expression(
                     .next()
                     .ok_or_else(|| LemmaError::Engine("Empty comparison operator".to_string()))?;
                 match inner_pair.as_rule() {
-                    Rule::comp_gt => ComparisonOperator::GreaterThan,
-                    Rule::comp_lt => ComparisonOperator::LessThan,
-                    Rule::comp_gte => ComparisonOperator::GreaterThanOrEqual,
-                    Rule::comp_lte => ComparisonOperator::LessThanOrEqual,
-                    Rule::comp_eq => ComparisonOperator::Equal,
-                    Rule::comp_ne => ComparisonOperator::NotEqual,
-                    Rule::comp_is => ComparisonOperator::Is,
-                    Rule::comp_is_not => ComparisonOperator::IsNot,
+                    Rule::comp_gt => ComparisonComputation::GreaterThan,
+                    Rule::comp_lt => ComparisonComputation::LessThan,
+                    Rule::comp_gte => ComparisonComputation::GreaterThanOrEqual,
+                    Rule::comp_lte => ComparisonComputation::LessThanOrEqual,
+                    Rule::comp_eq => ComparisonComputation::Equal,
+                    Rule::comp_ne => ComparisonComputation::NotEqual,
+                    Rule::comp_is => ComparisonComputation::Is,
+                    Rule::comp_is_not => ComparisonComputation::IsNot,
                     _ => {
                         return Err(LemmaError::Engine(format!(
                             "Invalid comparison operator: {:?}",
@@ -592,14 +592,14 @@ fn parse_comparison_expression(
                     }
                 }
             }
-            Rule::comp_gt => ComparisonOperator::GreaterThan,
-            Rule::comp_lt => ComparisonOperator::LessThan,
-            Rule::comp_gte => ComparisonOperator::GreaterThanOrEqual,
-            Rule::comp_lte => ComparisonOperator::LessThanOrEqual,
-            Rule::comp_eq => ComparisonOperator::Equal,
-            Rule::comp_ne => ComparisonOperator::NotEqual,
-            Rule::comp_is => ComparisonOperator::Is,
-            Rule::comp_is_not => ComparisonOperator::IsNot,
+            Rule::comp_gt => ComparisonComputation::GreaterThan,
+            Rule::comp_lt => ComparisonComputation::LessThan,
+            Rule::comp_gte => ComparisonComputation::GreaterThanOrEqual,
+            Rule::comp_lte => ComparisonComputation::LessThanOrEqual,
+            Rule::comp_eq => ComparisonComputation::Equal,
+            Rule::comp_ne => ComparisonComputation::NotEqual,
+            Rule::comp_is => ComparisonComputation::Is,
+            Rule::comp_is_not => ComparisonComputation::IsNot,
             _ => {
                 return Err(LemmaError::Engine(format!(
                     "Invalid comparison operator: {:?}",
@@ -642,19 +642,19 @@ fn parse_logical_expression(
         | Rule::ceil_expr
         | Rule::round_expr => {
             let operator = match pair.as_rule() {
-                Rule::sqrt_expr => MathematicalOperator::Sqrt,
-                Rule::sin_expr => MathematicalOperator::Sin,
-                Rule::cos_expr => MathematicalOperator::Cos,
-                Rule::tan_expr => MathematicalOperator::Tan,
-                Rule::asin_expr => MathematicalOperator::Asin,
-                Rule::acos_expr => MathematicalOperator::Acos,
-                Rule::atan_expr => MathematicalOperator::Atan,
-                Rule::log_expr => MathematicalOperator::Log,
-                Rule::exp_expr => MathematicalOperator::Exp,
-                Rule::abs_expr => MathematicalOperator::Abs,
-                Rule::floor_expr => MathematicalOperator::Floor,
-                Rule::ceil_expr => MathematicalOperator::Ceil,
-                Rule::round_expr => MathematicalOperator::Round,
+                Rule::sqrt_expr => MathematicalComputation::Sqrt,
+                Rule::sin_expr => MathematicalComputation::Sin,
+                Rule::cos_expr => MathematicalComputation::Cos,
+                Rule::tan_expr => MathematicalComputation::Tan,
+                Rule::asin_expr => MathematicalComputation::Asin,
+                Rule::acos_expr => MathematicalComputation::Acos,
+                Rule::atan_expr => MathematicalComputation::Atan,
+                Rule::log_expr => MathematicalComputation::Log,
+                Rule::exp_expr => MathematicalComputation::Exp,
+                Rule::abs_expr => MathematicalComputation::Abs,
+                Rule::floor_expr => MathematicalComputation::Floor,
+                Rule::ceil_expr => MathematicalComputation::Ceil,
+                Rule::round_expr => MathematicalComputation::Round,
                 _ => unreachable!(),
             };
 
@@ -663,7 +663,7 @@ fn parse_logical_expression(
                     || inner.as_rule() == Rule::primary
                 {
                     let operand = parse_expression(inner, id_gen)?;
-                    let kind = ExpressionKind::MathematicalOperator(operator, Box::new(operand));
+                    let kind = ExpressionKind::MathematicalComputation(operator, Box::new(operand));
                     return Ok(traceable_expr(kind, &pair, id_gen));
                 }
             }
@@ -747,19 +747,19 @@ fn parse_logical_expression(
             | Rule::ceil_expr
             | Rule::round_expr => {
                 let operator = match node.as_rule() {
-                    Rule::sqrt_expr => MathematicalOperator::Sqrt,
-                    Rule::sin_expr => MathematicalOperator::Sin,
-                    Rule::cos_expr => MathematicalOperator::Cos,
-                    Rule::tan_expr => MathematicalOperator::Tan,
-                    Rule::asin_expr => MathematicalOperator::Asin,
-                    Rule::acos_expr => MathematicalOperator::Acos,
-                    Rule::atan_expr => MathematicalOperator::Atan,
-                    Rule::log_expr => MathematicalOperator::Log,
-                    Rule::exp_expr => MathematicalOperator::Exp,
-                    Rule::abs_expr => MathematicalOperator::Abs,
-                    Rule::floor_expr => MathematicalOperator::Floor,
-                    Rule::ceil_expr => MathematicalOperator::Ceil,
-                    Rule::round_expr => MathematicalOperator::Round,
+                    Rule::sqrt_expr => MathematicalComputation::Sqrt,
+                    Rule::sin_expr => MathematicalComputation::Sin,
+                    Rule::cos_expr => MathematicalComputation::Cos,
+                    Rule::tan_expr => MathematicalComputation::Tan,
+                    Rule::asin_expr => MathematicalComputation::Asin,
+                    Rule::acos_expr => MathematicalComputation::Acos,
+                    Rule::atan_expr => MathematicalComputation::Atan,
+                    Rule::log_expr => MathematicalComputation::Log,
+                    Rule::exp_expr => MathematicalComputation::Exp,
+                    Rule::abs_expr => MathematicalComputation::Abs,
+                    Rule::floor_expr => MathematicalComputation::Floor,
+                    Rule::ceil_expr => MathematicalComputation::Ceil,
+                    Rule::round_expr => MathematicalComputation::Round,
                     _ => {
                         return Err(LemmaError::Engine(
                             "Unknown mathematical operator".to_string(),
@@ -773,7 +773,7 @@ fn parse_logical_expression(
                     {
                         let operand = parse_expression(inner, id_gen)?;
                         let kind =
-                            ExpressionKind::MathematicalOperator(operator, Box::new(operand));
+                            ExpressionKind::MathematicalComputation(operator, Box::new(operand));
                         return Ok(traceable_expr(kind, &node, id_gen));
                     }
                 }

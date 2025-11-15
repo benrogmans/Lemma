@@ -2,7 +2,7 @@ use crate::evaluator::context::EvaluationContext;
 use crate::evaluator::expression::evaluate_expression;
 use crate::evaluator::timeout::TimeoutTracker;
 use crate::{
-    ArithmeticOperation, Expression, ExpressionId, ExpressionKind, FactReference, LemmaDoc,
+    ArithmeticComputation, Expression, ExpressionId, ExpressionKind, FactReference, LemmaDoc,
     LiteralValue, OperationResult, ResourceLimits,
 };
 use rust_decimal::Decimal;
@@ -81,7 +81,7 @@ fn test_evaluate_simple_arithmetic() {
                 None,
                 ExpressionId::new(0),
             )),
-            ArithmeticOperation::Add,
+            ArithmeticComputation::Add,
             Box::new(Expression::new(
                 ExpressionKind::Literal(LiteralValue::Number(Decimal::from(5))),
                 None,

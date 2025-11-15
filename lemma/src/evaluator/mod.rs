@@ -16,7 +16,9 @@ pub mod rules;
 pub mod timeout;
 pub mod units;
 
-use crate::{LemmaDoc, LemmaError, LemmaFact, LemmaResult, ResourceLimits, Response, RuleResult};
+use crate::{
+    Fact, LemmaDoc, LemmaError, LemmaFact, LemmaResult, ResourceLimits, Response, RuleResult,
+};
 use context::{build_fact_map, EvaluationContext};
 use std::collections::HashMap;
 use timeout::TimeoutTracker;
@@ -60,8 +62,30 @@ impl Evaluator {
         let mut context =
             EvaluationContext::new(doc, documents, sources, facts, &timeout_tracker, limits);
 
-        // Phase 4: Execute rules in dependency order
-        let mut response = Response::new(doc_name.to_string());
+        // Phase 4: Collect all facts for response
+        let mut response = Response {
+            doc_name: doc_name.to_string(),
+            facts: doc
+                .facts
+                .iter()
+                .filter_map(|fact_def| {
+                    if let crate::FactType::Local(name) = &fact_def.fact_type {
+                        let fact_ref = crate::FactReference {
+                            reference: vec![name.clone()],
+                        };
+                        Some(Fact {
+                            name: name.clone(),
+                            value: context.facts.get(&fact_ref).cloned(),
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            results: vec![],
+        };
+
+        // Phase 5: Execute rules in dependency order
         let mut failed_rules: std::collections::HashSet<crate::RulePath> =
             std::collections::HashSet::new();
 
@@ -82,21 +106,14 @@ impl Evaluator {
                     ))
                 })?;
 
-            // Check if any dependencies have failed
-            let all_rule_deps = graph.get(&rule_path).cloned().unwrap_or_default();
-
-            let missing_deps: Vec<String> = all_rule_deps
+            // Check if any rule dependencies have failed
+            let rule_dependencies = graph.get(&rule_path).cloned().unwrap_or_default();
+            let has_failed_rule_dependencies = rule_dependencies
                 .iter()
-                .filter(|dep| failed_rules.contains(dep))
-                .map(|dep| dep.to_string())
-                .collect();
+                .any(|dependency_rule| failed_rules.contains(dependency_rule));
 
-            if !missing_deps.is_empty() {
-                // This rule depends on failed rules - mark it as missing dependencies
+            if has_failed_rule_dependencies {
                 failed_rules.insert(rule_path.clone());
-                if target_doc_name == doc_name {
-                    response.add_result(RuleResult::missing_facts(rule.name.clone(), missing_deps));
-                }
                 continue;
             }
 
@@ -117,6 +134,11 @@ impl Evaluator {
 
             match eval_result {
                 Ok(result) => {
+                    // Store operations for this rule so they can be inlined when referenced
+                    context
+                        .rule_operations
+                        .insert(rule_path.clone(), context.operations.clone());
+
                     // Store result in context for subsequent rules
                     context
                         .rule_results
@@ -126,24 +148,42 @@ impl Evaluator {
                     if target_doc_name == doc_name {
                         match result {
                             crate::OperationResult::Value(value) => {
-                                response.add_result(RuleResult::success_with_operations(
-                                    rule.name.clone(),
-                                    value.clone(),
-                                    HashMap::new(),
-                                    context.operations.clone(),
-                                ));
+                                response.add_result(RuleResult {
+                                    rule: rule.clone(),
+                                    result: Some(value.clone()),
+                                    facts: collect_facts_from_operations(
+                                        &context.operations,
+                                        &context.facts,
+                                    ),
+                                    veto_message: None,
+                                    operations: context.operations.clone(),
+                                });
                             }
                             crate::OperationResult::Veto(msg) => {
-                                response.add_result(RuleResult::veto(rule.name.clone(), msg));
+                                response.add_result(RuleResult {
+                                    rule: rule.clone(),
+                                    result: None,
+                                    facts: vec![],
+                                    veto_message: msg,
+                                    operations: vec![],
+                                });
                             }
                         }
                     }
                 }
-                Err(LemmaError::Engine(msg)) if msg.starts_with("Missing fact:") => {
+                Err(LemmaError::MissingFact(fact_ref)) => {
                     failed_rules.insert(rule_path.clone());
                     if target_doc_name == doc_name {
-                        let missing = vec![msg.replace("Missing fact: ", "")];
-                        response.add_result(RuleResult::missing_facts(rule.name.clone(), missing));
+                        response.add_result(RuleResult {
+                            rule: rule.clone(),
+                            result: None,
+                            facts: vec![Fact {
+                                name: fact_ref.to_string(),
+                                value: None,
+                            }],
+                            veto_message: None,
+                            operations: vec![],
+                        });
                     }
                 }
                 Err(e) => {
@@ -178,19 +218,21 @@ pub(crate) fn topological_sort(
         all_nodes.insert(node.clone());
         reverse_graph.entry(node.clone()).or_default();
 
-        for dep in dependencies {
-            all_nodes.insert(dep.clone());
+        for dependency_rule in dependencies {
+            all_nodes.insert(dependency_rule.clone());
             reverse_graph
-                .entry(dep.clone())
+                .entry(dependency_rule.clone())
                 .or_default()
                 .insert(node.clone());
         }
     }
 
-    // Count how many dependencies each node has
+    // Count how many rule dependencies each node has
     let mut dependency_count: HashMap<crate::RulePath, usize> = HashMap::new();
     for node in &all_nodes {
-        let count = graph.get(node).map_or(0, |deps| deps.len());
+        let count = graph
+            .get(node)
+            .map_or(0, |rule_dependencies| rule_dependencies.len());
         dependency_count.insert(node.clone(), count);
     }
 
@@ -229,4 +271,32 @@ pub(crate) fn topological_sort(
     }
 
     Ok(result)
+}
+
+/// Collect facts from OperationRecord::FactUsed records
+fn collect_facts_from_operations(
+    operations: &[crate::OperationRecord],
+    _fact_map: &HashMap<crate::FactReference, crate::LiteralValue>,
+) -> Vec<Fact> {
+    use crate::OperationRecord;
+    let mut facts = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for op in operations {
+        if let OperationRecord {
+            kind: crate::OperationKind::FactUsed { fact_ref, value },
+            ..
+        } = op
+        {
+            let name = fact_ref.to_string();
+            if seen.insert(name.clone()) {
+                facts.push(Fact {
+                    name,
+                    value: Some(value.clone()),
+                });
+            }
+        }
+    }
+
+    facts
 }

@@ -21,7 +21,7 @@ rule discount = 0
     let discount_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "discount")
+        .find(|r| r.rule.name == "discount")
         .unwrap();
 
     println!("Response: {:?}", discount_result);
@@ -51,7 +51,7 @@ rule can_drive = age >= 18 and has_license
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "can_drive")
+        .find(|r| r.rule.name == "can_drive")
         .unwrap();
 
     println!("Boolean Response: {:?}", result);
@@ -80,7 +80,7 @@ rule result = base * multiplier
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "result")
+        .find(|r| r.rule.name == "result")
         .unwrap();
 
     println!("Arithmetic Response: {:?}", result);
@@ -111,7 +111,7 @@ rule final_price = 100 - discount?
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "final_price")
+        .find(|r| r.rule.name == "final_price")
         .unwrap();
 
     println!("Rule Reference Response: {:?}", result);

@@ -94,14 +94,18 @@ impl WasmEngine {
                         rule_obj.insert("veto".to_string(), serde_json::Value::String(veto_msg));
                     }
 
-                    // Include missing facts if present
-                    if let Some(missing) = result.missing_facts {
-                        if !missing.is_empty() {
-                            rule_obj.insert(
-                                "missing_facts".to_string(),
-                                serde_json::to_value(&missing).unwrap_or(serde_json::Value::Null),
-                            );
-                        }
+                    // Check for missing facts in the facts list
+                    let missing_facts: Vec<_> = result
+                        .facts
+                        .iter()
+                        .filter(|f| f.value.is_none())
+                        .map(|f| f.name.clone())
+                        .collect();
+                    if !missing_facts.is_empty() {
+                        rule_obj.insert(
+                            "missing_facts".to_string(),
+                            serde_json::to_value(&missing_facts).unwrap_or(serde_json::Value::Null),
+                        );
                     }
 
                     // Include operations if present
@@ -112,7 +116,10 @@ impl WasmEngine {
                         );
                     }
 
-                    results_map.insert(result.rule_name, serde_json::Value::Object(rule_obj));
+                    results_map.insert(
+                        result.rule.name.clone(),
+                        serde_json::Value::Object(rule_obj),
+                    );
                 }
 
                 // Build the flat response with consistent structure
@@ -120,12 +127,11 @@ impl WasmEngine {
                     "success": true,
                     "document": response.doc_name,
                     "rules": results_map,
-                    "warnings": if response.warnings.is_empty() { serde_json::Value::Null } else { serde_json::json!(response.warnings) },
                     "error": serde_json::Value::Null
-                })).unwrap_or_else(|_| r#"{"success":false,"document":null,"rules":null,"warnings":null,"error":"Failed to serialize response"}"#.to_string())
+                })).unwrap_or_else(|_| r#"{"success":false,"document":null,"rules":null,"error":"Failed to serialize response"}"#.to_string())
             }
             Err(e) => format!(
-                r#"{{"success":false,"document":null,"rules":null,"warnings":null,"error":"{}"}}"#,
+                r#"{{"success":false,"document":null,"rules":null,"error":"{}"}}"#,
                 format_error(&e).replace('"', "\\\"")
             ),
         }
@@ -392,6 +398,7 @@ fn format_error(error: &LemmaError) -> String {
         LemmaError::Runtime(details) => format!("Runtime Error: {}", details.message),
         LemmaError::Engine(msg) => format!("Engine Error: {}", msg),
         LemmaError::CircularDependency(msg) => format!("Circular Dependency: {}", msg),
+        LemmaError::MissingFact(fact_ref) => format!("Missing Fact: {}", fact_ref),
         LemmaError::ResourceLimitExceeded {
             limit_name,
             limit_value,

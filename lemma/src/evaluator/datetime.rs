@@ -3,8 +3,8 @@
 //! Handles arithmetic and comparisons with dates and datetimes.
 
 use crate::{
-    ArithmeticOperation, ComparisonOperator, DateTimeValue, LemmaError, LemmaResult, LiteralValue,
-    TimeValue, TimezoneValue,
+    ArithmeticComputation, ComparisonComputation, DateTimeValue, LemmaError, LemmaResult,
+    LiteralValue, TimeValue, TimezoneValue,
 };
 use chrono::{
     DateTime, Datelike, Duration as ChronoDuration, FixedOffset, NaiveDate, NaiveDateTime,
@@ -45,7 +45,7 @@ fn create_timezone_offset(timezone: &Option<TimezoneValue>) -> LemmaResult<Fixed
 /// Perform date/datetime arithmetic
 pub fn datetime_arithmetic(
     left: &LiteralValue,
-    op: &ArithmeticOperation,
+    op: &ArithmeticComputation,
     right: &LiteralValue,
 ) -> LemmaResult<LiteralValue> {
     match (left, right, op) {
@@ -53,7 +53,7 @@ pub fn datetime_arithmetic(
         (
             LiteralValue::Date(date),
             LiteralValue::Unit(crate::NumericUnit::Duration(value, unit)),
-            ArithmeticOperation::Add,
+            ArithmeticComputation::Add,
         ) => {
             let dt = datetime_value_to_chrono(date)?;
 
@@ -89,7 +89,7 @@ pub fn datetime_arithmetic(
         (
             LiteralValue::Date(date),
             LiteralValue::Unit(crate::NumericUnit::Duration(value, unit)),
-            ArithmeticOperation::Subtract,
+            ArithmeticComputation::Subtract,
         ) => {
             let dt = datetime_value_to_chrono(date)?;
 
@@ -125,7 +125,7 @@ pub fn datetime_arithmetic(
         (
             LiteralValue::Date(left_date),
             LiteralValue::Date(right_date),
-            ArithmeticOperation::Subtract,
+            ArithmeticComputation::Subtract,
         ) => {
             let left_dt = datetime_value_to_chrono(left_date)?;
             let right_dt = datetime_value_to_chrono(right_date)?;
@@ -205,7 +205,7 @@ fn seconds_to_chrono_duration(seconds: Decimal) -> LemmaResult<ChronoDuration> {
 /// Perform date/datetime comparisons
 pub fn datetime_comparison(
     left: &LiteralValue,
-    op: &ComparisonOperator,
+    op: &ComparisonComputation,
     right: &LiteralValue,
 ) -> LemmaResult<bool> {
     match (left, right) {
@@ -219,12 +219,12 @@ pub fn datetime_comparison(
             let r_utc = r_dt.naive_utc();
 
             Ok(match op {
-                ComparisonOperator::GreaterThan => l_utc > r_utc,
-                ComparisonOperator::LessThan => l_utc < r_utc,
-                ComparisonOperator::GreaterThanOrEqual => l_utc >= r_utc,
-                ComparisonOperator::LessThanOrEqual => l_utc <= r_utc,
-                ComparisonOperator::Equal | ComparisonOperator::Is => l_utc == r_utc,
-                ComparisonOperator::NotEqual | ComparisonOperator::IsNot => l_utc != r_utc,
+                ComparisonComputation::GreaterThan => l_utc > r_utc,
+                ComparisonComputation::LessThan => l_utc < r_utc,
+                ComparisonComputation::GreaterThanOrEqual => l_utc >= r_utc,
+                ComparisonComputation::LessThanOrEqual => l_utc <= r_utc,
+                ComparisonComputation::Equal | ComparisonComputation::Is => l_utc == r_utc,
+                ComparisonComputation::NotEqual | ComparisonComputation::IsNot => l_utc != r_utc,
             })
         }
 
@@ -237,7 +237,7 @@ pub fn datetime_comparison(
 /// Perform time arithmetic operations
 pub fn time_arithmetic(
     left: &LiteralValue,
-    op: &ArithmeticOperation,
+    op: &ArithmeticComputation,
     right: &LiteralValue,
 ) -> LemmaResult<LiteralValue> {
     match (left, right, op) {
@@ -245,7 +245,7 @@ pub fn time_arithmetic(
         (
             LiteralValue::Time(time),
             LiteralValue::Unit(crate::NumericUnit::Duration(value, unit)),
-            ArithmeticOperation::Add,
+            ArithmeticComputation::Add,
         ) => {
             let seconds = crate::parser::units::duration_to_seconds(*value, unit);
             let time_aware = time_value_to_chrono_datetime(time)?;
@@ -258,7 +258,7 @@ pub fn time_arithmetic(
         (
             LiteralValue::Time(time),
             LiteralValue::Unit(crate::NumericUnit::Duration(value, unit)),
-            ArithmeticOperation::Subtract,
+            ArithmeticComputation::Subtract,
         ) => {
             let seconds = crate::parser::units::duration_to_seconds(*value, unit);
             let time_aware = time_value_to_chrono_datetime(time)?;
@@ -271,7 +271,7 @@ pub fn time_arithmetic(
         (
             LiteralValue::Time(left_time),
             LiteralValue::Time(right_time),
-            ArithmeticOperation::Subtract,
+            ArithmeticComputation::Subtract,
         ) => {
             let left_dt = time_value_to_chrono_datetime(left_time)?;
             let right_dt = time_value_to_chrono_datetime(right_time)?;

@@ -42,19 +42,19 @@ rule contract_valid = is_salary_valid? and vacation_days_ok? and is_adult?
     let total_comp = response
         .results
         .iter()
-        .find(|r| r.rule_name == "total_compensation")
+        .find(|r| r.rule.name == "total_compensation")
         .unwrap();
     assert!(total_comp
         .result
         .as_ref()
         .unwrap()
         .to_string()
-        .contains("82500"));
+        .contains("82_500"));
 
     let contract_valid = response
         .results
         .iter()
-        .find(|r| r.rule_name == "contract_valid")
+        .find(|r| r.rule.name == "contract_valid")
         .unwrap();
     assert_eq!(contract_valid.result.as_ref().unwrap().to_string(), "true");
 
@@ -100,7 +100,7 @@ rule final_cost = (base_shipping? + distance_fee?) * express_multiplier?
     let weight_pounds = response
         .results
         .iter()
-        .find(|r| r.rule_name == "weight_in_pounds")
+        .find(|r| r.rule.name == "weight_in_pounds")
         .unwrap();
     assert!(weight_pounds
         .result
@@ -112,7 +112,7 @@ rule final_cost = (base_shipping? + distance_fee?) * express_multiplier?
     let weight_surcharge = response
         .results
         .iter()
-        .find(|r| r.rule_name == "weight_surcharge")
+        .find(|r| r.rule.name == "weight_surcharge")
         .unwrap();
     assert_eq!(
         weight_surcharge.result.as_ref().unwrap().to_string(),
@@ -157,26 +157,26 @@ rule effective_rate = (tax_amount? / income) * 100%
     let taxable = response
         .results
         .iter()
-        .find(|r| r.rule_name == "taxable_income")
+        .find(|r| r.rule.name == "taxable_income")
         .unwrap();
     assert!(taxable
         .result
         .as_ref()
         .unwrap()
         .to_string()
-        .contains("70000"));
+        .contains("70_000"));
 
     let in_mid = response
         .results
         .iter()
-        .find(|r| r.rule_name == "in_mid_bracket")
+        .find(|r| r.rule.name == "in_mid_bracket")
         .unwrap();
     assert_eq!(in_mid.result.as_ref().unwrap().to_string(), "true");
 
     let tax_rate = response
         .results
         .iter()
-        .find(|r| r.rule_name == "tax_rate")
+        .find(|r| r.rule.name == "tax_rate")
         .unwrap();
     assert!(tax_rate.result.as_ref().unwrap().to_string().contains("20"));
 
@@ -223,14 +223,14 @@ rule status = "OK"
     let system_healthy = response
         .results
         .iter()
-        .find(|r| r.rule_name == "system_healthy")
+        .find(|r| r.rule.name == "system_healthy")
         .unwrap();
     assert_eq!(system_healthy.result.as_ref().unwrap().to_string(), "true");
 
     let status = response
         .results
         .iter()
-        .find(|r| r.rule_name == "status")
+        .find(|r| r.rule.name == "status")
         .unwrap();
     assert_eq!(status.result.as_ref().unwrap().to_string(), "\"OK\"");
 
@@ -265,7 +265,7 @@ rule status = "OK"
     let system_healthy2 = response2
         .results
         .iter()
-        .find(|r| r.rule_name == "system_healthy")
+        .find(|r| r.rule.name == "system_healthy")
         .unwrap();
     assert_eq!(
         system_healthy2.result.as_ref().unwrap().to_string(),
@@ -275,7 +275,7 @@ rule status = "OK"
     let status2 = response2
         .results
         .iter()
-        .find(|r| r.rule_name == "status")
+        .find(|r| r.rule.name == "status")
         .unwrap();
     assert_eq!(
         status2.result.as_ref().unwrap().to_string(),
@@ -320,7 +320,7 @@ rule trip_summary = is_high_speed? and is_long_distance? and is_high_power?
     let mass_pounds = response
         .results
         .iter()
-        .find(|r| r.rule_name == "mass_in_pounds")
+        .find(|r| r.rule.name == "mass_in_pounds")
         .unwrap();
     assert!(mass_pounds
         .result
@@ -332,7 +332,7 @@ rule trip_summary = is_high_speed? and is_long_distance? and is_high_power?
     let trip_summary = response
         .results
         .iter()
-        .find(|r| r.rule_name == "trip_summary")
+        .find(|r| r.rule.name == "trip_summary")
         .unwrap();
     assert_eq!(trip_summary.result.as_ref().unwrap().to_string(), "true");
 
@@ -365,14 +365,14 @@ rule status = "LOW"
     let calculated = response
         .results
         .iter()
-        .find(|r| r.rule_name == "calculated_value")
+        .find(|r| r.rule.name == "calculated_value")
         .unwrap();
     assert_eq!(calculated.result.as_ref().unwrap().to_string(), "200");
 
     let status = response
         .results
         .iter()
-        .find(|r| r.rule_name == "status")
+        .find(|r| r.rule.name == "status")
         .unwrap();
     assert_eq!(status.result.as_ref().unwrap().to_string(), "\"LOW\"");
 
@@ -384,7 +384,7 @@ rule status = "LOW"
     let status2 = response2
         .results
         .iter()
-        .find(|r| r.rule_name == "status")
+        .find(|r| r.rule.name == "status")
         .unwrap();
     assert_eq!(status2.result.as_ref().unwrap().to_string(), "\"HIGH\"");
 
@@ -423,14 +423,14 @@ rule is_on_schedule = elapsed_time? <= phase1_duration + phase2_duration
     let phase1_complete = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_phase1_complete")
+        .find(|r| r.rule.name == "is_phase1_complete")
         .unwrap();
     assert_eq!(phase1_complete.result.as_ref().unwrap().to_string(), "true");
 
     let phase2_complete = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_phase2_complete")
+        .find(|r| r.rule.name == "is_phase2_complete")
         .unwrap();
     assert_eq!(
         phase2_complete.result.as_ref().unwrap().to_string(),
@@ -461,7 +461,7 @@ rule end_date = start + duration
     let end_date = response
         .results
         .iter()
-        .find(|r| r.rule_name == "end_date")
+        .find(|r| r.rule.name == "end_date")
         .unwrap();
 
     assert!(end_date.result.is_some());
@@ -487,7 +487,7 @@ rule start_date = end - duration
     let start_date = response
         .results
         .iter()
-        .find(|r| r.rule_name == "start_date")
+        .find(|r| r.rule.name == "start_date")
         .unwrap();
 
     assert!(start_date.result.is_some());
@@ -513,7 +513,7 @@ rule duration = end - start
     let duration = response
         .results
         .iter()
-        .find(|r| r.rule_name == "duration")
+        .find(|r| r.rule.name == "duration")
         .unwrap();
 
     assert!(duration.result.is_some());
@@ -541,14 +541,14 @@ rule date1_after_date2 = date1 > date2
     let before = response
         .results
         .iter()
-        .find(|r| r.rule_name == "date1_before_date2")
+        .find(|r| r.rule.name == "date1_before_date2")
         .unwrap();
     assert_eq!(before.result.as_ref().unwrap().to_string(), "true");
 
     let after = response
         .results
         .iter()
-        .find(|r| r.rule_name == "date1_after_date2")
+        .find(|r| r.rule.name == "date1_after_date2")
         .unwrap();
     assert_eq!(after.result.as_ref().unwrap().to_string(), "false");
 }
@@ -732,7 +732,7 @@ rule is_valid = value >= config.min_value and value <= config.max_value
     let is_valid = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_valid")
+        .find(|r| r.rule.name == "is_valid")
         .unwrap();
     assert_eq!(is_valid.result.as_ref().unwrap().to_string(), "true");
 }
@@ -763,7 +763,7 @@ rule is_valid = salary >= base_contract.min_salary and salary <= base_contract.m
     let is_valid = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_valid")
+        .find(|r| r.rule.name == "is_valid")
         .unwrap();
     assert_eq!(is_valid.result.as_ref().unwrap().to_string(), "true");
 }
@@ -793,7 +793,7 @@ rule probation_end = base_contract.project_start + base_contract.probation_perio
     let probation_end = response
         .results
         .iter()
-        .find(|r| r.rule_name == "probation_end")
+        .find(|r| r.rule.name == "probation_end")
         .unwrap();
 
     assert!(probation_end.result.is_some());

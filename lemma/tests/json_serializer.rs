@@ -130,7 +130,7 @@ fn test_json_to_lemma_syntax_end_to_end() -> LemmaResult<()> {
     let total_rule = response
         .results
         .iter()
-        .find(|r| r.rule_name == "total")
+        .find(|r| r.rule.name == "total")
         .unwrap();
 
     assert_eq!(

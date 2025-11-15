@@ -17,7 +17,7 @@ rule net_multiplier = 1 - discount
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "net_multiplier")
+        .find(|r| r.rule.name == "net_multiplier")
         .unwrap()
         .result
         .as_ref()
@@ -45,7 +45,7 @@ rule is_heavy = weight > 5 kilograms
     let result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "double_weight")
+        .find(|r| r.rule.name == "double_weight")
         .unwrap()
         .result
         .as_ref()
@@ -62,7 +62,7 @@ rule is_heavy = weight > 5 kilograms
     let is_heavy = response
         .results
         .iter()
-        .find(|r| r.rule_name == "is_heavy")
+        .find(|r| r.rule.name == "is_heavy")
         .unwrap();
     assert_eq!(is_heavy.result, Some(LiteralValue::Boolean(true)));
 }

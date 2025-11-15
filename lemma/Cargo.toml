@@ -33,3 +33,5 @@ console_error_panic_hook.workspace = true
 
 [dev-dependencies]
 proptest = "1.4"
+insta = "1.34"
+lemma-cli = { path = "../cli" }

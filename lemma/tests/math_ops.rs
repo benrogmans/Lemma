@@ -9,7 +9,7 @@ fn run(code: &str, rule: &str) -> LemmaResult<String> {
     let v = resp
         .results
         .iter()
-        .find(|r| r.rule_name == rule)
+        .find(|r| r.rule.name == rule)
         .and_then(|r| r.result.clone())
         .expect("rule value");
     Ok(v.to_string())

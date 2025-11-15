@@ -6,7 +6,7 @@ fn get_rule_value(engine: &Engine, doc_name: &str, rule_name: &str) -> lemma::Li
     response
         .results
         .iter()
-        .find(|r| r.rule_name == rule_name)
+        .find(|r| r.rule.name == rule_name)
         .unwrap()
         .result
         .as_ref()

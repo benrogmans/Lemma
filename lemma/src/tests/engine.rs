@@ -24,7 +24,7 @@ fn test_evaluate_document_all_rules() {
     let sum_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "sum")
+        .find(|r| r.rule.name == "sum")
         .unwrap();
     assert_eq!(
         sum_result.result,
@@ -36,7 +36,7 @@ fn test_evaluate_document_all_rules() {
     let product_result = response
         .results
         .iter()
-        .find(|r| r.rule_name == "product")
+        .find(|r| r.rule.name == "product")
         .unwrap();
     assert_eq!(
         product_result.result,
@@ -184,4 +184,69 @@ fn test_runtime_error_mapping() {
     // Division by zero returns an error from the evaluator
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Division by zero"));
+}
+
+#[test]
+fn test_rules_sorted_by_source_order() {
+    let mut engine = Engine::new();
+    engine
+        .add_lemma_code(
+            r#"
+        doc test
+        fact a = 1
+        fact b = 2
+        rule z = a + b
+        rule y = a * b
+        rule x = a - b
+    "#,
+            "test.lemma",
+        )
+        .unwrap();
+
+    let response = engine.evaluate("test", None, None).unwrap();
+    assert_eq!(response.results.len(), 3);
+
+    // Check they all have span information for ordering
+    for result in &response.results {
+        assert!(
+            result.rule.span.is_some(),
+            "Rule {} missing span",
+            result.rule.name
+        );
+    }
+
+    // Verify source positions increase (z < y < x)
+    let z_pos = response
+        .results
+        .iter()
+        .find(|r| r.rule.name == "z")
+        .unwrap()
+        .rule
+        .span
+        .as_ref()
+        .unwrap()
+        .start;
+    let y_pos = response
+        .results
+        .iter()
+        .find(|r| r.rule.name == "y")
+        .unwrap()
+        .rule
+        .span
+        .as_ref()
+        .unwrap()
+        .start;
+    let x_pos = response
+        .results
+        .iter()
+        .find(|r| r.rule.name == "x")
+        .unwrap()
+        .rule
+        .span
+        .as_ref()
+        .unwrap()
+        .start;
+
+    assert!(z_pos < y_pos);
+    assert!(y_pos < x_pos);
 }

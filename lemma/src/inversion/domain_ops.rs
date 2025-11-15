@@ -1,11 +1,11 @@
 //! Domain operations for constraint solving
 
 use crate::evaluator::operations::comparison_operation;
-use crate::{Bound, ComparisonOperator, Domain, LiteralValue};
+use crate::{Bound, ComparisonComputation, Domain, LiteralValue};
 use std::cmp::Ordering;
 
 pub fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
-    use ComparisonOperator as Cmp;
+    use ComparisonComputation as Cmp;
     if let Ok(true) = comparison_operation(a, &Cmp::LessThan, b) {
         return -1;
     }
@@ -42,10 +42,10 @@ pub fn bounds_contradict(min: &Bound, max: &Bound) -> bool {
 
 pub fn domain_from_comparison(
     side: &str,
-    op: &ComparisonOperator,
+    op: &ComparisonComputation,
     val: LiteralValue,
 ) -> Option<Domain> {
-    use ComparisonOperator as Cmp;
+    use ComparisonComputation as Cmp;
     let make_range = |min: Bound, max: Bound| Domain::Range { min, max };
     let fact_on_right = side == "right";
 
