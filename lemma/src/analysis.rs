@@ -297,7 +297,7 @@ pub fn build_dependency_graph(
         // Queue dependencies for discovery
         for full_dep_path in full_dependencies {
             if !graph.contains_key(&full_dep_path) {
-                let target_doc_name = full_dep_path.target_doc(&doc.name);
+                let target_doc_name = full_dep_path.containing_document(&doc.name);
                 let target_doc = documents.get(target_doc_name).ok_or_else(|| {
                     crate::LemmaError::Engine(format!(
                         "Rule {} references document '{}' which does not exist",

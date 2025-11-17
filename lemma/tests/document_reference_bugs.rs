@@ -33,7 +33,7 @@ rule line_total = pricing.final_price? * quantity
         .unwrap();
 
     // Should be: (100 * 1.21) * 10 = 1210
-    assert_eq!(line_total.result.as_ref().unwrap().to_string(), "1_210");
+    assert_eq!(line_total.result.value().unwrap().to_string(), "1,210");
 }
 
 /// Bug: Multi-level document references fail
@@ -80,7 +80,7 @@ rule top_calc = middle_ref.middle_calc?
         .expect("top_calc rule not found in results");
 
     // Should be: ((100 * 2) + 50) = 250
-    assert_eq!(top_calc.result.as_ref().unwrap().to_string(), "250");
+    assert_eq!(top_calc.result.value().unwrap().to_string(), "250");
 }
 
 /// Bug: Overriding document reference facts in nested structures fails
@@ -137,7 +137,7 @@ rule order_total = line.line_total?
         .expect("order_total rule not found in results");
 
     // Should use wholesale pricing: (75 * 1.1) * 100 = 8250
-    assert_eq!(order_total.result.as_ref().unwrap().to_string(), "8_250");
+    assert_eq!(order_total.result.value().unwrap().to_string(), "8,250");
 }
 
 /// Bug: Accessing facts through multi-level document references with nested overrides
@@ -177,5 +177,5 @@ rule final_value = settings.config.value * 2
         .unwrap();
 
     // Should be: 100 * 2 = 200 (using the overridden value from middle)
-    assert_eq!(final_value.result.as_ref().unwrap().to_string(), "200");
+    assert_eq!(final_value.result.value().unwrap().to_string(), "200");
 }

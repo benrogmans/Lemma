@@ -20,7 +20,7 @@ rule net_multiplier = 1 - discount
         .find(|r| r.rule.name == "net_multiplier")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
 
     match result {
@@ -48,7 +48,7 @@ rule is_heavy = weight > 5 kilograms
         .find(|r| r.rule.name == "double_weight")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
 
     match result {
@@ -64,5 +64,8 @@ rule is_heavy = weight > 5 kilograms
         .iter()
         .find(|r| r.rule.name == "is_heavy")
         .unwrap();
-    assert_eq!(is_heavy.result, Some(LiteralValue::Boolean(true)));
+    assert_eq!(
+        is_heavy.result,
+        lemma::OperationResult::Value(lemma::LiteralValue::Boolean(lemma::BooleanValue::True))
+    );
 }

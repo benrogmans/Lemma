@@ -22,6 +22,7 @@ crossterm = "0.27"
 comfy-table = "7.2"
 inquire = { version = "0.9", features = ["date"] }
 rust_decimal = "1.36"
+strip-ansi-escapes = "0.2"
 
 # Server dependencies (optional)
 axum = { workspace = true, optional = true }

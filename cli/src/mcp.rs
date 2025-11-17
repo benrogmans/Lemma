@@ -323,12 +323,17 @@ pub mod server {
                 output.push_str("## Results\n\n");
                 for result in &response.results {
                     output.push_str(&format!("**{}**: ", result.rule.name));
-                    if let Some(ref value) = result.result {
-                        output.push_str(&value.to_string());
-                    } else if let Some(ref veto) = result.veto_message {
-                        output.push_str(&format!("VETO ({veto})"));
-                    } else {
-                        output.push_str("(no value)");
+                    match &result.result {
+                        lemma::OperationResult::Value(value) => {
+                            output.push_str(&value.to_string());
+                        }
+                        lemma::OperationResult::Veto(msg) => {
+                            if let Some(veto) = msg {
+                                output.push_str(&format!("Veto: {veto}"));
+                            } else {
+                                output.push_str("Veto");
+                            }
+                        }
                     }
                     output.push('\n');
                 }

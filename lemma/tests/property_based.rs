@@ -4,13 +4,17 @@ use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
-fn get_rule_result(engine: &mut Engine, doc_name: &str, rule_name: &str) -> Option<LiteralValue> {
+/// Get the result of a rule evaluation.
+/// Panics if the rule is not found (test failure).
+/// Returns the OperationResult which must be checked explicitly.
+fn get_rule_result(engine: &mut Engine, doc_name: &str, rule_name: &str) -> lemma::OperationResult {
     let response = engine.evaluate(doc_name, None, None).unwrap();
     response
         .results
         .iter()
         .find(|r| r.rule.name == rule_name)
-        .and_then(|r| r.result.clone())
+        .map(|r| r.result.clone())
+        .unwrap_or_else(|| panic!("Rule '{}' not found in document '{}'", rule_name, doc_name))
 }
 
 proptest! {
@@ -29,8 +33,13 @@ rule result = x * 0
 "#, n);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "result") {
-            prop_assert_eq!(val, Decimal::from_str("0").unwrap());
+        let result = get_rule_result(&mut engine, "test", "result");
+        let val = result
+            .value()
+            .expect("Expected value result, got veto")
+            .clone();
+        if let LiteralValue::Number(num) = val {
+            prop_assert_eq!(num, Decimal::from_str("0").unwrap());
         }
     }
 
@@ -44,9 +53,14 @@ rule result = x * 1
 "#, n);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "result") {
+        let result = get_rule_result(&mut engine, "test", "result");
+        let val = result
+            .value()
+            .expect("Expected value result, got veto")
+            .clone();
+        if let LiteralValue::Number(num) = val {
             let expected = Decimal::from_f64(n).unwrap();
-            let diff = (val - expected).abs();
+            let diff = (num - expected).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
         }
     }
@@ -61,9 +75,14 @@ rule result = x + 0
 "#, n);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "result") {
+        let result = get_rule_result(&mut engine, "test", "result");
+        let val = result
+            .value()
+            .expect("Expected value result, got veto")
+            .clone();
+        if let LiteralValue::Number(num) = val {
             let expected = Decimal::from_f64(n).unwrap();
-            let diff = (val - expected).abs();
+            let diff = (num - expected).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
         }
     }
@@ -79,11 +98,16 @@ rule lte_self = x <= x
 "#, n);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "eq_self") {
-            prop_assert_eq!(val, true);
+        let result = get_rule_result(&mut engine, "test", "eq_self");
+        let val = result.value().expect("Expected value result, got veto").clone();
+        if let LiteralValue::Boolean(b) = val {
+            prop_assert!(bool::from(b));
         }
-        if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "lte_self") {
-            prop_assert_eq!(val, true);
+
+        let result = get_rule_result(&mut engine, "test", "lte_self");
+        let val = result.value().expect("Expected value result, got veto").clone();
+        if let LiteralValue::Boolean(b) = val {
+            prop_assert!(bool::from(b));
         }
     }
 
@@ -101,12 +125,20 @@ rule doubled = x * 2
         let facts = lemma::parse_facts(&[override_fact.as_str()]).unwrap();
         let response = engine.evaluate("test", None, Some(facts)).unwrap();
 
-        if let Some(result) = response.results.iter().find(|r| r.rule.name == "doubled") {
-            if let Some(LiteralValue::Number(val)) = &result.result {
-                let expected = Decimal::from_f64(n * 2.0).unwrap();
-                let diff = (val - expected).abs();
-                prop_assert!(diff < Decimal::from_str("0.001").unwrap());
-            }
+        let result = response
+            .results
+            .iter()
+            .find(|r| r.rule.name == "doubled")
+            .expect("Rule 'doubled' not found");
+        let val = result
+            .result
+            .value()
+            .expect("Expected value result, got veto")
+            .clone();
+        if let LiteralValue::Number(num) = val {
+            let expected = Decimal::from_f64(n * 2.0).unwrap();
+            let diff = (num - expected).abs();
+            prop_assert!(diff < Decimal::from_str("0.001").unwrap());
         }
     }
 
@@ -122,10 +154,12 @@ rule sum2 = b + a
 "#, a, b);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        let v1 = get_rule_result(&mut engine, "test", "sum1");
-        let v2 = get_rule_result(&mut engine, "test", "sum2");
+        let v1_result = get_rule_result(&mut engine, "test", "sum1");
+        let v1 = v1_result.value().expect("Expected value, got veto").clone();
+        let v2_result = get_rule_result(&mut engine, "test", "sum2");
+        let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Some(LiteralValue::Number(val1)), Some(LiteralValue::Number(val2))) = (v1, v2) {
+        if let (LiteralValue::Number(val1), LiteralValue::Number(val2)) = (v1, v2) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
         }
@@ -143,10 +177,12 @@ rule prod2 = b * a
 "#, a, b);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        let v1 = get_rule_result(&mut engine, "test", "prod1");
-        let v2 = get_rule_result(&mut engine, "test", "prod2");
+        let v1_result = get_rule_result(&mut engine, "test", "prod1");
+        let v1 = v1_result.value().expect("Expected value, got veto").clone();
+        let v2_result = get_rule_result(&mut engine, "test", "prod2");
+        let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Some(LiteralValue::Number(val1)), Some(LiteralValue::Number(val2))) = (v1, v2) {
+        if let (LiteralValue::Number(val1), LiteralValue::Number(val2)) = (v1, v2) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
         }
@@ -165,10 +201,12 @@ rule sum2 = a + (b + c)
 "#, a, b, c);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        let v1 = get_rule_result(&mut engine, "test", "sum1");
-        let v2 = get_rule_result(&mut engine, "test", "sum2");
+        let v1_result = get_rule_result(&mut engine, "test", "sum1");
+        let v1 = v1_result.value().expect("Expected value, got veto").clone();
+        let v2_result = get_rule_result(&mut engine, "test", "sum2");
+        let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Some(LiteralValue::Number(val1)), Some(LiteralValue::Number(val2))) = (v1, v2) {
+        if let (LiteralValue::Number(val1), LiteralValue::Number(val2)) = (v1, v2) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
         }
@@ -187,10 +225,12 @@ rule prod2 = a * (b * c)
 "#, a, b, c);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        let v1 = get_rule_result(&mut engine, "test", "prod1");
-        let v2 = get_rule_result(&mut engine, "test", "prod2");
+        let v1_result = get_rule_result(&mut engine, "test", "prod1");
+        let v1 = v1_result.value().expect("Expected value, got veto").clone();
+        let v2_result = get_rule_result(&mut engine, "test", "prod2");
+        let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Some(LiteralValue::Number(val1)), Some(LiteralValue::Number(val2))) = (v1, v2) {
+        if let (LiteralValue::Number(val1), LiteralValue::Number(val2)) = (v1, v2) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.01").unwrap());
         }
@@ -209,10 +249,12 @@ rule dist2 = (a * b) + (a * c)
 "#, a, b, c);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        let v1 = get_rule_result(&mut engine, "test", "dist1");
-        let v2 = get_rule_result(&mut engine, "test", "dist2");
+        let v1_result = get_rule_result(&mut engine, "test", "dist1");
+        let v1 = v1_result.value().expect("Expected value, got veto").clone();
+        let v2_result = get_rule_result(&mut engine, "test", "dist2");
+        let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Some(LiteralValue::Number(val1)), Some(LiteralValue::Number(val2))) = (v1, v2) {
+        if let (LiteralValue::Number(val1), LiteralValue::Number(val2)) = (v1, v2) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.01").unwrap());
         }
@@ -228,7 +270,13 @@ rule double_neg = -(-x)
 "#, n);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "double_neg") {
+        let result = get_rule_result(&mut engine, "test", "double_neg");
+
+
+        let val = result.value().expect("Expected value result, got veto").clone();
+
+
+        if let LiteralValue::Number(val) = val {
             let expected = Decimal::from_f64(n).unwrap();
             let diff = (val - expected).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
@@ -247,10 +295,12 @@ rule add_neg = a + (-b)
 "#, a, b);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        let v1 = get_rule_result(&mut engine, "test", "sub");
-        let v2 = get_rule_result(&mut engine, "test", "add_neg");
+        let v1_result = get_rule_result(&mut engine, "test", "sub");
+        let v1 = v1_result.value().expect("Expected value, got veto").clone();
+        let v2_result = get_rule_result(&mut engine, "test", "add_neg");
+        let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Some(LiteralValue::Number(val1)), Some(LiteralValue::Number(val2))) = (v1, v2) {
+        if let (LiteralValue::Number(val1), LiteralValue::Number(val2)) = (v1, v2) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
         }
@@ -268,7 +318,13 @@ rule back = product? / b
 "#, a, b);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "back") {
+        let result = get_rule_result(&mut engine, "test", "back");
+
+
+        let val = result.value().expect("Expected value result, got veto").clone();
+
+
+        if let LiteralValue::Number(val) = val {
             let expected = Decimal::from_f64(a).unwrap();
             let diff = (val - expected).abs();
             prop_assert!(diff < Decimal::from_str("0.01").unwrap());
@@ -285,8 +341,14 @@ rule double_not = not (not b)
 "#, b);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "double_not") {
-            prop_assert_eq!(val, b);
+        let result = get_rule_result(&mut engine, "test", "double_not");
+
+
+        let val = result.value().expect("Expected value result, got veto").clone();
+
+
+        if let LiteralValue::Boolean(val) = val {
+            prop_assert_eq!(bool::from(val), b);
         }
     }
 
@@ -302,10 +364,12 @@ rule and2 = b and a
 "#, a, b);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        let v1 = get_rule_result(&mut engine, "test", "and1");
-        let v2 = get_rule_result(&mut engine, "test", "and2");
+        let v1_result = get_rule_result(&mut engine, "test", "and1");
+        let v1 = v1_result.value().expect("Expected value, got veto").clone();
+        let v2_result = get_rule_result(&mut engine, "test", "and2");
+        let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Some(LiteralValue::Boolean(val1)), Some(LiteralValue::Boolean(val2))) = (v1, v2) {
+        if let (LiteralValue::Boolean(val1), LiteralValue::Boolean(val2)) = (v1, v2) {
             prop_assert_eq!(val1, val2);
         }
     }
@@ -322,10 +386,12 @@ rule or2 = b or a
 "#, a, b);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        let v1 = get_rule_result(&mut engine, "test", "or1");
-        let v2 = get_rule_result(&mut engine, "test", "or2");
+        let v1_result = get_rule_result(&mut engine, "test", "or1");
+        let v1 = v1_result.value().expect("Expected value, got veto").clone();
+        let v2_result = get_rule_result(&mut engine, "test", "or2");
+        let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Some(LiteralValue::Boolean(val1)), Some(LiteralValue::Boolean(val2))) = (v1, v2) {
+        if let (LiteralValue::Boolean(val1), LiteralValue::Boolean(val2)) = (v1, v2) {
             prop_assert_eq!(val1, val2);
         }
     }
@@ -347,12 +413,17 @@ rule ac = a < c
 "#, min, mid, max);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        let ab = get_rule_result(&mut engine, "test", "ab");
-        let bc = get_rule_result(&mut engine, "test", "bc");
-        let ac = get_rule_result(&mut engine, "test", "ac");
+        let ab_result = get_rule_result(&mut engine, "test", "ab");
+        let ab = ab_result.value().expect("Expected value, got veto").clone();
+        let bc_result = get_rule_result(&mut engine, "test", "bc");
+        let bc = bc_result.value().expect("Expected value, got veto").clone();
+        let ac_result = get_rule_result(&mut engine, "test", "ac");
+        let ac = ac_result.value().expect("Expected value, got veto").clone();
 
-        if let (Some(LiteralValue::Boolean(true)), Some(LiteralValue::Boolean(true)), Some(LiteralValue::Boolean(ac_val))) = (ab, bc, ac) {
-            prop_assert_eq!(ac_val, true);
+        if let (LiteralValue::Boolean(ab_val), LiteralValue::Boolean(bc_val), LiteralValue::Boolean(ac_val)) = (ab, bc, ac) {
+            if bool::from(ab_val) && bool::from(bc_val) {
+                prop_assert!(bool::from(ac_val));
+            }
         }
     }
 
@@ -369,7 +440,13 @@ rule discount = 0
 "#, n);
         engine.add_lemma_code(&code, "test").unwrap();
 
-        if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "discount") {
+        let result = get_rule_result(&mut engine, "test", "discount");
+
+
+        let val = result.value().expect("Expected value result, got veto").clone();
+
+
+        if let LiteralValue::Number(val) = val {
             let expected = if n > 50.0 {
                 Decimal::from(50)
             } else if n > 20.0 {
@@ -404,7 +481,14 @@ rule commutative2 = 5 + x
         );
         engine.add_lemma_code(&code, "test").unwrap();
 
-        if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "zero") {
+        let result = get_rule_result(&mut engine, "test", "zero");
+
+        let val = result
+            .value()
+            .expect("Expected value result, got veto")
+            .clone();
+
+        if let LiteralValue::Number(val) = val {
             assert_eq!(
                 val,
                 Decimal::from_str("0").unwrap(),
@@ -413,9 +497,14 @@ rule commutative2 = 5 + x
             );
         }
 
-        if let Some(LiteralValue::Number(val)) =
-            get_rule_result(&mut engine, "test", "identity_mul")
-        {
+        let result = get_rule_result(&mut engine, "test", "identity_mul");
+
+        let val = result
+            .value()
+            .expect("Expected value result, got veto")
+            .clone();
+
+        if let LiteralValue::Number(val) = val {
             let expected = Decimal::from_f64(n).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.001").unwrap(),
@@ -424,9 +513,14 @@ rule commutative2 = 5 + x
             );
         }
 
-        if let Some(LiteralValue::Number(val)) =
-            get_rule_result(&mut engine, "test", "identity_add")
-        {
+        let result = get_rule_result(&mut engine, "test", "identity_add");
+
+        let val = result
+            .value()
+            .expect("Expected value result, got veto")
+            .clone();
+
+        if let LiteralValue::Number(val) = val {
             let expected = Decimal::from_f64(n).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.001").unwrap(),
@@ -435,9 +529,17 @@ rule commutative2 = 5 + x
             );
         }
 
-        let comm1 = get_rule_result(&mut engine, "test", "commutative1");
-        let comm2 = get_rule_result(&mut engine, "test", "commutative2");
-        if let (Some(LiteralValue::Number(v1)), Some(LiteralValue::Number(v2))) = (comm1, comm2) {
+        let comm1_result = get_rule_result(&mut engine, "test", "commutative1");
+        let comm1 = comm1_result
+            .value()
+            .expect("Expected value, got veto")
+            .clone();
+        let comm2_result = get_rule_result(&mut engine, "test", "commutative2");
+        let comm2 = comm2_result
+            .value()
+            .expect("Expected value, got veto")
+            .clone();
+        if let (LiteralValue::Number(v1), LiteralValue::Number(v2)) = (comm1, comm2) {
             assert!(
                 (v1 - v2).abs() < Decimal::from_str("0.001").unwrap(),
                 "Commutativity failed for {}",
@@ -464,29 +566,53 @@ rule a_gte_a = a >= a
 "#;
     engine.add_lemma_code(code, "test").unwrap();
 
-    if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "a_eq_a") {
-        assert!(val, "Reflexive equality failed");
+    let result = get_rule_result(&mut engine, "test", "a_eq_a");
+
+    let val = result
+        .value()
+        .expect("Expected value result, got veto")
+        .clone();
+
+    if let LiteralValue::Boolean(val) = val {
+        assert!(bool::from(val), "Reflexive equality failed");
     }
 
-    if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "a_lte_a") {
-        assert!(val, "Reflexive <= failed");
+    let result = get_rule_result(&mut engine, "test", "a_lte_a");
+
+    let val = result
+        .value()
+        .expect("Expected value result, got veto")
+        .clone();
+
+    if let LiteralValue::Boolean(val) = val {
+        assert!(bool::from(val), "Reflexive <= failed");
     }
 
-    if let Some(LiteralValue::Boolean(val)) = get_rule_result(&mut engine, "test", "a_gte_a") {
-        assert!(val, "Reflexive >= failed");
+    let result = get_rule_result(&mut engine, "test", "a_gte_a");
+
+    let val = result
+        .value()
+        .expect("Expected value result, got veto")
+        .clone();
+
+    if let LiteralValue::Boolean(val) = val {
+        assert!(bool::from(val), "Reflexive >= failed");
     }
 
-    let ab = get_rule_result(&mut engine, "test", "a_lt_b");
-    let bc = get_rule_result(&mut engine, "test", "b_lt_c");
-    let ac = get_rule_result(&mut engine, "test", "a_lt_c");
+    let ab_result = get_rule_result(&mut engine, "test", "a_lt_b");
+    let ab = ab_result.value().expect("Expected value, got veto").clone();
+    let bc_result = get_rule_result(&mut engine, "test", "b_lt_c");
+    let bc = bc_result.value().expect("Expected value, got veto").clone();
+    let ac_result = get_rule_result(&mut engine, "test", "a_lt_c");
+    let ac = ac_result.value().expect("Expected value, got veto").clone();
 
     if let (
-        Some(LiteralValue::Boolean(true)),
-        Some(LiteralValue::Boolean(true)),
-        Some(LiteralValue::Boolean(val)),
+        LiteralValue::Boolean(lemma::BooleanValue::True),
+        LiteralValue::Boolean(lemma::BooleanValue::True),
+        LiteralValue::Boolean(val),
     ) = (ab, bc, ac)
     {
-        assert!(val, "Transitivity of < failed");
+        assert!(bool::from(val), "Transitivity of < failed");
     }
 }
 
@@ -501,7 +627,14 @@ rule to_km = distance in kilometers
     engine.add_lemma_code(code, "test").unwrap();
 
     // After using `in`, the result is a plain Number, not a Unit
-    if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "to_km") {
+    let result = get_rule_result(&mut engine, "test", "to_km");
+
+    let val = result
+        .value()
+        .expect("Expected value result, got veto")
+        .clone();
+
+    if let LiteralValue::Number(val) = val {
         assert!(
             (val - Decimal::from_str("1").unwrap()).abs() < Decimal::from_str("0.001").unwrap(),
             "meters to kilometers conversion failed: got {}",
@@ -524,9 +657,12 @@ rule difference = price1 - price2
 "#;
     engine.add_lemma_code(code, "test").unwrap();
 
-    if let Some(LiteralValue::Unit(NumericUnit::Money(amount, currency))) =
-        get_rule_result(&mut engine, "test", "total")
-    {
+    let result = get_rule_result(&mut engine, "test", "total");
+    let val = result
+        .value()
+        .expect("Expected value result, got veto")
+        .clone();
+    if let LiteralValue::Unit(NumericUnit::Money(amount, currency)) = val {
         assert!(matches!(currency, MoneyUnit::Usd));
         assert!(
             (amount - Decimal::from_str("80").unwrap()).abs() < Decimal::from_str("0.01").unwrap(),
@@ -534,9 +670,12 @@ rule difference = price1 - price2
         );
     }
 
-    if let Some(LiteralValue::Unit(NumericUnit::Money(amount, currency))) =
-        get_rule_result(&mut engine, "test", "difference")
-    {
+    let result = get_rule_result(&mut engine, "test", "difference");
+    let val = result
+        .value()
+        .expect("Expected value result, got veto")
+        .clone();
+    if let LiteralValue::Unit(NumericUnit::Money(amount, currency)) = val {
         assert!(matches!(currency, MoneyUnit::Usd));
         assert!(
             (amount - Decimal::from_str("20").unwrap()).abs() < Decimal::from_str("0.01").unwrap(),
@@ -556,7 +695,14 @@ rule result = base * rate
 "#;
     engine.add_lemma_code(code, "test").unwrap();
 
-    if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "result") {
+    let result = get_rule_result(&mut engine, "test", "result");
+
+    let val = result
+        .value()
+        .expect("Expected value result, got veto")
+        .clone();
+
+    if let LiteralValue::Number(val) = val {
         assert!(
             (val - Decimal::from_str("20").unwrap()).abs() < Decimal::from_str("0.01").unwrap(),
             "Percentage calculation failed"
@@ -584,7 +730,14 @@ rule back_div = product? / b
         );
         engine.add_lemma_code(&code, "test").unwrap();
 
-        if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "back_sub") {
+        let result = get_rule_result(&mut engine, "test", "back_sub");
+
+        let val = result
+            .value()
+            .expect("Expected value result, got veto")
+            .clone();
+
+        if let LiteralValue::Number(val) = val {
             let expected = Decimal::from_f64(a).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.001").unwrap(),
@@ -594,7 +747,14 @@ rule back_div = product? / b
             );
         }
 
-        if let Some(LiteralValue::Number(val)) = get_rule_result(&mut engine, "test", "back_div") {
+        let result = get_rule_result(&mut engine, "test", "back_div");
+
+        let val = result
+            .value()
+            .expect("Expected value result, got veto")
+            .clone();
+
+        if let LiteralValue::Number(val) = val {
             let expected = Decimal::from_f64(a).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.01").unwrap(),

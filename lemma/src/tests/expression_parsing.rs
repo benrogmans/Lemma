@@ -40,7 +40,11 @@ fn test_arithmetic_operations_work() {
     ];
     for expr in cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None, &crate::ResourceLimits::default());
+        let result = parse(
+            &input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        );
         assert!(
             result.is_ok(),
             "Failed to parse {}: {:?}",
@@ -77,7 +81,11 @@ fn test_arithmetic_expressions_comprehensive() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None, &crate::ResourceLimits::default());
+        let result = parse(
+            &input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        );
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -117,7 +125,11 @@ fn test_comparison_expressions_comprehensive() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None, &crate::ResourceLimits::default());
+        let result = parse(
+            &input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        );
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -168,7 +180,11 @@ fn test_logical_expressions_comprehensive() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None, &crate::ResourceLimits::default());
+        let result = parse(
+            &input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        );
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -201,7 +217,11 @@ fn test_fact_reference_expressions_comprehensive() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None, &crate::ResourceLimits::default());
+        let result = parse(
+            &input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        );
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -247,7 +267,11 @@ fn test_nested_expressions_comprehensive() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None, &crate::ResourceLimits::default());
+        let result = parse(
+            &input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        );
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -284,7 +308,11 @@ fn test_operator_precedence_comprehensive() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None, &crate::ResourceLimits::default());
+        let result = parse(
+            &input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        );
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -314,7 +342,11 @@ fn test_parenthesized_expression_edge_cases() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None, &crate::ResourceLimits::default());
+        let result = parse(
+            &input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        );
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -338,7 +370,11 @@ fn test_rule_references_comprehensive() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None, &crate::ResourceLimits::default());
+        let result = parse(
+            &input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        );
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",
@@ -366,7 +402,11 @@ fn test_complex_real_world_expressions() {
 
     for (expr, description) in test_cases {
         let input = format!("doc test\nrule test = {}", expr);
-        let result = parse(&input, None, &crate::ResourceLimits::default());
+        let result = parse(
+            &input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        );
         assert!(
             result.is_ok(),
             "Failed to parse {} ({}): {:?}",

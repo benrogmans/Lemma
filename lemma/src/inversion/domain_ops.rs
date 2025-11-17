@@ -5,11 +5,11 @@ use crate::{Bound, ComparisonComputation, Domain, LiteralValue};
 use std::cmp::Ordering;
 
 pub fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
-    use ComparisonComputation as Cmp;
-    if let Ok(true) = comparison_operation(a, &Cmp::LessThan, b) {
+    use ComparisonComputation;
+    if let Ok(true) = comparison_operation(a, &ComparisonComputation::LessThan, b) {
         return -1;
     }
-    if let Ok(true) = comparison_operation(a, &Cmp::Equal, b) {
+    if let Ok(true) = comparison_operation(a, &ComparisonComputation::Equal, b) {
         return 0;
     }
     1
@@ -30,171 +30,109 @@ pub fn value_within(v: &LiteralValue, min: &Bound, max: &Bound) -> bool {
 }
 
 pub fn bounds_contradict(min: &Bound, max: &Bound) -> bool {
-    use Bound as B;
+    use Bound;
     match (min, max) {
-        (B::Unbounded, _) | (_, B::Unbounded) => false,
-        (B::Inclusive(a), B::Inclusive(b)) => lit_cmp(a, b) > 0,
-        (B::Inclusive(a), B::Exclusive(b)) => lit_cmp(a, b) >= 0,
-        (B::Exclusive(a), B::Inclusive(b)) => lit_cmp(a, b) >= 0,
-        (B::Exclusive(a), B::Exclusive(b)) => lit_cmp(a, b) >= 0,
-    }
-}
-
-pub fn domain_from_comparison(
-    side: &str,
-    op: &ComparisonComputation,
-    val: LiteralValue,
-) -> Option<Domain> {
-    use ComparisonComputation as Cmp;
-    let make_range = |min: Bound, max: Bound| Domain::Range { min, max };
-    let fact_on_right = side == "right";
-
-    match op {
-        Cmp::LessThan => {
-            if fact_on_right {
-                Some(make_range(Bound::Exclusive(val), Bound::Unbounded))
-            } else {
-                Some(make_range(Bound::Unbounded, Bound::Exclusive(val)))
-            }
-        }
-        Cmp::LessThanOrEqual => {
-            if fact_on_right {
-                Some(make_range(Bound::Inclusive(val), Bound::Unbounded))
-            } else {
-                Some(make_range(Bound::Unbounded, Bound::Inclusive(val)))
-            }
-        }
-        Cmp::GreaterThan => {
-            if fact_on_right {
-                Some(make_range(Bound::Unbounded, Bound::Exclusive(val)))
-            } else {
-                Some(make_range(Bound::Exclusive(val), Bound::Unbounded))
-            }
-        }
-        Cmp::GreaterThanOrEqual => {
-            if fact_on_right {
-                Some(make_range(Bound::Unbounded, Bound::Inclusive(val)))
-            } else {
-                Some(make_range(Bound::Inclusive(val), Bound::Unbounded))
-            }
-        }
-        Cmp::Equal => Some(Domain::Enumeration(vec![val])),
-        Cmp::NotEqual => Some(Domain::Complement(Box::new(Domain::Enumeration(vec![val])))),
-        _ => None,
-    }
-}
-
-pub fn domain_union(a: Domain, b: Domain) -> Domain {
-    match (a, b) {
-        (Domain::Union(mut v1), Domain::Union(v2)) => {
-            v1.extend(v2);
-            Domain::Union(v1)
-        }
-        (Domain::Union(mut v1), d2) => {
-            v1.push(d2);
-            Domain::Union(v1)
-        }
-        (d1, Domain::Union(mut v2)) => {
-            v2.push(d1);
-            Domain::Union(v2)
-        }
-        (d1, d2) => Domain::Union(vec![d1, d2]),
+        (Bound::Unbounded, _) | (_, Bound::Unbounded) => false,
+        (Bound::Inclusive(a), Bound::Inclusive(b)) => lit_cmp(a, b) > 0,
+        (Bound::Inclusive(a), Bound::Exclusive(b)) => lit_cmp(a, b) >= 0,
+        (Bound::Exclusive(a), Bound::Inclusive(b)) => lit_cmp(a, b) >= 0,
+        (Bound::Exclusive(a), Bound::Exclusive(b)) => lit_cmp(a, b) >= 0,
     }
 }
 
 pub fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
-    use Bound as B;
-    use Domain as D;
+    use Bound;
+    use Domain;
     match (a, b) {
-        (D::Unconstrained, d) | (d, D::Unconstrained) => Some(d),
+        (Domain::Unconstrained, d) | (d, Domain::Unconstrained) => Some(d),
         (
-            D::Range {
+            Domain::Range {
                 min: min1,
                 max: max1,
             },
-            D::Range {
+            Domain::Range {
                 min: min2,
                 max: max2,
             },
         ) => {
             let min = match (min1, min2) {
-                (B::Unbounded, x) | (x, B::Unbounded) => x,
-                (B::Inclusive(v1), B::Inclusive(v2)) => {
+                (Bound::Unbounded, x) | (x, Bound::Unbounded) => x,
+                (Bound::Inclusive(v1), Bound::Inclusive(v2)) => {
                     if lit_cmp(&v1, &v2) >= 0 {
-                        B::Inclusive(v1)
+                        Bound::Inclusive(v1)
                     } else {
-                        B::Inclusive(v2)
+                        Bound::Inclusive(v2)
                     }
                 }
-                (B::Inclusive(v1), B::Exclusive(v2)) => {
+                (Bound::Inclusive(v1), Bound::Exclusive(v2)) => {
                     if lit_cmp(&v1, &v2) > 0 {
-                        B::Inclusive(v1)
+                        Bound::Inclusive(v1)
                     } else {
-                        B::Exclusive(v2)
+                        Bound::Exclusive(v2)
                     }
                 }
-                (B::Exclusive(v1), B::Inclusive(v2)) => {
+                (Bound::Exclusive(v1), Bound::Inclusive(v2)) => {
                     if lit_cmp(&v1, &v2) > 0 {
-                        B::Exclusive(v1)
+                        Bound::Exclusive(v1)
                     } else {
-                        B::Inclusive(v2)
+                        Bound::Inclusive(v2)
                     }
                 }
-                (B::Exclusive(v1), B::Exclusive(v2)) => {
+                (Bound::Exclusive(v1), Bound::Exclusive(v2)) => {
                     if lit_cmp(&v1, &v2) >= 0 {
-                        B::Exclusive(v1)
+                        Bound::Exclusive(v1)
                     } else {
-                        B::Exclusive(v2)
+                        Bound::Exclusive(v2)
                     }
                 }
             };
             let max = match (max1, max2) {
-                (B::Unbounded, x) | (x, B::Unbounded) => x,
-                (B::Inclusive(v1), B::Inclusive(v2)) => {
+                (Bound::Unbounded, x) | (x, Bound::Unbounded) => x,
+                (Bound::Inclusive(v1), Bound::Inclusive(v2)) => {
                     if lit_cmp(&v1, &v2) <= 0 {
-                        B::Inclusive(v1)
+                        Bound::Inclusive(v1)
                     } else {
-                        B::Inclusive(v2)
+                        Bound::Inclusive(v2)
                     }
                 }
-                (B::Inclusive(v1), B::Exclusive(v2)) => {
+                (Bound::Inclusive(v1), Bound::Exclusive(v2)) => {
                     if lit_cmp(&v1, &v2) < 0 {
-                        B::Inclusive(v1)
+                        Bound::Inclusive(v1)
                     } else {
-                        B::Exclusive(v2)
+                        Bound::Exclusive(v2)
                     }
                 }
-                (B::Exclusive(v1), B::Inclusive(v2)) => {
+                (Bound::Exclusive(v1), Bound::Inclusive(v2)) => {
                     if lit_cmp(&v1, &v2) < 0 {
-                        B::Exclusive(v1)
+                        Bound::Exclusive(v1)
                     } else {
-                        B::Inclusive(v2)
+                        Bound::Inclusive(v2)
                     }
                 }
-                (B::Exclusive(v1), B::Exclusive(v2)) => {
+                (Bound::Exclusive(v1), Bound::Exclusive(v2)) => {
                     if lit_cmp(&v1, &v2) <= 0 {
-                        B::Exclusive(v1)
+                        Bound::Exclusive(v1)
                     } else {
-                        B::Exclusive(v2)
+                        Bound::Exclusive(v2)
                     }
                 }
             };
             if bounds_contradict(&min, &max) {
                 None
             } else {
-                Some(D::Range { min, max })
+                Some(Domain::Range { min, max })
             }
         }
-        (D::Enumeration(mut v1), D::Enumeration(v2)) => {
+        (Domain::Enumeration(mut v1), Domain::Enumeration(v2)) => {
             v1.retain(|x| v2.contains(x));
             if v1.is_empty() {
                 None
             } else {
-                Some(D::Enumeration(v1))
+                Some(Domain::Enumeration(v1))
             }
         }
-        (D::Enumeration(vs), D::Range { min, max })
-        | (D::Range { min, max }, D::Enumeration(vs)) => {
+        (Domain::Enumeration(vs), Domain::Range { min, max })
+        | (Domain::Range { min, max }, Domain::Enumeration(vs)) => {
             let mut kept = Vec::new();
             for v in vs {
                 if value_within(&v, &min, &max) {
@@ -204,11 +142,11 @@ pub fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
             if kept.is_empty() {
                 None
             } else {
-                Some(D::Enumeration(kept))
+                Some(Domain::Enumeration(kept))
             }
         }
-        (D::Union(v1), D::Union(v2)) => {
-            let mut acc: Vec<D> = Vec::new();
+        (Domain::Union(v1), Domain::Union(v2)) => {
+            let mut acc: Vec<Domain> = Vec::new();
             for a in v1.into_iter() {
                 for b in v2.iter() {
                     if let Some(ix) = domain_intersection(a.clone(), b.clone()) {
@@ -219,11 +157,11 @@ pub fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
             if acc.is_empty() {
                 None
             } else {
-                Some(D::Union(acc))
+                Some(Domain::Union(acc))
             }
         }
-        (D::Union(vs), d) | (d, D::Union(vs)) => {
-            let mut acc: Vec<D> = Vec::new();
+        (Domain::Union(vs), d) | (d, Domain::Union(vs)) => {
+            let mut acc: Vec<Domain> = Vec::new();
             for a in vs.into_iter() {
                 if let Some(ix) = domain_intersection(a, d.clone()) {
                     acc.push(ix);
@@ -232,7 +170,7 @@ pub fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
             if acc.is_empty() {
                 None
             } else {
-                Some(D::Union(acc))
+                Some(Domain::Union(acc))
             }
         }
         _ => None,
@@ -240,51 +178,51 @@ pub fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
 }
 
 pub fn negate_domain(d: Domain) -> Domain {
-    use Bound as B;
-    use Domain as D;
+    use Bound;
+    use Domain;
     match d {
-        D::Unconstrained => D::Complement(Box::new(D::Unconstrained)),
-        D::Complement(inner) => normalize_domain(*inner),
-        D::Enumeration(vals) => D::Complement(Box::new(D::Enumeration(vals))),
-        D::Range { min, max } => {
-            let mut parts: Vec<D> = Vec::new();
+        Domain::Unconstrained => Domain::Complement(Box::new(Domain::Unconstrained)),
+        Domain::Complement(inner) => normalize_domain(*inner),
+        Domain::Enumeration(vals) => Domain::Complement(Box::new(Domain::Enumeration(vals))),
+        Domain::Range { min, max } => {
+            let mut parts: Vec<Domain> = Vec::new();
             match min {
-                B::Unbounded => {}
-                B::Inclusive(v) => parts.push(D::Range {
-                    min: B::Unbounded,
-                    max: B::Exclusive(v),
+                Bound::Unbounded => {}
+                Bound::Inclusive(v) => parts.push(Domain::Range {
+                    min: Bound::Unbounded,
+                    max: Bound::Exclusive(v),
                 }),
-                B::Exclusive(v) => parts.push(D::Range {
-                    min: B::Unbounded,
-                    max: B::Inclusive(v),
+                Bound::Exclusive(v) => parts.push(Domain::Range {
+                    min: Bound::Unbounded,
+                    max: Bound::Inclusive(v),
                 }),
             }
             match max {
-                B::Unbounded => {}
-                B::Inclusive(v) => parts.push(D::Range {
-                    min: B::Exclusive(v),
-                    max: B::Unbounded,
+                Bound::Unbounded => {}
+                Bound::Inclusive(v) => parts.push(Domain::Range {
+                    min: Bound::Exclusive(v),
+                    max: Bound::Unbounded,
                 }),
-                B::Exclusive(v) => parts.push(D::Range {
-                    min: B::Inclusive(v),
-                    max: B::Unbounded,
+                Bound::Exclusive(v) => parts.push(Domain::Range {
+                    min: Bound::Inclusive(v),
+                    max: Bound::Unbounded,
                 }),
             }
             if parts.is_empty() {
-                D::Unconstrained
+                Domain::Unconstrained
             } else if parts.len() == 1 {
                 parts.remove(0)
             } else {
-                D::Union(parts)
+                Domain::Union(parts)
             }
         }
-        D::Union(parts) => {
-            let mut acc = D::Unconstrained;
+        Domain::Union(parts) => {
+            let mut acc = Domain::Unconstrained;
             for p in parts {
                 let np = negate_domain(p);
                 acc = match domain_intersection(acc, np) {
                     Some(ix) => ix,
-                    None => return D::Complement(Box::new(D::Unconstrained)),
+                    None => return Domain::Complement(Box::new(Domain::Unconstrained)),
                 };
             }
             acc
@@ -293,31 +231,31 @@ pub fn negate_domain(d: Domain) -> Domain {
 }
 
 pub fn normalize_domain(d: Domain) -> Domain {
-    use Domain as D;
+    use Domain;
     match d {
-        D::Union(mut parts) => {
-            let mut flat: Vec<D> = Vec::new();
+        Domain::Union(mut parts) => {
+            let mut flat: Vec<Domain> = Vec::new();
             for p in parts.drain(..) {
                 match p {
-                    D::Union(inner) => flat.extend(inner),
+                    Domain::Union(inner) => flat.extend(inner),
                     other => flat.push(other),
                 }
             }
 
             flat.sort_by(|a, b| match (a, b) {
-                (D::Enumeration(_), D::Enumeration(_)) => Ordering::Equal,
-                (D::Enumeration(_), _) => Ordering::Less,
-                (_, D::Enumeration(_)) => Ordering::Greater,
-                (D::Range { .. }, D::Range { .. }) => Ordering::Equal,
-                (D::Range { .. }, D::Complement(_)) => Ordering::Less,
-                (D::Range { .. }, D::Unconstrained) => Ordering::Less,
-                (D::Complement(_), D::Range { .. }) => Ordering::Greater,
-                (D::Unconstrained, D::Range { .. }) => Ordering::Greater,
+                (Domain::Enumeration(_), Domain::Enumeration(_)) => Ordering::Equal,
+                (Domain::Enumeration(_), _) => Ordering::Less,
+                (_, Domain::Enumeration(_)) => Ordering::Greater,
+                (Domain::Range { .. }, Domain::Range { .. }) => Ordering::Equal,
+                (Domain::Range { .. }, Domain::Complement(_)) => Ordering::Less,
+                (Domain::Range { .. }, Domain::Unconstrained) => Ordering::Less,
+                (Domain::Complement(_), Domain::Range { .. }) => Ordering::Greater,
+                (Domain::Unconstrained, Domain::Range { .. }) => Ordering::Greater,
                 _ => Ordering::Equal,
             });
 
             for domain in &mut flat {
-                if let D::Enumeration(ref mut values) = domain {
+                if let Domain::Enumeration(ref mut values) = domain {
                     values.sort_by(|a, b| match lit_cmp(a, b) {
                         -1 => Ordering::Less,
                         0 => Ordering::Equal,
@@ -330,37 +268,37 @@ pub fn normalize_domain(d: Domain) -> Domain {
             flat = merge_ranges(flat);
 
             if flat.is_empty() {
-                D::Union(vec![])
+                Domain::Union(vec![])
             } else if flat.len() == 1 {
                 flat.remove(0)
             } else {
-                D::Union(flat)
+                Domain::Union(flat)
             }
         }
-        D::Enumeration(mut values) => {
+        Domain::Enumeration(mut values) => {
             values.sort_by(|a, b| match lit_cmp(a, b) {
                 -1 => Ordering::Less,
                 0 => Ordering::Equal,
                 _ => Ordering::Greater,
             });
             values.dedup();
-            D::Enumeration(values)
+            Domain::Enumeration(values)
         }
         other => other,
     }
 }
 
 fn merge_ranges(domains: Vec<Domain>) -> Vec<Domain> {
-    use Bound as B;
-    use Domain as D;
+    use Bound;
+    use Domain;
 
     let mut result = Vec::new();
-    let mut ranges: Vec<(B, B)> = Vec::new();
+    let mut ranges: Vec<(Bound, Bound)> = Vec::new();
     let mut others = Vec::new();
 
     for d in domains {
         match d {
-            D::Range { min, max } => ranges.push((min, max)),
+            Domain::Range { min, max } => ranges.push((min, max)),
             other => others.push(other),
         }
     }
@@ -371,7 +309,7 @@ fn merge_ranges(domains: Vec<Domain>) -> Vec<Domain> {
 
     ranges.sort_by(|a, b| compare_bounds(&a.0, &b.0));
 
-    let mut merged: Vec<(B, B)> = Vec::new();
+    let mut merged: Vec<(Bound, Bound)> = Vec::new();
     let mut current = ranges[0].clone();
 
     for next in ranges.iter().skip(1) {
@@ -388,7 +326,7 @@ fn merge_ranges(domains: Vec<Domain>) -> Vec<Domain> {
     merged.push(current);
 
     for (min, max) in merged {
-        result.push(D::Range { min, max });
+        result.push(Domain::Range { min, max });
     }
     result.extend(others);
 
@@ -396,50 +334,47 @@ fn merge_ranges(domains: Vec<Domain>) -> Vec<Domain> {
 }
 
 fn compare_bounds(a: &Bound, b: &Bound) -> Ordering {
-    use Bound as B;
+    use Bound;
     match (a, b) {
-        (B::Unbounded, B::Unbounded) => Ordering::Equal,
-        (B::Unbounded, _) => Ordering::Less,
-        (_, B::Unbounded) => Ordering::Greater,
-        (B::Inclusive(v1), B::Inclusive(v2)) | (B::Exclusive(v1), B::Exclusive(v2)) => {
-            match lit_cmp(v1, v2) {
-                -1 => Ordering::Less,
-                0 => Ordering::Equal,
-                _ => Ordering::Greater,
-            }
-        }
-        (B::Inclusive(v1), B::Exclusive(v2)) | (B::Exclusive(v1), B::Inclusive(v2)) => {
-            match lit_cmp(v1, v2) {
-                -1 => Ordering::Less,
-                0 => {
-                    if matches!(a, B::Inclusive(_)) {
-                        Ordering::Less
-                    } else {
-                        Ordering::Greater
-                    }
+        (Bound::Unbounded, Bound::Unbounded) => Ordering::Equal,
+        (Bound::Unbounded, _) => Ordering::Less,
+        (_, Bound::Unbounded) => Ordering::Greater,
+        (Bound::Inclusive(v1), Bound::Inclusive(v2))
+        | (Bound::Exclusive(v1), Bound::Exclusive(v2)) => match lit_cmp(v1, v2) {
+            -1 => Ordering::Less,
+            0 => Ordering::Equal,
+            _ => Ordering::Greater,
+        },
+        (Bound::Inclusive(v1), Bound::Exclusive(v2))
+        | (Bound::Exclusive(v1), Bound::Inclusive(v2)) => match lit_cmp(v1, v2) {
+            -1 => Ordering::Less,
+            0 => {
+                if matches!(a, Bound::Inclusive(_)) {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
                 }
-                _ => Ordering::Greater,
             }
-        }
+            _ => Ordering::Greater,
+        },
     }
 }
 
 fn ranges_adjacent_or_overlap(r1: &(Bound, Bound), r2: &(Bound, Bound)) -> bool {
-    use Bound as B;
+    use Bound;
     match (&r1.1, &r2.0) {
-        (B::Unbounded, _) | (_, B::Unbounded) => true,
-        (B::Inclusive(v1), B::Inclusive(v2)) | (B::Inclusive(v1), B::Exclusive(v2)) => {
-            lit_cmp(v1, v2) >= 0
-        }
-        (B::Exclusive(v1), B::Inclusive(v2)) => lit_cmp(v1, v2) >= 0,
-        (B::Exclusive(v1), B::Exclusive(v2)) => lit_cmp(v1, v2) > 0,
+        (Bound::Unbounded, _) | (_, Bound::Unbounded) => true,
+        (Bound::Inclusive(v1), Bound::Inclusive(v2))
+        | (Bound::Inclusive(v1), Bound::Exclusive(v2)) => lit_cmp(v1, v2) >= 0,
+        (Bound::Exclusive(v1), Bound::Inclusive(v2)) => lit_cmp(v1, v2) >= 0,
+        (Bound::Exclusive(v1), Bound::Exclusive(v2)) => lit_cmp(v1, v2) > 0,
     }
 }
 
 fn min_bound(a: &Bound, b: &Bound) -> Bound {
-    use Bound as B;
+    use Bound;
     match (a, b) {
-        (B::Unbounded, _) | (_, B::Unbounded) => B::Unbounded,
+        (Bound::Unbounded, _) | (_, Bound::Unbounded) => Bound::Unbounded,
         _ => {
             if matches!(compare_bounds(a, b), Ordering::Less | Ordering::Equal) {
                 a.clone()
@@ -451,9 +386,9 @@ fn min_bound(a: &Bound, b: &Bound) -> Bound {
 }
 
 fn max_bound(a: &Bound, b: &Bound) -> Bound {
-    use Bound as B;
+    use Bound;
     match (a, b) {
-        (B::Unbounded, _) | (_, B::Unbounded) => B::Unbounded,
+        (Bound::Unbounded, _) | (_, Bound::Unbounded) => Bound::Unbounded,
         _ => {
             if matches!(compare_bounds(a, b), Ordering::Greater) {
                 a.clone()

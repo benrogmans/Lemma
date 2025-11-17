@@ -73,10 +73,22 @@ impl Evaluator {
                         let fact_ref = crate::FactReference {
                             reference: vec![name.clone()],
                         };
-                        Some(Fact {
-                            name: name.clone(),
-                            value: context.facts.get(&fact_ref).cloned(),
-                        })
+                        // Check if this is a document reference fact
+                        if let crate::FactValue::DocumentReference(doc_name) = &fact_def.value {
+                            // Document reference facts don't have a value in the fact map
+                            Some(Fact {
+                                name: name.clone(),
+                                value: None,
+                                document_reference: Some(doc_name.clone()),
+                            })
+                        } else {
+                            // Regular fact - get value from fact map
+                            Some(Fact {
+                                name: name.clone(),
+                                value: context.facts.get(&fact_ref).cloned(),
+                                document_reference: None,
+                            })
+                        }
                     } else {
                         None
                     }
@@ -90,7 +102,7 @@ impl Evaluator {
             std::collections::HashSet::new();
 
         for rule_path in execution_order {
-            let target_doc_name = rule_path.target_doc(doc_name);
+            let target_doc_name = rule_path.containing_document(doc_name);
             let rule_doc = documents.get(target_doc_name).ok_or_else(|| {
                 LemmaError::Engine(format!("Document {} not found", target_doc_name))
             })?;
@@ -107,15 +119,8 @@ impl Evaluator {
                 })?;
 
             // Check if any rule dependencies have failed
-            let rule_dependencies = graph.get(&rule_path).cloned().unwrap_or_default();
-            let has_failed_rule_dependencies = rule_dependencies
-                .iter()
-                .any(|dependency_rule| failed_rules.contains(dependency_rule));
-
-            if has_failed_rule_dependencies {
-                failed_rules.insert(rule_path.clone());
-                continue;
-            }
+            // Note: We don't skip the rule here - let it try to evaluate.
+            // It will fail when it tries to reference the failed rule, and we'll show that error.
 
             // Clear operation records for this rule
             context.operations.clear();
@@ -130,10 +135,16 @@ impl Evaluator {
                 // Local rule: empty prefix
                 Vec::new()
             };
-            let eval_result = rules::evaluate_rule(rule, rule_doc, &mut context, &path_prefix);
+            let eval_result = rules::evaluate_rule(
+                rule,
+                rule_path.clone(),
+                rule_doc,
+                &mut context,
+                &path_prefix,
+            );
 
             match eval_result {
-                Ok(result) => {
+                Ok((result, proof)) => {
                     // Store operations for this rule so they can be inlined when referenced
                     context
                         .rule_operations
@@ -144,45 +155,162 @@ impl Evaluator {
                         .rule_results
                         .insert(rule_path.clone(), result.clone());
 
+                    // Store proof in context for subsequent rule references
+                    context.rule_proofs.insert(rule_path.clone(), proof.clone());
+
+                    // Create RuleResult with proof already built
+                    let rule_result = RuleResult {
+                        rule: rule.clone(),
+                        result: result.clone(),
+                        facts: collect_facts_from_operations(&context.operations, &context.facts),
+                        operations: context.operations.clone(),
+                        proof: Some(proof),
+                    };
+
                     // Add to response only for main document rules
                     if target_doc_name == doc_name {
-                        match result {
-                            crate::OperationResult::Value(value) => {
-                                response.add_result(RuleResult {
-                                    rule: rule.clone(),
-                                    result: Some(value.clone()),
-                                    facts: collect_facts_from_operations(
-                                        &context.operations,
-                                        &context.facts,
-                                    ),
-                                    veto_message: None,
-                                    operations: context.operations.clone(),
-                                });
-                            }
-                            crate::OperationResult::Veto(msg) => {
-                                response.add_result(RuleResult {
-                                    rule: rule.clone(),
-                                    result: None,
-                                    facts: vec![],
-                                    veto_message: msg,
-                                    operations: vec![],
-                                });
-                            }
-                        }
+                        response.add_result(rule_result);
                     }
                 }
                 Err(LemmaError::MissingFact(fact_ref)) => {
                     failed_rules.insert(rule_path.clone());
+                    let veto_result =
+                        crate::OperationResult::Veto(Some(format!("Missing fact: {}", fact_ref)));
+                    // Store the veto result so dependent rules can see it failed
+                    context
+                        .rule_results
+                        .insert(rule_path.clone(), veto_result.clone());
+
+                    // Build proof from operations (if any) so dependent rules can reference it
+                    let veto_msg = match &veto_result {
+                        crate::OperationResult::Veto(msg) => msg.clone(),
+                        _ => unreachable!(),
+                    };
+                    let proof = if context.operations.is_empty() {
+                        // No operations - create minimal Veto proof
+                        crate::proof::Proof {
+                            rule_path: rule_path.clone(),
+                            source: rule.source_location.clone(),
+                            result: veto_result.clone(),
+                            tree: crate::proof::ProofNode::Veto {
+                                message: veto_msg.clone(),
+                                source_location: rule.source_location.clone(),
+                            },
+                        }
+                    } else {
+                        // Build proof from recorded operations
+                        crate::proof::build_proof_node_from_rule(
+                            rule,
+                            &context.operations,
+                            rule_doc,
+                            context.all_documents,
+                            &context.rule_proofs,
+                            context.sources,
+                        )
+                        .map(|tree| crate::proof::Proof {
+                            rule_path: rule_path.clone(),
+                            source: rule.source_location.clone(),
+                            result: veto_result.clone(),
+                            tree,
+                        })
+                        .unwrap_or_else(|_| {
+                            // Fallback to minimal Veto proof if building fails
+                            crate::proof::Proof {
+                                rule_path: rule_path.clone(),
+                                source: rule.source_location.clone(),
+                                result: veto_result.clone(),
+                                tree: crate::proof::ProofNode::Veto {
+                                    message: veto_msg.clone(),
+                                    source_location: rule.source_location.clone(),
+                                },
+                            }
+                        })
+                    };
+
+                    // Store proof so dependent rules can reference it
+                    context.rule_proofs.insert(rule_path.clone(), proof.clone());
+
+                    // Always show error for missing facts, even for referenced document rules
+                    // This helps users understand why a rule failed
                     if target_doc_name == doc_name {
                         response.add_result(RuleResult {
                             rule: rule.clone(),
-                            result: None,
+                            result: veto_result,
                             facts: vec![Fact {
                                 name: fact_ref.to_string(),
                                 value: None,
+                                document_reference: None,
                             }],
-                            veto_message: None,
-                            operations: vec![],
+                            operations: context.operations.clone(),
+                            proof: Some(proof),
+                        });
+                    }
+                }
+                Err(LemmaError::Engine(msg)) if msg.contains("not found") => {
+                    // Rule reference failed because the referenced rule failed
+                    failed_rules.insert(rule_path.clone());
+                    let veto_result = crate::OperationResult::Veto(Some(msg.clone()));
+                    // Store the veto result so dependent rules can see it failed
+                    context
+                        .rule_results
+                        .insert(rule_path.clone(), veto_result.clone());
+
+                    // Build proof from operations (if any) so dependent rules can reference it
+                    let veto_msg = match &veto_result {
+                        crate::OperationResult::Veto(msg) => msg.clone(),
+                        _ => unreachable!(),
+                    };
+                    let proof = if context.operations.is_empty() {
+                        // No operations - create minimal Veto proof
+                        crate::proof::Proof {
+                            rule_path: rule_path.clone(),
+                            source: rule.source_location.clone(),
+                            result: veto_result.clone(),
+                            tree: crate::proof::ProofNode::Veto {
+                                message: veto_msg.clone(),
+                                source_location: rule.source_location.clone(),
+                            },
+                        }
+                    } else {
+                        // Build proof from recorded operations
+                        crate::proof::build_proof_node_from_rule(
+                            rule,
+                            &context.operations,
+                            rule_doc,
+                            context.all_documents,
+                            &context.rule_proofs,
+                            context.sources,
+                        )
+                        .map(|tree| crate::proof::Proof {
+                            rule_path: rule_path.clone(),
+                            source: rule.source_location.clone(),
+                            result: veto_result.clone(),
+                            tree,
+                        })
+                        .unwrap_or_else(|_| {
+                            // Fallback to minimal Veto proof if building fails
+                            crate::proof::Proof {
+                                rule_path: rule_path.clone(),
+                                source: rule.source_location.clone(),
+                                result: veto_result.clone(),
+                                tree: crate::proof::ProofNode::Veto {
+                                    message: veto_msg.clone(),
+                                    source_location: rule.source_location.clone(),
+                                },
+                            }
+                        })
+                    };
+
+                    // Store proof so dependent rules can reference it
+                    context.rule_proofs.insert(rule_path.clone(), proof.clone());
+
+                    if target_doc_name == doc_name {
+                        response.add_result(RuleResult {
+                            rule: rule.clone(),
+                            result: veto_result,
+                            facts: vec![],
+                            operations: context.operations.clone(),
+                            proof: Some(proof),
                         });
                     }
                 }
@@ -293,6 +421,7 @@ fn collect_facts_from_operations(
                 facts.push(Fact {
                     name,
                     value: Some(value.clone()),
+                    document_reference: None,
                 });
             }
         }

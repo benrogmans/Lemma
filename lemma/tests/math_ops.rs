@@ -10,7 +10,7 @@ fn run(code: &str, rule: &str) -> LemmaResult<String> {
         .results
         .iter()
         .find(|r| r.rule.name == rule)
-        .and_then(|r| r.result.clone())
+        .and_then(|r| r.result.value().cloned())
         .expect("rule value");
     Ok(v.to_string())
 }

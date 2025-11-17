@@ -133,10 +133,7 @@ fn test_json_to_lemma_syntax_end_to_end() -> LemmaResult<()> {
         .find(|r| r.rule.name == "total")
         .unwrap();
 
-    assert_eq!(
-        total_rule.result.as_ref().unwrap().to_string(),
-        "302.50 USD"
-    );
+    assert_eq!(total_rule.result.value().unwrap().to_string(), "302.50 USD");
 
     Ok(())
 }

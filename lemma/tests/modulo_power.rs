@@ -25,7 +25,9 @@ rule remainder = a % b
         .unwrap();
 
     match &result.result {
-        Some(LiteralValue::Number(n)) => assert_eq!(*n, Decimal::from_str("1").unwrap()),
+        lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
+            assert_eq!(*n, Decimal::from_str("1").unwrap())
+        }
         _ => panic!("Expected number, got {:?}", result.result),
     }
 }
@@ -53,7 +55,9 @@ rule result = base ^ exponent
         .unwrap();
 
     match &result.result {
-        Some(LiteralValue::Number(n)) => assert_eq!(*n, Decimal::from_str("8").unwrap()),
+        lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
+            assert_eq!(*n, Decimal::from_str("8").unwrap())
+        }
         _ => panic!("Expected number, got {:?}", result.result),
     }
 }
@@ -80,14 +84,20 @@ rule is_odd = (value % 2) == 1
         .iter()
         .find(|r| r.rule.name == "is_even")
         .unwrap();
-    assert_eq!(is_even.result, Some(LiteralValue::Boolean(false)));
+    assert_eq!(
+        is_even.result,
+        lemma::OperationResult::Value(lemma::LiteralValue::Boolean(lemma::BooleanValue::False))
+    );
 
     let is_odd = response
         .results
         .iter()
         .find(|r| r.rule.name == "is_odd")
         .unwrap();
-    assert_eq!(is_odd.result, Some(LiteralValue::Boolean(true)));
+    assert_eq!(
+        is_odd.result,
+        lemma::OperationResult::Value(lemma::LiteralValue::Boolean(lemma::BooleanValue::True))
+    );
 }
 
 #[test]
@@ -112,7 +122,9 @@ rule square_root = base ^ 0.5
         .unwrap();
 
     match &result.result {
-        Some(LiteralValue::Number(n)) => assert_eq!(*n, Decimal::from_str("2").unwrap()),
+        lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
+            assert_eq!(*n, Decimal::from_str("2").unwrap())
+        }
         _ => panic!("Expected number, got {:?}", result.result),
     }
 }
@@ -140,7 +152,9 @@ rule calculation = (x % y) + (2 ^ 3)
         .unwrap();
 
     match &result.result {
-        Some(LiteralValue::Number(n)) => assert_eq!(*n, Decimal::from_str("9").unwrap()),
+        lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
+            assert_eq!(*n, Decimal::from_str("9").unwrap())
+        }
         _ => panic!("Expected number, got {:?}", result.result),
     }
 }

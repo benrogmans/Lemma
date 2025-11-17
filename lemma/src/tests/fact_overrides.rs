@@ -6,7 +6,12 @@ fn test_parse_simple_document_reference() {
     let input = r#"doc person
 fact name = "John"
 fact contract = doc employment_contract"#;
-    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
+    let result = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &crate::ResourceLimits::default(),
+    )
+    .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].facts.len(), 2);
 
@@ -26,7 +31,12 @@ fact contract.end_date = [date]
 fact contract.employment_type = "contractor"
 fact contract.base = doc base_contract
 fact contract.base.rate = 100"#;
-    let result = parse(input, None, &crate::ResourceLimits::default()).unwrap();
+    let result = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &crate::ResourceLimits::default(),
+    )
+    .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].facts.len(), 6);
 

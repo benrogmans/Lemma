@@ -7,40 +7,46 @@ use std::collections::HashMap;
 fn is_boolean_false(expr: &Expression) -> bool {
     matches!(
         expr.kind,
-        ExpressionKind::Literal(LiteralValue::Boolean(false))
+        ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False))
     )
 }
 
 fn expressions_semantically_equal(a: &Expression, b: &Expression) -> bool {
-    use ExpressionKind as EK;
+    use ExpressionKind;
     match (&a.kind, &b.kind) {
-        (EK::Literal(lit_a), EK::Literal(lit_b)) => lit_a == lit_b,
-        (EK::FactReference(ref_a), EK::FactReference(ref_b)) => ref_a.reference == ref_b.reference,
-        (EK::RuleReference(ref_a), EK::RuleReference(ref_b)) => ref_a.reference == ref_b.reference,
-        (EK::Arithmetic(l1, op1, r1), EK::Arithmetic(l2, op2, r2)) => {
+        (ExpressionKind::Literal(lit_a), ExpressionKind::Literal(lit_b)) => lit_a == lit_b,
+        (ExpressionKind::FactReference(ref_a), ExpressionKind::FactReference(ref_b)) => {
+            ref_a.reference == ref_b.reference
+        }
+        (ExpressionKind::RuleReference(ref_a), ExpressionKind::RuleReference(ref_b)) => {
+            ref_a.reference == ref_b.reference
+        }
+        (ExpressionKind::Arithmetic(l1, op1, r1), ExpressionKind::Arithmetic(l2, op2, r2)) => {
             op1 == op2
                 && expressions_semantically_equal(l1, l2)
                 && expressions_semantically_equal(r1, r2)
         }
-        (EK::LogicalAnd(l1, r1), EK::LogicalAnd(l2, r2))
-        | (EK::LogicalOr(l1, r1), EK::LogicalOr(l2, r2)) => {
+        (ExpressionKind::LogicalAnd(l1, r1), ExpressionKind::LogicalAnd(l2, r2))
+        | (ExpressionKind::LogicalOr(l1, r1), ExpressionKind::LogicalOr(l2, r2)) => {
             expressions_semantically_equal(l1, l2) && expressions_semantically_equal(r1, r2)
         }
-        (EK::Comparison(l1, op1, r1), EK::Comparison(l2, op2, r2)) => {
+        (ExpressionKind::Comparison(l1, op1, r1), ExpressionKind::Comparison(l2, op2, r2)) => {
             op1 == op2
                 && expressions_semantically_equal(l1, l2)
                 && expressions_semantically_equal(r1, r2)
         }
-        (EK::LogicalNegation(e1, _), EK::LogicalNegation(e2, _)) => {
+        (ExpressionKind::LogicalNegation(e1, _), ExpressionKind::LogicalNegation(e2, _)) => {
             expressions_semantically_equal(e1, e2)
         }
-        (EK::MathematicalComputation(op1, e1), EK::MathematicalComputation(op2, e2)) => {
-            op1 == op2 && expressions_semantically_equal(e1, e2)
-        }
-        (EK::UnitConversion(e1, target1), EK::UnitConversion(e2, target2)) => {
-            target1 == target2 && expressions_semantically_equal(e1, e2)
-        }
-        (EK::Veto(v1), EK::Veto(v2)) => v1.message == v2.message,
+        (
+            ExpressionKind::MathematicalComputation(op1, e1),
+            ExpressionKind::MathematicalComputation(op2, e2),
+        ) => op1 == op2 && expressions_semantically_equal(e1, e2),
+        (
+            ExpressionKind::UnitConversion(e1, target1),
+            ExpressionKind::UnitConversion(e2, target2),
+        ) => target1 == target2 && expressions_semantically_equal(e1, e2),
+        (ExpressionKind::Veto(v1), ExpressionKind::Veto(v2)) => v1.message == v2.message,
         _ => false,
     }
 }
@@ -110,7 +116,7 @@ pub fn invert(
     // Build unified piecewise
     let mut all_branches: Vec<(Expression, Expression)> = Vec::new();
     all_branches.push((
-        literal_expr(LiteralValue::Boolean(true)),
+        literal_expr(LiteralValue::Boolean(crate::BooleanValue::True)),
         rule.expression.clone(),
     ));
     for br in &rule.unless_clauses {
@@ -133,36 +139,50 @@ pub fn invert(
     let mut branches_out = Vec::new();
     let mut available_outcomes = Vec::new();
 
-    for (idx, (raw_cond, raw_res)) in all_branches.iter().enumerate() {
-        let mut eff_cond = raw_cond.clone();
+    let context = InversionContext {
+        doc_name,
+        given_facts: &given_facts,
+        get_rule: &get_rule,
+    };
+
+    let operations = ExpressionOperations {
+        try_fold: &try_fold,
+        literal_expr: &literal_expr,
+        logical_and: &logical_and,
+        logical_not: &logical_not,
+        logical_or: &logical_or,
+    };
+
+    for (idx, (raw_condition, raw_result)) in all_branches.iter().enumerate() {
+        let mut effective_condition = raw_condition.clone();
         if let Some(later_or) = &suffix_or[idx] {
-            eff_cond = logical_and(eff_cond, logical_not(later_or.clone()));
+            effective_condition = logical_and(effective_condition, logical_not(later_or.clone()));
         }
 
-        let cond_h = crate::inversion::hydration::hydrate_and_simplify(
-            &eff_cond,
+        let hydrated_condition = crate::inversion::hydration::hydrate_and_simplify(
+            &effective_condition,
             doc_name,
             &given_facts,
             &get_rule,
             &|e, g| crate::inversion::hydration::is_simple_for_expansion(e, g),
             &literal_expr,
         );
-        let outcome = match &raw_res.kind {
+        let outcome = match &raw_result.kind {
             ExpressionKind::Veto(ve) => BranchOutcome::Veto(ve.message.clone()),
             _ => {
-                let res_h = crate::inversion::hydration::hydrate_and_simplify(
-                    raw_res,
+                let hydrated_result = crate::inversion::hydration::hydrate_and_simplify(
+                    raw_result,
                     doc_name,
                     &given_facts,
                     &get_rule,
                     &|e, g| crate::inversion::hydration::is_simple_for_expansion(e, g),
                     &literal_expr,
                 );
-                BranchOutcome::Value(res_h)
+                BranchOutcome::Value(hydrated_result)
             }
         };
 
-        if !is_boolean_false(&cond_h) {
+        if !is_boolean_false(&hydrated_condition) {
             let outcome_desc = match &outcome {
                 BranchOutcome::Value(expr) => {
                     if let ExpressionKind::Literal(lit) = &expr.kind {
@@ -177,19 +197,9 @@ pub fn invert(
             available_outcomes.push(outcome_desc);
         }
 
-        if let Some(branch) = filter_branch(
-            cond_h,
-            outcome,
-            &target,
-            doc_name,
-            &given_facts,
-            &get_rule,
-            &try_fold,
-            &literal_expr,
-            &logical_and,
-            &logical_not,
-            &logical_or,
-        )? {
+        if let Some(branch) =
+            filter_branch(hydrated_condition, outcome, &target, &context, &operations)?
+        {
             branches_out.push(branch);
         }
     }
@@ -374,58 +384,70 @@ pub fn invert(
     Ok(crate::Shape::new(unified_branches, free_vars))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn filter_branch<'a, F>(
-    cond_h: Expression,
+struct InversionContext<'a, F> {
+    doc_name: &'a str,
+    given_facts: &'a HashMap<String, LiteralValue>,
+    get_rule: &'a F,
+}
+
+struct ExpressionOperations<'a, TryFold, LiteralExpr, LogicalAnd, LogicalNot, LogicalOr> {
+    try_fold: &'a TryFold,
+    literal_expr: &'a LiteralExpr,
+    logical_and: &'a LogicalAnd,
+    logical_not: &'a LogicalNot,
+    logical_or: &'a LogicalOr,
+}
+
+fn filter_branch<'a, F, TryFold, LiteralExpr, LogicalAnd, LogicalNot, LogicalOr>(
+    hydrated_condition: Expression,
     outcome: BranchOutcome,
     target: &Target,
-    doc_name: &str,
-    given_facts: &HashMap<String, LiteralValue>,
-    get_rule: &F,
-    try_fold: &impl Fn(&Expression) -> Option<Expression>,
-    literal_expr: &impl Fn(LiteralValue) -> Expression,
-    logical_and: &impl Fn(Expression, Expression) -> Expression,
-    logical_not: &impl Fn(Expression) -> Expression,
-    logical_or: &impl Fn(Expression, Expression) -> Expression,
+    context: &InversionContext<'a, F>,
+    operations: &ExpressionOperations<'a, TryFold, LiteralExpr, LogicalAnd, LogicalNot, LogicalOr>,
 ) -> LemmaResult<Option<ShapeBranch>>
 where
     F: Fn(&[String]) -> Option<&'a crate::LemmaRule>,
+    TryFold: Fn(&Expression) -> Option<Expression>,
+    LiteralExpr: Fn(LiteralValue) -> Expression,
+    LogicalAnd: Fn(Expression, Expression) -> Expression,
+    LogicalNot: Fn(Expression) -> Expression,
+    LogicalOr: Fn(Expression, Expression) -> Expression,
 {
     match (&outcome, &target.outcome) {
         (BranchOutcome::Value(_value_expr), None) => {
             // Target is any_value() - matches any non-veto value
-            let cond_simpl = crate::inversion::boolean::simplify_boolean(
-                &cond_h,
-                &try_fold,
+            let simplified_condition = crate::inversion::boolean::simplify_boolean(
+                &hydrated_condition,
+                &operations.try_fold,
                 &expressions_semantically_equal,
             )?;
-            if is_boolean_false(&cond_simpl) {
+            if is_boolean_false(&simplified_condition) {
                 Ok(None)
             } else {
                 Ok(Some(ShapeBranch {
-                    condition: cond_simpl,
+                    condition: simplified_condition,
                     outcome,
                 }))
             }
         }
         (BranchOutcome::Value(value_expr), Some(OperationResult::Value(_))) => {
-            let mut guard = build_value_target_guard(value_expr, target, literal_expr);
+            let mut guard = build_value_target_guard(value_expr, target, operations.literal_expr);
             if let ExpressionKind::Comparison(lhs, op, rhs) = &guard.kind {
                 if matches!(op, crate::ComparisonComputation::Equal) {
                     if let ExpressionKind::RuleReference(rr) = &lhs.kind {
                         let rule_ref_qualified: Vec<String> = if rr.reference.len() > 1 {
                             rr.reference.clone()
                         } else {
-                            vec![doc_name.to_owned(), rr.reference[0].clone()]
+                            vec![context.doc_name.to_owned(), rr.reference[0].clone()]
                         };
-                        if let Some(referenced_rule) = get_rule(&rule_ref_qualified) {
+                        if let Some(referenced_rule) = (context.get_rule)(&rule_ref_qualified) {
                             let inner_expr = crate::inversion::hydration::hydrate_and_simplify(
                                 &referenced_rule.expression,
-                                doc_name,
-                                given_facts,
-                                &get_rule,
+                                context.doc_name,
+                                context.given_facts,
+                                &context.get_rule,
                                 &|e, g| crate::inversion::hydration::is_simple_for_expansion(e, g),
-                                literal_expr,
+                                operations.literal_expr,
                             );
                             guard = Expression::new(
                                 ExpressionKind::Comparison(
@@ -440,57 +462,70 @@ where
                             for br in &referenced_rule.unless_clauses {
                                 if let ExpressionKind::Veto(_) = br.result.kind {
                                     veto_conds.push(crate::inversion::hydration::hydrate_and_simplify(
-                                        &br.condition, doc_name, given_facts, &get_rule,
+                                        &br.condition, context.doc_name, context.given_facts, &context.get_rule,
                                         &|e, g| crate::inversion::hydration::is_simple_for_expansion(e, g),
-                                        literal_expr
+                                        operations.literal_expr
                                     ));
                                 }
                             }
                             if !veto_conds.is_empty() {
-                                let veto_or = veto_conds.into_iter().reduce(logical_or).unwrap();
-                                let veto_guard =
-                                    logical_not(crate::inversion::hydration::hydrate_and_simplify(
-                                        &veto_or,
-                                        doc_name,
-                                        given_facts,
-                                        &get_rule,
+                                let combined_veto_conditions = veto_conds
+                                    .into_iter()
+                                    .reduce(operations.logical_or)
+                                    .unwrap();
+                                let veto_guard = (operations.logical_not)(
+                                    crate::inversion::hydration::hydrate_and_simplify(
+                                        &combined_veto_conditions,
+                                        context.doc_name,
+                                        context.given_facts,
+                                        &context.get_rule,
                                         &|e, g| {
                                             crate::inversion::hydration::is_simple_for_expansion(
                                                 e, g,
                                             )
                                         },
-                                        literal_expr,
-                                    ));
-                                let cond_ext = logical_and(cond_h.clone(), veto_guard);
-                                let cond_simpl = crate::inversion::boolean::simplify_boolean(
-                                    &cond_ext,
-                                    &try_fold,
-                                    &expressions_semantically_equal,
-                                )?;
-                                if is_boolean_false(&cond_simpl) {
+                                        operations.literal_expr,
+                                    ),
+                                );
+                                let extended_condition = (operations.logical_and)(
+                                    hydrated_condition.clone(),
+                                    veto_guard,
+                                );
+                                let simplified_condition =
+                                    crate::inversion::boolean::simplify_boolean(
+                                        &extended_condition,
+                                        &operations.try_fold,
+                                        &expressions_semantically_equal,
+                                    )?;
+                                if is_boolean_false(&simplified_condition) {
                                     return Ok(None);
                                 }
-                                let guard_h = crate::inversion::hydration::hydrate_and_simplify(
-                                    &guard,
-                                    doc_name,
-                                    given_facts,
-                                    &get_rule,
-                                    &|e, g| {
-                                        crate::inversion::hydration::is_simple_for_expansion(e, g)
-                                    },
-                                    literal_expr,
-                                );
-                                let conj = logical_and(cond_simpl, guard_h);
-                                let conj_simpl = crate::inversion::boolean::simplify_boolean(
-                                    &conj,
-                                    &try_fold,
-                                    &expressions_semantically_equal,
-                                )?;
-                                if is_boolean_false(&conj_simpl) {
+                                let hydrated_guard =
+                                    crate::inversion::hydration::hydrate_and_simplify(
+                                        &guard,
+                                        context.doc_name,
+                                        context.given_facts,
+                                        &context.get_rule,
+                                        &|e, g| {
+                                            crate::inversion::hydration::is_simple_for_expansion(
+                                                e, g,
+                                            )
+                                        },
+                                        operations.literal_expr,
+                                    );
+                                let conjunction =
+                                    (operations.logical_and)(simplified_condition, hydrated_guard);
+                                let simplified_conjunction =
+                                    crate::inversion::boolean::simplify_boolean(
+                                        &conjunction,
+                                        &operations.try_fold,
+                                        &expressions_semantically_equal,
+                                    )?;
+                                if is_boolean_false(&simplified_conjunction) {
                                     return Ok(None);
                                 }
                                 return Ok(Some(ShapeBranch {
-                                    condition: conj_simpl,
+                                    condition: simplified_conjunction,
                                     outcome,
                                 }));
                             }
@@ -498,25 +533,25 @@ where
                     }
                 }
             }
-            let guard_h = crate::inversion::hydration::hydrate_and_simplify(
+            let hydrated_guard = crate::inversion::hydration::hydrate_and_simplify(
                 &guard,
-                doc_name,
-                given_facts,
-                &get_rule,
+                context.doc_name,
+                context.given_facts,
+                &context.get_rule,
                 &|e, g| crate::inversion::hydration::is_simple_for_expansion(e, g),
-                literal_expr,
+                operations.literal_expr,
             );
-            let conj = logical_and(cond_h, guard_h);
-            let conj_simpl = crate::inversion::boolean::simplify_boolean(
-                &conj,
-                &try_fold,
+            let conjunction = (operations.logical_and)(hydrated_condition, hydrated_guard);
+            let simplified_conjunction = crate::inversion::boolean::simplify_boolean(
+                &conjunction,
+                &operations.try_fold,
                 &expressions_semantically_equal,
             )?;
-            if is_boolean_false(&conj_simpl) {
+            if is_boolean_false(&simplified_conjunction) {
                 Ok(None)
             } else {
                 Ok(Some(ShapeBranch {
-                    condition: conj_simpl,
+                    condition: simplified_conjunction,
                     outcome,
                 }))
             }
@@ -530,16 +565,16 @@ where
             if !matches {
                 return Ok(None);
             }
-            let cond_simpl = crate::inversion::boolean::simplify_boolean(
-                &cond_h,
-                &try_fold,
+            let simplified_condition = crate::inversion::boolean::simplify_boolean(
+                &hydrated_condition,
+                &operations.try_fold,
                 &expressions_semantically_equal,
             )?;
-            if is_boolean_false(&cond_simpl) {
+            if is_boolean_false(&simplified_condition) {
                 Ok(None)
             } else {
                 Ok(Some(ShapeBranch {
-                    condition: cond_simpl,
+                    condition: simplified_condition,
                     outcome,
                 }))
             }
@@ -573,10 +608,10 @@ fn build_value_target_guard(
 }
 
 fn extract_fact_equality(cond: &Expression) -> Option<(crate::FactReference, Expression)> {
-    use ExpressionKind as EK;
+    use ExpressionKind;
     match &cond.kind {
-        EK::Comparison(l, crate::ComparisonComputation::Equal, r) => {
-            if let EK::FactReference(fr) = &l.kind {
+        ExpressionKind::Comparison(l, crate::ComparisonComputation::Equal, r) => {
+            if let ExpressionKind::FactReference(fr) = &l.kind {
                 let fp = if fr.reference.len() == 1 {
                     crate::FactReference {
                         reference: vec![fr.reference[0].clone()],
@@ -590,7 +625,7 @@ fn extract_fact_equality(cond: &Expression) -> Option<(crate::FactReference, Exp
                 };
                 return Some((fp, (**r).clone()));
             }
-            if let EK::FactReference(fr) = &r.kind {
+            if let ExpressionKind::FactReference(fr) = &r.kind {
                 let fp = if fr.reference.len() == 1 {
                     crate::FactReference {
                         reference: vec![fr.reference[0].clone()],
@@ -606,8 +641,10 @@ fn extract_fact_equality(cond: &Expression) -> Option<(crate::FactReference, Exp
             }
             None
         }
-        EK::LogicalAnd(a, b) => extract_fact_equality(a).or_else(|| extract_fact_equality(b)),
-        EK::LogicalNegation(inner, _) => extract_fact_equality(inner),
+        ExpressionKind::LogicalAnd(a, b) => {
+            extract_fact_equality(a).or_else(|| extract_fact_equality(b))
+        }
+        ExpressionKind::LogicalNegation(inner, _) => extract_fact_equality(inner),
         _ => None,
     }
 }

@@ -14,70 +14,70 @@ pub fn substitute_fact_with_expr(
     fact_path: &crate::FactReference,
     replacement: &Expression,
 ) -> Expression {
-    use ExpressionKind as EK;
+    use ExpressionKind;
     match &expr.kind {
-        EK::FactReference(fr) => {
+        ExpressionKind::FactReference(fr) => {
             if fr.reference == fact_path.reference {
                 return replacement.clone();
             }
             expr.clone()
         }
-        EK::Arithmetic(l, op, r) => Expression::new(
-            EK::Arithmetic(
+        ExpressionKind::Arithmetic(l, op, r) => Expression::new(
+            ExpressionKind::Arithmetic(
                 Box::new(substitute_fact_with_expr(l, fact_path, replacement)),
                 op.clone(),
                 Box::new(substitute_fact_with_expr(r, fact_path, replacement)),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::Comparison(l, op, r) => Expression::new(
-            EK::Comparison(
+        ExpressionKind::Comparison(l, op, r) => Expression::new(
+            ExpressionKind::Comparison(
                 Box::new(substitute_fact_with_expr(l, fact_path, replacement)),
                 op.clone(),
                 Box::new(substitute_fact_with_expr(r, fact_path, replacement)),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::LogicalAnd(l, r) => Expression::new(
-            EK::LogicalAnd(
+        ExpressionKind::LogicalAnd(l, r) => Expression::new(
+            ExpressionKind::LogicalAnd(
                 Box::new(substitute_fact_with_expr(l, fact_path, replacement)),
                 Box::new(substitute_fact_with_expr(r, fact_path, replacement)),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::LogicalOr(l, r) => Expression::new(
-            EK::LogicalOr(
+        ExpressionKind::LogicalOr(l, r) => Expression::new(
+            ExpressionKind::LogicalOr(
                 Box::new(substitute_fact_with_expr(l, fact_path, replacement)),
                 Box::new(substitute_fact_with_expr(r, fact_path, replacement)),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::LogicalNegation(inner, nt) => Expression::new(
-            EK::LogicalNegation(
+        ExpressionKind::LogicalNegation(inner, nt) => Expression::new(
+            ExpressionKind::LogicalNegation(
                 Box::new(substitute_fact_with_expr(inner, fact_path, replacement)),
                 nt.clone(),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::UnitConversion(inner, tgt) => Expression::new(
-            EK::UnitConversion(
+        ExpressionKind::UnitConversion(inner, tgt) => Expression::new(
+            ExpressionKind::UnitConversion(
                 Box::new(substitute_fact_with_expr(inner, fact_path, replacement)),
                 tgt.clone(),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::MathematicalComputation(op, inner) => Expression::new(
-            EK::MathematicalComputation(
+        ExpressionKind::MathematicalComputation(op, inner) => Expression::new(
+            ExpressionKind::MathematicalComputation(
                 op.clone(),
                 Box::new(substitute_fact_with_expr(inner, fact_path, replacement)),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
         _ => expr.clone(),
@@ -101,10 +101,10 @@ where
     F: Fn(&[String]) -> Option<&'a crate::LemmaRule>,
     G: Fn(&Expression, &HashMap<String, LiteralValue>) -> bool,
 {
-    use ExpressionKind as EK;
+    use ExpressionKind;
     match &expr.kind {
-        EK::Literal(_) | EK::Veto(_) => expr.clone(),
-        EK::FactReference(fref) => {
+        ExpressionKind::Literal(_) | ExpressionKind::Veto(_) => expr.clone(),
+        ExpressionKind::FactReference(fref) => {
             // Build keys to try: fully-qualified and local
             let local = fref.reference.join(".");
             let qualified = if fref.reference.len() > 1 {
@@ -113,12 +113,16 @@ where
                 format!("{}.{}", doc_name, local)
             };
             if let Some(val) = given.get(&qualified).or_else(|| given.get(&local)) {
-                Expression::new(EK::Literal(val.clone()), expr.span.clone(), expr.id)
+                Expression::new(
+                    ExpressionKind::Literal(val.clone()),
+                    expr.source_location.clone(),
+                    expr.id,
+                )
             } else {
                 expr.clone()
             }
         }
-        EK::RuleReference(rule_ref) => {
+        ExpressionKind::RuleReference(rule_ref) => {
             let rule_ref_qualified: Vec<String> = if rule_ref.reference.len() > 1 {
                 rule_ref.reference.clone()
             } else {
@@ -150,71 +154,71 @@ where
             // Can't simplify, keep the rule reference
             expr.clone()
         }
-        EK::Arithmetic(l, op, r) => Expression::new(
-            EK::Arithmetic(
+        ExpressionKind::Arithmetic(l, op, r) => Expression::new(
+            ExpressionKind::Arithmetic(
                 Box::new(hydrate_expression(l, doc_name, given, get_rule, is_simple)),
                 op.clone(),
                 Box::new(hydrate_expression(r, doc_name, given, get_rule, is_simple)),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::Comparison(l, op, r) => Expression::new(
-            EK::Comparison(
+        ExpressionKind::Comparison(l, op, r) => Expression::new(
+            ExpressionKind::Comparison(
                 Box::new(hydrate_expression(l, doc_name, given, get_rule, is_simple)),
                 op.clone(),
                 Box::new(hydrate_expression(r, doc_name, given, get_rule, is_simple)),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::LogicalAnd(l, r) => Expression::new(
-            EK::LogicalAnd(
+        ExpressionKind::LogicalAnd(l, r) => Expression::new(
+            ExpressionKind::LogicalAnd(
                 Box::new(hydrate_expression(l, doc_name, given, get_rule, is_simple)),
                 Box::new(hydrate_expression(r, doc_name, given, get_rule, is_simple)),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::LogicalOr(l, r) => Expression::new(
-            EK::LogicalOr(
+        ExpressionKind::LogicalOr(l, r) => Expression::new(
+            ExpressionKind::LogicalOr(
                 Box::new(hydrate_expression(l, doc_name, given, get_rule, is_simple)),
                 Box::new(hydrate_expression(r, doc_name, given, get_rule, is_simple)),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::LogicalNegation(inner, nt) => Expression::new(
-            EK::LogicalNegation(
+        ExpressionKind::LogicalNegation(inner, nt) => Expression::new(
+            ExpressionKind::LogicalNegation(
                 Box::new(hydrate_expression(
                     inner, doc_name, given, get_rule, is_simple,
                 )),
                 nt.clone(),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::UnitConversion(val, tgt) => Expression::new(
-            EK::UnitConversion(
+        ExpressionKind::UnitConversion(val, tgt) => Expression::new(
+            ExpressionKind::UnitConversion(
                 Box::new(hydrate_expression(
                     val, doc_name, given, get_rule, is_simple,
                 )),
                 tgt.clone(),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::MathematicalComputation(op, inner) => Expression::new(
-            EK::MathematicalComputation(
+        ExpressionKind::MathematicalComputation(op, inner) => Expression::new(
+            ExpressionKind::MathematicalComputation(
                 op.clone(),
                 Box::new(hydrate_expression(
                     inner, doc_name, given, get_rule, is_simple,
                 )),
             ),
-            expr.span.clone(),
+            expr.source_location.clone(),
             expr.id,
         ),
-        EK::FactHasAnyValue(fref) => {
+        ExpressionKind::FactHasAnyValue(fref) => {
             // If a given fact is present, this reduces to true; otherwise keep symbolic
             let local = fref.reference.join(".");
             let qualified = if fref.reference.len() > 1 {
@@ -224,8 +228,8 @@ where
             };
             if given.contains_key(&qualified) || given.contains_key(&local) {
                 Expression::new(
-                    EK::Literal(LiteralValue::Boolean(true)),
-                    expr.span.clone(),
+                    ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)),
+                    expr.source_location.clone(),
                     expr.id,
                 )
             } else {
@@ -242,24 +246,24 @@ where
 /// - Simple arithmetic with literals only
 /// - Expressions with no fact or rule references
 pub fn is_simple_for_expansion(expr: &Expression, _given: &HashMap<String, LiteralValue>) -> bool {
-    use ExpressionKind as EK;
+    use ExpressionKind;
     match &expr.kind {
         // Literals are always simple
-        EK::Literal(_) => true,
+        ExpressionKind::Literal(_) => true,
 
         // Arithmetic is simple if both operands are simple
-        EK::Arithmetic(l, _, r) => {
+        ExpressionKind::Arithmetic(l, _, r) => {
             is_simple_for_expansion(l, _given) && is_simple_for_expansion(r, _given)
         }
 
         // Unit conversions are simple if the inner expression is simple
-        EK::UnitConversion(inner, _) => is_simple_for_expansion(inner, _given),
+        ExpressionKind::UnitConversion(inner, _) => is_simple_for_expansion(inner, _given),
 
         // Mathematical operators (abs, etc.) are simple if inner is simple
-        EK::MathematicalComputation(_, inner) => is_simple_for_expansion(inner, _given),
+        ExpressionKind::MathematicalComputation(_, inner) => is_simple_for_expansion(inner, _given),
 
         // Fact references and rule references are NOT simple - keep symbolic
-        EK::FactReference(_) | EK::RuleReference(_) => false,
+        ExpressionKind::FactReference(_) | ExpressionKind::RuleReference(_) => false,
 
         // Comparisons, logical ops, vetos are NOT simple for expansion
         _ => false,
@@ -273,102 +277,132 @@ pub fn try_constant_fold<F>(expr: &Expression, make_literal: &F) -> Option<Expre
 where
     F: Fn(LiteralValue) -> Expression,
 {
-    use ExpressionKind as EK;
+    use ExpressionKind;
     match &expr.kind {
-        EK::Arithmetic(l, op, r) => {
+        ExpressionKind::Arithmetic(l, op, r) => {
             let l2 = try_constant_fold(l, make_literal).unwrap_or((**l).clone());
             let r2 = try_constant_fold(r, make_literal).unwrap_or((**r).clone());
-            if let (EK::Literal(ref lv), EK::Literal(ref rv)) = (&l2.kind, &r2.kind) {
+            if let (ExpressionKind::Literal(ref lv), ExpressionKind::Literal(ref rv)) =
+                (&l2.kind, &r2.kind)
+            {
                 if let Ok(val) = crate::evaluator::operations::arithmetic_operation(lv, op, rv) {
                     return Some(make_literal(val));
                 }
             }
             Some(Expression::new(
-                EK::Arithmetic(Box::new(l2), op.clone(), Box::new(r2)),
-                expr.span.clone(),
+                ExpressionKind::Arithmetic(Box::new(l2), op.clone(), Box::new(r2)),
+                expr.source_location.clone(),
                 expr.id,
             ))
         }
-        EK::Comparison(l, op, r) => {
+        ExpressionKind::Comparison(l, op, r) => {
             let l2 = try_constant_fold(l, make_literal).unwrap_or((**l).clone());
             let r2 = try_constant_fold(r, make_literal).unwrap_or((**r).clone());
-            if let (EK::Literal(ref lv), EK::Literal(ref rv)) = (&l2.kind, &r2.kind) {
+            if let (ExpressionKind::Literal(ref lv), ExpressionKind::Literal(ref rv)) =
+                (&l2.kind, &r2.kind)
+            {
                 if let Ok(b) = crate::evaluator::operations::comparison_operation(lv, op, rv) {
-                    return Some(make_literal(LiteralValue::Boolean(b)));
+                    return Some(make_literal(LiteralValue::Boolean(b.into())));
                 }
             }
             Some(Expression::new(
-                EK::Comparison(Box::new(l2), op.clone(), Box::new(r2)),
-                expr.span.clone(),
+                ExpressionKind::Comparison(Box::new(l2), op.clone(), Box::new(r2)),
+                expr.source_location.clone(),
                 expr.id,
             ))
         }
-        EK::LogicalAnd(l, r) => {
+        ExpressionKind::LogicalAnd(l, r) => {
             let l2 = try_constant_fold(l, make_literal).unwrap_or((**l).clone());
             let r2 = try_constant_fold(r, make_literal).unwrap_or((**r).clone());
             // Short-circuit identities
-            if let EK::Literal(LiteralValue::Boolean(false)) = &l2.kind {
-                return Some(make_literal(LiteralValue::Boolean(false)));
+            if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)) =
+                &l2.kind
+            {
+                return Some(make_literal(LiteralValue::Boolean(
+                    crate::BooleanValue::False,
+                )));
             }
-            if let EK::Literal(LiteralValue::Boolean(false)) = &r2.kind {
-                return Some(make_literal(LiteralValue::Boolean(false)));
+            if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)) =
+                &r2.kind
+            {
+                return Some(make_literal(LiteralValue::Boolean(
+                    crate::BooleanValue::False,
+                )));
             }
-            if let EK::Literal(LiteralValue::Boolean(true)) = &l2.kind {
+            if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)) =
+                &l2.kind
+            {
                 return Some(r2);
             }
-            if let EK::Literal(LiteralValue::Boolean(true)) = &r2.kind {
+            if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)) =
+                &r2.kind
+            {
                 return Some(l2);
             }
             if let (
-                EK::Literal(LiteralValue::Boolean(lb)),
-                EK::Literal(LiteralValue::Boolean(rb)),
+                ExpressionKind::Literal(LiteralValue::Boolean(lb)),
+                ExpressionKind::Literal(LiteralValue::Boolean(rb)),
             ) = (&l2.kind, &r2.kind)
             {
-                return Some(make_literal(LiteralValue::Boolean(*lb && *rb)));
+                let result = lb.into() && rb.into();
+                return Some(make_literal(LiteralValue::Boolean(result.into())));
             }
             Some(Expression::new(
-                EK::LogicalAnd(Box::new(l2), Box::new(r2)),
-                expr.span.clone(),
+                ExpressionKind::LogicalAnd(Box::new(l2), Box::new(r2)),
+                expr.source_location.clone(),
                 expr.id,
             ))
         }
-        EK::LogicalOr(l, r) => {
+        ExpressionKind::LogicalOr(l, r) => {
             let l2 = try_constant_fold(l, make_literal).unwrap_or((**l).clone());
             let r2 = try_constant_fold(r, make_literal).unwrap_or((**r).clone());
             // Short-circuit identities
-            if let EK::Literal(LiteralValue::Boolean(true)) = &l2.kind {
-                return Some(make_literal(LiteralValue::Boolean(true)));
+            if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)) =
+                &l2.kind
+            {
+                return Some(make_literal(LiteralValue::Boolean(
+                    crate::BooleanValue::True,
+                )));
             }
-            if let EK::Literal(LiteralValue::Boolean(true)) = &r2.kind {
-                return Some(make_literal(LiteralValue::Boolean(true)));
+            if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)) =
+                &r2.kind
+            {
+                return Some(make_literal(LiteralValue::Boolean(
+                    crate::BooleanValue::True,
+                )));
             }
-            if let EK::Literal(LiteralValue::Boolean(false)) = &l2.kind {
+            if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)) =
+                &l2.kind
+            {
                 return Some(r2);
             }
-            if let EK::Literal(LiteralValue::Boolean(false)) = &r2.kind {
+            if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)) =
+                &r2.kind
+            {
                 return Some(l2);
             }
             if let (
-                EK::Literal(LiteralValue::Boolean(lb)),
-                EK::Literal(LiteralValue::Boolean(rb)),
+                ExpressionKind::Literal(LiteralValue::Boolean(lb)),
+                ExpressionKind::Literal(LiteralValue::Boolean(rb)),
             ) = (&l2.kind, &r2.kind)
             {
-                return Some(make_literal(LiteralValue::Boolean(*lb || *rb)));
+                let result = lb.into() || rb.into();
+                return Some(make_literal(LiteralValue::Boolean(result.into())));
             }
             Some(Expression::new(
-                EK::LogicalOr(Box::new(l2), Box::new(r2)),
-                expr.span.clone(),
+                ExpressionKind::LogicalOr(Box::new(l2), Box::new(r2)),
+                expr.source_location.clone(),
                 expr.id,
             ))
         }
-        EK::LogicalNegation(inner, nt) => {
+        ExpressionKind::LogicalNegation(inner, nt) => {
             let i2 = try_constant_fold(inner, make_literal).unwrap_or((**inner).clone());
-            if let EK::Literal(LiteralValue::Boolean(b)) = i2.kind {
+            if let ExpressionKind::Literal(LiteralValue::Boolean(b)) = i2.kind {
                 return Some(make_literal(LiteralValue::Boolean(!b)));
             }
             Some(Expression::new(
-                EK::LogicalNegation(Box::new(i2), nt.clone()),
-                expr.span.clone(),
+                ExpressionKind::LogicalNegation(Box::new(i2), nt.clone()),
+                expr.source_location.clone(),
                 expr.id,
             ))
         }

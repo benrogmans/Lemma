@@ -58,10 +58,7 @@ fn test_02_rules_and_unless() {
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "examples/rules_and_unless");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule.name == "discount_percentage"));
+    assert!(response.results.iter().any(|r| r.rule.name == "total"));
     // final_total depends on total_after_discount which depends on base_price (provided)
     // but also depends on shipping_cost which depends on total_after_discount
     // Since we're only providing base_price, not all dependencies are met
@@ -403,7 +400,7 @@ fn test_11_document_composition() {
         .find(|r| r.rule.name == "order_total");
     assert!(order_total.is_some(), "order_total rule should exist");
     assert!(
-        order_total.unwrap().result.is_some(),
+        order_total.unwrap().result.value().is_some(),
         "order_total should have a value"
     );
 

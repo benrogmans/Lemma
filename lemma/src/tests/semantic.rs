@@ -39,7 +39,10 @@ fn test_literal_value_to_type() {
         LemmaType::Text
     );
     assert_eq!(LiteralValue::Number(one).to_type(), LemmaType::Number);
-    assert_eq!(LiteralValue::Boolean(true).to_type(), LemmaType::Boolean);
+    assert_eq!(
+        LiteralValue::Boolean(crate::BooleanValue::True).to_type(),
+        LemmaType::Boolean
+    );
 
     let dt = DateTimeValue {
         year: 2024,
@@ -313,8 +316,14 @@ fn test_literal_value_display_value() {
         "\"hello\""
     );
     assert_eq!(LiteralValue::Number(ten).display_value(), "10");
-    assert_eq!(LiteralValue::Boolean(true).display_value(), "true");
-    assert_eq!(LiteralValue::Boolean(false).display_value(), "false");
+    assert_eq!(
+        LiteralValue::Boolean(crate::BooleanValue::True).display_value(),
+        "true"
+    );
+    assert_eq!(
+        LiteralValue::Boolean(crate::BooleanValue::False).display_value(),
+        "false"
+    );
     assert_eq!(LiteralValue::Percentage(ten).display_value(), "10%");
 
     let money = LiteralValue::Unit(NumericUnit::Money(ten, MoneyUnit::Usd));
@@ -434,4 +443,68 @@ fn test_veto_expression() {
 
     let veto_without_message = VetoExpression { message: None };
     assert!(veto_without_message.message.is_none());
+}
+
+#[test]
+fn test_expression_get_source_text_with_location() {
+    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue, SourceLocation, Span};
+    use std::collections::HashMap;
+
+    let source = "fact value = 42";
+    let mut sources = HashMap::new();
+    sources.insert("test.lemma".to_string(), source.to_string());
+
+    let span = Span {
+        start: 13,
+        end: 15,
+        line: 1,
+        col: 13,
+    };
+    let source_location = Some(SourceLocation::new("test.lemma", span, "test"));
+    let expr = Expression::new(
+        ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
+        source_location,
+        ExpressionId::new(0),
+    );
+
+    assert_eq!(expr.get_source_text(&sources), Some("42".to_string()));
+}
+
+#[test]
+fn test_expression_get_source_text_no_location() {
+    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue};
+    use std::collections::HashMap;
+
+    let mut sources = HashMap::new();
+    sources.insert("test.lemma".to_string(), "fact value = 42".to_string());
+
+    let expr = Expression::new(
+        ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
+        None,
+        ExpressionId::new(0),
+    );
+
+    assert_eq!(expr.get_source_text(&sources), None);
+}
+
+#[test]
+fn test_expression_get_source_text_source_not_found() {
+    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue, SourceLocation, Span};
+    use std::collections::HashMap;
+
+    let sources = HashMap::new();
+    let span = Span {
+        start: 0,
+        end: 5,
+        line: 1,
+        col: 0,
+    };
+    let source_location = Some(SourceLocation::new("missing.lemma", span, "test"));
+    let expr = Expression::new(
+        ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
+        source_location,
+        ExpressionId::new(0),
+    );
+
+    assert_eq!(expr.get_source_text(&sources), None);
 }

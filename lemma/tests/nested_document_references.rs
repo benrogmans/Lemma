@@ -19,8 +19,10 @@ fact quantity = 10
 rule line_total = pricing.final_price? * quantity
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(line_item_doc, "test.lemma").unwrap();
+    engine.add_lemma_code(base_doc, "pricing.lemma").unwrap();
+    engine
+        .add_lemma_code(line_item_doc, "line_item.lemma")
+        .unwrap();
 
     let response = engine.evaluate("line_item", None, None).unwrap();
     let line_total = response
@@ -30,7 +32,7 @@ rule line_total = pricing.final_price? * quantity
         .unwrap();
 
     // Should be: (100 * 1.21) * 10 = 1210
-    assert_eq!(line_total.result.as_ref().unwrap().to_string(), "1_210");
+    assert_eq!(line_total.result.value().unwrap().to_string(), "1,210");
 }
 
 /// Multi-level document rule references should work correctly.
@@ -74,7 +76,7 @@ rule top_calc = middle_ref.middle_calc?
             .map(|f| f.name.as_str())
             .collect();
         println!("       missing: {:?}", missing);
-        println!("       veto: {:?}", r.veto_message);
+        println!("       veto: {:?}", r.result.veto_message());
     }
 
     let top_calc = response
@@ -83,7 +85,7 @@ rule top_calc = middle_ref.middle_calc?
         .find(|r| r.rule.name == "top_calc")
         .expect("top_calc rule not found in results");
 
-    assert_eq!(top_calc.result.as_ref().unwrap().to_string(), "250");
+    assert_eq!(top_calc.result.value().unwrap().to_string(), "250");
 }
 
 /// Overriding nested document references should propagate through rule evaluations.
@@ -133,7 +135,7 @@ rule order_total = line.line_total?
         .find(|r| r.rule.name == "order_total")
         .expect("order_total rule not found in results");
 
-    assert_eq!(order_total.result.as_ref().unwrap().to_string(), "8_250");
+    assert_eq!(order_total.result.value().unwrap().to_string(), "8,250");
 }
 
 /// Accessing facts through multi-level document references with nested overrides works correctly.
@@ -170,7 +172,7 @@ rule final_value = settings.config.value * 2
         .unwrap();
 
     // Should be: 100 * 2 = 200 (using the overridden value from middle)
-    assert_eq!(final_value.result.as_ref().unwrap().to_string(), "200");
+    assert_eq!(final_value.result.value().unwrap().to_string(), "200");
 }
 
 /// Deep nested fact overrides through multiple document layers should work.
@@ -215,7 +217,7 @@ rule order_total = line.line_total?
 
     // base_price=100, tax_rate=10% (overridden), quantity=5
     // (100 * 1.10) * 5 = 550
-    assert_eq!(order_total.result.as_ref().unwrap().to_string(), "550");
+    assert_eq!(order_total.result.value().unwrap().to_string(), "550");
 }
 
 /// Different fact paths to the same base document should produce different results
@@ -269,11 +271,11 @@ rule difference = total2? - total1?
         .unwrap();
 
     // path1: 100 * 1.21 = 121
-    assert_eq!(total1.result.as_ref().unwrap().to_string(), "121");
+    assert_eq!(total1.result.value().unwrap().to_string(), "121");
     // path2: 75 * 1.21 = 90.75
-    assert_eq!(total2.result.as_ref().unwrap().to_string(), "90.75");
+    assert_eq!(total2.result.value().unwrap().to_string(), "90.75");
     // difference: 90.75 - 121 = -30.25
-    assert_eq!(difference.result.as_ref().unwrap().to_string(), "-30.25");
+    assert_eq!(difference.result.value().unwrap().to_string(), "-30.25");
 }
 
 /// Multiple independent document references in a single document should all work.
@@ -320,9 +322,9 @@ rule product = c1.value * c2.value
         .unwrap();
 
     // sum: (100 * 2) + (50 * 3) = 200 + 150 = 350
-    assert_eq!(sum.result.as_ref().unwrap().to_string(), "350");
+    assert_eq!(sum.result.value().unwrap().to_string(), "350");
     // product: 100 * 50 = 5000
-    assert_eq!(product.result.as_ref().unwrap().to_string(), "5_000");
+    assert_eq!(product.result.value().unwrap().to_string(), "5,000");
 }
 
 /// Referencing rules from a document that itself has document references.
@@ -350,9 +352,9 @@ fact middle_config = doc middle
 rule final_result = middle_config.x_squared_plus_ten? * 2
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(middle_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(top_doc, "test.lemma").unwrap();
+    engine.add_lemma_code(base_doc, "base.lemma").unwrap();
+    engine.add_lemma_code(middle_doc, "middle.lemma").unwrap();
+    engine.add_lemma_code(top_doc, "top.lemma").unwrap();
 
     let response = engine.evaluate("top", None, None).unwrap();
 
@@ -363,7 +365,7 @@ rule final_result = middle_config.x_squared_plus_ten? * 2
         .unwrap();
 
     // x=20 (overridden), x_squared=400, x_squared_plus_ten=410, final=820
-    assert_eq!(final_result.result.as_ref().unwrap().to_string(), "820");
+    assert_eq!(final_result.result.value().unwrap().to_string(), "820");
 }
 
 /// Overriding the same document reference in different ways should produce
@@ -415,9 +417,9 @@ rule price_difference = retail_final? - wholesale_final?
         .unwrap();
 
     // retail: 100 * (1 - 0.05) = 95
-    assert_eq!(retail_final.result.as_ref().unwrap().to_string(), "95");
+    assert_eq!(retail_final.result.value().unwrap().to_string(), "95");
     // wholesale: 80 * (1 - 0.15) = 68
-    assert_eq!(wholesale_final.result.as_ref().unwrap().to_string(), "68");
+    assert_eq!(wholesale_final.result.value().unwrap().to_string(), "68");
     // difference: 95 - 68 = 27
-    assert_eq!(price_difference.result.as_ref().unwrap().to_string(), "27");
+    assert_eq!(price_difference.result.value().unwrap().to_string(), "27");
 }

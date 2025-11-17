@@ -1,14 +1,17 @@
-use crate::ast::ExpressionIdGenerator;
+use crate::ast::{ExpressionIdGenerator, Span};
 use crate::error::LemmaError;
 use crate::parser::Rule;
 use crate::semantic::*;
+use crate::SourceLocation;
 use pest::iterators::Pair;
 
 pub(crate) fn parse_rule_definition(
     pair: Pair<Rule>,
     id_gen: &mut ExpressionIdGenerator,
+    source_id: &str,
+    doc_name: &str,
 ) -> Result<LemmaRule, LemmaError> {
-    let span = crate::ast::Span::from_pest_span(pair.as_span());
+    let span = Span::from_pest_span(pair.as_span());
     let mut rule_name = None;
     let mut rule_expression = None;
 
@@ -16,7 +19,9 @@ pub(crate) fn parse_rule_definition(
         match inner_pair.as_rule() {
             Rule::rule_name => rule_name = Some(inner_pair.as_str().to_string()),
             Rule::rule_expression => {
-                rule_expression = Some(parse_rule_expression(inner_pair, id_gen)?)
+                rule_expression = Some(parse_rule_expression(
+                    inner_pair, id_gen, source_id, doc_name,
+                )?)
             }
             _ => {}
         }
@@ -33,13 +38,19 @@ pub(crate) fn parse_rule_definition(
         name,
         expression,
         unless_clauses,
-        span: Some(span),
+        source_location: Some(SourceLocation::new(
+            source_id.to_string(),
+            span,
+            doc_name.to_string(),
+        )),
     })
 }
 
 fn parse_rule_expression(
     pair: Pair<Rule>,
     id_gen: &mut ExpressionIdGenerator,
+    source_id: &str,
+    doc_name: &str,
 ) -> Result<(Expression, Vec<UnlessClause>), LemmaError> {
     let mut expression = None;
     let mut unless_clauses = Vec::new();
@@ -48,11 +59,12 @@ fn parse_rule_expression(
         match inner_pair.as_rule() {
             Rule::expression_group => {
                 expression = Some(crate::parser::expressions::parse_or_expression(
-                    inner_pair, id_gen,
+                    inner_pair, id_gen, source_id, doc_name,
                 )?);
             }
             Rule::unless_statement => {
-                let unless_clause = parse_unless_statement(inner_pair, id_gen)?;
+                let unless_clause =
+                    parse_unless_statement(inner_pair, id_gen, source_id, doc_name)?;
                 unless_clauses.push(unless_clause);
             }
             _ => {}
@@ -68,8 +80,10 @@ fn parse_rule_expression(
 fn parse_unless_statement(
     pair: Pair<Rule>,
     id_gen: &mut ExpressionIdGenerator,
+    source_id: &str,
+    doc_name: &str,
 ) -> Result<UnlessClause, LemmaError> {
-    let span = crate::ast::Span::from_pest_span(pair.as_span());
+    let span = Span::from_pest_span(pair.as_span());
     let mut condition = None;
     let mut result = None;
 
@@ -78,16 +92,16 @@ fn parse_unless_statement(
             Rule::expression_group => {
                 if condition.is_none() {
                     condition = Some(crate::parser::expressions::parse_or_expression(
-                        inner_pair, id_gen,
+                        inner_pair, id_gen, source_id, doc_name,
                     )?);
                 } else {
                     result = Some(crate::parser::expressions::parse_or_expression(
-                        inner_pair, id_gen,
+                        inner_pair, id_gen, source_id, doc_name,
                     )?);
                 }
             }
             Rule::veto_expression => {
-                let veto_span = crate::ast::Span::from_pest_span(inner_pair.as_span());
+                let veto_span = Span::from_pest_span(inner_pair.as_span());
                 // Pest grammar: ^"veto" ~ (SPACE+ ~ string_literal)?
                 // If string_literal child exists, extract the string content (without quotes)
                 let message = inner_pair
@@ -99,7 +113,15 @@ fn parse_unless_statement(
                         content[1..content.len() - 1].to_string()
                     });
                 let kind = ExpressionKind::Veto(VetoExpression { message });
-                result = Some(Expression::new(kind, Some(veto_span), id_gen.next_id()));
+                result = Some(Expression::new(
+                    kind,
+                    Some(SourceLocation::new(
+                        source_id.to_string(),
+                        veto_span,
+                        doc_name.to_string(),
+                    )),
+                    id_gen.next_id(),
+                ));
             }
             _ => {}
         }
@@ -115,6 +137,10 @@ fn parse_unless_statement(
     Ok(UnlessClause {
         condition: cond,
         result: res,
-        span: Some(span),
+        source_location: Some(SourceLocation::new(
+            source_id.to_string(),
+            span,
+            doc_name.to_string(),
+        )),
     })
 }

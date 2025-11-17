@@ -1,4 +1,5 @@
-use crate::ast::{ExpressionId, Span};
+use crate::ast::ExpressionId;
+use crate::SourceLocation;
 use rust_decimal::Decimal;
 use serde::Serialize;
 use std::fmt;
@@ -18,7 +19,7 @@ pub struct LemmaDoc {
 pub struct LemmaFact {
     pub fact_type: FactType,
     pub value: FactValue,
-    pub span: Option<Span>,
+    pub source_location: Option<SourceLocation>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -42,7 +43,7 @@ pub struct ForeignFact {
 pub struct UnlessClause {
     pub condition: Expression,
     pub result: Expression,
-    pub span: Option<Span>,
+    pub source_location: Option<SourceLocation>,
 }
 
 /// A rule with a single expression and optional unless clauses
@@ -51,22 +52,44 @@ pub struct LemmaRule {
     pub name: String,
     pub expression: Expression,
     pub unless_clauses: Vec<UnlessClause>,
-    pub span: Option<Span>,
+    pub source_location: Option<SourceLocation>,
 }
 
 /// An expression that can be evaluated, with source location and unique ID
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Expression {
     pub kind: ExpressionKind,
-    pub span: Option<Span>,
+    pub source_location: Option<SourceLocation>,
     pub id: ExpressionId,
 }
 
 impl Expression {
-    /// Create a new expression with kind, span, and ID
+    /// Create a new expression with kind, source location, and ID
     #[must_use]
-    pub fn new(kind: ExpressionKind, span: Option<Span>, id: ExpressionId) -> Self {
-        Self { kind, span, id }
+    pub fn new(
+        kind: ExpressionKind,
+        source_location: Option<SourceLocation>,
+        id: ExpressionId,
+    ) -> Self {
+        Self {
+            kind,
+            source_location,
+            id,
+        }
+    }
+
+    /// Get the source text for this expression from the given sources map
+    ///
+    /// Returns `None` if the expression has no source location or the source is not found.
+    pub fn get_source_text(
+        &self,
+        sources: &std::collections::HashMap<String, String>,
+    ) -> Option<String> {
+        self.source_location.as_ref().and_then(|loc| {
+            sources
+                .get(&loc.source_id)
+                .and_then(|source| loc.extract_text(source))
+        })
     }
 }
 
@@ -186,6 +209,14 @@ pub enum NegationType {
     NotHave, // "not have expression"
 }
 
+/// Logical computations
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub enum LogicalComputation {
+    And,
+    Or,
+    Not,
+}
+
 /// A veto expression that prohibits any valid verdict from the rule
 ///
 /// Unlike `reject` (which is just an alias for boolean `false`), a veto
@@ -251,6 +282,82 @@ pub enum LemmaType {
     Money,
 }
 
+/// Boolean value with original input preserved
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub enum BooleanValue {
+    True,
+    False,
+    Yes,
+    No,
+    Accept,
+    Reject,
+}
+
+impl From<BooleanValue> for bool {
+    fn from(value: BooleanValue) -> bool {
+        match value {
+            BooleanValue::True | BooleanValue::Yes | BooleanValue::Accept => true,
+            BooleanValue::False | BooleanValue::No | BooleanValue::Reject => false,
+        }
+    }
+}
+
+impl From<&BooleanValue> for bool {
+    fn from(value: &BooleanValue) -> bool {
+        match value {
+            BooleanValue::True | BooleanValue::Yes | BooleanValue::Accept => true,
+            BooleanValue::False | BooleanValue::No | BooleanValue::Reject => false,
+        }
+    }
+}
+
+impl From<bool> for BooleanValue {
+    fn from(value: bool) -> BooleanValue {
+        if value {
+            BooleanValue::True
+        } else {
+            BooleanValue::False
+        }
+    }
+}
+
+impl fmt::Display for BooleanValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BooleanValue::True => write!(f, "true"),
+            BooleanValue::False => write!(f, "false"),
+            BooleanValue::Yes => write!(f, "yes"),
+            BooleanValue::No => write!(f, "no"),
+            BooleanValue::Accept => write!(f, "accept"),
+            BooleanValue::Reject => write!(f, "reject"),
+        }
+    }
+}
+
+impl std::ops::Not for BooleanValue {
+    type Output = BooleanValue;
+
+    fn not(self) -> Self::Output {
+        if self.into() {
+            BooleanValue::False
+        } else {
+            BooleanValue::True
+        }
+    }
+}
+
+impl std::ops::Not for &BooleanValue {
+    type Output = BooleanValue;
+
+    fn not(self) -> Self::Output {
+        if self.into() {
+            BooleanValue::False
+        } else {
+            BooleanValue::True
+        }
+    }
+}
+
 /// A literal value
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum LiteralValue {
@@ -258,7 +365,7 @@ pub enum LiteralValue {
     Text(String),
     Date(DateTimeValue), // Date with time and timezone information preserved
     Time(TimeValue),     // Standalone time with optional timezone
-    Boolean(bool),
+    Boolean(BooleanValue),
     Percentage(Decimal),
     Unit(NumericUnit), // All physical units and money
     Regex(String),     // e.g., "/pattern/"
@@ -589,21 +696,94 @@ impl NumericUnit {
     }
 }
 
+fn format_decimal_with_unit(value: &Decimal, unit: &impl fmt::Display) -> String {
+    let normalized = value.normalize();
+    if normalized.fract().is_zero() {
+        let int_part = normalized.trunc().to_string();
+        let formatted = int_part
+            .chars()
+            .rev()
+            .enumerate()
+            .flat_map(|(i, c)| {
+                if i > 0 && i % 3 == 0 && c != '-' {
+                    vec![',', c]
+                } else {
+                    vec![c]
+                }
+            })
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        format!("{} {}", formatted, unit)
+    } else {
+        format!("{} {}", normalized, unit)
+    }
+}
+
+fn format_money_with_unit(value: &Decimal, unit: &impl fmt::Display) -> String {
+    let normalized = value.normalize();
+    if normalized.fract().is_zero() {
+        let int_part = normalized.trunc().to_string();
+        let formatted = int_part
+            .chars()
+            .rev()
+            .enumerate()
+            .flat_map(|(i, c)| {
+                if i > 0 && i % 3 == 0 && c != '-' {
+                    vec![',', c]
+                } else {
+                    vec![c]
+                }
+            })
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        format!("{} {}", formatted, unit)
+    } else {
+        let rounded = normalized.round_dp(2);
+        let int_part = rounded.trunc();
+        let fract_part = (rounded.fract() * Decimal::from(100))
+            .trunc()
+            .to_string()
+            .parse::<u64>()
+            .unwrap_or(0);
+        let formatted_int = int_part
+            .to_string()
+            .chars()
+            .rev()
+            .enumerate()
+            .flat_map(|(i, c)| {
+                if i > 0 && i % 3 == 0 && c != '-' {
+                    vec![',', c]
+                } else {
+                    vec![c]
+                }
+            })
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        format!("{}.{:02} {}", formatted_int, fract_part, unit)
+    }
+}
+
 impl fmt::Display for NumericUnit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NumericUnit::Mass(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Length(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Volume(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Duration(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Temperature(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Power(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Force(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Pressure(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Energy(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Frequency(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Data(v, u) => write!(f, "{} {}", v, u),
-            NumericUnit::Money(v, u) => write!(f, "{} {}", v, u),
+            NumericUnit::Mass(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+            NumericUnit::Length(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+            NumericUnit::Volume(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+            NumericUnit::Duration(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+            NumericUnit::Temperature(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+            NumericUnit::Power(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+            NumericUnit::Force(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+            NumericUnit::Pressure(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+            NumericUnit::Energy(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+            NumericUnit::Frequency(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+            NumericUnit::Data(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+            NumericUnit::Money(v, u) => write!(f, "{}", format_money_with_unit(v, u)),
         }
     }
 }
@@ -615,7 +795,7 @@ impl LemmaRule {
             name,
             expression,
             unless_clauses: Vec::new(),
-            span: None,
+            source_location: None,
         }
     }
 
@@ -632,13 +812,13 @@ impl LemmaFact {
         Self {
             fact_type,
             value,
-            span: None,
+            source_location: None,
         }
     }
 
     #[must_use]
-    pub fn with_span(mut self, span: Span) -> Self {
-        self.span = Some(span);
+    pub fn with_source_location(mut self, source_location: SourceLocation) -> Self {
+        self.source_location = Some(source_location);
         self
     }
 }
@@ -827,7 +1007,7 @@ impl fmt::Display for LiteralValue {
                         .enumerate()
                         .flat_map(|(i, c)| {
                             if i > 0 && i % 3 == 0 && c != '-' {
-                                vec!['_', c]
+                                vec![',', c]
                             } else {
                                 vec![c]
                             }
@@ -1209,6 +1389,26 @@ impl fmt::Display for ComparisonComputation {
     }
 }
 
+impl fmt::Display for MathematicalComputation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MathematicalComputation::Sqrt => write!(f, "sqrt"),
+            MathematicalComputation::Sin => write!(f, "sin"),
+            MathematicalComputation::Cos => write!(f, "cos"),
+            MathematicalComputation::Tan => write!(f, "tan"),
+            MathematicalComputation::Asin => write!(f, "asin"),
+            MathematicalComputation::Acos => write!(f, "acos"),
+            MathematicalComputation::Atan => write!(f, "atan"),
+            MathematicalComputation::Log => write!(f, "log"),
+            MathematicalComputation::Exp => write!(f, "exp"),
+            MathematicalComputation::Abs => write!(f, "abs"),
+            MathematicalComputation::Floor => write!(f, "floor"),
+            MathematicalComputation::Ceil => write!(f, "ceil"),
+            MathematicalComputation::Round => write!(f, "round"),
+        }
+    }
+}
+
 impl fmt::Display for TimeValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:02}:{:02}:{:02}", self.hour, self.minute, self.second)
@@ -1245,7 +1445,7 @@ impl fmt::Display for DateTimeValue {
 ///
 /// E.g., for `employee.is_eligible?` where `employee` is a fact with value `doc hr_doc`,
 /// the segment would be `RulePathSegment { fact: "employee", doc: "hr_doc" }`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct RulePathSegment {
     pub fact: String,
     pub doc: String,
@@ -1255,7 +1455,7 @@ pub struct RulePathSegment {
 ///
 /// E.g., `employee.department.head.salary?` would have segments for each fact
 /// in the chain (employee, department, head) leading to the final rule (salary)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct RulePath {
     pub rule: String,
     pub segments: Vec<RulePathSegment>,
@@ -1313,7 +1513,11 @@ impl RulePath {
         })
     }
 
-    pub fn target_doc<'a>(&'a self, main_doc: &'a str) -> &'a str {
+    /// Returns the name of the document that contains the rule identified by this path.
+    ///
+    /// For local rules (no segments), returns `main_doc`.
+    /// For cross-document references, returns the document from the last segment.
+    pub fn containing_document<'a>(&'a self, main_doc: &'a str) -> &'a str {
         self.segments
             .last()
             .map(|s| s.doc.as_str())

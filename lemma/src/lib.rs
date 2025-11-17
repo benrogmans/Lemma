@@ -54,6 +54,7 @@ pub mod evaluator;
 pub mod inversion;
 pub mod operation_result;
 pub mod parser;
+pub mod proof;
 pub mod resource_limits;
 pub mod response;
 pub mod semantic;

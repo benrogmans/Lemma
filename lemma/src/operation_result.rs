@@ -1,8 +1,9 @@
 use crate::semantic::LiteralValue;
 use crate::LemmaError;
+use serde::Serialize;
 
 /// Result of an operation (evaluating a rule or expression)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum OperationResult {
     /// Operation produced a value
     Value(LiteralValue),
@@ -44,3 +45,5 @@ impl OperationResult {
         }
     }
 }
+
+// TODO: Add test coverage for OperationResult

@@ -32,10 +32,14 @@ fn test_evaluate_rule_no_unless() {
             ExpressionId::new(0),
         ),
         unless_clauses: vec![],
-        span: None,
+        source_location: None,
     };
 
-    let result = evaluate_rule(&rule, &test_doc, &mut context, &[]).unwrap();
+    let rule_path = crate::RulePath {
+        rule: rule.name.clone(),
+        segments: vec![],
+    };
+    let (result, _proof) = evaluate_rule(&rule, rule_path, &test_doc, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(42)))
@@ -56,7 +60,7 @@ fn test_evaluate_rule_with_unless_no_match() {
         ),
         unless_clauses: vec![UnlessClause {
             condition: Expression::new(
-                ExpressionKind::Literal(LiteralValue::Boolean(false)),
+                ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)),
                 None,
                 ExpressionId::new(1),
             ),
@@ -65,12 +69,16 @@ fn test_evaluate_rule_with_unless_no_match() {
                 None,
                 ExpressionId::new(2),
             ),
-            span: None,
+            source_location: None,
         }],
-        span: None,
+        source_location: None,
     };
 
-    let result = evaluate_rule(&rule, &test_doc, &mut context, &[]).unwrap();
+    let rule_path = crate::RulePath {
+        rule: rule.name.clone(),
+        segments: vec![],
+    };
+    let (result, _proof) = evaluate_rule(&rule, rule_path, &test_doc, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(100)))
@@ -91,7 +99,7 @@ fn test_evaluate_rule_with_unless_match() {
         ),
         unless_clauses: vec![UnlessClause {
             condition: Expression::new(
-                ExpressionKind::Literal(LiteralValue::Boolean(true)),
+                ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)),
                 None,
                 ExpressionId::new(1),
             ),
@@ -100,12 +108,16 @@ fn test_evaluate_rule_with_unless_match() {
                 None,
                 ExpressionId::new(2),
             ),
-            span: None,
+            source_location: None,
         }],
-        span: None,
+        source_location: None,
     };
 
-    let result = evaluate_rule(&rule, &test_doc, &mut context, &[]).unwrap();
+    let rule_path = crate::RulePath {
+        rule: rule.name.clone(),
+        segments: vec![],
+    };
+    let (result, _proof) = evaluate_rule(&rule, rule_path, &test_doc, &mut context, &[]).unwrap();
     assert_eq!(
         result,
         OperationResult::Value(LiteralValue::Number(Decimal::from(200)))
@@ -127,7 +139,7 @@ fn test_evaluate_rule_last_matching_wins() {
         unless_clauses: vec![
             UnlessClause {
                 condition: Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(true)),
+                    ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)),
                     None,
                     ExpressionId::new(1),
                 ),
@@ -136,11 +148,11 @@ fn test_evaluate_rule_last_matching_wins() {
                     None,
                     ExpressionId::new(2),
                 ),
-                span: None,
+                source_location: None,
             },
             UnlessClause {
                 condition: Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(true)),
+                    ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)),
                     None,
                     ExpressionId::new(3),
                 ),
@@ -149,13 +161,17 @@ fn test_evaluate_rule_last_matching_wins() {
                     None,
                     ExpressionId::new(4),
                 ),
-                span: None,
+                source_location: None,
             },
         ],
-        span: None,
+        source_location: None,
     };
 
-    let result = evaluate_rule(&rule, &test_doc, &mut context, &[]).unwrap();
+    let rule_path = crate::RulePath {
+        rule: rule.name.clone(),
+        segments: vec![],
+    };
+    let (result, _proof) = evaluate_rule(&rule, rule_path, &test_doc, &mut context, &[]).unwrap();
     // Last unless clause wins
     assert_eq!(
         result,

@@ -225,10 +225,16 @@ pub mod http {
         response
             .results
             .iter()
-            .map(|r| RuleResultJson {
-                name: r.rule.name.clone(),
-                value: r.result.as_ref().map(|v| v.to_string()),
-                veto_reason: r.veto_message.clone(),
+            .map(|r| {
+                let (value, veto_reason) = match &r.result {
+                    lemma::OperationResult::Value(v) => (Some(v.to_string()), None),
+                    lemma::OperationResult::Veto(msg) => (None, msg.clone()),
+                };
+                RuleResultJson {
+                    name: r.rule.name.clone(),
+                    value,
+                    veto_reason,
+                }
             })
             .collect()
     }

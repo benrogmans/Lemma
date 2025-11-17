@@ -26,14 +26,14 @@ rule equal_false = a == c
         .iter()
         .find(|r| r.rule.name == "equal_true")
         .unwrap();
-    assert_eq!(equal_true.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(equal_true.result.value().unwrap().to_string(), "true");
 
     let equal_false = response
         .results
         .iter()
         .find(|r| r.rule.name == "equal_false")
         .unwrap();
-    assert_eq!(equal_false.result.as_ref().unwrap().to_string(), "false");
+    assert_eq!(equal_false.result.value().unwrap().to_string(), "false");
 }
 
 #[test]
@@ -61,14 +61,14 @@ rule different_greeting = greeting == other
         .iter()
         .find(|r| r.rule.name == "same_greeting")
         .unwrap();
-    assert_eq!(same.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(same.result.value().unwrap().to_string(), "true");
 
     let different = response
         .results
         .iter()
         .find(|r| r.rule.name == "different_greeting")
         .unwrap();
-    assert_eq!(different.result.as_ref().unwrap().to_string(), "false");
+    assert_eq!(different.result.value().unwrap().to_string(), "false");
 }
 
 #[test]
@@ -97,14 +97,14 @@ rule different_price = price_a == price_c
         .iter()
         .find(|r| r.rule.name == "same_price")
         .unwrap();
-    assert_eq!(same.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(same.result.value().unwrap().to_string(), "true");
 
     let different = response
         .results
         .iter()
         .find(|r| r.rule.name == "different_price")
         .unwrap();
-    assert_eq!(different.result.as_ref().unwrap().to_string(), "false");
+    assert_eq!(different.result.value().unwrap().to_string(), "false");
 }
 
 #[test]
@@ -133,14 +133,14 @@ rule mixed = flag_a == flag_c
         .iter()
         .find(|r| r.rule.name == "both_true")
         .unwrap();
-    assert_eq!(both_true.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(both_true.result.value().unwrap().to_string(), "true");
 
     let mixed = response
         .results
         .iter()
         .find(|r| r.rule.name == "mixed")
         .unwrap();
-    assert_eq!(mixed.result.as_ref().unwrap().to_string(), "false");
+    assert_eq!(mixed.result.value().unwrap().to_string(), "false");
 }
 
 #[test]
@@ -172,7 +172,7 @@ rule message = "inactive"
         .find(|r| r.rule.name == "message")
         .unwrap();
     assert_eq!(
-        message.result.as_ref().unwrap().to_string(),
+        message.result.value().unwrap().to_string(),
         "\"count is 10\""
     );
 }

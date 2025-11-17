@@ -27,21 +27,27 @@ pub fn algebraic_solve(
             None
         }
         ExpressionKind::MathematicalComputation(op, inner) => {
-            use crate::MathematicalComputation as M;
+            use crate::MathematicalComputation;
             if !contains_unknown(inner, unknown, fact_matcher) {
                 return None;
             }
 
             let new_target = match op {
                 // exp(u) = t  =>  u = log(t)
-                M::Exp => Expression::new(
-                    ExpressionKind::MathematicalComputation(M::Log, Box::new(target.clone())),
+                MathematicalComputation::Exp => Expression::new(
+                    ExpressionKind::MathematicalComputation(
+                        MathematicalComputation::Log,
+                        Box::new(target.clone()),
+                    ),
                     None,
                     ExpressionId::new(0),
                 ),
                 // log(u) = t  =>  u = exp(t)
-                M::Log => Expression::new(
-                    ExpressionKind::MathematicalComputation(M::Exp, Box::new(target.clone())),
+                MathematicalComputation::Log => Expression::new(
+                    ExpressionKind::MathematicalComputation(
+                        MathematicalComputation::Exp,
+                        Box::new(target.clone()),
+                    ),
                     None,
                     ExpressionId::new(0),
                 ),

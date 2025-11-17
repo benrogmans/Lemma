@@ -41,7 +41,7 @@ pub fn parse(
     }
 
     let mut id_gen = ExpressionIdGenerator::with_max_depth(limits.max_expression_depth);
-    let filename = filename.unwrap_or_else(|| "<input>".to_string());
+    let filename_str = filename.as_deref().unwrap_or("");
 
     match LemmaParser::parse(Rule::lemma_file, content) {
         Ok(pairs) => {
@@ -50,7 +50,7 @@ pub fn parse(
                 if pair.as_rule() == Rule::lemma_file {
                     for inner_pair in pair.into_inner() {
                         if inner_pair.as_rule() == Rule::doc {
-                            docs.push(parse_doc(inner_pair, &filename, content, &mut id_gen)?);
+                            docs.push(parse_doc(inner_pair, filename_str, content, &mut id_gen)?);
                         }
                     }
                 }
@@ -76,7 +76,7 @@ pub fn parse(
             Err(LemmaError::parse(
                 format!("Parse error: {}", e.variant),
                 pest_span,
-                filename,
+                filename_str,
                 Arc::from(content),
                 "<parse-error>",
                 1,
@@ -104,8 +104,12 @@ pub fn parse_facts(fact_strings: &[&str]) -> Result<Vec<LemmaFact>, LemmaError> 
             .ok_or_else(|| LemmaError::Engine(format!("No inner rule for fact '{}'", fact_str)))?;
 
         let fact = match inner_pair.as_rule() {
-            Rule::fact_definition => crate::parser::facts::parse_fact_definition(inner_pair)?,
-            Rule::fact_override => crate::parser::facts::parse_fact_override(inner_pair)?,
+            Rule::fact_definition => {
+                crate::parser::facts::parse_fact_definition(inner_pair, "<input>", "default")?
+            }
+            Rule::fact_override => {
+                crate::parser::facts::parse_fact_override(inner_pair, "<input>", "default")?
+            }
             _ => {
                 return Err(LemmaError::Engine(format!(
                     "Unexpected rule type for fact '{}'",
@@ -133,36 +137,44 @@ fn parse_doc(
     let mut facts = Vec::new();
     let mut rules = Vec::new();
 
-    for inner_pair in pair.into_inner() {
-        match inner_pair.as_rule() {
-            Rule::doc_declaration => {
-                for decl_inner in inner_pair.into_inner() {
-                    if decl_inner.as_rule() == Rule::doc_name {
-                        doc_name = Some(parse_doc_name(decl_inner)?);
-                        break;
-                    }
+    for inner_pair in pair.clone().into_inner() {
+        if inner_pair.as_rule() == Rule::doc_declaration {
+            for decl_inner in inner_pair.into_inner() {
+                if decl_inner.as_rule() == Rule::doc_name {
+                    doc_name = Some(parse_doc_name(decl_inner)?);
+                    break;
                 }
             }
+        }
+    }
+
+    let name = doc_name.ok_or_else(|| {
+        LemmaError::Engine("Grammar error: doc missing doc_declaration".to_string())
+    })?;
+
+    for inner_pair in pair.into_inner() {
+        match inner_pair.as_rule() {
             Rule::commentary_content => {
                 commentary = Some(inner_pair.as_str().trim().to_string());
             }
             Rule::fact_definition => {
-                let fact = crate::parser::facts::parse_fact_definition(inner_pair)?;
+                let fact =
+                    crate::parser::facts::parse_fact_definition(inner_pair, filename, &name)?;
                 facts.push(fact);
             }
             Rule::fact_override => {
-                let fact = crate::parser::facts::parse_fact_override(inner_pair)?;
+                let fact = crate::parser::facts::parse_fact_override(inner_pair, filename, &name)?;
                 facts.push(fact);
             }
             Rule::rule_definition => {
-                let rule = crate::parser::rules::parse_rule_definition(inner_pair, id_gen)?;
+                let rule = crate::parser::rules::parse_rule_definition(
+                    inner_pair, id_gen, filename, &name,
+                )?;
                 rules.push(rule);
             }
             _ => {}
         }
     }
-
-    let name = doc_name.unwrap_or_else(|| "default".to_string());
     let mut doc = LemmaDoc::new(name)
         .with_source(filename.to_string())
         .with_start_line(doc_start_line);

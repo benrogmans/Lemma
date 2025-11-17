@@ -9,7 +9,7 @@ fn get_rule_value(engine: &Engine, doc_name: &str, rule_name: &str) -> lemma::Li
         .find(|r| r.rule.name == rule_name)
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap()
         .clone()
 }
@@ -518,7 +518,7 @@ rule is_before = date1 < date2
         .expect("Failed to parse");
 
     if let lemma::LiteralValue::Boolean(value) = get_rule_value(&engine, "test", "is_before") {
-        assert!(value);
+        assert!(bool::from(value));
     } else {
         panic!("Expected Boolean value");
     }

@@ -54,9 +54,15 @@ fn parse_string_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
 /// Parse boolean literals.
 /// Accepts: true, false, yes, no, accept, reject (case-sensitive)
 fn parse_boolean_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
-    let boolean = match pair.as_str() {
-        "true" | "yes" | "accept" => true,
-        "false" | "no" | "reject" => false,
+    use crate::BooleanValue;
+
+    let boolean_value = match pair.as_str() {
+        "true" => BooleanValue::True,
+        "false" => BooleanValue::False,
+        "yes" => BooleanValue::Yes,
+        "no" => BooleanValue::No,
+        "accept" => BooleanValue::Accept,
+        "reject" => BooleanValue::Reject,
         _ => {
             return Err(LemmaError::Engine(format!(
                 "Invalid boolean: '{}'\n\
@@ -65,7 +71,8 @@ fn parse_boolean_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
             )))
         }
     };
-    Ok(LiteralValue::Boolean(boolean))
+
+    Ok(LiteralValue::Boolean(boolean_value))
 }
 
 fn parse_percentage_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {

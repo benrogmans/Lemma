@@ -23,7 +23,7 @@ rule weight_lbs = weight_kg in pounds
         .find(|r| r.rule.name == "weight_lbs")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -56,7 +56,7 @@ rule weight_kg = weight_tons in kilograms
         .find(|r| r.rule.name == "weight_kg")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -88,7 +88,7 @@ rule distance_miles = distance_km in miles
         .find(|r| r.rule.name == "distance_miles")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -120,7 +120,7 @@ rule distance_meters = distance_yards in meters
         .find(|r| r.rule.name == "distance_meters")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -152,7 +152,7 @@ rule length_cm = length_dm in centimeters
         .find(|r| r.rule.name == "length_cm")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -184,7 +184,7 @@ rule volume_ml = volume_l in milliliters
         .find(|r| r.rule.name == "volume_ml")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -211,7 +211,7 @@ rule volume_l = volume_gal in liters
         .find(|r| r.rule.name == "volume_l")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -243,7 +243,7 @@ rule volume_pt = volume_qt in pints
         .find(|r| r.rule.name == "volume_pt")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -270,7 +270,7 @@ rule volume_dl = volume_cl in deciliters
         .find(|r| r.rule.name == "volume_dl")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -307,7 +307,7 @@ rule time_min = time_h in minutes
         .find(|r| r.rule.name == "time_min")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(n) => {
@@ -335,7 +335,7 @@ rule time_ms = time_s in milliseconds
         .find(|r| r.rule.name == "time_ms")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(n) => {
@@ -363,7 +363,7 @@ rule time_us = time_ms in microseconds
         .find(|r| r.rule.name == "time_us")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(n) => {
@@ -396,7 +396,7 @@ rule power_w = power_kw in watts
         .find(|r| r.rule.name == "power_w")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -423,7 +423,7 @@ rule power_mw = power_w in milliwatts
         .find(|r| r.rule.name == "power_mw")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -455,7 +455,7 @@ rule energy_j = energy_kj in joules
         .find(|r| r.rule.name == "energy_j")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -482,7 +482,7 @@ rule energy_wh = energy_kwh in watthours
         .find(|r| r.rule.name == "energy_wh")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -509,7 +509,7 @@ rule energy_cal = energy_kcal in calories
         .find(|r| r.rule.name == "energy_cal")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -541,7 +541,7 @@ rule pressure_pa = pressure_kpa in pascals
         .find(|r| r.rule.name == "pressure_pa")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -568,7 +568,7 @@ rule pressure_kpa = pressure_mpa in kilopascals
         .find(|r| r.rule.name == "pressure_kpa")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -600,7 +600,7 @@ rule size_mb = size_gb in megabytes
         .find(|r| r.rule.name == "size_mb")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -627,7 +627,7 @@ rule size_gb = size_tb in gigabytes
         .find(|r| r.rule.name == "size_gb")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -654,7 +654,7 @@ rule size_tb = size_pb in terabytes
         .find(|r| r.rule.name == "size_tb")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -681,7 +681,7 @@ rule size_mib = size_gib in mebibytes
         .find(|r| r.rule.name == "size_mib")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -708,7 +708,7 @@ rule size_b = size_kib in bytes
         .find(|r| r.rule.name == "size_b")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
@@ -747,7 +747,7 @@ rule discounted_price = base_price * (1 - discount)
         .find(|r| r.rule.name == "weight_lbs")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match weight_result {
         LiteralValue::Number(amount) => {
@@ -765,7 +765,7 @@ rule discounted_price = base_price * (1 - discount)
         .find(|r| r.rule.name == "distance_miles")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match distance_result {
         LiteralValue::Number(amount) => {
@@ -783,7 +783,7 @@ rule discounted_price = base_price * (1 - discount)
         .find(|r| r.rule.name == "discounted_price")
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap();
     match price_result {
         LiteralValue::Number(n) => {

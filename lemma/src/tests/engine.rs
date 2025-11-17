@@ -28,7 +28,7 @@ fn test_evaluate_document_all_rules() {
         .unwrap();
     assert_eq!(
         sum_result.result,
-        Some(crate::LiteralValue::Number(
+        crate::OperationResult::Value(crate::LiteralValue::Number(
             Decimal::from_str("15").unwrap()
         ))
     );
@@ -40,7 +40,7 @@ fn test_evaluate_document_all_rules() {
         .unwrap();
     assert_eq!(
         product_result.result,
-        Some(crate::LiteralValue::Number(
+        crate::OperationResult::Value(crate::LiteralValue::Number(
             Decimal::from_str("50").unwrap()
         ))
     );
@@ -64,7 +64,7 @@ fn test_evaluate_empty_facts() {
     assert_eq!(response.results.len(), 1);
     assert_eq!(
         response.results[0].result,
-        Some(crate::LiteralValue::Number(
+        crate::OperationResult::Value(crate::LiteralValue::Number(
             Decimal::from_str("200").unwrap()
         ))
     );
@@ -87,7 +87,7 @@ fn test_evaluate_boolean_rule() {
     let response = engine.evaluate("test", None, None).unwrap();
     assert_eq!(
         response.results[0].result,
-        Some(crate::LiteralValue::Boolean(true))
+        crate::OperationResult::Value(crate::LiteralValue::Boolean(crate::BooleanValue::True))
     );
 }
 
@@ -109,7 +109,7 @@ fn test_evaluate_with_unless_clause() {
     let response = engine.evaluate("test", None, None).unwrap();
     assert_eq!(
         response.results[0].result,
-        Some(crate::LiteralValue::Number(
+        crate::OperationResult::Value(crate::LiteralValue::Number(
             Decimal::from_str("10").unwrap()
         ))
     );
@@ -151,7 +151,7 @@ fn test_multiple_documents() {
     let response1 = engine.evaluate("doc1", None, None).unwrap();
     assert_eq!(
         response1.results[0].result,
-        Some(crate::LiteralValue::Number(
+        crate::OperationResult::Value(crate::LiteralValue::Number(
             Decimal::from_str("20").unwrap()
         ))
     );
@@ -159,7 +159,7 @@ fn test_multiple_documents() {
     let response2 = engine.evaluate("doc2", None, None).unwrap();
     assert_eq!(
         response2.results[0].result,
-        Some(crate::LiteralValue::Number(
+        crate::OperationResult::Value(crate::LiteralValue::Number(
             Decimal::from_str("15").unwrap()
         ))
     );
@@ -209,8 +209,8 @@ fn test_rules_sorted_by_source_order() {
     // Check they all have span information for ordering
     for result in &response.results {
         assert!(
-            result.rule.span.is_some(),
-            "Rule {} missing span",
+            result.rule.source_location.is_some(),
+            "Rule {} missing source_location",
             result.rule.name
         );
     }
@@ -222,9 +222,10 @@ fn test_rules_sorted_by_source_order() {
         .find(|r| r.rule.name == "z")
         .unwrap()
         .rule
-        .span
+        .source_location
         .as_ref()
         .unwrap()
+        .span
         .start;
     let y_pos = response
         .results
@@ -232,9 +233,10 @@ fn test_rules_sorted_by_source_order() {
         .find(|r| r.rule.name == "y")
         .unwrap()
         .rule
-        .span
+        .source_location
         .as_ref()
         .unwrap()
+        .span
         .start;
     let x_pos = response
         .results
@@ -242,9 +244,10 @@ fn test_rules_sorted_by_source_order() {
         .find(|r| r.rule.name == "x")
         .unwrap()
         .rule
-        .span
+        .source_location
         .as_ref()
         .unwrap()
+        .span
         .start;
 
     assert!(z_pos < y_pos);

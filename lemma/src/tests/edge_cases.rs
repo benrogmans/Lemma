@@ -5,7 +5,11 @@ use crate::{ExpressionKind, LiteralValue};
 fn test_veto_in_unless_clauses() {
     let input = r#"doc test
 rule is_adult = age >= 18 unless age < 0 then veto "Age must be 0 or higher""#;
-    let result = parse(input, None, &crate::ResourceLimits::default());
+    let result = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &crate::ResourceLimits::default(),
+    );
     assert!(
         result.is_ok(),
         "Failed to parse single veto: {:?}",
@@ -34,7 +38,11 @@ rule is_adult = age >= 18 unless age < 0 then veto "Age must be 0 or higher""#;
 rule is_adult = age >= 18
   unless age > 150 then veto "Age cannot be over 150"
   unless age < 0 then veto "Age must be 0 or higher""#;
-    let result = parse(input, None, &crate::ResourceLimits::default());
+    let result = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &crate::ResourceLimits::default(),
+    );
     assert!(
         result.is_ok(),
         "Failed to parse multiple vetoes: {:?}",
@@ -64,7 +72,11 @@ rule is_adult = age >= 18
 fn test_veto_without_message() {
     let input = r#"doc test
 rule adult = age >= 18 unless age > 150 then veto"#;
-    let result = parse(input, None, &crate::ResourceLimits::default());
+    let result = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &crate::ResourceLimits::default(),
+    );
     assert!(
         result.is_ok(),
         "Failed to parse veto without message: {:?}",
@@ -89,7 +101,11 @@ fn test_mixed_veto_and_regular_unless() {
 rule adjusted_age = age + 1
   unless age < 0 then veto "Invalid age"
   unless age > 100 then 100"#;
-    let result = parse(input, None, &crate::ResourceLimits::default());
+    let result = parse(
+        input,
+        Some("test.lemma".to_string()),
+        &crate::ResourceLimits::default(),
+    );
     assert!(
         result.is_ok(),
         "Failed to parse mixed unless: {:?}",
@@ -134,7 +150,11 @@ fn test_error_cases_comprehensive() {
     ];
 
     for (input, description) in error_cases {
-        let result = parse(input, None, &crate::ResourceLimits::default());
+        let result = parse(
+            input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        );
         assert!(
             result.is_err(),
             "Expected error for {} but got success",

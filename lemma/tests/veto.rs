@@ -6,7 +6,7 @@
 //! 3. Unless clauses can provide alternative values, so the veto doesn't apply
 //! 4. Veto in unless clause conditions or results will apply to the dependent rule
 
-use lemma::{Engine, LiteralValue};
+use lemma::{Engine, LiteralValue, OperationResult};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
@@ -29,10 +29,9 @@ rule is_adult = age >= 18
         .find(|r| r.rule.name == "is_adult")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Must be at least 18 years old".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Must be at least 18 years old".to_string()))
     );
 }
 
@@ -55,8 +54,7 @@ rule is_valid = value > 0
         .find(|r| r.rule.name == "is_valid")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
-    assert_eq!(rule_result.veto_message, None);
+    assert_eq!(rule_result.result, OperationResult::Veto(None));
 }
 
 #[test]
@@ -78,8 +76,10 @@ rule is_adult = age >= 18
         .find(|r| r.rule.name == "is_adult")
         .unwrap();
 
-    assert_eq!(rule_result.result, Some(LiteralValue::Boolean(true)));
-    assert_eq!(rule_result.veto_message, None);
+    assert_eq!(
+        rule_result.result,
+        OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))
+    );
 }
 
 #[test]
@@ -103,10 +103,9 @@ rule eligible = age >= 18 and score >= 80
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Age requirement not met".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Age requirement not met".to_string()))
     );
 }
 
@@ -131,10 +130,9 @@ rule eligible = age >= 18 and score >= 80
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Score requirement not met".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Score requirement not met".to_string()))
     );
 }
 
@@ -158,10 +156,9 @@ rule valid_compensation = salary >= 40000
         .find(|r| r.rule.name == "valid_compensation")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Insufficient salary for experience level".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Insufficient salary for experience level".to_string()))
     );
 }
 
@@ -188,8 +185,10 @@ rule can_drive = age >= 16
         .find(|r| r.rule.name == "can_drive")
         .unwrap();
 
-    assert_eq!(rule_result.result, Some(LiteralValue::Boolean(false)));
-    assert_eq!(rule_result.veto_message, None);
+    assert_eq!(
+        rule_result.result,
+        OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::False))
+    );
 }
 
 #[test]
@@ -211,10 +210,9 @@ rule can_ship = package_weight <= 50 kilograms
         .find(|r| r.rule.name == "can_ship")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Package exceeds maximum weight limit".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Package exceeds maximum weight limit".to_string()))
     );
 }
 
@@ -237,10 +235,9 @@ rule is_affordable = price <= 1000
         .find(|r| r.rule.name == "is_affordable")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Price exceeds budget limit".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Price exceeds budget limit".to_string()))
     );
 }
 
@@ -264,10 +261,9 @@ rule is_valid_date = event_date >= min_date
         .find(|r| r.rule.name == "is_valid_date")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Event date is too early in the year".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Event date is too early in the year".to_string()))
     );
 }
 
@@ -290,10 +286,9 @@ rule is_complete = completion >= 95%
         .find(|r| r.rule.name == "is_complete")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Project barely started".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Project barely started".to_string()))
     );
 }
 
@@ -318,10 +313,9 @@ rule eligible = has_permission
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
-    assert_eq!(eligible_result.result, None);
     assert_eq!(
-        eligible_result.veto_message,
-        Some("Must be adult or have permission".to_string())
+        eligible_result.result,
+        OperationResult::Veto(Some("Must be adult or have permission".to_string()))
     );
 }
 
@@ -345,10 +339,9 @@ rule within_budget = expenses < income
         .find(|r| r.rule.name == "within_budget")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Expenses exceed 90% of income".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Expenses exceed 90% of income".to_string()))
     );
 }
 
@@ -371,10 +364,9 @@ rule is_active = status == "active"
         .find(|r| r.rule.name == "is_active")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Cannot process cancelled items".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Cannot process cancelled items".to_string()))
     );
 }
 
@@ -399,10 +391,9 @@ rule double_value = value * 2
         .iter()
         .find(|r| r.rule.name == "check_positive")
         .unwrap();
-    assert_eq!(check_positive.result, None);
     assert_eq!(
-        check_positive.veto_message,
-        Some("Value must be positive".to_string())
+        check_positive.result,
+        OperationResult::Veto(Some("Value must be positive".to_string()))
     );
 
     let check_negative = response
@@ -410,8 +401,10 @@ rule double_value = value * 2
         .iter()
         .find(|r| r.rule.name == "check_negative")
         .unwrap();
-    assert_eq!(check_negative.result, Some(LiteralValue::Boolean(true)));
-    assert_eq!(check_negative.veto_message, None);
+    assert_eq!(
+        check_negative.result,
+        OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))
+    );
 
     let double_value = response
         .results
@@ -420,9 +413,8 @@ rule double_value = value * 2
         .unwrap();
     assert_eq!(
         double_value.result,
-        Some(LiteralValue::Number(Decimal::from_str("-20.0").unwrap()))
+        OperationResult::Value(LiteralValue::Number(Decimal::from_str("-20.0").unwrap()))
     );
-    assert_eq!(double_value.veto_message, None);
 }
 
 #[test]
@@ -444,8 +436,7 @@ rule is_valid = value > 0
         .find(|r| r.rule.name == "is_valid")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
-    assert!(rule_result.veto_message.is_some());
+    assert!(matches!(rule_result.result, OperationResult::Veto(Some(_))));
 }
 
 #[test]
@@ -467,10 +458,11 @@ rule valid = age >= 18
         .find(|r| r.rule.name == "valid")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Error: Age < 18! Must be 18+. Contact: admin@example.com (555-1234)".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some(
+            "Error: Age < 18! Must be 18+. Contact: admin@example.com (555-1234)".to_string()
+        ))
     );
 }
 
@@ -498,8 +490,10 @@ rule valid = value > 0
         .find(|r| r.rule.name == "valid")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
-    assert_eq!(rule_result.veto_message, Some(message.to_string()));
+    assert_eq!(
+        rule_result.result,
+        OperationResult::Veto(Some(message.to_string()))
+    );
 }
 
 #[test]
@@ -522,10 +516,9 @@ rule check = value > 10
         .find(|r| r.rule.name == "check")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Value too small".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Value too small".to_string()))
     );
 }
 
@@ -550,8 +543,7 @@ rule eligible = age >= 18 and score >= 80
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
-    assert!(rule_result.veto_message.is_some());
+    assert!(matches!(rule_result.result, OperationResult::Veto(Some(_))));
 }
 
 #[test]
@@ -574,10 +566,9 @@ rule eligible = age >= 18
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Eligibility criteria not met".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Eligibility criteria not met".to_string()))
     );
 }
 
@@ -600,9 +591,8 @@ rule can_proceed = true
         .find(|r| r.rule.name == "can_proceed")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Account must be verified".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Account must be verified".to_string()))
     );
 }

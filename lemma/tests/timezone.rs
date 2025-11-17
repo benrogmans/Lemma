@@ -9,7 +9,7 @@ fn get_rule_value(engine: &Engine, doc_name: &str, rule_name: &str) -> lemma::Li
         .find(|r| r.rule.name == rule_name)
         .unwrap()
         .result
-        .as_ref()
+        .value()
         .unwrap()
         .clone()
 }
@@ -29,7 +29,10 @@ rule are_equal = time_nyc == time_london
         .expect("Failed to parse");
 
     if let lemma::LiteralValue::Boolean(value) = get_rule_value(&engine, "test", "are_equal") {
-        assert!(value, "Same instant in different timezones should be equal");
+        assert!(
+            bool::from(value),
+            "Same instant in different timezones should be equal"
+        );
     } else {
         panic!("Expected Boolean value");
     }
@@ -50,7 +53,10 @@ rule nyc_is_later = time_nyc > time_tokyo
         .expect("Failed to parse");
 
     if let lemma::LiteralValue::Boolean(value) = get_rule_value(&engine, "test", "nyc_is_later") {
-        assert!(value, "NYC 10am is later than Tokyo 10am (same local time)");
+        assert!(
+            bool::from(value),
+            "NYC 10am is later than Tokyo 10am (same local time)"
+        );
     } else {
         panic!("Expected Boolean value");
     }

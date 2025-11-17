@@ -1,4 +1,4 @@
-use lemma::{Engine, LemmaResult, LiteralValue};
+use lemma::{Engine, LemmaResult};
 
 #[test]
 fn test_unit_subtract_percentage() -> LemmaResult<()> {
@@ -32,7 +32,7 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
         .expect("discount rule not found");
 
     match &discount_result.result {
-        Some(LiteralValue::Percentage(p)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Percentage(p)) => {
             assert_eq!(p.to_string(), "10", "discount should be 10%");
         }
         _ => panic!("Expected percentage for discount"),
@@ -46,7 +46,7 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
         .expect("price rule not found");
 
     match &price_result.result {
-        Some(LiteralValue::Unit(unit)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Unit(unit)) => {
             assert_eq!(
                 unit.to_string(),
                 "180 EUR",
@@ -84,12 +84,12 @@ fn test_unit_add_percentage() -> LemmaResult<()> {
         .expect("price_with_tax rule not found");
 
     match &result.result {
-        Some(LiteralValue::Unit(unit)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Unit(unit)) => {
             // 100 usd + 8.5% = 108.50 usd
             assert_eq!(
                 unit.to_string(),
-                "108.5 USD",
-                "price_with_tax should be 108.5 USD"
+                "108.50 USD",
+                "price_with_tax should be 108.50 USD"
             );
         }
         _ => panic!("Expected unit for price_with_tax, got {:?}", result.result),
@@ -127,7 +127,7 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
         .expect("increased rule not found");
 
     match &increased_result.result {
-        Some(LiteralValue::Unit(unit)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Unit(unit)) => {
             assert_eq!(unit.to_string(), "60 GBP", "50 gbp + 20% should be 60 gbp");
         }
         _ => panic!(
@@ -144,7 +144,7 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
         .expect("decreased rule not found");
 
     match &decreased_result.result {
-        Some(LiteralValue::Unit(unit)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Unit(unit)) => {
             assert_eq!(
                 unit.to_string(),
                 "42.50 GBP",
@@ -165,7 +165,7 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
         .expect("scaled rule not found");
 
     match &scaled_result.result {
-        Some(LiteralValue::Unit(unit)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Unit(unit)) => {
             assert_eq!(unit.to_string(), "10 GBP", "50 gbp * 20% should be 10 gbp");
         }
         _ => panic!("Expected unit for scaled, got {:?}", scaled_result.result),
@@ -202,7 +202,7 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
         .expect("after_bulk rule not found");
 
     match &after_bulk_result.result {
-        Some(LiteralValue::Unit(unit)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Unit(unit)) => {
             assert_eq!(
                 unit.to_string(),
                 "850 EUR",
@@ -223,7 +223,7 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
         .expect("final_price rule not found");
 
     match &final_price_result.result {
-        Some(LiteralValue::Unit(unit)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Unit(unit)) => {
             assert_eq!(
                 unit.to_string(),
                 "807.50 EUR",
@@ -269,7 +269,7 @@ fn test_unit_percentage_with_different_currencies() -> LemmaResult<()> {
         .expect("usd_discounted rule not found");
 
     match &usd_result.result {
-        Some(LiteralValue::Unit(unit)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Unit(unit)) => {
             assert_eq!(unit.to_string(), "88 USD", "100 usd - 12% should be 88 usd");
         }
         _ => panic!("Expected unit for usd_discounted"),
@@ -283,7 +283,7 @@ fn test_unit_percentage_with_different_currencies() -> LemmaResult<()> {
         .expect("eur_discounted rule not found");
 
     match &eur_result.result {
-        Some(LiteralValue::Unit(unit)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Unit(unit)) => {
             assert_eq!(
                 unit.to_string(),
                 "74.80 EUR",
@@ -301,10 +301,10 @@ fn test_unit_percentage_with_different_currencies() -> LemmaResult<()> {
         .expect("jpy_discounted rule not found");
 
     match &jpy_result.result {
-        Some(LiteralValue::Unit(unit)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Unit(unit)) => {
             assert_eq!(
                 unit.to_string(),
-                "8800 JPY",
+                "8,800 JPY",
                 "10000 jpy - 12% should be 8800 jpy"
             );
         }
@@ -345,7 +345,7 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
         .expect("combined_discount rule not found");
 
     match &combined_result.result {
-        Some(LiteralValue::Percentage(p)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Percentage(p)) => {
             assert_eq!(p.to_string(), "15", "5% + 10% should be 15%");
         }
         _ => panic!(
@@ -362,7 +362,7 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
         .expect("net_rate rule not found");
 
     match &net_rate_result.result {
-        Some(LiteralValue::Percentage(p)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Percentage(p)) => {
             assert_eq!(p.to_string(), "10", "15% - 5% should be 10%");
         }
         _ => panic!(
@@ -379,7 +379,7 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
         .expect("compound rule not found");
 
     match &compound_result.result {
-        Some(LiteralValue::Percentage(p)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Percentage(p)) => {
             assert_eq!(p.to_string(), "4", "20% * 20% should be 4%");
         }
         _ => panic!(
@@ -396,7 +396,7 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
         .expect("ratio rule not found");
 
     match &ratio_result.result {
-        Some(LiteralValue::Number(n)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
             assert_eq!(n.to_string(), "4", "20% / 5% should be 4");
         }
         _ => panic!("Expected number for ratio, got {:?}", ratio_result.result),
@@ -433,7 +433,7 @@ fn test_averaging_percentages() -> LemmaResult<()> {
         .expect("sum rule not found");
 
     match &sum_result.result {
-        Some(LiteralValue::Percentage(p)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Percentage(p)) => {
             assert_eq!(p.to_string(), "45", "10% + 20% + 15% should be 45%");
         }
         _ => panic!("Expected percentage for sum, got {:?}", sum_result.result),
@@ -447,7 +447,7 @@ fn test_averaging_percentages() -> LemmaResult<()> {
         .expect("average rule not found");
 
     match &avg_result.result {
-        Some(LiteralValue::Percentage(p)) => {
+        lemma::OperationResult::Value(lemma::LiteralValue::Percentage(p)) => {
             assert_eq!(p.to_string(), "15", "45% / 3 should be 15%");
         }
         _ => panic!(

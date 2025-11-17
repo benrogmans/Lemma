@@ -239,7 +239,7 @@ fn given_facts_affect_domain_count() {
     let mut given = HashMap::new();
     given.insert(
         "pricing.is_member".to_string(),
-        LiteralValue::Boolean(false),
+        LiteralValue::Boolean(lemma::BooleanValue::False),
     );
 
     let domains_with_given = engine

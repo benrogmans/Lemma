@@ -429,9 +429,9 @@ fn parse_literal_value(s: &str) -> Result<lemma::LiteralValue> {
 
     // Try parsing as various types
     if s == "true" {
-        Ok(LiteralValue::Boolean(true))
+        Ok(LiteralValue::Boolean(lemma::BooleanValue::True))
     } else if s == "false" {
-        Ok(LiteralValue::Boolean(false))
+        Ok(LiteralValue::Boolean(lemma::BooleanValue::False))
     } else if let Ok(num) = s.parse::<Decimal>() {
         Ok(LiteralValue::Number(num))
     } else if let Some(s_without_percent) = s.strip_suffix('%') {

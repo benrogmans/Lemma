@@ -28,7 +28,9 @@ rule discount = 0
 
     // Since quantity=25 is >= 10, we should get 10
     match &discount_result.result {
-        Some(LiteralValue::Number(n)) => assert_eq!(*n, Decimal::from_str("10").unwrap()),
+        lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
+            assert_eq!(*n, Decimal::from_str("10").unwrap())
+        }
         _ => panic!("Expected number result"),
     }
 }
@@ -57,7 +59,7 @@ rule can_drive = age >= 18 and has_license
     println!("Boolean Response: {:?}", result);
 
     match &result.result {
-        Some(LiteralValue::Boolean(b)) => assert!(*b),
+        lemma::OperationResult::Value(lemma::LiteralValue::Boolean(b)) => assert!(bool::from(b)),
         _ => panic!("Expected boolean result, got {:?}", result.result),
     }
 }
@@ -86,7 +88,9 @@ rule result = base * multiplier
     println!("Arithmetic Response: {:?}", result);
 
     match &result.result {
-        Some(LiteralValue::Number(n)) => assert_eq!(*n, Decimal::from_str("200").unwrap()),
+        lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
+            assert_eq!(*n, Decimal::from_str("200").unwrap())
+        }
         _ => panic!("Expected number result, got {:?}", result.result),
     }
 }
@@ -117,7 +121,9 @@ rule final_price = 100 - discount?
     println!("Rule Reference Response: {:?}", result);
 
     match &result.result {
-        Some(LiteralValue::Number(n)) => assert_eq!(*n, Decimal::from_str("90").unwrap()),
+        lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
+            assert_eq!(*n, Decimal::from_str("90").unwrap())
+        }
         _ => panic!("Expected number result, got {:?}", result.result),
     }
 }

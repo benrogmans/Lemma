@@ -18,7 +18,9 @@ pub fn shape_to_domains(shape: &Shape) -> LemmaResult<Vec<HashMap<FactReference,
 
     for branch in &shape.branches {
         // Check if the branch condition is literally false (unsatisfiable)
-        if let ExpressionKind::Literal(LiteralValue::Boolean(false)) = &branch.condition.kind {
+        if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)) =
+            &branch.condition.kind
+        {
             // Skip this branch - it's impossible
             continue;
         }
@@ -53,7 +55,7 @@ fn extract_domain_for_variable(
     match &condition.kind {
         // Boolean literal
         ExpressionKind::Literal(lit) => {
-            if let LiteralValue::Boolean(true) = lit {
+            if let LiteralValue::Boolean(crate::BooleanValue::True) = lit {
                 // Condition is always true - no constraints
                 Ok(None)
             } else {

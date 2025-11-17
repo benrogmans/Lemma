@@ -4,8 +4,8 @@
 
 use super::context::EvaluationContext;
 use crate::{
-    ast::Span, ComputationKind, Expression, ExpressionKind, FactReference, LemmaError,
-    LiteralValue, MathematicalComputation, OperationRecord, OperationResult,
+    ComputationKind, Expression, ExpressionKind, FactReference, LemmaError, LiteralValue,
+    MathematicalComputation, OperationRecord, OperationResult,
 };
 use rust_decimal::Decimal;
 use std::sync::Arc;
@@ -132,31 +132,36 @@ pub fn evaluate_expression(
                 match result {
                     OperationResult::Veto(msg) => {
                         // Rule was vetoed - the veto applies to this rule too
-                        return Ok(OperationResult::Veto(msg));
-                    }
-                    OperationResult::Value(value) => {
-                        // Record that we used this rule
-                        let rule_index = context.push_operation(
+                        // Record the operation so proof builder can find it
+                        context.push_operation(
                             crate::OperationKind::RuleUsed {
                                 rule_ref: rule_ref.clone(),
-                                value: value.clone(),
+                                rule_path: lookup_path.clone(),
+                                result: OperationResult::Veto(msg.clone()),
                             },
                             expr.id,
                         );
-
-                        // Inline the operations that computed this rule's value with this rule as parent
-                        if let Some(rule_ops) = context.rule_operations.get(&lookup_path) {
-                            context
-                                .operations
-                                .extend(rule_ops.iter().map(|op| op.with_parent(rule_index)));
-                        }
+                        return Ok(OperationResult::Veto(msg));
+                    }
+                    OperationResult::Value(value) => {
+                        // Record that we used this rule, including the full path
+                        context.push_operation(
+                            crate::OperationKind::RuleUsed {
+                                rule_ref: rule_ref.clone(),
+                                rule_path: lookup_path.clone(),
+                                result: OperationResult::Value(value.clone()),
+                            },
+                            expr.id,
+                        );
 
                         return Ok(OperationResult::Value(value));
                     }
                 }
             }
 
-            // Rule not computed yet
+            // Rule not computed yet or doesn't exist
+            // Note: If the rule failed due to missing facts, it should already be in rule_results with a Veto
+            // If it's not in rule_results, it either doesn't exist or hasn't been evaluated yet
             Err(LemmaError::Engine(format!(
                 "Rule {} not found",
                 lookup_path
@@ -184,7 +189,7 @@ pub fn evaluate_expression(
                 .map_err(|e| convert_engine_error_to_runtime(e, expr, context))?;
 
             // Extract the original expression text from the source
-            let expr_text = context.extract_expr_text(expr, rule_doc);
+            let expr_text = expr.get_source_text(context.sources);
 
             context.push_operation(
                 crate::OperationKind::Computation {
@@ -218,19 +223,21 @@ pub fn evaluate_expression(
             let result = super::operations::comparison_operation(left_val, op, right_val)?;
 
             // Extract the original expression text from the source
-            let expr_text = context.extract_expr_text(expr, rule_doc);
+            let expr_text = expr.get_source_text(context.sources);
+
+            let result_value = LiteralValue::Boolean(result.into());
 
             context.push_operation(
                 crate::OperationKind::Computation {
                     kind: ComputationKind::Comparison(op.clone()),
                     inputs: vec![left_val.clone(), right_val.clone()],
-                    result: LiteralValue::Boolean(result),
+                    result: result_value.clone(),
                     expr: expr_text,
                 },
                 expr.id,
             );
 
-            Ok(OperationResult::Value(LiteralValue::Boolean(result)))
+            Ok(OperationResult::Value(result_value))
         }
 
         ExpressionKind::LogicalAnd(left, right) => {
@@ -252,7 +259,8 @@ pub fn evaluate_expression(
             match (left_val, right_val) {
                 (LiteralValue::Boolean(l), LiteralValue::Boolean(r)) => {
                     // No operation record for logical operations - only record sub-expressions
-                    Ok(OperationResult::Value(LiteralValue::Boolean(*l && *r)))
+                    let result = l.into() && r.into();
+                    Ok(OperationResult::Value(LiteralValue::Boolean(result.into())))
                 }
                 _ => Err(LemmaError::Engine(
                     "Logical AND requires boolean operands".to_string(),
@@ -279,7 +287,8 @@ pub fn evaluate_expression(
             match (left_val, right_val) {
                 (LiteralValue::Boolean(l), LiteralValue::Boolean(r)) => {
                     // No operation record for logical operations - only record sub-expressions
-                    Ok(OperationResult::Value(LiteralValue::Boolean(*l || *r)))
+                    let result = l.into() || r.into();
+                    Ok(OperationResult::Value(LiteralValue::Boolean(result.into())))
                 }
                 _ => Err(LemmaError::Engine(
                     "Logical OR requires boolean operands".to_string(),
@@ -299,7 +308,11 @@ pub fn evaluate_expression(
             let value = result.expect_value("logical negation operand")?;
 
             match value {
-                LiteralValue::Boolean(b) => Ok(OperationResult::Value(LiteralValue::Boolean(!b))),
+                LiteralValue::Boolean(b) => {
+                    let result = !bool::from(b);
+                    let result_value = LiteralValue::Boolean(result.into());
+                    Ok(OperationResult::Value(result_value))
+                }
                 _ => Err(LemmaError::Engine(
                     "Logical NOT requires boolean operand".to_string(),
                 )),
@@ -321,7 +334,7 @@ pub fn evaluate_expression(
         }
 
         ExpressionKind::MathematicalComputation(op, operand) => {
-            let expr_text = context.extract_expr_text(expr, rule_doc);
+            let expr_text = expr.get_source_text(context.sources);
             let result = evaluate_mathematical_operator(
                 op,
                 operand,
@@ -360,7 +373,9 @@ pub fn evaluate_expression(
                 fact_ref.clone()
             };
             let has_value = context.facts.contains_key(&lookup_ref);
-            Ok(OperationResult::Value(LiteralValue::Boolean(has_value)))
+            Ok(OperationResult::Value(LiteralValue::Boolean(
+                has_value.into(),
+            )))
         }
     }
 }
@@ -496,6 +511,7 @@ fn evaluate_mathematical_operator(
 /// Convert an Engine error to a Runtime error with proper source location
 ///
 /// This is used to add span information to errors that occur during expression evaluation.
+/// If source location information is not available, the error remains as an Engine error.
 fn convert_engine_error_to_runtime(
     error: LemmaError,
     expr: &Expression,
@@ -503,48 +519,36 @@ fn convert_engine_error_to_runtime(
 ) -> LemmaError {
     match error {
         LemmaError::Engine(msg) => {
-            let span = expr.span.clone().unwrap_or(Span {
-                start: 0,
-                end: 0,
-                line: 0,
-                col: 0,
-            });
+            // Only convert to Runtime error if we have proper source location
+            if let Some(source_location) = &expr.source_location {
+                let source_text: Arc<str> = context
+                    .sources
+                    .get(&source_location.source_id)
+                    .map(|s| Arc::from(s.as_str()))
+                    .unwrap_or_default();
 
-            let source_id = context
-                .current_doc
-                .source
-                .as_ref()
-                .cloned()
-                .unwrap_or_else(|| "<input>".to_string());
+                let suggestion = if msg.contains("division") || msg.contains("zero") {
+                    Some(
+                        "Consider using an 'unless' clause to guard against division by zero"
+                            .to_string(),
+                    )
+                } else if msg.contains("type") || msg.contains("mismatch") {
+                    Some("Check that operands have compatible types".to_string())
+                } else {
+                    None
+                };
 
-            let source_text: Arc<str> = context
-                .sources
-                .get(&source_id)
-                .map(|s| Arc::from(s.as_str()))
-                .unwrap_or_else(|| Arc::from(""));
-
-            let suggestion = if msg.contains("division") || msg.contains("zero") {
-                Some(
-                    "Consider using an 'unless' clause to guard against division by zero"
-                        .to_string(),
-                )
-            } else if msg.contains("type") || msg.contains("mismatch") {
-                Some("Check that operands have compatible types".to_string())
+                LemmaError::Runtime(Box::new(crate::error::ErrorDetails {
+                    message: msg,
+                    source_location: source_location.clone(),
+                    source_text,
+                    doc_start_line: context.current_doc.start_line,
+                    suggestion,
+                }))
             } else {
-                None
-            };
-
-            LemmaError::Runtime(Box::new(crate::error::ErrorDetails {
-                message: msg,
-                source_location: crate::SourceLocation::new(
-                    source_id,
-                    span,
-                    context.current_doc.name.clone(),
-                ),
-                source_text,
-                doc_start_line: context.current_doc.start_line,
-                suggestion,
-            }))
+                // No source location available - keep as Engine error
+                LemmaError::Engine(msg)
+            }
         }
         other => other,
     }

@@ -220,7 +220,7 @@ fn cross_document_rule_references() {
         .invert(
             "order",
             "is_vip",
-            Target::value(LiteralValue::Boolean(true)),
+            Target::value(LiteralValue::Boolean(lemma::BooleanValue::True)),
             given,
         )
         .expect("should invert successfully");
@@ -396,7 +396,7 @@ fn target_operator_not_equal() {
         "is_complete",
         Target::with_op(
             TargetOp::Neq,
-            lemma::OperationResult::Value(LiteralValue::Boolean(true)),
+            lemma::OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True)),
         ),
         HashMap::new(),
     );

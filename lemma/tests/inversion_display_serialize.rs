@@ -8,7 +8,7 @@ fn lit_num(n: i32) -> lemma::LiteralValue {
 }
 
 fn lit_bool(b: bool) -> lemma::LiteralValue {
-    lemma::LiteralValue::Boolean(b)
+    lemma::LiteralValue::Boolean(b.into())
 }
 
 fn expr_lit(l: lemma::LiteralValue) -> lemma::Expression {

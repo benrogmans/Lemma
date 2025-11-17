@@ -136,12 +136,6 @@ impl Validator {
                 let fact_name = crate::analysis::fact_display_name(fact);
 
                 if let Some(first_span) = fact_names.get(&fact_name) {
-                    let duplicate_span = fact.span.clone().unwrap_or(Span {
-                        start: 0,
-                        end: 0,
-                        line: 0,
-                        col: 0,
-                    });
                     let first_doc_line = if first_span.line >= doc.start_line {
                         first_span.line - doc.start_line + 1
                     } else {
@@ -164,21 +158,24 @@ impl Validator {
                         ),
                     };
 
-                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                        message: error_message,
-                        source_location: crate::SourceLocation::new(
-                            doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                            duplicate_span,
-                            doc.name.clone(),
-                        ),
-                        source_text: Arc::from(""),
-                        doc_start_line: doc.start_line,
-                        suggestion: Some(suggestion),
-                    })));
+                    if let Some(source_location) = &fact.source_location {
+                        return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                            message: error_message,
+                            source_location: source_location.clone(),
+                            source_text: Arc::from(""),
+                            doc_start_line: doc.start_line,
+                            suggestion: Some(suggestion),
+                        })));
+                    } else {
+                        return Err(LemmaError::Engine(format!(
+                            "{}: {}",
+                            error_message, suggestion
+                        )));
+                    }
                 }
 
-                if let Some(span) = &fact.span {
-                    fact_names.insert(fact_name, span.clone());
+                if let Some(source_location) = &fact.source_location {
+                    fact_names.insert(fact_name, source_location.span.clone());
                 }
             }
 
@@ -186,67 +183,65 @@ impl Validator {
             let mut rule_names: HashMap<String, Span> = HashMap::new();
             for rule in &doc.rules {
                 if let Some(first_span) = rule_names.get(&rule.name) {
-                    let duplicate_span = rule.span.clone().unwrap_or(Span {
-                        start: 0,
-                        end: 0,
-                        line: 0,
-                        col: 0,
-                    });
                     let first_doc_line = if first_span.line >= doc.start_line {
                         first_span.line - doc.start_line + 1
                     } else {
                         first_span.line
                     };
-                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                        message: format!("Duplicate rule definition: '{}'", rule.name),
-                        source_location: crate::SourceLocation::new(
-                            doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                            duplicate_span,
-                            doc.name.clone(),
-                        ),
-                        source_text: Arc::from(""),
-                        doc_start_line: doc.start_line,
-                        suggestion: Some(format!(
-                            "Rule '{}' was already defined at doc line {} (file line {}). Each rule can only be defined once per document. Consider using 'unless' clauses for conditional logic.",
-                            rule.name, first_doc_line, first_span.line
-                        )),
-            })));
+                    let suggestion = format!(
+                        "Rule '{}' was already defined at doc line {} (file line {}). Each rule can only be defined once per document. Consider using 'unless' clauses for conditional logic.",
+                        rule.name, first_doc_line, first_span.line
+                    );
+                    if let Some(source_location) = &rule.source_location {
+                        return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                            message: format!("Duplicate rule definition: '{}'", rule.name),
+                            source_location: source_location.clone(),
+                            source_text: Arc::from(""),
+                            doc_start_line: doc.start_line,
+                            suggestion: Some(suggestion),
+                        })));
+                    } else {
+                        return Err(LemmaError::Engine(format!(
+                            "Duplicate rule definition: '{}': {}",
+                            rule.name, suggestion
+                        )));
+                    }
                 }
 
-                if let Some(span) = &rule.span {
-                    rule_names.insert(rule.name.clone(), span.clone());
+                if let Some(source_location) = &rule.source_location {
+                    rule_names.insert(rule.name.clone(), source_location.span.clone());
                 }
             }
 
             // Check for name conflicts between facts and rules
             for rule in &doc.rules {
                 if let Some(fact_span) = fact_names.get(&rule.name) {
-                    let rule_span = rule.span.clone().unwrap_or(Span {
-                        start: 0,
-                        end: 0,
-                        line: 0,
-                        col: 0,
-                    });
                     let fact_doc_line = if fact_span.line >= doc.start_line {
                         fact_span.line - doc.start_line + 1
                     } else {
                         fact_span.line
                     };
-
-                    return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                        message: format!("Name conflict: '{}' is defined as both a fact and a rule", rule.name),
-                        source_location: crate::SourceLocation::new(
-                            doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                            rule_span,
-                            doc.name.clone(),
-                        ),
-                        source_text: Arc::from(""),
-                        doc_start_line: doc.start_line,
-                        suggestion: Some(format!(
-                            "A fact named '{}' was already defined at doc line {} (file line {}). Facts and rules cannot share the same name within a document. Choose a different name for either the fact or the rule.",
-                            rule.name, fact_doc_line, fact_span.line
-                        )),
-            })));
+                    let suggestion = format!(
+                        "A fact named '{}' was already defined at doc line {} (file line {}). Facts and rules cannot share the same name within a document. Choose a different name for either the fact or the rule.",
+                        rule.name, fact_doc_line, fact_span.line
+                    );
+                    if let Some(source_location) = &rule.source_location {
+                        return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                            message: format!(
+                                "Name conflict: '{}' is defined as both a fact and a rule",
+                                rule.name
+                            ),
+                            source_location: source_location.clone(),
+                            source_text: Arc::from(""),
+                            doc_start_line: doc.start_line,
+                            suggestion: Some(suggestion),
+                        })));
+                    } else {
+                        return Err(LemmaError::Engine(format!(
+                            "Name conflict: '{}' is defined as both a fact and a rule: {}",
+                            rule.name, suggestion
+                        )));
+                    }
                 }
             }
         }
@@ -260,20 +255,24 @@ impl Validator {
                 if let FactValue::DocumentReference(ref_doc_name) = &fact.value {
                     // Check if the referenced document exists
                     if !docs.iter().any(|d| d.name == *ref_doc_name) {
-                        return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                            message: format!("Document reference error: '{}' does not exist", ref_doc_name),
-                            source_location: crate::SourceLocation::new(
-                                doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                                fact.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                                doc.name.clone(),
-                            ),
+                        let message = format!(
+                            "Document reference error: '{}' does not exist",
+                            ref_doc_name
+                        );
+                        if let Some(source_location) = &fact.source_location {
+                            return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                                message,
+                                source_location: source_location.clone(),
                             source_text: Arc::from(""),
                             doc_start_line: doc.start_line,
                             suggestion: Some(format!(
                                 "Document '{}' is referenced but not defined. Make sure the document exists in your workspace.",
                                 ref_doc_name
                             )),
-            })));
+                            })));
+                        } else {
+                            return Err(LemmaError::Engine(message));
+                        }
                     }
                 }
             }
@@ -551,25 +550,17 @@ impl Validator {
         expr: &Expression,
         current_doc: &LemmaDoc,
     ) -> LemmaError {
-        LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-            message,
-            source_location: crate::SourceLocation::new(
-                current_doc
-                    .source
-                    .clone()
-                    .unwrap_or_else(|| "<input>".to_string()),
-                expr.span.clone().unwrap_or(Span {
-                    start: 0,
-                    end: 0,
-                    line: 0,
-                    col: 0,
-                }),
-                current_doc.name.clone(),
-            ),
-            source_text: Arc::from(""),
-            doc_start_line: current_doc.start_line,
-            suggestion: Some(suggestion),
-        }))
+        if let Some(source_location) = &expr.source_location {
+            LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                message,
+                source_location: source_location.clone(),
+                source_text: Arc::from(""),
+                doc_start_line: current_doc.start_line,
+                suggestion: Some(suggestion),
+            }))
+        } else {
+            LemmaError::Engine(format!("{}: {}", message, suggestion))
+        }
     }
 
     /// Check for circular dependencies in rules (moved from document transpiler)
@@ -589,7 +580,7 @@ impl Validator {
                 let mut path = Vec::new();
 
                 if let Some(cycle) =
-                    Self::detect_cycle(&graph, rule_name, &mut visiting, &mut visited, &mut path)
+                    Self::detect_cycle(&graph, rule_name, &mut visiting, &mut visited, &mut path)?
                 {
                     let cycle_display = cycle.join(" -> ");
                     return Err(LemmaError::CircularDependency(format!(
@@ -633,16 +624,21 @@ impl Validator {
         visiting: &mut HashSet<String>,
         visited: &mut HashSet<String>,
         path: &mut Vec<String>,
-    ) -> Option<Vec<String>> {
+    ) -> Result<Option<Vec<String>>, LemmaError> {
         if visiting.contains(node) {
-            let cycle_start = path.iter().position(|n| n == node).unwrap_or(0);
+            let cycle_start = path.iter().position(|n| n == node).ok_or_else(|| {
+                LemmaError::Engine(format!(
+                    "Cycle detection logic error: node '{}' found in visiting set but not in path",
+                    node
+                ))
+            })?;
             let mut cycle = path[cycle_start..].to_vec();
             cycle.push(node.to_string());
-            return Some(cycle);
+            return Ok(Some(cycle));
         }
 
         if visited.contains(node) {
-            return None;
+            return Ok(None);
         }
 
         visiting.insert(node.to_string());
@@ -652,9 +648,9 @@ impl Validator {
             for dependency_rule in dependencies {
                 if graph.contains_key(dependency_rule) {
                     if let Some(cycle) =
-                        Self::detect_cycle(graph, dependency_rule, visiting, visited, path)
+                        Self::detect_cycle(graph, dependency_rule, visiting, visited, path)?
                     {
-                        return Some(cycle);
+                        return Ok(Some(cycle));
                     }
                 }
             }
@@ -664,7 +660,7 @@ impl Validator {
         visiting.remove(node);
         visited.insert(node.to_string());
 
-        None
+        Ok(None)
     }
 
     /// Validate expression types - ensure logical operators only have boolean operands
@@ -677,28 +673,27 @@ impl Validator {
                     let condition_type = self
                         .infer_expression_type_with_context(&unless_clause.condition, Some(doc))?;
                     if condition_type != ExpressionType::Unknown && !condition_type.is_boolean() {
-                        return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-                            message: format!(
-                                "Type error: Unless condition must be boolean, but got {}",
-                                condition_type.name()
-                            ),
-                            source_location: crate::SourceLocation::new(
-                                doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                                unless_clause.condition.span.clone().unwrap_or(Span {
-                                    start: 0,
-                                    end: 0,
-                                    line: 0,
-                                    col: 0,
-                                }),
-                                doc.name.clone(),
-                            ),
-                            source_text: Arc::from(""),
-                            doc_start_line: doc.start_line,
-                            suggestion: Some(
-                                "Use a comparison or boolean expression for unless conditions"
-                                    .to_string(),
-                            ),
-                        })));
+                        let message = format!(
+                            "Type error: Unless condition must be boolean, but got {}",
+                            condition_type.name()
+                        );
+                        if let Some(source_location) = &unless_clause.condition.source_location {
+                            return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                                message,
+                                source_location: source_location.clone(),
+                                source_text: Arc::from(""),
+                                doc_start_line: doc.start_line,
+                                suggestion: Some(
+                                    "Use a comparison or boolean expression for unless conditions"
+                                        .to_string(),
+                                ),
+                            })));
+                        } else {
+                            return Err(LemmaError::Engine(format!(
+                                "{}: Use a comparison or boolean expression for unless conditions",
+                                message
+                            )));
+                        }
                     }
 
                     self.validate_expression_type(&unless_clause.condition, doc)?;
@@ -763,21 +758,27 @@ impl Validator {
             return Ok(());
         }
 
-        Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
-            message: format!(
-                "Type error: Logical operator '{}' requires boolean operands, but operand has type {}",
-                operator,
-                operand_type.name()
-            ),
-            source_location: crate::SourceLocation::new(
-                doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
-                operand.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                doc.name.clone(),
-            ),
-            source_text: Arc::from(""),
-            doc_start_line: doc.start_line,
-            suggestion: Some("Use a boolean expression or comparison for logical operations".to_string()),
-        })))
+        let message = format!(
+            "Type error: Logical operator '{}' requires boolean operands, but operand has type {}",
+            operator,
+            operand_type.name()
+        );
+        if let Some(source_location) = &operand.source_location {
+            Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
+                message,
+                source_location: source_location.clone(),
+                source_text: Arc::from(""),
+                doc_start_line: doc.start_line,
+                suggestion: Some(
+                    "Use a boolean expression or comparison for logical operations".to_string(),
+                ),
+            })))
+        } else {
+            Err(LemmaError::Engine(format!(
+                "{}: Use a boolean expression or comparison for logical operations",
+                message
+            )))
+        }
     }
 
     /// Validate that all branches of a rule return compatible types
@@ -918,7 +919,6 @@ impl Validator {
         self.infer_expression_type_with_context(expr, None)
     }
 
-    #[allow(clippy::only_used_in_recursion)]
     fn infer_expression_type_with_context(
         &self,
         expr: &Expression,

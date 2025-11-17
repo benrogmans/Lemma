@@ -1,10 +1,16 @@
+use crate::ast::Span;
 use crate::error::LemmaError;
 use crate::parser::Rule;
 use crate::semantic::*;
+use crate::SourceLocation;
 use pest::iterators::Pair;
 
-pub(crate) fn parse_fact_definition(pair: Pair<Rule>) -> Result<LemmaFact, LemmaError> {
-    let span = crate::ast::Span::from_pest_span(pair.as_span());
+pub(crate) fn parse_fact_definition(
+    pair: Pair<Rule>,
+    source_id: &str,
+    doc_name: &str,
+) -> Result<LemmaFact, LemmaError> {
+    let span = Span::from_pest_span(pair.as_span());
     let mut fact_name = None;
     let mut fact_value = None;
 
@@ -23,11 +29,19 @@ pub(crate) fn parse_fact_definition(pair: Pair<Rule>) -> Result<LemmaFact, Lemma
         LemmaError::Engine("Grammar error: fact_definition missing fact_value".to_string())
     })?;
 
-    Ok(LemmaFact::new(crate::FactType::Local(name), value).with_span(span))
+    Ok(
+        LemmaFact::new(crate::FactType::Local(name), value).with_source_location(
+            SourceLocation::new(source_id.to_string(), span, doc_name.to_string()),
+        ),
+    )
 }
 
-pub(crate) fn parse_fact_override(pair: Pair<Rule>) -> Result<LemmaFact, LemmaError> {
-    let span = crate::ast::Span::from_pest_span(pair.as_span());
+pub(crate) fn parse_fact_override(
+    pair: Pair<Rule>,
+    source_id: &str,
+    doc_name: &str,
+) -> Result<LemmaFact, LemmaError> {
+    let span = Span::from_pest_span(pair.as_span());
     let mut fact_override_name = None;
     let mut fact_value = None;
 
@@ -48,7 +62,11 @@ pub(crate) fn parse_fact_override(pair: Pair<Rule>) -> Result<LemmaFact, LemmaEr
         LemmaError::Engine("Grammar error: fact_override missing fact_value".to_string())
     })?;
 
-    Ok(LemmaFact::new(crate::FactType::Foreign(override_ref), value).with_span(span))
+    Ok(
+        LemmaFact::new(crate::FactType::Foreign(override_ref), value).with_source_location(
+            SourceLocation::new(source_id.to_string(), span, doc_name.to_string()),
+        ),
+    )
 }
 
 fn parse_fact_override_name(pair: Pair<Rule>) -> Result<crate::ForeignFact, LemmaError> {

@@ -54,7 +54,7 @@ fn test_recursive_fact_finding() {
             crate::ExpressionId::new(0),
         ),
         unless_clauses: vec![],
-        span: None,
+        source_location: None,
     };
 
     let rule_b = LemmaRule {
@@ -67,7 +67,7 @@ fn test_recursive_fact_finding() {
             crate::ExpressionId::new(1),
         ),
         unless_clauses: vec![],
-        span: None,
+        source_location: None,
     };
 
     let rule_c = LemmaRule {
@@ -80,7 +80,7 @@ fn test_recursive_fact_finding() {
             crate::ExpressionId::new(2),
         ),
         unless_clauses: vec![],
-        span: None,
+        source_location: None,
     };
 
     let rules = vec![rule_a, rule_b, rule_c.clone()];

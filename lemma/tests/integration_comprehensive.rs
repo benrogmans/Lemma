@@ -46,17 +46,17 @@ rule contract_valid = is_salary_valid? and vacation_days_ok? and is_adult?
         .unwrap();
     assert!(total_comp
         .result
-        .as_ref()
+        .value()
         .unwrap()
         .to_string()
-        .contains("82_500"));
+        .contains("82,500"));
 
     let contract_valid = response
         .results
         .iter()
         .find(|r| r.rule.name == "contract_valid")
         .unwrap();
-    assert_eq!(contract_valid.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(contract_valid.result.value().unwrap().to_string(), "true");
 
     engine.remove_document("employment_terms");
     engine.remove_document("base_contract");
@@ -104,7 +104,7 @@ rule final_cost = (base_shipping? + distance_fee?) * express_multiplier?
         .unwrap();
     assert!(weight_pounds
         .result
-        .as_ref()
+        .value()
         .unwrap()
         .to_string()
         .contains("11.02"));
@@ -114,10 +114,7 @@ rule final_cost = (base_shipping? + distance_fee?) * express_multiplier?
         .iter()
         .find(|r| r.rule.name == "weight_surcharge")
         .unwrap();
-    assert_eq!(
-        weight_surcharge.result.as_ref().unwrap().to_string(),
-        "true"
-    );
+    assert_eq!(weight_surcharge.result.value().unwrap().to_string(), "true");
 
     engine.remove_document("shipping");
 }
@@ -161,24 +158,24 @@ rule effective_rate = (tax_amount? / income) * 100%
         .unwrap();
     assert!(taxable
         .result
-        .as_ref()
+        .value()
         .unwrap()
         .to_string()
-        .contains("70_000"));
+        .contains("70,000"));
 
     let in_mid = response
         .results
         .iter()
         .find(|r| r.rule.name == "in_mid_bracket")
         .unwrap();
-    assert_eq!(in_mid.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(in_mid.result.value().unwrap().to_string(), "true");
 
     let tax_rate = response
         .results
         .iter()
         .find(|r| r.rule.name == "tax_rate")
         .unwrap();
-    assert!(tax_rate.result.as_ref().unwrap().to_string().contains("20"));
+    assert!(tax_rate.result.value().unwrap().to_string().contains("20"));
 
     engine.remove_document("tax_calculation");
 }
@@ -225,14 +222,14 @@ rule status = "OK"
         .iter()
         .find(|r| r.rule.name == "system_healthy")
         .unwrap();
-    assert_eq!(system_healthy.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(system_healthy.result.value().unwrap().to_string(), "true");
 
     let status = response
         .results
         .iter()
         .find(|r| r.rule.name == "status")
         .unwrap();
-    assert_eq!(status.result.as_ref().unwrap().to_string(), "\"OK\"");
+    assert_eq!(status.result.value().unwrap().to_string(), "\"OK\"");
 
     engine.remove_document("monitoring");
 
@@ -267,10 +264,7 @@ rule status = "OK"
         .iter()
         .find(|r| r.rule.name == "system_healthy")
         .unwrap();
-    assert_eq!(
-        system_healthy2.result.as_ref().unwrap().to_string(),
-        "false"
-    );
+    assert_eq!(system_healthy2.result.value().unwrap().to_string(), "false");
 
     let status2 = response2
         .results
@@ -278,7 +272,7 @@ rule status = "OK"
         .find(|r| r.rule.name == "status")
         .unwrap();
     assert_eq!(
-        status2.result.as_ref().unwrap().to_string(),
+        status2.result.value().unwrap().to_string(),
         "\"USAGE_ALERT\""
     );
 
@@ -324,7 +318,7 @@ rule trip_summary = is_high_speed? and is_long_distance? and is_high_power?
         .unwrap();
     assert!(mass_pounds
         .result
-        .as_ref()
+        .value()
         .unwrap()
         .to_string()
         .contains("22.04"));
@@ -334,7 +328,7 @@ rule trip_summary = is_high_speed? and is_long_distance? and is_high_power?
         .iter()
         .find(|r| r.rule.name == "trip_summary")
         .unwrap();
-    assert_eq!(trip_summary.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(trip_summary.result.value().unwrap().to_string(), "true");
 
     engine.remove_document("physics_calculation");
 }
@@ -367,14 +361,14 @@ rule status = "LOW"
         .iter()
         .find(|r| r.rule.name == "calculated_value")
         .unwrap();
-    assert_eq!(calculated.result.as_ref().unwrap().to_string(), "200");
+    assert_eq!(calculated.result.value().unwrap().to_string(), "200");
 
     let status = response
         .results
         .iter()
         .find(|r| r.rule.name == "status")
         .unwrap();
-    assert_eq!(status.result.as_ref().unwrap().to_string(), "\"LOW\"");
+    assert_eq!(status.result.value().unwrap().to_string(), "\"LOW\"");
 
     let facts2 = lemma::parse_facts(&["threshold=150", "multiplier=2"]).unwrap();
     let response2 = engine
@@ -386,7 +380,7 @@ rule status = "LOW"
         .iter()
         .find(|r| r.rule.name == "status")
         .unwrap();
-    assert_eq!(status2.result.as_ref().unwrap().to_string(), "\"HIGH\"");
+    assert_eq!(status2.result.value().unwrap().to_string(), "\"HIGH\"");
 
     engine.remove_document("dynamic_config");
 }
@@ -425,17 +419,14 @@ rule is_on_schedule = elapsed_time? <= phase1_duration + phase2_duration
         .iter()
         .find(|r| r.rule.name == "is_phase1_complete")
         .unwrap();
-    assert_eq!(phase1_complete.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(phase1_complete.result.value().unwrap().to_string(), "true");
 
     let phase2_complete = response
         .results
         .iter()
         .find(|r| r.rule.name == "is_phase2_complete")
         .unwrap();
-    assert_eq!(
-        phase2_complete.result.as_ref().unwrap().to_string(),
-        "false"
-    );
+    assert_eq!(phase2_complete.result.value().unwrap().to_string(), "false");
 
     engine.remove_document("project_timeline");
 }
@@ -464,8 +455,8 @@ rule end_date = start + duration
         .find(|r| r.rule.name == "end_date")
         .unwrap();
 
-    assert!(end_date.result.is_some());
-    let result_str = end_date.result.as_ref().unwrap().to_string();
+    assert!(end_date.result.value().is_some());
+    let result_str = end_date.result.value().unwrap().to_string();
     assert!(result_str.contains("2024"));
     assert!(result_str.contains("2") && result_str.contains("14"));
 }
@@ -490,8 +481,8 @@ rule start_date = end - duration
         .find(|r| r.rule.name == "start_date")
         .unwrap();
 
-    assert!(start_date.result.is_some());
-    let result_str = start_date.result.as_ref().unwrap().to_string();
+    assert!(start_date.result.value().is_some());
+    let result_str = start_date.result.value().unwrap().to_string();
     assert!(result_str.contains("2024"));
     assert!(result_str.contains("1") && result_str.contains("15"));
 }
@@ -516,10 +507,10 @@ rule duration = end - start
         .find(|r| r.rule.name == "duration")
         .unwrap();
 
-    assert!(duration.result.is_some());
-    let result_str = duration.result.as_ref().unwrap().to_string();
+    assert!(duration.result.value().is_some());
+    let result_str = duration.result.value().unwrap().to_string();
     // Date - Date returns seconds (30 days = 2,592,000 seconds)
-    assert!(result_str.contains("2592000"));
+    assert!(result_str.contains("2,592,000"));
     assert!(result_str.contains("second"));
 }
 
@@ -543,14 +534,14 @@ rule date1_after_date2 = date1 > date2
         .iter()
         .find(|r| r.rule.name == "date1_before_date2")
         .unwrap();
-    assert_eq!(before.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(before.result.value().unwrap().to_string(), "true");
 
     let after = response
         .results
         .iter()
         .find(|r| r.rule.name == "date1_after_date2")
         .unwrap();
-    assert_eq!(after.result.as_ref().unwrap().to_string(), "false");
+    assert_eq!(after.result.value().unwrap().to_string(), "false");
 }
 
 // ============================================================================
@@ -734,7 +725,7 @@ rule is_valid = value >= config.min_value and value <= config.max_value
         .iter()
         .find(|r| r.rule.name == "is_valid")
         .unwrap();
-    assert_eq!(is_valid.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(is_valid.result.value().unwrap().to_string(), "true");
 }
 
 #[test]
@@ -765,7 +756,7 @@ rule is_valid = salary >= base_contract.min_salary and salary <= base_contract.m
         .iter()
         .find(|r| r.rule.name == "is_valid")
         .unwrap();
-    assert_eq!(is_valid.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(is_valid.result.value().unwrap().to_string(), "true");
 }
 
 #[test]
@@ -796,8 +787,8 @@ rule probation_end = base_contract.project_start + base_contract.probation_perio
         .find(|r| r.rule.name == "probation_end")
         .unwrap();
 
-    assert!(probation_end.result.is_some());
-    let result_str = probation_end.result.as_ref().unwrap().to_string();
+    assert!(probation_end.result.value().is_some());
+    let result_str = probation_end.result.value().unwrap().to_string();
     assert!(result_str.contains("2024"));
     assert!(result_str.contains("4") && result_str.contains("14"));
 }

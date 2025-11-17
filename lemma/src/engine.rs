@@ -50,7 +50,7 @@ impl Engine {
         let new_docs = parse(lemma_code, Some(source.to_owned()), &self.limits)?;
 
         for doc in &new_docs {
-            let source_id = doc.source.clone().unwrap_or_else(|| "<input>".to_owned());
+            let source_id = doc.source.clone().unwrap_or_else(|| doc.name.clone());
             self.sources.insert(source_id, lemma_code.to_owned());
         }
 

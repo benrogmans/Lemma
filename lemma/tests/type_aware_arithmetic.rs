@@ -27,7 +27,7 @@ rule test_passes = price_after_discount? == expected?
         .find(|r| r.rule.name == "price_after_discount")
         .unwrap();
     assert_eq!(
-        price_after_discount.result.as_ref().unwrap().to_string(),
+        price_after_discount.result.value().unwrap().to_string(),
         "150"
     );
 
@@ -36,7 +36,7 @@ rule test_passes = price_after_discount? == expected?
         .iter()
         .find(|r| r.rule.name == "test_passes")
         .unwrap();
-    assert_eq!(test_passes.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(test_passes.result.value().unwrap().to_string(), "true");
 }
 
 #[test]
@@ -65,17 +65,14 @@ rule test_passes = price_with_markup? == expected?
         .iter()
         .find(|r| r.rule.name == "price_with_markup")
         .unwrap();
-    assert_eq!(
-        price_with_markup.result.as_ref().unwrap().to_string(),
-        "110"
-    );
+    assert_eq!(price_with_markup.result.value().unwrap().to_string(), "110");
 
     let test_passes = response
         .results
         .iter()
         .find(|r| r.rule.name == "test_passes")
         .unwrap();
-    assert_eq!(test_passes.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(test_passes.result.value().unwrap().to_string(), "true");
 }
 
 #[test]
@@ -104,14 +101,14 @@ rule test_passes = result? == expected?
         .iter()
         .find(|r| r.rule.name == "result")
         .unwrap();
-    assert_eq!(result.result.as_ref().unwrap().to_string(), "150");
+    assert_eq!(result.result.value().unwrap().to_string(), "150");
 
     let test_passes = response
         .results
         .iter()
         .find(|r| r.rule.name == "test_passes")
         .unwrap();
-    assert_eq!(test_passes.result.as_ref().unwrap().to_string(), "true");
+    assert_eq!(test_passes.result.value().unwrap().to_string(), "true");
 }
 
 #[test]
@@ -141,14 +138,14 @@ rule test_passes = final_price? == expected?
         .iter()
         .find(|r| r.rule.name == "discount_amount")
         .unwrap();
-    assert_eq!(discount_amount.result.as_ref().unwrap().to_string(), "50");
+    assert_eq!(discount_amount.result.value().unwrap().to_string(), "50");
 
     let final_price = response
         .results
         .iter()
         .find(|r| r.rule.name == "final_price")
         .unwrap();
-    assert_eq!(final_price.result.as_ref().unwrap().to_string(), "150");
+    assert_eq!(final_price.result.value().unwrap().to_string(), "150");
 }
 
 #[test]
@@ -180,12 +177,12 @@ rule test_passes = after_second? == expected?
         .iter()
         .find(|r| r.rule.name == "after_first")
         .unwrap();
-    assert_eq!(after_first.result.as_ref().unwrap().to_string(), "80");
+    assert_eq!(after_first.result.value().unwrap().to_string(), "80");
 
     let after_second = response
         .results
         .iter()
         .find(|r| r.rule.name == "after_second")
         .unwrap();
-    assert_eq!(after_second.result.as_ref().unwrap().to_string(), "72");
+    assert_eq!(after_second.result.value().unwrap().to_string(), "72");
 }

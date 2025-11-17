@@ -1,30 +1,6 @@
-use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, Row, Table};
-use lemma::{ComputationKind, Fact, LiteralValue, OperationRecord, Response, RuleResult};
-
-enum LineType {
-    RuleName,
-    Computation,
-    FinalResult,
-    UnlessMatched,
-    UnlessRejected,
-    UnlessFinalResult,
-    DefaultValue,
-}
-
-impl LineType {
-    fn format_line(&self, base_prefix: &str, content: &str) -> String {
-        let symbol = match self {
-            LineType::RuleName => "├─",
-            LineType::Computation => "├─ =",
-            LineType::FinalResult => "└─ =",
-            LineType::UnlessMatched => "├─>",
-            LineType::UnlessRejected => "×",
-            LineType::UnlessFinalResult => "└─>",
-            LineType::DefaultValue => "└─ =",
-        };
-        format!("{}{} {}\n", base_prefix, symbol, content)
-    }
-}
+use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, Table};
+use lemma::{Fact, Response, RuleResult};
+use std::collections::HashSet;
 
 pub struct Formatter {}
 
@@ -47,19 +23,21 @@ impl Formatter {
             output.push('\n');
         }
 
-        // Sort results by source order
         let mut sorted_results = response.results.clone();
         sorted_results.sort_by_key(|result| {
             result
                 .rule
-                .span
+                .source_location
                 .as_ref()
-                .map(|s| s.start)
+                .map(|loc| loc.span.start)
                 .unwrap_or(usize::MAX)
         });
 
+        // Track which rules have been expanded across the entire response
+        let mut expanded_rules = HashSet::new();
+
         for result in &sorted_results {
-            output.push_str(&self.format_rule_result(result));
+            output.push_str(&self.format_rule_result_with_cache(result, &mut expanded_rules));
             output.push('\n');
         }
 
@@ -69,301 +47,477 @@ impl Formatter {
     fn format_facts_table(&self, facts: &[Fact]) -> String {
         let mut table = Table::new();
         table.load_preset(UTF8_FULL);
-        table.set_header(Row::from(vec![
+        table.set_header(vec![
             Cell::new("Fact").set_alignment(CellAlignment::Left),
             Cell::new("Value").set_alignment(CellAlignment::Left),
-        ]));
+        ]);
 
         for fact in facts {
-            let value_str = fact
-                .value
-                .as_ref()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "?".to_string());
-            table.add_row(Row::from(vec![&fact.name, &value_str]));
+            let value_str = if let Some(doc_name) = &fact.document_reference {
+                format!("doc {}", doc_name)
+            } else {
+                fact.value
+                    .as_ref()
+                    .map(|v| v.to_string())
+                    .unwrap_or_default()
+            };
+            table.add_row(vec![
+                Cell::new(&fact.name).set_alignment(CellAlignment::Left),
+                Cell::new(value_str).set_alignment(CellAlignment::Right),
+            ]);
         }
 
         table.to_string()
     }
 
-    fn format_rule_result(&self, result: &RuleResult) -> String {
-        let title = format!(
-            "{} = {}",
-            result.rule.name,
-            result
-                .result
-                .as_ref()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "?".to_string())
-        );
+    fn format_rule_result_with_cache(
+        &self,
+        result: &RuleResult,
+        expanded_rules: &mut HashSet<String>,
+    ) -> String {
+        let header = match &result.result {
+            lemma::OperationResult::Value(value) => {
+                format!("{} = {}", result.rule.name, value)
+            }
+            lemma::OperationResult::Veto(msg) => {
+                if let Some(msg) = msg {
+                    format!("{} = Veto: {}", result.rule.name, msg)
+                } else {
+                    format!("{} = Veto", result.rule.name)
+                }
+            }
+        };
 
-        let mut content = String::new();
-        self.format_operations(&result.operations, &mut content);
+        // Mark this rule as expanded
+        expanded_rules.insert(result.rule.name.clone());
 
+        // Build the content (without prefix - table will provide border)
+        let content = if let Some(proof) = &result.proof {
+            self.format_proof_node(&proof.tree, "", expanded_rules)
+        } else {
+            match &result.result {
+                lemma::OperationResult::Value(_) => String::new(),
+                lemma::OperationResult::Veto(msg) => {
+                    if let Some(msg) = msg {
+                        format!("└> Veto: {}", msg)
+                    } else {
+                        "└> Veto".to_string()
+                    }
+                }
+            }
+        };
+
+        // Use comfy-table with single column and custom style
         let mut table = Table::new();
         table.load_preset(UTF8_FULL);
 
-        table.add_row(Row::from(vec![Cell::new(&title)]));
+        // Customize to use solid lines instead of dashed for separators
+        table.set_style(comfy_table::TableComponent::MiddleIntersections, '┼');
+        table.set_style(comfy_table::TableComponent::HorizontalLines, '─');
 
-        let content = content.trim_end();
-        if !content.is_empty() {
-            table.add_row(Row::from(vec![Cell::new(content)]));
+        // Add header row
+        table.add_row(vec![header]);
+
+        // Add content row if not empty
+        if !content.trim().is_empty() {
+            table.add_row(vec![content.trim_end()]);
         }
 
         table.to_string()
     }
 
-    fn format_operations(&self, operations: &[OperationRecord], output: &mut String) {
-        // Walk the flat operations list once, using depth for indentation
-        // The engine has already inlined nested operations right after RuleUsed records
+    fn format_proof_node(
+        &self,
+        node: &lemma::proof::ProofNode,
+        prefix: &str,
+        expanded_rules: &mut HashSet<String>,
+    ) -> String {
+        use lemma::proof::ProofNode;
 
-        let mut i = 0;
-        while i < operations.len() {
-            let op = &operations[i];
-            let depth = self.depth(op);
-            let indent = "│  ".repeat(depth);
-
-            match &op.kind {
-                lemma::OperationKind::RuleUsed { rule_ref, .. } => {
-                    // Show rule name - nested operations follow
-                    output.push_str(
-                        &LineType::RuleName.format_line(&indent, &format!("{}?", rule_ref)),
-                    );
-                }
-
-                lemma::OperationKind::Computation {
-                    kind,
-                    inputs,
-                    result,
-                    ..
-                } => {
-                    // For comparisons: check if this is part of an unless clause
-                    if matches!(kind, ComputationKind::Comparison(_)) {
-                        // Check if the next operation is a matched rule branch
-                        if let Some(next_op) = operations.get(i + 1) {
-                            if let lemma::OperationKind::RuleBranchEvaluated {
-                                matched: true,
-                                index: Some(_),
-                                ..
-                            } = &next_op.kind
-                            {
-                                if next_op.depth == depth {
-                                    // This is the condition for the unless - show it
-                                    let calc = self.format_computation(kind, inputs);
-                                    output.push_str(
-                                        &LineType::Computation.format_line(&indent, &calc),
-                                    );
-                                    i += 1;
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-
-                    // For arithmetic: only show if it's the last one at this depth
-                    if !matches!(kind, ComputationKind::Comparison(_))
-                        && self.is_last_arithmetic_at_depth(operations, i, depth)
-                    {
-                        let calc = self.format_computation(kind, inputs);
-                        output.push_str(&LineType::Computation.format_line(&indent, &calc));
-                        output.push_str(
-                            &LineType::FinalResult.format_line(&indent, &result.to_string()),
-                        );
-                    }
-                }
-
-                lemma::OperationKind::RuleBranchEvaluated {
-                    index,
-                    matched,
-                    condition_expr,
-                    result_expr,
-                    ..
-                } => {
-                    if *matched {
-                        // Show matched condition if not already shown by a rule expansion
-                        // Only show condition for unless clauses (index is Some), not for default (index is None)
-                        if !self.has_expanded_rule_before(operations, i, depth) {
-                            if let Some(cond) = condition_expr {
-                                if depth == 0 {
-                                    output.push_str(&format!("{}\n", cond));
-                                } else {
-                                    output.push_str(
-                                        &LineType::UnlessMatched.format_line(&indent, cond),
-                                    );
-                                }
-                            }
-                        }
-
-                        // Show rejected unless clauses that come after this one
-                        // Only check if this is an unless clause (index is Some)
-                        if let Some(current_index) = index {
-                            for rej_op in operations.iter().skip(i + 1) {
-                                if let lemma::OperationKind::RuleBranchEvaluated {
-                                    matched: false,
-                                    index: Some(rej_index),
-                                    condition_expr: Some(cond),
-                                    ..
-                                } = &rej_op.kind
-                                {
-                                    if rej_op.depth == depth && *rej_index > *current_index {
-                                        output.push_str(
-                                            &LineType::UnlessRejected.format_line(&indent, cond),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-
-                        // Show result expression
-                        if let Some(expr) = result_expr {
-                            // Check if there are arithmetic operations after
-                            let has_arithmetic_after = operations[i+1..].iter().any(|op| {
-                                op.depth == depth && matches!(&op.kind, lemma::OperationKind::Computation { kind, .. } if !matches!(kind, ComputationKind::Comparison(_)))
-                            });
-
-                            // Use different formatting for default (index is None) vs unless (index is Some)
-                            if index.is_none() {
-                                // Default value
-                                if !has_arithmetic_after {
-                                    output.push_str(
-                                        &LineType::DefaultValue.format_line(&indent, expr),
-                                    );
-                                } else {
-                                    output.push_str(
-                                        &LineType::UnlessMatched.format_line(&indent, expr),
-                                    );
-                                }
-                            } else {
-                                // Unless clause
-                                if !has_arithmetic_after {
-                                    output.push_str(
-                                        &LineType::UnlessFinalResult.format_line(&indent, expr),
-                                    );
-                                } else {
-                                    output.push_str(
-                                        &LineType::UnlessMatched.format_line(&indent, expr),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-
-                _ => {}
+        match node {
+            ProofNode::Value { value, .. } => {
+                format!("{}└> {}\n", prefix, value)
             }
 
-            i += 1;
+            ProofNode::Computation {
+                original_expression,
+                expression,
+                result,
+                operands,
+                ..
+            } => {
+                let mut output = String::new();
+
+                // 1. Show original expression
+                output.push_str(&format!("{}{}\n", prefix, original_expression));
+
+                // 2. Expand all rule references (only once)
+                let rule_refs = Self::collect_rule_references(operands);
+                for rule_ref in rule_refs {
+                    output.push_str(&self.format_rule_reference_expansion(
+                        rule_ref,
+                        prefix,
+                        expanded_rules,
+                    ));
+                }
+
+                // 3. Show substituted calculation
+                output.push_str(&format!("{}├─ = {}\n", prefix, expression));
+
+                // 4. Show final result
+                output.push_str(&format!("{}└> = {}\n", prefix, result));
+
+                output
+            }
+
+            ProofNode::RuleReference {
+                rule_path,
+                expansion,
+                result,
+                ..
+            } => {
+                let rule_key = rule_path.to_string();
+
+                // Check if already expanded
+                if expanded_rules.contains(&rule_key) {
+                    // Just show the value with proper indentation
+                    let value_str = match result {
+                        lemma::OperationResult::Value(v) => v.to_string(),
+                        lemma::OperationResult::Veto(_) => "<veto>".to_string(),
+                    };
+                    let mut output = String::new();
+                    output.push_str(&format!("{}├─ {}?\n", prefix, rule_path));
+                    output.push_str(&format!("{}│  └> {}\n", prefix, value_str));
+                    output
+                } else {
+                    // Mark as expanded and show full expansion
+                    expanded_rules.insert(rule_key);
+                    let mut output = String::new();
+                    output.push_str(&format!("{}├─ {}?\n", prefix, rule_path));
+                    let expand_prefix = format!("{}│  ", prefix);
+                    output.push_str(&self.format_proof_node(
+                        expansion,
+                        &expand_prefix,
+                        expanded_rules,
+                    ));
+                    output
+                }
+            }
+
+            ProofNode::Branches {
+                matched,
+                non_matched,
+                ..
+            } => {
+                let mut output = String::new();
+
+                // Show matched branch
+                if let Some(condition) = &matched.condition {
+                    output.push_str(&self.format_condition_node(condition, prefix, expanded_rules));
+                    output.push_str(&self.format_result_expression(
+                        &matched.result,
+                        prefix,
+                        expanded_rules,
+                    ));
+                } else {
+                    output.push_str(&self.format_proof_node(
+                        &matched.result,
+                        prefix,
+                        expanded_rules,
+                    ));
+                }
+
+                // Show non-matched branches
+                for branch in non_matched {
+                    output.push_str(&self.format_non_matched_branch(branch, prefix));
+                }
+
+                output
+            }
+
+            ProofNode::Condition {
+                original_expression,
+                expression,
+                ..
+            } => {
+                let mut output = String::new();
+                output.push_str(&format!("{}{}\n", prefix, original_expression));
+                output.push_str(&format!("{}├─ = {}\n", prefix, expression));
+                output
+            }
+
+            ProofNode::Veto { message, .. } => {
+                if let Some(msg) = message {
+                    format!("{}└> Veto: {}\n", prefix, msg)
+                } else {
+                    format!("{}└> Veto\n", prefix)
+                }
+            }
         }
     }
 
-    fn depth(&self, op: &OperationRecord) -> usize {
-        op.depth
+    fn format_condition_node(
+        &self,
+        node: &lemma::proof::ProofNode,
+        prefix: &str,
+        expanded_rules: &mut HashSet<String>,
+    ) -> String {
+        use lemma::proof::ProofNode;
+
+        match node {
+            ProofNode::Computation {
+                original_expression,
+                expression,
+                result,
+                operands,
+                ..
+            } => {
+                let mut output = String::new();
+                output.push_str(&format!("{}{}\n", prefix, original_expression));
+
+                // Expand rule references
+                let rule_refs = Self::collect_rule_references(operands);
+                for rule_ref in rule_refs {
+                    output.push_str(&self.format_rule_reference_expansion(
+                        rule_ref,
+                        prefix,
+                        expanded_rules,
+                    ));
+                }
+
+                output.push_str(&format!("{}├─ = {}\n", prefix, expression));
+                // Show the condition result (computed from the expression above)
+                output.push_str(&format!("{}├─ = {}\n", prefix, result));
+                output
+            }
+            ProofNode::Condition {
+                original_expression,
+                expression,
+                result,
+                operands,
+                ..
+            } => {
+                let mut output = String::new();
+                output.push_str(&format!("{}{}\n", prefix, original_expression));
+
+                // Expand rule references
+                let rule_refs = Self::collect_rule_references(operands);
+                for rule_ref in rule_refs {
+                    output.push_str(&self.format_rule_reference_expansion(
+                        rule_ref,
+                        prefix,
+                        expanded_rules,
+                    ));
+                }
+
+                output.push_str(&format!("{}├─ = {}\n", prefix, expression));
+                // Show the condition result (computed from the expression above)
+                output.push_str(&format!("{}├─ = {}\n", prefix, result));
+                output
+            }
+            ProofNode::Value { value, source, .. } => {
+                let condition_text = match source {
+                    lemma::proof::ValueSource::Fact { fact_ref } => fact_ref.to_string(),
+                    _ => value.to_string(),
+                };
+                format!("{}{}\n", prefix, condition_text)
+            }
+            _ => String::new(),
+        }
     }
 
-    fn has_expanded_rule_before(
+    fn format_result_expression(
         &self,
-        operations: &[OperationRecord],
-        idx: usize,
-        target_depth: usize,
-    ) -> bool {
-        // Check if there's a RuleUsed with nested logic before this index at the same depth
-        for i in (0..idx).rev() {
-            let depth = self.depth(&operations[i]);
-            if depth < target_depth {
-                break;
+        node: &lemma::proof::ProofNode,
+        prefix: &str,
+        expanded_rules: &mut HashSet<String>,
+    ) -> String {
+        use lemma::proof::ProofNode;
+
+        match node {
+            ProofNode::Value { value, .. } => {
+                format!("{}└> {}\n", prefix, value)
             }
-            if depth == target_depth
-                && matches!(&operations[i].kind, lemma::OperationKind::RuleUsed { .. })
-            {
-                // Check if it has nested operations
-                if i + 1 < operations.len() && self.depth(&operations[i + 1]) > target_depth {
-                    return true;
+            ProofNode::Veto { message, .. } => {
+                if let Some(msg) = message {
+                    format!("{}└> Veto: {}\n", prefix, msg)
+                } else {
+                    format!("{}└> Veto\n", prefix)
                 }
+            }
+            ProofNode::Computation {
+                original_expression,
+                expression,
+                result,
+                operands,
+                ..
+            } => {
+                let mut output = String::new();
+                output.push_str(&format!("{}{}\n", prefix, original_expression));
+
+                // Expand rule references
+                let rule_refs = Self::collect_rule_references(operands);
+                for rule_ref in rule_refs {
+                    output.push_str(&self.format_rule_reference_expansion(
+                        rule_ref,
+                        prefix,
+                        expanded_rules,
+                    ));
+                }
+
+                output.push_str(&format!("{}├─ = {}\n", prefix, expression));
+                output.push_str(&format!("{}└> = {}\n", prefix, result));
+                output
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn format_non_matched_branch(
+        &self,
+        branch: &lemma::proof::NonMatchedBranch,
+        prefix: &str,
+    ) -> String {
+        use lemma::proof::ProofNode;
+
+        let mut output = String::new();
+        let indent_prefix = format!("{}   ", prefix);
+
+        // Format the condition
+        match &*branch.condition {
+            ProofNode::Computation {
+                original_expression,
+                expression,
+                result,
+                ..
+            } => {
+                output.push_str(&format!("{}×─ {}\n", prefix, original_expression));
+                output.push_str(&format!("{}├─ = {}\n", indent_prefix, expression));
+
+                // For veto branches, show the condition result as intermediate and then the veto
+                if matches!(&*branch.result, ProofNode::Veto { .. }) {
+                    output.push_str(&format!("{}├─ = {}\n", indent_prefix, result));
+                    let result_str = self.format_result_display(&branch.result);
+                    output.push_str(&format!("{}└─ {}\n", indent_prefix, result_str));
+                } else {
+                    // For non-veto branches, the condition result is the final result
+                    output.push_str(&format!("{}└> = {}\n", indent_prefix, result));
+                }
+            }
+            ProofNode::Condition {
+                original_expression,
+                expression,
+                result,
+                ..
+            } => {
+                output.push_str(&format!("{}×─ {}\n", prefix, original_expression));
+                output.push_str(&format!("{}├─ = {}\n", indent_prefix, expression));
+
+                // For veto branches, show the condition result as intermediate and then the veto
+                if matches!(&*branch.result, ProofNode::Veto { .. }) {
+                    output.push_str(&format!("{}├─ = {}\n", indent_prefix, result));
+                    let result_str = self.format_result_display(&branch.result);
+                    output.push_str(&format!("{}└─ {}\n", indent_prefix, result_str));
+                } else {
+                    // For non-veto branches, the condition result is the final result
+                    output.push_str(&format!("{}└> = {}\n", indent_prefix, result));
+                }
+            }
+            ProofNode::Value { value, source, .. } => {
+                let condition_text = match source {
+                    lemma::proof::ValueSource::Fact { fact_ref } => fact_ref.to_string(),
+                    _ => value.to_string(),
+                };
+                output.push_str(&format!("{}×─ {}\n", prefix, condition_text));
+
+                // For veto branches, show the value as intermediate and then the veto
+                if matches!(&*branch.result, ProofNode::Veto { .. }) {
+                    output.push_str(&format!("{}├─ {}\n", indent_prefix, value));
+                    let result_str = self.format_result_display(&branch.result);
+                    output.push_str(&format!("{}└─ {}\n", indent_prefix, result_str));
+                } else {
+                    // For non-veto branches, the value is the final result (not computed, so no =)
+                    output.push_str(&format!("{}└> {}\n", indent_prefix, value));
+                }
+            }
+            _ => {}
+        }
+
+        output
+    }
+
+    /// Helper to format the result part for displaying in "then" clauses
+    fn format_result_display(&self, node: &lemma::proof::ProofNode) -> String {
+        use lemma::proof::ProofNode;
+
+        match node {
+            ProofNode::Veto { message, .. } => {
+                if let Some(msg) = message {
+                    format!("Veto: {}", msg)
+                } else {
+                    "Veto".to_string()
+                }
+            }
+            ProofNode::Value { value, .. } => value.to_string(),
+            ProofNode::Computation {
+                original_expression,
+                ..
+            } => original_expression.clone(),
+            _ => "<expression>".to_string(),
+        }
+    }
+
+    fn collect_rule_references(
+        operands: &[lemma::proof::ProofNode],
+    ) -> Vec<&lemma::proof::ProofNode> {
+        let mut refs = Vec::new();
+        for operand in operands {
+            if matches!(operand, lemma::proof::ProofNode::RuleReference { .. }) {
+                refs.push(operand);
+            } else if let lemma::proof::ProofNode::Computation { operands, .. } = operand {
+                refs.extend(Self::collect_rule_references(operands));
             }
         }
-        false
+        refs
     }
 
-    fn is_last_arithmetic_at_depth(
+    fn format_rule_reference_expansion(
         &self,
-        operations: &[OperationRecord],
-        idx: usize,
-        depth: usize,
-    ) -> bool {
-        !operations.iter().skip(idx + 1).any(|op| {
-            self.depth(op) == depth
-                &&                 matches!(
-                    &op.kind,
-                    lemma::OperationKind::Computation { kind, .. } if !matches!(kind, ComputationKind::Comparison(_))
-                )
-        })
-    }
+        node: &lemma::proof::ProofNode,
+        prefix: &str,
+        expanded_rules: &mut HashSet<String>,
+    ) -> String {
+        if let lemma::proof::ProofNode::RuleReference {
+            rule_path,
+            expansion,
+            result,
+            ..
+        } = node
+        {
+            let rule_key = rule_path.to_string();
 
-    fn format_computation(&self, kind: &ComputationKind, inputs: &[LiteralValue]) -> String {
-        match kind {
-            ComputationKind::Arithmetic(op) => {
-                if inputs.len() == 2 {
-                    let symbol = match op {
-                        lemma::ArithmeticComputation::Add => "+",
-                        lemma::ArithmeticComputation::Subtract => "-",
-                        lemma::ArithmeticComputation::Multiply => "*",
-                        lemma::ArithmeticComputation::Divide => "/",
-                        lemma::ArithmeticComputation::Modulo => "%",
-                        lemma::ArithmeticComputation::Power => "^",
-                    };
-                    match (inputs.first(), inputs.get(1)) {
-                        (Some(left), Some(right)) => format!("{left} {symbol} {right}"),
-                        _ => format!("{:?} {:?}", op, inputs),
-                    }
-                } else {
-                    format!("{:?} {:?}", op, inputs)
-                }
+            // Check if already expanded
+            if expanded_rules.contains(&rule_key) {
+                // Just show the value with proper indentation
+                let value_str = match result {
+                    lemma::OperationResult::Value(v) => v.to_string(),
+                    lemma::OperationResult::Veto(_) => "<veto>".to_string(),
+                };
+                let mut output = String::new();
+                output.push_str(&format!("{}├─ {}?\n", prefix, rule_path));
+                output.push_str(&format!("{}│  └> {}\n", prefix, value_str));
+                output
+            } else {
+                // Mark as expanded and show full expansion
+                expanded_rules.insert(rule_key);
+                let mut output = String::new();
+                output.push_str(&format!("{}├─ {}?\n", prefix, rule_path));
+                let expand_prefix = format!("{}│  ", prefix);
+                output.push_str(&self.format_proof_node(expansion, &expand_prefix, expanded_rules));
+                output
             }
-            ComputationKind::Comparison(op) => {
-                if inputs.len() == 2 {
-                    let symbol = match op {
-                        lemma::ComparisonComputation::GreaterThan => ">",
-                        lemma::ComparisonComputation::LessThan => "<",
-                        lemma::ComparisonComputation::GreaterThanOrEqual => ">=",
-                        lemma::ComparisonComputation::LessThanOrEqual => "<=",
-                        lemma::ComparisonComputation::Equal => "==",
-                        lemma::ComparisonComputation::NotEqual => "!=",
-                        lemma::ComparisonComputation::Is => "is",
-                        lemma::ComparisonComputation::IsNot => "is not",
-                    };
-                    match (inputs.first(), inputs.get(1)) {
-                        (Some(left), Some(right)) => format!("{left} {symbol} {right}"),
-                        _ => format!("{:?} {:?}", op, inputs),
-                    }
-                } else {
-                    format!("{:?} {:?}", op, inputs)
-                }
-            }
-            ComputationKind::Mathematical(op) => {
-                if !inputs.is_empty() {
-                    let func = match op {
-                        lemma::MathematicalComputation::Sqrt => "sqrt",
-                        lemma::MathematicalComputation::Sin => "sin",
-                        lemma::MathematicalComputation::Cos => "cos",
-                        lemma::MathematicalComputation::Tan => "tan",
-                        lemma::MathematicalComputation::Asin => "asin",
-                        lemma::MathematicalComputation::Acos => "acos",
-                        lemma::MathematicalComputation::Atan => "atan",
-                        lemma::MathematicalComputation::Abs => "abs",
-                        lemma::MathematicalComputation::Floor => "floor",
-                        lemma::MathematicalComputation::Ceil => "ceil",
-                        lemma::MathematicalComputation::Round => "round",
-                        lemma::MathematicalComputation::Log => "log",
-                        lemma::MathematicalComputation::Exp => "exp",
-                    };
-                    match inputs.first() {
-                        Some(operand) => format!("{func}({operand})"),
-                        None => format!("{:?} {:?}", op, inputs),
-                    }
-                } else {
-                    format!("{:?} {:?}", op, inputs)
-                }
-            }
+        } else {
+            String::new()
         }
     }
 
@@ -375,11 +529,13 @@ impl Formatter {
     ) -> String {
         let mut output = String::new();
         output.push_str(&format!("Document: {}\n\n", doc.name));
-        output.push_str(&format!("facts ({}):\n", facts.len()));
+        output.push_str("facts:\n");
         for fact in facts {
-            output.push_str(&format!("  - {}\n", fact.fact_type));
+            if let lemma::FactType::Local(name) = &fact.fact_type {
+                output.push_str(&format!("  - {}\n", name));
+            }
         }
-        output.push_str(&format!("\nrules ({}):\n", rules.len()));
+        output.push_str("\nrules:\n");
         for rule in rules {
             output.push_str(&format!("  - {}\n", rule.name));
         }
@@ -393,13 +549,27 @@ impl Formatter {
         doc_stats: &[(String, usize, usize)],
     ) -> String {
         let mut output = String::new();
+        let file_word = if file_count == 1 { "file" } else { "files" };
+        let doc_word = if doc_count == 1 {
+            "document"
+        } else {
+            "documents"
+        };
         output.push_str(&format!(
-            "Workspace contains {} files, {} documents\n\n",
-            file_count, doc_count
+            "Found {} {} in {} {}\n\n",
+            doc_count, doc_word, file_count, file_word
         ));
-        for (name, facts, rules) in doc_stats {
-            output.push_str(&format!("{}: {} facts, {} rules\n", name, facts, rules));
+        let mut table = Table::new();
+        table.load_preset(UTF8_FULL);
+        table.set_header(vec!["Document", "Facts", "Rules"]);
+        for (doc_name, facts, rules) in doc_stats {
+            table.add_row(vec![
+                doc_name.as_str(),
+                &facts.to_string(),
+                &rules.to_string(),
+            ]);
         }
+        output.push_str(&table.to_string());
         output
     }
 
@@ -408,350 +578,18 @@ impl Formatter {
         solutions: &[std::collections::HashMap<lemma::FactReference, lemma::Domain>],
     ) -> String {
         let mut output = String::new();
-        output.push_str(&format!("Found {} solution(s)\n\n", solutions.len()));
-        for (idx, solution) in solutions.iter().enumerate() {
-            output.push_str(&format!("Solution {}:\n", idx + 1));
-            for (fact_ref, domain) in solution {
-                output.push_str(&format!(
-                    "  {}: {:?}\n",
-                    fact_ref.reference.join("."),
-                    domain
-                ));
+        if solutions.is_empty() {
+            output.push_str("No solutions found.\n");
+        } else {
+            output.push_str(&format!("Found {} solution(s):\n\n", solutions.len()));
+            for (i, solution) in solutions.iter().enumerate() {
+                output.push_str(&format!("Solution {}:\n", i + 1));
+                for (fact_ref, domain) in solution {
+                    output.push_str(&format!("  {} = {:?}\n", fact_ref, domain));
+                }
+                output.push('\n');
             }
-            output.push('\n');
         }
         output
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use lemma::*;
-
-    fn dummy_rule(name: &str) -> LemmaRule {
-        LemmaRule {
-            name: name.to_string(),
-            expression: Expression {
-                kind: ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(
-                    0, 0,
-                ))),
-                span: None,
-                id: ExpressionId::new(0),
-            },
-            unless_clauses: vec![],
-            span: None,
-        }
-    }
-
-    fn rule_ref(name: &str) -> RuleReference {
-        RuleReference {
-            reference: vec![name.to_string()],
-        }
-    }
-
-    fn op(kind: lemma::OperationKind, depth: usize) -> OperationRecord {
-        OperationRecord {
-            parent_index: None,
-            depth,
-            expression_id: lemma::ExpressionId::new(0),
-            kind,
-        }
-    }
-
-    #[test]
-    fn test_simple_fact_display() {
-        let response = Response {
-            doc_name: "test".to_string(),
-            facts: vec![Fact {
-                name: "amount".to_string(),
-                value: Some(LiteralValue::Number(rust_decimal::Decimal::new(100000, 2))),
-            }],
-            results: vec![],
-        };
-
-        let formatter = Formatter::new();
-        let output = formatter.format_response(&response, false);
-
-        assert!(output.contains("amount"));
-        assert!(output.contains("1_000"));
-    }
-
-    #[test]
-    fn test_simple_computation() {
-        let response = Response {
-            doc_name: "test".to_string(),
-            facts: vec![],
-            results: vec![RuleResult {
-                rule: dummy_rule("total"),
-                result: Some(LiteralValue::Number(rust_decimal::Decimal::new(150, 0))),
-                veto_message: None,
-                operations: vec![op(
-                    lemma::OperationKind::Computation {
-                        kind: ComputationKind::Arithmetic(ArithmeticComputation::Add),
-                        inputs: vec![
-                            LiteralValue::Number(rust_decimal::Decimal::new(100, 0)),
-                            LiteralValue::Number(rust_decimal::Decimal::new(50, 0)),
-                        ],
-                        result: LiteralValue::Number(rust_decimal::Decimal::new(150, 0)),
-                        expr: Some("100 + 50".to_string()),
-                    },
-                    0,
-                )],
-                facts: vec![],
-            }],
-        };
-
-        let formatter = Formatter::new();
-        let output = formatter.format_response(&response, false);
-
-        assert!(output.contains("total = 150"));
-        assert!(output.contains("100 + 50"));
-    }
-
-    #[test]
-    fn test_nested_rule_no_duplicate_results() {
-        let response = Response {
-            doc_name: "test".to_string(),
-            facts: vec![],
-            results: vec![RuleResult {
-                rule: dummy_rule("outer"),
-                result: Some(LiteralValue::Number(rust_decimal::Decimal::new(200, 0))),
-                veto_message: None,
-                operations: vec![
-                    op(
-                        lemma::OperationKind::RuleUsed {
-                            rule_ref: rule_ref("inner"),
-                            value: LiteralValue::Number(rust_decimal::Decimal::new(100, 0)),
-                        },
-                        0,
-                    ),
-                    op(
-                        lemma::OperationKind::Computation {
-                            kind: ComputationKind::Arithmetic(ArithmeticComputation::Add),
-                            inputs: vec![
-                                LiteralValue::Number(rust_decimal::Decimal::new(50, 0)),
-                                LiteralValue::Number(rust_decimal::Decimal::new(50, 0)),
-                            ],
-                            result: LiteralValue::Number(rust_decimal::Decimal::new(100, 0)),
-                            expr: Some("50 + 50".to_string()),
-                        },
-                        1,
-                    ),
-                    op(
-                        lemma::OperationKind::Computation {
-                            kind: ComputationKind::Arithmetic(ArithmeticComputation::Multiply),
-                            inputs: vec![
-                                LiteralValue::Number(rust_decimal::Decimal::new(100, 0)),
-                                LiteralValue::Number(rust_decimal::Decimal::new(2, 0)),
-                            ],
-                            result: LiteralValue::Number(rust_decimal::Decimal::new(200, 0)),
-                            expr: Some("inner? * 2".to_string()),
-                        },
-                        0,
-                    ),
-                ],
-                facts: vec![],
-            }],
-        };
-
-        let formatter = Formatter::new();
-        let output = formatter.format_response(&response, false);
-
-        // Should show nested rule expansion
-        assert!(output.contains("inner?"));
-        assert!(output.contains("50 + 50"));
-        assert!(output.contains("100 * 2"));
-        assert!(output.contains("200"));
-
-        // Should NOT show duplicate results after rule expansion
-        let inner_result_count = output.matches("└─ = 100").count();
-        assert_eq!(
-            inner_result_count, 1,
-            "inner? result should appear exactly once"
-        );
-    }
-
-    #[test]
-    fn test_unless_clause_formatting() {
-        let response = Response {
-            doc_name: "test".to_string(),
-            facts: vec![],
-            results: vec![RuleResult {
-                rule: dummy_rule("bonus"),
-                result: Some(LiteralValue::Percentage(rust_decimal::Decimal::new(10, 0))),
-                veto_message: None,
-                operations: vec![
-                    op(
-                        lemma::OperationKind::Computation {
-                            kind: ComputationKind::Comparison(
-                                ComparisonComputation::GreaterThanOrEqual,
-                            ),
-                            inputs: vec![
-                                LiteralValue::Number(rust_decimal::Decimal::new(4, 0)),
-                                LiteralValue::Number(rust_decimal::Decimal::new(35, 1)),
-                            ],
-                            result: LiteralValue::Boolean(true),
-                            expr: Some("rating >= 3.5".to_string()),
-                        },
-                        0,
-                    ),
-                    op(
-                        lemma::OperationKind::RuleBranchEvaluated {
-                            index: Some(0),
-                            matched: true,
-                            condition_expr: Some("rating >= 3.5".to_string()),
-                            result_expr: Some("10%".to_string()),
-                            result_value: Some(LiteralValue::Percentage(
-                                rust_decimal::Decimal::new(10, 0),
-                            )),
-                        },
-                        0,
-                    ),
-                    op(
-                        lemma::OperationKind::RuleBranchEvaluated {
-                            index: Some(1),
-                            matched: false,
-                            condition_expr: Some("rating >= 4.5".to_string()),
-                            result_expr: Some("15%".to_string()),
-                            result_value: None,
-                        },
-                        0,
-                    ),
-                ],
-                facts: vec![],
-            }],
-        };
-
-        let formatter = Formatter::new();
-        let output = formatter.format_response(&response, false);
-
-        // Should show matched condition and result
-        assert!(output.contains("rating >= 3.5"));
-        assert!(output.contains("10%"));
-
-        // Should show rejected clause with cross
-        assert!(output.contains("×"));
-        assert!(output.contains("rating >= 4.5"));
-    }
-
-    #[test]
-    fn test_default_value_formatting() {
-        let response = Response {
-            doc_name: "test".to_string(),
-            facts: vec![],
-            results: vec![RuleResult {
-                rule: dummy_rule("fallback"),
-                result: Some(LiteralValue::Number(rust_decimal::Decimal::new(0, 0))),
-                veto_message: None,
-                operations: vec![op(
-                    lemma::OperationKind::RuleBranchEvaluated {
-                        index: None,
-                        matched: true,
-                        condition_expr: None,
-                        result_expr: Some("0".to_string()),
-                        result_value: Some(LiteralValue::Number(rust_decimal::Decimal::new(0, 0))),
-                    },
-                    0,
-                )],
-                facts: vec![],
-            }],
-        };
-
-        let formatter = Formatter::new();
-        let output = formatter.format_response(&response, false);
-
-        // Should show default value (either as "└─ = 0" or just "0")
-        assert!(output.contains("0"));
-        assert!(output.contains("fallback"));
-    }
-
-    #[test]
-    fn test_percentage_rounding() {
-        let response = Response {
-            doc_name: "test".to_string(),
-            facts: vec![],
-            results: vec![RuleResult {
-                rule: dummy_rule("rate"),
-                result: Some(LiteralValue::Percentage(rust_decimal::Decimal::new(
-                    21361, 3,
-                ))),
-                veto_message: None,
-                operations: vec![],
-                facts: vec![],
-            }],
-        };
-
-        let formatter = Formatter::new();
-        let output = formatter.format_response(&response, false);
-
-        // Should round percentage to 2 decimal places
-        assert!(output.contains("21.36%"));
-    }
-
-    #[test]
-    fn test_number_thousand_separators() {
-        let response = Response {
-            doc_name: "test".to_string(),
-            facts: vec![Fact {
-                name: "large".to_string(),
-                value: Some(LiteralValue::Number(rust_decimal::Decimal::new(1000000, 0))),
-            }],
-            results: vec![],
-        };
-
-        let formatter = Formatter::new();
-        let output = formatter.format_response(&response, false);
-
-        // Should format with thousand separators
-        assert!(output.contains("1_000_000"));
-    }
-
-    #[test]
-    fn test_rules_sorted_by_source_order() {
-        let mut rule_a = dummy_rule("rule_a");
-        rule_a.span = Some(Span {
-            start: 100,
-            end: 150,
-            line: 10,
-            col: 0,
-        });
-
-        let mut rule_b = dummy_rule("rule_b");
-        rule_b.span = Some(Span {
-            start: 50,
-            end: 80,
-            line: 5,
-            col: 0,
-        });
-
-        let response = Response {
-            doc_name: "test".to_string(),
-            facts: vec![],
-            results: vec![
-                RuleResult {
-                    rule: rule_a,
-                    result: Some(LiteralValue::Number(rust_decimal::Decimal::new(1, 0))),
-                    veto_message: None,
-                    operations: vec![],
-                    facts: vec![],
-                },
-                RuleResult {
-                    rule: rule_b,
-                    result: Some(LiteralValue::Number(rust_decimal::Decimal::new(2, 0))),
-                    veto_message: None,
-                    operations: vec![],
-                    facts: vec![],
-                },
-            ],
-        };
-
-        let formatter = Formatter::new();
-        let output = formatter.format_response(&response, false);
-
-        // Should display in source order (rule_b before rule_a)
-        let rule_b_pos = output.find("rule_b").unwrap();
-        let rule_a_pos = output.find("rule_a").unwrap();
-        assert!(rule_b_pos < rule_a_pos, "Rules should be in source order");
     }
 }

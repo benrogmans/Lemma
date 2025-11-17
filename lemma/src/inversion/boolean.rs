@@ -55,26 +55,26 @@ fn to_bool_expr(
     atoms: &mut Vec<Expression>,
     expr_eq: &impl Fn(&Expression, &Expression) -> bool,
 ) -> Option<boolean_expression::Expr<usize>> {
-    use boolean_expression::Expr as BExpr;
-    use ExpressionKind as EK;
+    use boolean_expression::Expr;
+    use ExpressionKind;
 
     match &expr.kind {
-        EK::Literal(LiteralValue::Boolean(b)) => Some(BExpr::Const(*b)),
-        EK::LogicalAnd(l, r) => {
+        ExpressionKind::Literal(LiteralValue::Boolean(b)) => Some(Expr::Const(b.into())),
+        ExpressionKind::LogicalAnd(l, r) => {
             let lbe = to_bool_expr(l, atoms, expr_eq)?;
             let rbe = to_bool_expr(r, atoms, expr_eq)?;
-            Some(BExpr::and(lbe, rbe))
+            Some(Expr::and(lbe, rbe))
         }
-        EK::LogicalOr(l, r) => {
+        ExpressionKind::LogicalOr(l, r) => {
             let lbe = to_bool_expr(l, atoms, expr_eq)?;
             let rbe = to_bool_expr(r, atoms, expr_eq)?;
-            Some(BExpr::or(lbe, rbe))
+            Some(Expr::or(lbe, rbe))
         }
-        EK::LogicalNegation(inner, _) => {
+        ExpressionKind::LogicalNegation(inner, _) => {
             let ibe = to_bool_expr(inner, atoms, expr_eq)?;
-            Some(BExpr::not(ibe))
+            Some(Expr::not(ibe))
         }
-        EK::Comparison(_, _, _) | EK::FactHasAnyValue(_) => {
+        ExpressionKind::Comparison(_, _, _) | ExpressionKind::FactHasAnyValue(_) => {
             let mut idx_opt = None;
             for (i, a) in atoms.iter().enumerate() {
                 if expr_eq(a, expr) {
@@ -89,57 +89,57 @@ fn to_bool_expr(
                     atoms.len() - 1
                 }
             };
-            Some(BExpr::Terminal(idx))
+            Some(Expr::Terminal(idx))
         }
-        EK::Literal(_)
-        | EK::Arithmetic(_, _, _)
-        | EK::UnitConversion(_, _)
-        | EK::MathematicalComputation(_, _)
-        | EK::FactReference(_)
-        | EK::RuleReference(_)
-        | EK::Veto(_) => None,
+        ExpressionKind::Literal(_)
+        | ExpressionKind::Arithmetic(_, _, _)
+        | ExpressionKind::UnitConversion(_, _)
+        | ExpressionKind::MathematicalComputation(_, _)
+        | ExpressionKind::FactReference(_)
+        | ExpressionKind::RuleReference(_)
+        | ExpressionKind::Veto(_) => None,
     }
 }
 
 fn from_bool_expr(be: &boolean_expression::Expr<usize>, atoms: &[Expression]) -> Expression {
-    use boolean_expression::Expr as BExpr;
-    use ExpressionKind as EK;
+    use boolean_expression::Expr;
+    use ExpressionKind;
 
     match be {
-        BExpr::Const(b) => Expression::new(
-            EK::Literal(LiteralValue::Boolean(*b)),
+        Expr::Const(b) => Expression::new(
+            ExpressionKind::Literal(LiteralValue::Boolean((*b).into())),
             None,
             ExpressionId::new(0),
         ),
-        BExpr::Terminal(i) => atoms.get(*i).cloned().unwrap_or_else(|| {
+        Expr::Terminal(i) => atoms.get(*i).cloned().unwrap_or_else(|| {
             Expression::new(
-                EK::Literal(LiteralValue::Boolean(false)),
+                ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)),
                 None,
                 ExpressionId::new(0),
             )
         }),
-        BExpr::Not(inner) => {
+        Expr::Not(inner) => {
             let inner_expr = from_bool_expr(inner, atoms);
             Expression::new(
-                EK::LogicalNegation(Box::new(inner_expr), crate::NegationType::Not),
+                ExpressionKind::LogicalNegation(Box::new(inner_expr), crate::NegationType::Not),
                 None,
                 ExpressionId::new(0),
             )
         }
-        BExpr::And(l, r) => {
+        Expr::And(l, r) => {
             let l_expr = from_bool_expr(l, atoms);
             let r_expr = from_bool_expr(r, atoms);
             Expression::new(
-                EK::LogicalAnd(Box::new(l_expr), Box::new(r_expr)),
+                ExpressionKind::LogicalAnd(Box::new(l_expr), Box::new(r_expr)),
                 None,
                 ExpressionId::new(0),
             )
         }
-        BExpr::Or(l, r) => {
+        Expr::Or(l, r) => {
             let l_expr = from_bool_expr(l, atoms);
             let r_expr = from_bool_expr(r, atoms);
             Expression::new(
-                EK::LogicalOr(Box::new(l_expr), Box::new(r_expr)),
+                ExpressionKind::LogicalOr(Box::new(l_expr), Box::new(r_expr)),
                 None,
                 ExpressionId::new(0),
             )

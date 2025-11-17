@@ -1,6 +1,6 @@
 use crate::{
-    ArithmeticComputation, ComparisonComputation, ExpressionId, LiteralValue,
-    MathematicalComputation,
+    ArithmeticComputation, ComparisonComputation, ExpressionId, LiteralValue, LogicalComputation,
+    MathematicalComputation, OperationResult,
 };
 use serde::Serialize;
 
@@ -9,6 +9,9 @@ use serde::Serialize;
 pub struct Fact {
     pub name: String,
     pub value: Option<LiteralValue>,
+    /// If this fact is a document reference, contains the referenced document name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_reference: Option<String>,
 }
 
 /// Response from evaluating a Lemma document
@@ -28,6 +31,7 @@ pub struct Response {
 pub enum ComputationKind {
     Arithmetic(ArithmeticComputation),
     Comparison(ComparisonComputation),
+    Logical(LogicalComputation),
     Mathematical(MathematicalComputation),
 }
 
@@ -36,14 +40,10 @@ pub enum ComputationKind {
 /// Represents one operation performed during rule evaluation,
 /// capturing the actual values and decisions made during execution.
 ///
-/// Operations are stored in a linear sequence (Vec) in execution order.
-/// The `parent_index` field provides O(1) access to the parent operation
-/// by directly referencing its position in the operations vector.
+/// Operations are stored as a flat chronological trace in execution order.
+/// Tree structure for proofs is derived from the Expression AST, not from these records.
 #[derive(Debug, Clone, Serialize)]
 pub struct OperationRecord {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_index: Option<usize>,
-    pub depth: usize,
     /// Expression ID for direct lookup of the Expression AST node
     pub expression_id: ExpressionId,
     #[serde(flatten)]
@@ -60,7 +60,8 @@ pub enum OperationKind {
     },
     RuleUsed {
         rule_ref: crate::RuleReference,
-        value: LiteralValue,
+        rule_path: crate::RulePath,
+        result: OperationResult,
     },
     Computation {
         kind: ComputationKind,
@@ -80,8 +81,9 @@ pub enum OperationKind {
         /// The result expression as written in source
         #[serde(skip_serializing_if = "Option::is_none", default)]
         result_expr: Option<String>,
+        /// The result value - only present for matched branches (None for non-matched branches)
         #[serde(skip_serializing_if = "Option::is_none", default)]
-        result_value: Option<LiteralValue>,
+        result_value: Option<OperationResult>,
     },
 }
 
@@ -92,21 +94,19 @@ pub enum OperationKind {
 #[derive(Debug, Clone, Serialize)]
 pub struct RuleResult {
     pub rule: crate::LemmaRule,
-    pub result: Option<LiteralValue>,
+    pub result: OperationResult,
     pub facts: Vec<Fact>,
-    pub veto_message: Option<String>,
     pub operations: Vec<OperationRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof: Option<crate::proof::Proof>,
 }
 
 impl OperationRecord {
-    /// Create a copy of this operation with a new parent index
-    #[must_use]
-    pub fn with_parent(&self, new_parent_index: usize) -> Self {
+    /// Create a new operation record
+    pub fn new(expression_id: ExpressionId, kind: OperationKind) -> Self {
         OperationRecord {
-            parent_index: Some(new_parent_index),
-            depth: self.depth + 1,
-            expression_id: self.expression_id,
-            kind: self.kind.clone(),
+            expression_id,
+            kind,
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::response::{Fact, Response, RuleResult};
-use crate::{Expression, ExpressionKind, LemmaRule, LiteralValue};
+use crate::{Expression, ExpressionKind, LemmaRule, LiteralValue, OperationResult};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
@@ -8,12 +8,12 @@ fn dummy_rule(name: &str) -> LemmaRule {
     LemmaRule {
         name: name.to_string(),
         expression: Expression {
-            kind: ExpressionKind::Literal(LiteralValue::Boolean(true)),
-            span: None,
+            kind: ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)),
+            source_location: None,
             id: ExpressionId::new(0),
         },
         unless_clauses: vec![],
-        span: None,
+        source_location: None,
     }
 }
 
@@ -24,10 +24,10 @@ fn test_response_serialization() {
         facts: vec![],
         results: vec![RuleResult {
             rule: dummy_rule("test_rule"),
-            result: Some(LiteralValue::Number(Decimal::from_str("42").unwrap())),
+            result: OperationResult::Value(LiteralValue::Number(Decimal::from_str("42").unwrap())),
             facts: vec![],
-            veto_message: None,
             operations: vec![],
+            proof: None,
         }],
     };
 
@@ -45,17 +45,17 @@ fn test_response_filter_rules() {
         results: vec![
             RuleResult {
                 rule: dummy_rule("rule1"),
-                result: Some(LiteralValue::Boolean(true)),
+                result: OperationResult::Value(LiteralValue::Boolean(crate::BooleanValue::True)),
                 facts: vec![],
-                veto_message: None,
                 operations: vec![],
+                proof: None,
             },
             RuleResult {
                 rule: dummy_rule("rule2"),
-                result: Some(LiteralValue::Boolean(false)),
+                result: OperationResult::Value(LiteralValue::Boolean(crate::BooleanValue::False)),
                 facts: vec![],
-                veto_message: None,
                 operations: vec![],
+                proof: None,
             },
         ],
     };
@@ -70,44 +70,38 @@ fn test_response_filter_rules() {
 fn test_rule_result_types() {
     let success = RuleResult {
         rule: dummy_rule("rule1"),
-        result: Some(LiteralValue::Boolean(true)),
+        result: OperationResult::Value(LiteralValue::Boolean(crate::BooleanValue::True)),
         facts: vec![],
-        veto_message: None,
         operations: vec![],
+        proof: None,
     };
-    assert!(success.result.is_some());
-    assert!(success.veto_message.is_none());
-
-    let no_match = RuleResult {
-        rule: dummy_rule("rule2"),
-        result: None,
-        facts: vec![],
-        veto_message: None,
-        operations: vec![],
-    };
-    assert!(no_match.result.is_none());
+    assert!(matches!(success.result, OperationResult::Value(_)));
 
     let missing = RuleResult {
         rule: dummy_rule("rule3"),
-        result: None,
+        result: OperationResult::Veto(Some("Missing fact: fact1".to_string())),
         facts: vec![Fact {
             name: "fact1".to_string(),
             value: None,
+            document_reference: None,
         }],
-        veto_message: None,
         operations: vec![],
+        proof: None,
     };
     assert_eq!(missing.facts.len(), 1);
     assert_eq!(missing.facts[0].name, "fact1");
     assert!(missing.facts[0].value.is_none());
-    assert!(missing.veto_message.is_none());
+    assert!(matches!(missing.result, OperationResult::Veto(_)));
 
     let veto = RuleResult {
         rule: dummy_rule("rule4"),
-        result: None,
+        result: OperationResult::Veto(Some("Vetoed".to_string())),
         facts: vec![],
-        veto_message: Some("Vetoed".to_string()),
         operations: vec![],
+        proof: None,
     };
-    assert_eq!(veto.veto_message, Some("Vetoed".to_string()));
+    assert_eq!(
+        veto.result,
+        OperationResult::Veto(Some("Vetoed".to_string()))
+    );
 }

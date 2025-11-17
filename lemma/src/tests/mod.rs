@@ -26,3 +26,5 @@ mod error;
 
 // Serializer tests
 mod serializers;
+
+// Proof tests moved to integration tests (tests/proof_e2e.rs)
