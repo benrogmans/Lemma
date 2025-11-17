@@ -17,6 +17,7 @@ impl OperationResult {
     }
 
     /// Get the value if present, None if vetoed
+    #[must_use]
     pub fn value(&self) -> Option<&LiteralValue> {
         match self {
             OperationResult::Value(v) => Some(v),

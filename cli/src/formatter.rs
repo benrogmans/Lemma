@@ -316,7 +316,10 @@ impl Formatter {
                         lemma::ArithmeticComputation::Modulo => "%",
                         lemma::ArithmeticComputation::Power => "^",
                     };
-                    format!("{} {} {}", inputs[0], symbol, inputs[1])
+                    match (inputs.first(), inputs.get(1)) {
+                        (Some(left), Some(right)) => format!("{left} {symbol} {right}"),
+                        _ => format!("{:?} {:?}", op, inputs),
+                    }
                 } else {
                     format!("{:?} {:?}", op, inputs)
                 }
@@ -333,7 +336,10 @@ impl Formatter {
                         lemma::ComparisonComputation::Is => "is",
                         lemma::ComparisonComputation::IsNot => "is not",
                     };
-                    format!("{} {} {}", inputs[0], symbol, inputs[1])
+                    match (inputs.first(), inputs.get(1)) {
+                        (Some(left), Some(right)) => format!("{left} {symbol} {right}"),
+                        _ => format!("{:?} {:?}", op, inputs),
+                    }
                 } else {
                     format!("{:?} {:?}", op, inputs)
                 }
@@ -355,7 +361,10 @@ impl Formatter {
                         lemma::MathematicalComputation::Log => "log",
                         lemma::MathematicalComputation::Exp => "exp",
                     };
-                    format!("{}({})", func, inputs[0])
+                    match inputs.first() {
+                        Some(operand) => format!("{func}({operand})"),
+                        None => format!("{:?} {:?}", op, inputs),
+                    }
                 } else {
                     format!("{:?} {:?}", op, inputs)
                 }

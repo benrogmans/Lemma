@@ -30,7 +30,10 @@ fn select_document(engine: &Engine) -> Result<String> {
     }
 
     if documents.len() == 1 {
-        return Ok(documents[0].clone());
+        return Ok(documents
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("Expected at least one document"))?
+            .clone());
     }
 
     let display_options: Vec<String> = documents

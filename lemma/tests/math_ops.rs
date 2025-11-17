@@ -18,7 +18,7 @@ fn run(code: &str, rule: &str) -> LemmaResult<String> {
 fn run_num(code: &str, rule: &str) -> LemmaResult<Decimal> {
     let s = run(code, rule)?;
     s.parse::<Decimal>()
-        .map_err(|e| LemmaError::Engine(format!("Failed to parse '{}' as Decimal: {}", s, e)))
+        .map_err(|e| LemmaError::Engine(format!("Failed to parse '{s}' as Decimal: {e}")))
 }
 
 fn dec(s: &str) -> Decimal {
@@ -33,11 +33,7 @@ fn assert_close_dec(actual: &Decimal, expected: &Decimal, tol: &Decimal) {
     };
     assert!(
         diff <= *tol,
-        "expected ~{} (±{}), got {} (diff {})",
-        expected,
-        tol,
-        actual,
-        diff
+        "expected ~{expected} (±{tol}), got {actual} (diff {diff})"
     );
 }
 

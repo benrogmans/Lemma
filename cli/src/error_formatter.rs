@@ -23,13 +23,8 @@ pub fn format_error(error: &LemmaError) -> String {
             };
 
             let enhanced_message = format!(
-                "{}: {} (in doc '{}' at line {}, file {}:{})",
-                error_type,
-                details.message,
-                details.doc_name,
-                doc_line,
-                details.source_id,
-                details.span.line
+                "{error_type}: {} (in doc '{}' at line {}, file {}:{})",
+                details.message, details.doc_name, doc_line, details.source_id, details.span.line
             );
 
             let mut report =
@@ -59,9 +54,9 @@ pub fn format_error(error: &LemmaError) -> String {
                 }
             }
         }
-        LemmaError::Engine(msg) => format!("Engine error: {}", msg),
-        LemmaError::MissingFact(fact_ref) => format!("Missing fact: {}", fact_ref),
-        LemmaError::CircularDependency(msg) => format!("Circular dependency: {}", msg),
+        LemmaError::Engine(msg) => format!("Engine error: {msg}"),
+        LemmaError::MissingFact(fact_ref) => format!("Missing fact: {fact_ref}"),
+        LemmaError::CircularDependency(msg) => format!("Circular dependency: {msg}"),
         LemmaError::ResourceLimitExceeded {
             limit_name,
             limit_value,
@@ -69,8 +64,7 @@ pub fn format_error(error: &LemmaError) -> String {
             suggestion,
         } => {
             format!(
-                "Resource limit exceeded: {}\n  Limit: {}\n  Actual: {}\n  {}",
-                limit_name, limit_value, actual_value, suggestion
+                "Resource limit exceeded: {limit_name}\n  Limit: {limit_value}\n  Actual: {actual_value}\n  {suggestion}"
             )
         }
         LemmaError::MultipleErrors(errors) => {

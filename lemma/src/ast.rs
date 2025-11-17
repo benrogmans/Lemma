@@ -33,6 +33,7 @@ impl Span {
 pub struct ExpressionId(u64);
 
 impl ExpressionId {
+    #[must_use]
     pub fn new(id: u64) -> Self {
         Self(id)
     }

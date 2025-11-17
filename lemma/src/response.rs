@@ -100,6 +100,7 @@ pub struct RuleResult {
 
 impl OperationRecord {
     /// Create a copy of this operation with a new parent
+    #[must_use]
     pub fn with_parent(&self, new_parent: OperationId) -> Self {
         OperationRecord {
             id: self.id,

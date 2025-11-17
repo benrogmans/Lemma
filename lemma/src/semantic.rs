@@ -64,6 +64,7 @@ pub struct Expression {
 
 impl Expression {
     /// Create a new expression with kind, span, and ID
+    #[must_use]
     pub fn new(kind: ExpressionKind, span: Option<Span>, id: ExpressionId) -> Self {
         Self { kind, span, id }
     }
@@ -116,6 +117,7 @@ pub enum ArithmeticComputation {
 
 impl ArithmeticComputation {
     /// Returns a human-readable name for the computation
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             ArithmeticComputation::Add => "addition",
@@ -143,6 +145,7 @@ pub enum ComparisonComputation {
 
 impl ComparisonComputation {
     /// Returns a human-readable name for the computation
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             ComparisonComputation::GreaterThan => "greater than",
@@ -263,6 +266,7 @@ pub enum LiteralValue {
 
 impl LiteralValue {
     /// Get the display value as a string (uses the Display implementation)
+    #[must_use]
     pub fn display_value(&self) -> String {
         self.to_string()
     }
@@ -283,6 +287,7 @@ impl LiteralValue {
     }
 
     /// Convert a LiteralValue to its corresponding LemmaType
+    #[must_use]
     pub fn to_type(&self) -> LemmaType {
         match self {
             LiteralValue::Text(_) => LemmaType::Text,
@@ -526,6 +531,7 @@ pub enum NumericUnit {
 
 impl NumericUnit {
     /// Extract the numeric value from any unit
+    #[must_use]
     pub fn value(&self) -> Decimal {
         match self {
             NumericUnit::Mass(v, _)
@@ -550,6 +556,7 @@ impl NumericUnit {
 
     /// Create a new NumericUnit with the same unit type but different value
     /// This is the key method that eliminates type enumeration in operations
+    #[must_use]
     pub fn with_value(&self, new_value: Decimal) -> NumericUnit {
         match self {
             NumericUnit::Mass(_, u) => NumericUnit::Mass(new_value, u.clone()),
@@ -602,6 +609,7 @@ impl fmt::Display for NumericUnit {
 }
 
 impl LemmaRule {
+    #[must_use]
     pub fn new(name: String, expression: Expression) -> Self {
         Self {
             name,
@@ -611,6 +619,7 @@ impl LemmaRule {
         }
     }
 
+    #[must_use]
     pub fn add_unless_clause(mut self, unless_clause: UnlessClause) -> Self {
         self.unless_clauses.push(unless_clause);
         self
@@ -618,6 +627,7 @@ impl LemmaRule {
 }
 
 impl LemmaFact {
+    #[must_use]
     pub fn new(fact_type: FactType, value: FactValue) -> Self {
         Self {
             fact_type,
@@ -626,6 +636,7 @@ impl LemmaFact {
         }
     }
 
+    #[must_use]
     pub fn with_span(mut self, span: Span) -> Self {
         self.span = Some(span);
         self
@@ -633,6 +644,7 @@ impl LemmaFact {
 }
 
 impl LemmaDoc {
+    #[must_use]
     pub fn new(name: String) -> Self {
         Self {
             name,
@@ -644,26 +656,31 @@ impl LemmaDoc {
         }
     }
 
+    #[must_use]
     pub fn with_source(mut self, source: String) -> Self {
         self.source = Some(source);
         self
     }
 
+    #[must_use]
     pub fn with_start_line(mut self, start_line: usize) -> Self {
         self.start_line = start_line;
         self
     }
 
+    #[must_use]
     pub fn set_commentary(mut self, commentary: String) -> Self {
         self.commentary = Some(commentary);
         self
     }
 
+    #[must_use]
     pub fn add_fact(mut self, fact: LemmaFact) -> Self {
         self.facts.push(fact);
         self
     }
 
+    #[must_use]
     pub fn add_rule(mut self, rule: LemmaRule) -> Self {
         self.rules.push(rule);
         self
@@ -1092,6 +1109,7 @@ impl fmt::Display for TypeAnnotation {
 
 impl LemmaType {
     /// Get an example value string for this type, suitable for UI help text
+    #[must_use]
     pub fn example_value(&self) -> &'static str {
         match self {
             LemmaType::Text => "\"hello world\"",
@@ -1118,6 +1136,7 @@ impl LemmaType {
 
 impl TypeAnnotation {
     /// Get an example value string for this type annotation, suitable for UI help text
+    #[must_use]
     pub fn example_value(&self) -> &'static str {
         match self {
             TypeAnnotation::LemmaType(lemma_type) => lemma_type.example_value(),

@@ -396,9 +396,9 @@ fn format_error(error: &LemmaError) -> String {
         LemmaError::Parse(details) => format!("Parse Error: {}", details.message),
         LemmaError::Semantic(details) => format!("Semantic Error: {}", details.message),
         LemmaError::Runtime(details) => format!("Runtime Error: {}", details.message),
-        LemmaError::Engine(msg) => format!("Engine Error: {}", msg),
-        LemmaError::CircularDependency(msg) => format!("Circular Dependency: {}", msg),
-        LemmaError::MissingFact(fact_ref) => format!("Missing Fact: {}", fact_ref),
+        LemmaError::Engine(msg) => format!("Engine Error: {msg}"),
+        LemmaError::MissingFact(fact_ref) => format!("Missing Fact: {fact_ref}"),
+        LemmaError::CircularDependency(msg) => format!("Circular Dependency: {msg}"),
         LemmaError::ResourceLimitExceeded {
             limit_name,
             limit_value,
@@ -406,8 +406,7 @@ fn format_error(error: &LemmaError) -> String {
             suggestion,
         } => {
             format!(
-                "Resource Limit Exceeded: {} (limit: {}, actual: {}). {}",
-                limit_name, limit_value, actual_value, suggestion
+                "Resource Limit Exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value}). {suggestion}"
             )
         }
         LemmaError::MultipleErrors(errors) => {

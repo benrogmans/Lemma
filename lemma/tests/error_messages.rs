@@ -28,7 +28,7 @@ fn test_duplicate_fact_definition_error() {
             assert_eq!(details.source_id, "test.lemma");
             assert!(details.span.line >= 3);
         }
-        Err(e) => panic!("Expected Semantic error, got: {:?}", e),
+        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error for duplicate fact"),
     }
 }
@@ -55,7 +55,7 @@ fn test_duplicate_rule_definition_error() {
             assert_eq!(details.source_id, "test.lemma");
             assert!(details.span.line >= 4);
         }
-        Err(e) => panic!("Expected Semantic error, got: {:?}", e),
+        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error for duplicate rule"),
     }
 }
@@ -83,7 +83,7 @@ fn test_duplicate_fact_shows_both_locations() {
                 assert!(sugg.contains("already defined"));
             }
         }
-        Err(e) => panic!("Expected Semantic error, got: {:?}", e),
+        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error for duplicate fact"),
     }
 }
@@ -109,7 +109,7 @@ fn test_parse_error_with_span() {
             assert_eq!(details.source_id, "test.lemma");
             assert_eq!(details.doc_name, "<parse-error>");
         }
-        Err(e) => panic!("Expected Parse error, got: {:?}", e),
+        Err(e) => panic!("Expected Parse error, got: {e:?}"),
         Ok(_) => panic!("Expected parse error for unclosed string"),
     }
 }
@@ -131,7 +131,7 @@ fn test_parse_error_malformed_input() {
         Err(LemmaError::Parse { .. }) => {
             // Expected
         }
-        Err(e) => panic!("Expected Parse error, got: {:?}", e),
+        Err(e) => panic!("Expected Parse error, got: {e:?}"),
         Ok(_) => panic!("Expected parse error"),
     }
 }
@@ -176,7 +176,7 @@ fn test_runtime_error_division_by_zero() {
                 assert!(sugg.contains("zero") || sugg.contains("guard") || sugg.contains("check"));
             }
         }
-        Err(e) => panic!("Expected Runtime error, got: {:?}", e),
+        Err(e) => panic!("Expected Runtime error, got: {e:?}"),
         Ok(_) => panic!("Expected runtime error for division by zero"),
     }
 }
@@ -209,7 +209,7 @@ fn test_runtime_error_division_by_zero_with_cli_facts() {
             );
             assert_eq!(details.doc_name, "test");
         }
-        Err(e) => panic!("Expected Runtime error, got: {:?}", e),
+        Err(e) => panic!("Expected Runtime error, got: {e:?}"),
         Ok(_) => panic!("Expected runtime error for division by zero"),
     }
 }
@@ -240,7 +240,7 @@ fn test_transpile_error_self_referencing_rule() {
             );
             assert!(msg.contains("x"));
         }
-        Err(e) => panic!("Expected CircularDependency error, got: {:?}", e),
+        Err(e) => panic!("Expected CircularDependency error, got: {e:?}"),
         Ok(_) => panic!("Expected error for self-referencing rule"),
     }
 }
@@ -279,7 +279,7 @@ fn test_runtime_error_type_mismatch_text_in_arithmetic() {
                 assert!(!sugg.is_empty());
             }
         }
-        Err(e) => panic!("Expected Runtime error for type mismatch, got: {:?}", e),
+        Err(e) => panic!("Expected Runtime error for type mismatch, got: {e:?}"),
         Ok(_) => panic!("Expected runtime error for type mismatch"),
     }
 }
@@ -306,7 +306,7 @@ fn test_runtime_error_boolean_in_arithmetic() {
         Err(LemmaError::Runtime(details)) => {
             assert!(details.message.contains("type") || details.message.contains("error"));
         }
-        Err(e) => panic!("Expected Runtime error for type mismatch, got: {:?}", e),
+        Err(e) => panic!("Expected Runtime error for type mismatch, got: {e:?}"),
         Ok(_) => panic!("Expected runtime error for type mismatch"),
     }
 }
@@ -333,7 +333,7 @@ fn test_error_contains_doc_name_and_source() {
             assert_eq!(details.doc_name, "my_document");
             assert_eq!(details.source_id, "my_file.lemma");
         }
-        Err(e) => panic!("Expected Semantic error, got: {:?}", e),
+        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
@@ -360,7 +360,7 @@ fn test_error_has_valid_span() {
                 "Start should be before end"
             );
         }
-        Err(e) => panic!("Expected Semantic error, got: {:?}", e),
+        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
@@ -387,7 +387,7 @@ fn test_error_with_doc_start_line() {
             assert_eq!(details.doc_name, "second_doc");
             assert!(details.doc_start_line >= 1);
         }
-        Err(e) => panic!("Expected Semantic error, got: {:?}", e),
+        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
@@ -411,7 +411,7 @@ fn test_error_display_format() {
 
     match result {
         Err(e) => {
-            let error_str = format!("{}", e);
+            let error_str = format!("{e}");
 
             // Should contain ariadne-formatted output
             assert!(error_str.contains("Error:") || error_str.contains("error:"));
@@ -455,7 +455,7 @@ fn test_division_by_zero_has_helpful_suggestion() {
                 .expect("Should have suggestion for division by zero");
             assert!(sugg.contains("zero") || sugg.contains("guard") || sugg.contains("unless"));
         }
-        Err(e) => panic!("Expected Runtime error, got: {:?}", e),
+        Err(e) => panic!("Expected Runtime error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
@@ -480,7 +480,7 @@ fn test_circular_dependency_has_helpful_suggestion() {
             );
             assert!(msg.contains("x") && msg.contains("y"));
         }
-        Err(e) => panic!("Expected CircularDependency error, got: {:?}", e),
+        Err(e) => panic!("Expected CircularDependency error, got: {e:?}"),
         Ok(_) => panic!("Expected error for circular dependency"),
     }
 }
@@ -509,7 +509,7 @@ fact line4 = 4"#;
                 "Should point to line 5 where duplicate is"
             );
         }
-        Err(e) => panic!("Expected Semantic error, got: {:?}", e),
+        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
@@ -541,7 +541,7 @@ fn test_runtime_error_has_source_context() {
             assert!(details.source_text.contains("numerator"));
             assert!(details.source_text.contains("denominator"));
         }
-        Err(e) => panic!("Expected Runtime error, got: {:?}", e),
+        Err(e) => panic!("Expected Runtime error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
@@ -567,7 +567,7 @@ fn test_error_with_database_source() {
         Err(LemmaError::Semantic(details)) => {
             assert_eq!(details.source_id, "db://contracts/123");
         }
-        Err(e) => panic!("Expected Semantic error, got: {:?}", e),
+        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
@@ -589,7 +589,7 @@ fn test_error_with_api_source() {
         Err(LemmaError::Semantic(details)) => {
             assert_eq!(details.source_id, "api://policies/endpoint");
         }
-        Err(e) => panic!("Expected Semantic error, got: {:?}", e),
+        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
@@ -611,7 +611,7 @@ fn test_error_with_runtime_source() {
         Err(LemmaError::Semantic(details)) => {
             assert_eq!(details.source_id, "<runtime>");
         }
-        Err(e) => panic!("Expected Semantic error, got: {:?}", e),
+        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }

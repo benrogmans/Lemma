@@ -137,7 +137,7 @@ impl fmt::Display for LemmaError {
             LemmaError::Parse(details) => {
                 write!(f, "Parse error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
-                    write!(f, " (suggestion: {})", suggestion)?;
+                    write!(f, " (suggestion: {suggestion})")?;
                 }
                 write!(
                     f,
@@ -148,7 +148,7 @@ impl fmt::Display for LemmaError {
             LemmaError::Semantic(details) => {
                 write!(f, "Semantic error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
-                    write!(f, " (suggestion: {})", suggestion)?;
+                    write!(f, " (suggestion: {suggestion})")?;
                 }
                 write!(
                     f,
@@ -159,7 +159,7 @@ impl fmt::Display for LemmaError {
             LemmaError::Runtime(details) => {
                 write!(f, "Runtime error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
-                    write!(f, " (suggestion: {})", suggestion)?;
+                    write!(f, " (suggestion: {suggestion})")?;
                 }
                 write!(
                     f,
@@ -167,9 +167,9 @@ impl fmt::Display for LemmaError {
                     details.source_id, details.span.line, details.span.col
                 )
             }
-            LemmaError::Engine(msg) => write!(f, "Engine error: {}", msg),
-            LemmaError::MissingFact(fact_ref) => write!(f, "Missing fact: {}", fact_ref),
-            LemmaError::CircularDependency(msg) => write!(f, "Circular dependency: {}", msg),
+            LemmaError::Engine(msg) => write!(f, "Engine error: {msg}"),
+            LemmaError::MissingFact(fact_ref) => write!(f, "Missing fact: {fact_ref}"),
+            LemmaError::CircularDependency(msg) => write!(f, "Circular dependency: {msg}"),
             LemmaError::ResourceLimitExceeded {
                 limit_name,
                 limit_value,
@@ -178,14 +178,13 @@ impl fmt::Display for LemmaError {
             } => {
                 write!(
                     f,
-                    "Resource limit exceeded: {} (limit: {}, actual: {}). {}",
-                    limit_name, limit_value, actual_value, suggestion
+                    "Resource limit exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value}). {suggestion}"
                 )
             }
             LemmaError::MultipleErrors(errors) => {
                 writeln!(f, "Multiple errors:")?;
                 for (i, error) in errors.iter().enumerate() {
-                    write!(f, "  {}. {}", i + 1, error)?;
+                    write!(f, "  {}. {error}", i + 1)?;
                     if i < errors.len() - 1 {
                         writeln!(f)?;
                     }
@@ -200,6 +199,6 @@ impl std::error::Error for LemmaError {}
 
 impl From<std::fmt::Error> for LemmaError {
     fn from(err: std::fmt::Error) -> Self {
-        LemmaError::Engine(format!("Format error: {}", err))
+        LemmaError::Engine(format!("Format error: {err}"))
     }
 }

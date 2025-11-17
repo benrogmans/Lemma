@@ -58,7 +58,7 @@ pub mod server {
         fn method_not_found(method: String) -> Self {
             Self {
                 code: -32601,
-                message: format!("Method not found: {}", method),
+                message: format!("Method not found: {method}"),
                 data: None,
             }
         }
@@ -258,7 +258,7 @@ pub mod server {
 
             self.engine.add_lemma_code(code, &source_id).map_err(|e| {
                 error!("Failed to add document: {}", e);
-                McpError::internal_error(format!("Failed to parse document: {}", e))
+                McpError::internal_error(format!("Failed to parse document: {e}"))
             })?;
 
             info!("Document added: {}", source_id);
@@ -266,7 +266,7 @@ pub mod server {
             Ok(serde_json::json!({
                 "content": [{
                     "type": "text",
-                    "text": format!("Document added successfully\n\nSource ID: {}\n\nThe document has been parsed and loaded into the engine. You can now evaluate it using the 'evaluate' tool.", source_id)
+                    "text": format!("Document added successfully\n\nSource ID: {source_id}\n\nThe document has been parsed and loaded into the engine. You can now evaluate it using the 'evaluate' tool.")
                 }]
             }))
         }
@@ -300,7 +300,7 @@ pub mod server {
             let parsed_facts = if !facts.is_empty() {
                 Some(lemma::parse_facts(&facts).map_err(|e| {
                     error!("Failed to parse facts: {}", e);
-                    McpError::internal_error(format!("Failed to parse facts: {}", e))
+                    McpError::internal_error(format!("Failed to parse facts: {e}"))
                 })?)
             } else {
                 None
@@ -311,13 +311,12 @@ pub mod server {
                 .evaluate(document, None, parsed_facts)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
-                    McpError::internal_error(format!("Evaluation failed: {}", e))
+                    McpError::internal_error(format!("Evaluation failed: {e}"))
                 })?;
 
             let mut output = String::default();
             output.push_str(&format!(
-                "Evaluation complete for document '{}'\n\n",
-                document
+                "Evaluation complete for document '{document}'\n\n"
             ));
 
             if !response.results.is_empty() {
@@ -327,7 +326,7 @@ pub mod server {
                     if let Some(ref value) = result.result {
                         output.push_str(&value.to_string());
                     } else if let Some(ref veto) = result.veto_message {
-                        output.push_str(&format!("VETO ({})", veto));
+                        output.push_str(&format!("VETO ({veto})"));
                     } else {
                         output.push_str("(no value)");
                     }
@@ -361,14 +360,14 @@ pub mod server {
             }
 
             self.engine.get_document(document).ok_or_else(|| {
-                McpError::invalid_params(format!("Document '{}' not found", document))
+                McpError::invalid_params(format!("Document '{document}' not found"))
             })?;
 
             let facts = self.engine.get_document_facts(document);
             let rules = self.engine.get_document_rules(document);
 
             let mut output = String::default();
-            output.push_str(&format!("# Document: {}\n\n", document));
+            output.push_str(&format!("# Document: {document}\n\n"));
 
             output.push_str(&format!("## Facts ({})\n\n", facts.len()));
             if facts.is_empty() {
@@ -376,7 +375,7 @@ pub mod server {
             } else {
                 for fact in &facts {
                     let fact_name = lemma::analysis::fact_display_name(fact);
-                    output.push_str(&format!("- **{}**: {}\n", fact_name, fact.value));
+                    output.push_str(&format!("- **{fact_name}**: {}\n", fact.value));
                 }
             }
 
@@ -408,7 +407,7 @@ pub mod server {
             } else {
                 let mut s = format!("## Loaded Documents ({})\n\n", documents.len());
                 for doc in &documents {
-                    s.push_str(&format!("- {}\n", doc));
+                    s.push_str(&format!("- {doc}\n"));
                 }
                 s
             };
@@ -457,7 +456,7 @@ pub mod server {
                         jsonrpc: "2.0".to_string(),
                         id: None,
                         result: None,
-                        error: Some(McpError::parse_error(format!("Parse error: {}", e))),
+                        error: Some(McpError::parse_error(format!("Parse error: {e}"))),
                     }
                 }
             };
