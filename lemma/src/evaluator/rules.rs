@@ -53,21 +53,21 @@ pub fn evaluate_rule(
             }
 
             let result_value = result.value().unwrap().clone();
-            context.push_operation(crate::OperationKind::UnlessClauseEvaluated {
-                index,
+            context.push_operation(crate::OperationKind::RuleBranchEvaluated {
+                index: Some(index),
                 matched: true,
-                result_if_matched: Some(result_value.clone()),
                 condition_expr,
                 result_expr,
+                result_value: Some(result_value.clone()),
             });
             return Ok(OperationResult::Value(result_value));
         } else {
-            context.push_operation(crate::OperationKind::UnlessClauseEvaluated {
-                index,
+            context.push_operation(crate::OperationKind::RuleBranchEvaluated {
+                index: Some(index),
                 matched: false,
-                result_if_matched: None,
                 condition_expr,
                 result_expr,
+                result_value: None,
             });
         }
     }
@@ -82,9 +82,12 @@ pub fn evaluate_rule(
     }
 
     let default_value = default_result.value().unwrap().clone();
-    context.push_operation(crate::OperationKind::DefaultValue {
-        value: default_value.clone(),
-        expr: default_expr,
+    context.push_operation(crate::OperationKind::RuleBranchEvaluated {
+        index: None,
+        matched: true,
+        condition_expr: None,
+        result_expr: default_expr,
+        result_value: Some(default_value.clone()),
     });
     Ok(OperationResult::Value(default_value))
 }

@@ -1,10 +1,6 @@
 use crate::{ArithmeticComputation, ComparisonComputation, LiteralValue, MathematicalComputation};
 use serde::Serialize;
 
-/// Unique identifier for an operation record
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize)]
-pub struct OperationId(pub usize);
-
 /// A fact with its name and optional value
 #[derive(Debug, Clone, Serialize)]
 pub struct Fact {
@@ -36,12 +32,18 @@ pub enum ComputationKind {
 ///
 /// Represents one operation performed during rule evaluation,
 /// capturing the actual values and decisions made during execution.
+///
+/// Operations are stored in a linear sequence (Vec) in execution order.
+/// The `parent_index` field provides O(1) access to the parent operation
+/// by directly referencing its position in the operations vector.
 #[derive(Debug, Clone, Serialize)]
 pub struct OperationRecord {
-    pub id: OperationId,
+    /// Index of the parent operation in the operations vector (None for root operations)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<OperationId>,
+    pub parent_index: Option<usize>,
+    /// Depth in the operation tree (0 for root, increases with nesting)
     pub depth: usize,
+    /// The operation data
     #[serde(flatten)]
     pub kind: OperationKind,
 }
@@ -66,22 +68,21 @@ pub enum OperationKind {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         expr: Option<String>,
     },
-    UnlessClauseEvaluated {
-        index: usize,
+    RuleBranchEvaluated {
+        /// Index of the unless clause (None for default expression)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+        /// Whether this branch was selected (true for matched unless or default, false for rejected unless)
         matched: bool,
-        result_if_matched: Option<LiteralValue>,
-        /// The condition expression as written in source
+        /// The condition expression as written in source (None for default expression)
         #[serde(skip_serializing_if = "Option::is_none", default)]
         condition_expr: Option<String>,
         /// The result expression as written in source
         #[serde(skip_serializing_if = "Option::is_none", default)]
         result_expr: Option<String>,
-    },
-    DefaultValue {
-        value: LiteralValue,
-        /// The default expression as written in source
+        /// The result value (None if branch was rejected)
         #[serde(skip_serializing_if = "Option::is_none", default)]
-        expr: Option<String>,
+        result_value: Option<LiteralValue>,
     },
 }
 
@@ -99,12 +100,11 @@ pub struct RuleResult {
 }
 
 impl OperationRecord {
-    /// Create a copy of this operation with a new parent
+    /// Create a copy of this operation with a new parent index
     #[must_use]
-    pub fn with_parent(&self, new_parent: OperationId) -> Self {
+    pub fn with_parent(&self, new_parent_index: usize) -> Self {
         OperationRecord {
-            id: self.id,
-            parent_id: Some(new_parent),
+            parent_index: Some(new_parent_index),
             depth: self.depth + 1,
             kind: self.kind.clone(),
         }

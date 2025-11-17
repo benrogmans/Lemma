@@ -50,11 +50,8 @@ pub struct EvaluationContext<'a> {
     /// Operation records - records every operation for the current rule
     pub operations: Vec<OperationRecord>,
 
-    /// Counter for generating unique operation IDs
-    next_op_id: usize,
-
-    /// Current parent operation ID (for nesting)
-    pub current_parent_id: Option<crate::OperationId>,
+    /// Current parent operation index in the operations vector (for nesting)
+    pub current_parent_index: Option<usize>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -75,37 +72,27 @@ impl<'a> EvaluationContext<'a> {
             rule_results: HashMap::new(),
             rule_operations: HashMap::new(),
             operations: Vec::new(),
-            next_op_id: 0,
-            current_parent_id: None,
+            current_parent_index: None,
             timeout_tracker,
             limits,
         }
     }
 
-    /// Generate the next operation ID
-    fn next_id(&mut self) -> crate::OperationId {
-        let id = crate::OperationId(self.next_op_id);
-        self.next_op_id += 1;
-        id
-    }
-
-    /// Push an operation and return its ID
-    pub fn push_operation(&mut self, kind: crate::OperationKind) -> crate::OperationId {
-        let id = self.next_id();
-        let depth = self.current_parent_id.map_or(0, |parent| {
-            // Find parent's depth and add 1
-            self.operations
-                .iter()
-                .find(|op| op.id == parent)
-                .map_or(1, |op| op.depth + 1)
+    /// Push an operation and return its index in the operations vector
+    ///
+    /// The index can be used to set this operation as the parent for subsequent operations.
+    pub fn push_operation(&mut self, kind: crate::OperationKind) -> usize {
+        let depth = self.current_parent_index.map_or(0, |parent_idx| {
+            // O(1) access to parent's depth
+            self.operations.get(parent_idx).map_or(1, |op| op.depth + 1)
         });
+        let index = self.operations.len();
         self.operations.push(OperationRecord {
-            id,
-            parent_id: self.current_parent_id,
+            parent_index: self.current_parent_index,
             depth,
             kind,
         });
-        id
+        index
     }
 
     /// Check if evaluation has exceeded timeout

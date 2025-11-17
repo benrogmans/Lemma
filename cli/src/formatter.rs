@@ -139,10 +139,11 @@ impl Formatter {
                 } => {
                     // For comparisons: check if this is part of an unless clause
                     if matches!(kind, ComputationKind::Comparison(_)) {
-                        // Check if the next operation is a matched unless clause
+                        // Check if the next operation is a matched rule branch
                         if let Some(next_op) = operations.get(i + 1) {
-                            if let lemma::OperationKind::UnlessClauseEvaluated {
+                            if let lemma::OperationKind::RuleBranchEvaluated {
                                 matched: true,
+                                index: Some(_),
                                 ..
                             } = &next_op.kind
                             {
@@ -171,15 +172,16 @@ impl Formatter {
                     }
                 }
 
-                lemma::OperationKind::UnlessClauseEvaluated {
+                lemma::OperationKind::RuleBranchEvaluated {
+                    index,
                     matched,
                     condition_expr,
                     result_expr,
-                    index,
                     ..
                 } => {
                     if *matched {
                         // Show matched condition if not already shown by a rule expansion
+                        // Only show condition for unless clauses (index is Some), not for default (index is None)
                         if !self.has_expanded_rule_before(operations, i, depth) {
                             if let Some(cond) = condition_expr {
                                 if depth == 0 {
@@ -193,18 +195,21 @@ impl Formatter {
                         }
 
                         // Show rejected unless clauses that come after this one
-                        for rej_op in operations.iter().skip(i + 1) {
-                            if let lemma::OperationKind::UnlessClauseEvaluated {
-                                matched: false,
-                                condition_expr: Some(cond),
-                                index: rej_index,
-                                ..
-                            } = &rej_op.kind
-                            {
-                                if rej_op.depth == depth && *rej_index > *index {
-                                    output.push_str(
-                                        &LineType::UnlessRejected.format_line(&indent, cond),
-                                    );
+                        // Only check if this is an unless clause (index is Some)
+                        if let Some(current_index) = index {
+                            for rej_op in operations.iter().skip(i + 1) {
+                                if let lemma::OperationKind::RuleBranchEvaluated {
+                                    matched: false,
+                                    index: Some(rej_index),
+                                    condition_expr: Some(cond),
+                                    ..
+                                } = &rej_op.kind
+                                {
+                                    if rej_op.depth == depth && *rej_index > *current_index {
+                                        output.push_str(
+                                            &LineType::UnlessRejected.format_line(&indent, cond),
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -216,26 +221,29 @@ impl Formatter {
                                 op.depth == depth && matches!(&op.kind, lemma::OperationKind::Computation { kind, .. } if !matches!(kind, ComputationKind::Comparison(_)))
                             });
 
-                            if !has_arithmetic_after {
-                                output.push_str(
-                                    &LineType::UnlessFinalResult.format_line(&indent, expr),
-                                );
+                            // Use different formatting for default (index is None) vs unless (index is Some)
+                            if index.is_none() {
+                                // Default value
+                                if !has_arithmetic_after {
+                                    output.push_str(
+                                        &LineType::DefaultValue.format_line(&indent, expr),
+                                    );
+                                } else {
+                                    output.push_str(
+                                        &LineType::UnlessMatched.format_line(&indent, expr),
+                                    );
+                                }
                             } else {
-                                output
-                                    .push_str(&LineType::UnlessMatched.format_line(&indent, expr));
-                            }
-                        }
-                    }
-                }
-
-                lemma::OperationKind::DefaultValue { expr, .. } => {
-                    // Only show if not preceded by an expanded rule
-                    if !self.has_expanded_rule_at_depth(operations, depth) {
-                        if let Some(e) = expr {
-                            if depth == 0 {
-                                output.push_str(&format!("{}\n", e));
-                            } else {
-                                output.push_str(&LineType::DefaultValue.format_line(&indent, e));
+                                // Unless clause
+                                if !has_arithmetic_after {
+                                    output.push_str(
+                                        &LineType::UnlessFinalResult.format_line(&indent, expr),
+                                    );
+                                } else {
+                                    output.push_str(
+                                        &LineType::UnlessMatched.format_line(&indent, expr),
+                                    );
+                                }
                             }
                         }
                     }
@@ -274,19 +282,6 @@ impl Formatter {
             }
         }
         false
-    }
-
-    fn has_expanded_rule_at_depth(
-        &self,
-        operations: &[OperationRecord],
-        target_depth: usize,
-    ) -> bool {
-        operations.iter().enumerate().any(|(i, op)| {
-            self.depth(op) == target_depth
-                && matches!(&op.kind, lemma::OperationKind::RuleUsed { .. })
-                && i + 1 < operations.len()
-                && self.depth(&operations[i + 1]) > target_depth
-        })
     }
 
     fn is_last_arithmetic_at_depth(
@@ -455,20 +450,9 @@ mod tests {
         }
     }
 
-    static mut NEXT_OP_ID: usize = 0;
-
-    fn next_op_id() -> lemma::OperationId {
-        unsafe {
-            let id = lemma::OperationId(NEXT_OP_ID);
-            NEXT_OP_ID += 1;
-            id
-        }
-    }
-
     fn op(kind: lemma::OperationKind, depth: usize) -> OperationRecord {
         OperationRecord {
-            id: next_op_id(),
-            parent_id: None,
+            parent_index: None,
             depth,
             kind,
         }
@@ -612,26 +596,24 @@ mod tests {
                         0,
                     ),
                     op(
-                        lemma::OperationKind::UnlessClauseEvaluated {
-                            index: 0,
+                        lemma::OperationKind::RuleBranchEvaluated {
+                            index: Some(0),
                             matched: true,
-                            result_if_matched: Some(LiteralValue::Percentage(
-                                rust_decimal::Decimal::new(10, 0),
-                            )),
                             condition_expr: Some("rating >= 3.5".to_string()),
                             result_expr: Some("10%".to_string()),
+                            result_value: Some(LiteralValue::Percentage(
+                                rust_decimal::Decimal::new(10, 0),
+                            )),
                         },
                         0,
                     ),
                     op(
-                        lemma::OperationKind::UnlessClauseEvaluated {
-                            index: 1,
+                        lemma::OperationKind::RuleBranchEvaluated {
+                            index: Some(1),
                             matched: false,
-                            result_if_matched: Some(LiteralValue::Percentage(
-                                rust_decimal::Decimal::new(15, 0),
-                            )),
                             condition_expr: Some("rating >= 4.5".to_string()),
                             result_expr: Some("15%".to_string()),
+                            result_value: None,
                         },
                         0,
                     ),
@@ -662,9 +644,12 @@ mod tests {
                 result: Some(LiteralValue::Number(rust_decimal::Decimal::new(0, 0))),
                 veto_message: None,
                 operations: vec![op(
-                    lemma::OperationKind::DefaultValue {
-                        expr: Some("0".to_string()),
-                        value: LiteralValue::Number(rust_decimal::Decimal::new(0, 0)),
+                    lemma::OperationKind::RuleBranchEvaluated {
+                        index: None,
+                        matched: true,
+                        condition_expr: None,
+                        result_expr: Some("0".to_string()),
+                        result_value: Some(LiteralValue::Number(rust_decimal::Decimal::new(0, 0))),
                     },
                     0,
                 )],

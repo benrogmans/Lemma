@@ -133,7 +133,7 @@ pub fn evaluate_expression(
                     }
                     OperationResult::Value(value) => {
                         // Record that we used this rule
-                        let rule_id = context.push_operation(crate::OperationKind::RuleUsed {
+                        let rule_index = context.push_operation(crate::OperationKind::RuleUsed {
                             rule_ref: rule_ref.clone(),
                             value: value.clone(),
                         });
@@ -142,7 +142,7 @@ pub fn evaluate_expression(
                         if let Some(rule_ops) = context.rule_operations.get(&lookup_path) {
                             context
                                 .operations
-                                .extend(rule_ops.iter().map(|op| op.with_parent(rule_id)));
+                                .extend(rule_ops.iter().map(|op| op.with_parent(rule_index)));
                         }
 
                         return Ok(OperationResult::Value(value));
