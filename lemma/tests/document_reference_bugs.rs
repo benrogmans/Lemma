@@ -33,7 +33,7 @@ rule line_total = pricing.final_price? * quantity
         .unwrap();
 
     // Should be: (100 * 1.21) * 10 = 1210
-    assert_eq!(line_total.result.as_ref().unwrap().to_string(), "1210.00");
+    assert_eq!(line_total.result.as_ref().unwrap().to_string(), "1210");
 }
 
 /// Bug: Multi-level document references fail

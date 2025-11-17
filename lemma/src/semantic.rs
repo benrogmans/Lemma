@@ -800,7 +800,7 @@ impl fmt::Display for Expression {
 impl fmt::Display for LiteralValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LiteralValue::Number(n) => write!(f, "{}", n),
+            LiteralValue::Number(n) => write!(f, "{}", n.normalize()),
             LiteralValue::Text(s) => write!(f, "\"{}\"", s),
             LiteralValue::Date(dt) => write!(f, "{}", dt),
             LiteralValue::Boolean(b) => write!(f, "{}", b),

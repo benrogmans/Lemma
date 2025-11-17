@@ -30,7 +30,7 @@ rule line_total = pricing.final_price? * quantity
         .unwrap();
 
     // Should be: (100 * 1.21) * 10 = 1210
-    assert_eq!(line_total.result.as_ref().unwrap().to_string(), "1210.00");
+    assert_eq!(line_total.result.as_ref().unwrap().to_string(), "1210");
 }
 
 /// Multi-level document rule references should work correctly.
@@ -127,7 +127,7 @@ rule order_total = line.line_total?
         .find(|r| r.rule_name == "order_total")
         .expect("order_total rule not found in results");
 
-    assert_eq!(order_total.result.as_ref().unwrap().to_string(), "8250.0");
+    assert_eq!(order_total.result.as_ref().unwrap().to_string(), "8250");
 }
 
 /// Accessing facts through multi-level document references with nested overrides works correctly.
@@ -209,7 +209,7 @@ rule order_total = line.line_total?
 
     // base_price=100, tax_rate=10% (overridden), quantity=5
     // (100 * 1.10) * 5 = 550
-    assert_eq!(order_total.result.as_ref().unwrap().to_string(), "550.00");
+    assert_eq!(order_total.result.as_ref().unwrap().to_string(), "550");
 }
 
 /// Different fact paths to the same base document should produce different results
@@ -263,7 +263,7 @@ rule difference = total2? - total1?
         .unwrap();
 
     // path1: 100 * 1.21 = 121
-    assert_eq!(total1.result.as_ref().unwrap().to_string(), "121.00");
+    assert_eq!(total1.result.as_ref().unwrap().to_string(), "121");
     // path2: 75 * 1.21 = 90.75
     assert_eq!(total2.result.as_ref().unwrap().to_string(), "90.75");
     // difference: 90.75 - 121 = -30.25
@@ -409,15 +409,9 @@ rule price_difference = retail_final? - wholesale_final?
         .unwrap();
 
     // retail: 100 * (1 - 0.05) = 95
-    assert_eq!(retail_final.result.as_ref().unwrap().to_string(), "95.00");
+    assert_eq!(retail_final.result.as_ref().unwrap().to_string(), "95");
     // wholesale: 80 * (1 - 0.15) = 68
-    assert_eq!(
-        wholesale_final.result.as_ref().unwrap().to_string(),
-        "68.00"
-    );
+    assert_eq!(wholesale_final.result.as_ref().unwrap().to_string(), "68");
     // difference: 95 - 68 = 27
-    assert_eq!(
-        price_difference.result.as_ref().unwrap().to_string(),
-        "27.00"
-    );
+    assert_eq!(price_difference.result.as_ref().unwrap().to_string(), "27");
 }

@@ -88,7 +88,7 @@ rule manager_bonus = employee.annual_salary? * 0.15
         .find(|r| r.rule_name == "manager_bonus")
         .unwrap();
 
-    assert_eq!(bonus.result.as_ref().unwrap().to_string(), "9000.00");
+    assert_eq!(bonus.result.as_ref().unwrap().to_string(), "9000");
 }
 
 /// Test fact override with cross-doc rule reference
