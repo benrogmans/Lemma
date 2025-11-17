@@ -166,10 +166,12 @@ impl Validator {
 
                     return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
                         message: error_message,
-                        span: duplicate_span,
-                        source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                        source_location: crate::SourceLocation::new(
+                            doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                            duplicate_span,
+                            doc.name.clone(),
+                        ),
                         source_text: Arc::from(""),
-                        doc_name: doc.name.clone(),
                         doc_start_line: doc.start_line,
                         suggestion: Some(suggestion),
                     })));
@@ -197,10 +199,12 @@ impl Validator {
                     };
                     return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
                         message: format!("Duplicate rule definition: '{}'", rule.name),
-                        span: duplicate_span,
-                        source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                        source_location: crate::SourceLocation::new(
+                            doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                            duplicate_span,
+                            doc.name.clone(),
+                        ),
                         source_text: Arc::from(""),
-                        doc_name: doc.name.clone(),
                         doc_start_line: doc.start_line,
                         suggestion: Some(format!(
                             "Rule '{}' was already defined at doc line {} (file line {}). Each rule can only be defined once per document. Consider using 'unless' clauses for conditional logic.",
@@ -231,10 +235,12 @@ impl Validator {
 
                     return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
                         message: format!("Name conflict: '{}' is defined as both a fact and a rule", rule.name),
-                        span: rule_span,
-                        source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                        source_location: crate::SourceLocation::new(
+                            doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                            rule_span,
+                            doc.name.clone(),
+                        ),
                         source_text: Arc::from(""),
-                        doc_name: doc.name.clone(),
                         doc_start_line: doc.start_line,
                         suggestion: Some(format!(
                             "A fact named '{}' was already defined at doc line {} (file line {}). Facts and rules cannot share the same name within a document. Choose a different name for either the fact or the rule.",
@@ -256,10 +262,12 @@ impl Validator {
                     if !docs.iter().any(|d| d.name == *ref_doc_name) {
                         return Err(LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
                             message: format!("Document reference error: '{}' does not exist", ref_doc_name),
-                            span: fact.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-                            source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                            source_location: crate::SourceLocation::new(
+                                doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                                fact.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
+                                doc.name.clone(),
+                            ),
                             source_text: Arc::from(""),
-                            doc_name: doc.name.clone(),
                             doc_start_line: doc.start_line,
                             suggestion: Some(format!(
                                 "Document '{}' is referenced but not defined. Make sure the document exists in your workspace.",
@@ -545,18 +553,20 @@ impl Validator {
     ) -> LemmaError {
         LemmaError::Semantic(Box::new(crate::error::ErrorDetails {
             message,
-            span: expr.span.clone().unwrap_or(Span {
-                start: 0,
-                end: 0,
-                line: 0,
-                col: 0,
-            }),
-            source_id: current_doc
-                .source
-                .clone()
-                .unwrap_or_else(|| "<input>".to_string()),
+            source_location: crate::SourceLocation::new(
+                current_doc
+                    .source
+                    .clone()
+                    .unwrap_or_else(|| "<input>".to_string()),
+                expr.span.clone().unwrap_or(Span {
+                    start: 0,
+                    end: 0,
+                    line: 0,
+                    col: 0,
+                }),
+                current_doc.name.clone(),
+            ),
             source_text: Arc::from(""),
-            doc_name: current_doc.name.clone(),
             doc_start_line: current_doc.start_line,
             suggestion: Some(suggestion),
         }))
@@ -672,15 +682,17 @@ impl Validator {
                                 "Type error: Unless condition must be boolean, but got {}",
                                 condition_type.name()
                             ),
-                            span: unless_clause.condition.span.clone().unwrap_or(Span {
-                                start: 0,
-                                end: 0,
-                                line: 0,
-                                col: 0,
-                            }),
-                            source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                            source_location: crate::SourceLocation::new(
+                                doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                                unless_clause.condition.span.clone().unwrap_or(Span {
+                                    start: 0,
+                                    end: 0,
+                                    line: 0,
+                                    col: 0,
+                                }),
+                                doc.name.clone(),
+                            ),
                             source_text: Arc::from(""),
-                            doc_name: doc.name.clone(),
                             doc_start_line: doc.start_line,
                             suggestion: Some(
                                 "Use a comparison or boolean expression for unless conditions"
@@ -757,10 +769,12 @@ impl Validator {
                 operator,
                 operand_type.name()
             ),
-            span: operand.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
-            source_id: doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+            source_location: crate::SourceLocation::new(
+                doc.source.clone().unwrap_or_else(|| "<input>".to_string()),
+                operand.span.clone().unwrap_or(Span { start: 0, end: 0, line: 0, col: 0 }),
+                doc.name.clone(),
+            ),
             source_text: Arc::from(""),
-            doc_name: doc.name.clone(),
             doc_start_line: doc.start_line,
             suggestion: Some("Use a boolean expression or comparison for logical operations".to_string()),
         })))

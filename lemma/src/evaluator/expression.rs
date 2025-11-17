@@ -502,10 +502,12 @@ fn convert_engine_error_to_runtime(
 
             LemmaError::Runtime(Box::new(crate::error::ErrorDetails {
                 message: msg,
-                span,
-                source_id,
+                source_location: crate::SourceLocation::new(
+                    source_id,
+                    span,
+                    context.current_doc.name.clone(),
+                ),
                 source_text,
-                doc_name: context.current_doc.name.clone(),
                 doc_start_line: context.current_doc.start_line,
                 suggestion,
             }))

@@ -1,4 +1,5 @@
 use crate::ast::Span;
+use crate::SourceLocation;
 use std::fmt;
 use std::sync::Arc;
 
@@ -6,10 +7,8 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct ErrorDetails {
     pub message: String,
-    pub span: Span,
-    pub source_id: String,
+    pub source_location: SourceLocation,
     pub source_text: Arc<str>,
-    pub doc_name: String,
     pub doc_start_line: usize,
     pub suggestion: Option<String>,
 }
@@ -59,10 +58,8 @@ impl LemmaError {
     ) -> Self {
         Self::Parse(Box::new(ErrorDetails {
             message: message.into(),
-            span,
-            source_id: source_id.into(),
+            source_location: SourceLocation::new(source_id, span, doc_name),
             source_text,
-            doc_name: doc_name.into(),
             doc_start_line,
             suggestion: None,
         }))
@@ -80,10 +77,8 @@ impl LemmaError {
     ) -> Self {
         Self::Parse(Box::new(ErrorDetails {
             message: message.into(),
-            span,
-            source_id: source_id.into(),
+            source_location: SourceLocation::new(source_id, span, doc_name),
             source_text,
-            doc_name: doc_name.into(),
             doc_start_line,
             suggestion: Some(suggestion.into()),
         }))
@@ -100,10 +95,8 @@ impl LemmaError {
     ) -> Self {
         Self::Semantic(Box::new(ErrorDetails {
             message: message.into(),
-            span,
-            source_id: source_id.into(),
+            source_location: SourceLocation::new(source_id, span, doc_name),
             source_text,
-            doc_name: doc_name.into(),
             doc_start_line,
             suggestion: None,
         }))
@@ -121,10 +114,8 @@ impl LemmaError {
     ) -> Self {
         Self::Semantic(Box::new(ErrorDetails {
             message: message.into(),
-            span,
-            source_id: source_id.into(),
+            source_location: SourceLocation::new(source_id, span, doc_name),
             source_text,
-            doc_name: doc_name.into(),
             doc_start_line,
             suggestion: Some(suggestion.into()),
         }))
@@ -142,7 +133,9 @@ impl fmt::Display for LemmaError {
                 write!(
                     f,
                     " at {}:{}:{}",
-                    details.source_id, details.span.line, details.span.col
+                    details.source_location.source_id,
+                    details.source_location.span.line,
+                    details.source_location.span.col
                 )
             }
             LemmaError::Semantic(details) => {
@@ -153,7 +146,9 @@ impl fmt::Display for LemmaError {
                 write!(
                     f,
                     " at {}:{}:{}",
-                    details.source_id, details.span.line, details.span.col
+                    details.source_location.source_id,
+                    details.source_location.span.line,
+                    details.source_location.span.col
                 )
             }
             LemmaError::Runtime(details) => {
@@ -164,7 +159,9 @@ impl fmt::Display for LemmaError {
                 write!(
                     f,
                     " at {}:{}:{}",
-                    details.source_id, details.span.line, details.span.col
+                    details.source_location.source_id,
+                    details.source_location.span.line,
+                    details.source_location.span.col
                 )
             }
             LemmaError::Engine(msg) => write!(f, "Engine error: {msg}"),

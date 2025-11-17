@@ -58,6 +58,7 @@ pub mod resource_limits;
 pub mod response;
 pub mod semantic;
 pub mod serializers;
+pub mod source_location;
 pub mod validator;
 
 #[cfg(target_arch = "wasm32")]
@@ -65,6 +66,7 @@ pub mod wasm;
 
 pub use ast::{ExpressionId, ExpressionIdGenerator, Span};
 pub use engine::Engine;
+pub use source_location::SourceLocation;
 /// Temporary alias to align with the Inversion plan's unified naming.
 /// Workspace is functionally identical to Engine and will eventually replace it.
 pub type Workspace = Engine;

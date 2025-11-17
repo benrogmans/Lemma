@@ -16,25 +16,35 @@ pub fn format_error(error: &LemmaError) -> String {
                 _ => unreachable!(),
             };
 
-            let doc_line = if details.span.line >= details.doc_start_line {
-                details.span.line - details.doc_start_line + 1
+            let doc_line = if details.source_location.span.line >= details.doc_start_line {
+                details.source_location.span.line - details.doc_start_line + 1
             } else {
-                details.span.line
+                details.source_location.span.line
             };
 
             let enhanced_message = format!(
                 "{error_type}: {} (in doc '{}' at line {}, file {}:{})",
-                details.message, details.doc_name, doc_line, details.source_id, details.span.line
+                details.message,
+                details.source_location.doc_name,
+                doc_line,
+                details.source_location.source_id,
+                details.source_location.span.line
             );
 
-            let mut report =
-                Report::build(ReportKind::Error, &details.source_id, details.span.start)
-                    .with_message(enhanced_message)
-                    .with_label(
-                        Label::new((&details.source_id, details.span.start..details.span.end))
-                            .with_message("")
-                            .with_color(Color::Red),
-                    );
+            let mut report = Report::build(
+                ReportKind::Error,
+                &details.source_location.source_id,
+                details.source_location.span.start,
+            )
+            .with_message(enhanced_message)
+            .with_label(
+                Label::new((
+                    &details.source_location.source_id,
+                    details.source_location.span.start..details.source_location.span.end,
+                ))
+                .with_message("")
+                .with_color(Color::Red),
+            );
 
             if let Some(suggestion) = &details.suggestion {
                 report = report.with_help(suggestion);
@@ -42,7 +52,7 @@ pub fn format_error(error: &LemmaError) -> String {
 
             match report.finish().write(
                 (
-                    &details.source_id,
+                    &details.source_location.source_id,
                     Source::from(details.source_text.as_ref()),
                 ),
                 &mut output,

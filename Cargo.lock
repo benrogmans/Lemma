@@ -949,7 +949,6 @@ dependencies = [
  "chrono",
  "console_error_panic_hook",
  "insta",
- "lemma-cli",
  "pest",
  "pest_derive",
  "proptest",

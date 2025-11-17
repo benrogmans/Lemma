@@ -24,9 +24,9 @@ fn test_duplicate_fact_definition_error() {
         Err(LemmaError::Semantic(details)) => {
             assert!(details.message.contains("Duplicate fact definition"));
             assert!(details.message.contains("salary"));
-            assert_eq!(details.doc_name, "test");
-            assert_eq!(details.source_id, "test.lemma");
-            assert!(details.span.line >= 3);
+            assert_eq!(details.source_location.doc_name, "test");
+            assert_eq!(details.source_location.source_id, "test.lemma");
+            assert!(details.source_location.span.line >= 3);
         }
         Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error for duplicate fact"),
@@ -51,9 +51,9 @@ fn test_duplicate_rule_definition_error() {
         Err(LemmaError::Semantic(details)) => {
             assert!(details.message.contains("Duplicate rule definition"));
             assert!(details.message.contains("total"));
-            assert_eq!(details.doc_name, "test");
-            assert_eq!(details.source_id, "test.lemma");
-            assert!(details.span.line >= 4);
+            assert_eq!(details.source_location.doc_name, "test");
+            assert_eq!(details.source_location.source_id, "test.lemma");
+            assert!(details.source_location.span.line >= 4);
         }
         Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error for duplicate rule"),
@@ -106,8 +106,8 @@ fn test_parse_error_with_span() {
 
     match result {
         Err(LemmaError::Parse(details)) => {
-            assert_eq!(details.source_id, "test.lemma");
-            assert_eq!(details.doc_name, "<parse-error>");
+            assert_eq!(details.source_location.source_id, "test.lemma");
+            assert_eq!(details.source_location.doc_name, "<parse-error>");
         }
         Err(e) => panic!("Expected Parse error, got: {e:?}"),
         Ok(_) => panic!("Expected parse error for unclosed string"),
@@ -167,9 +167,9 @@ fn test_runtime_error_division_by_zero() {
                 "Error message should mention division or zero, got: {}",
                 details.message
             );
-            assert_eq!(details.doc_name, "test");
-            assert_eq!(details.source_id, "test.lemma");
-            assert!(details.span.line >= 4);
+            assert_eq!(details.source_location.doc_name, "test");
+            assert_eq!(details.source_location.source_id, "test.lemma");
+            assert!(details.source_location.span.line >= 4);
 
             // Should have a helpful suggestion
             if let Some(ref sugg) = details.suggestion {
@@ -207,7 +207,7 @@ fn test_runtime_error_division_by_zero_with_cli_facts() {
                     || details.message.contains("zero")
                     || details.message.contains("error")
             );
-            assert_eq!(details.doc_name, "test");
+            assert_eq!(details.source_location.doc_name, "test");
         }
         Err(e) => panic!("Expected Runtime error, got: {e:?}"),
         Ok(_) => panic!("Expected runtime error for division by zero"),
@@ -330,8 +330,8 @@ fn test_error_contains_doc_name_and_source() {
 
     match result {
         Err(LemmaError::Semantic(details)) => {
-            assert_eq!(details.doc_name, "my_document");
-            assert_eq!(details.source_id, "my_file.lemma");
+            assert_eq!(details.source_location.doc_name, "my_document");
+            assert_eq!(details.source_location.source_id, "my_file.lemma");
         }
         Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
@@ -353,10 +353,16 @@ fn test_error_has_valid_span() {
 
     match result {
         Err(LemmaError::Semantic(details)) => {
-            assert!(details.span.line > 0, "Line number should be positive");
-            assert!(details.span.col > 0, "Column number should be positive");
             assert!(
-                details.span.start < details.span.end,
+                details.source_location.span.line > 0,
+                "Line number should be positive"
+            );
+            assert!(
+                details.source_location.span.col > 0,
+                "Column number should be positive"
+            );
+            assert!(
+                details.source_location.span.start < details.source_location.span.end,
                 "Start should be before end"
             );
         }
@@ -384,7 +390,7 @@ fn test_error_with_doc_start_line() {
 
     match result {
         Err(LemmaError::Semantic(details)) => {
-            assert_eq!(details.doc_name, "second_doc");
+            assert_eq!(details.source_location.doc_name, "second_doc");
             assert!(details.doc_start_line >= 1);
         }
         Err(e) => panic!("Expected Semantic error, got: {e:?}"),
@@ -505,7 +511,7 @@ fact line4 = 4"#;
         Err(LemmaError::Semantic(details)) => {
             // The duplicate 'line4' is on line 5 (1-based)
             assert_eq!(
-                details.span.line, 5,
+                details.source_location.span.line, 5,
                 "Should point to line 5 where duplicate is"
             );
         }
@@ -565,7 +571,7 @@ fn test_error_with_database_source() {
 
     match result {
         Err(LemmaError::Semantic(details)) => {
-            assert_eq!(details.source_id, "db://contracts/123");
+            assert_eq!(details.source_location.source_id, "db://contracts/123");
         }
         Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
@@ -587,7 +593,7 @@ fn test_error_with_api_source() {
 
     match result {
         Err(LemmaError::Semantic(details)) => {
-            assert_eq!(details.source_id, "api://policies/endpoint");
+            assert_eq!(details.source_location.source_id, "api://policies/endpoint");
         }
         Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
@@ -609,7 +615,7 @@ fn test_error_with_runtime_source() {
 
     match result {
         Err(LemmaError::Semantic(details)) => {
-            assert_eq!(details.source_id, "<runtime>");
+            assert_eq!(details.source_location.source_id, "<runtime>");
         }
         Err(e) => panic!("Expected Semantic error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
