@@ -56,10 +56,13 @@ pub fn evaluate_expression(
                 .clone();
 
             // Record operation
-            context.push_operation(crate::OperationKind::FactUsed {
-                fact_ref: lookup_ref.clone(),
-                value: value.clone(),
-            });
+            context.push_operation(
+                crate::OperationKind::FactUsed {
+                    fact_ref: lookup_ref.clone(),
+                    value: value.clone(),
+                },
+                expr.id,
+            );
 
             Ok(OperationResult::Value(value))
         }
@@ -133,10 +136,13 @@ pub fn evaluate_expression(
                     }
                     OperationResult::Value(value) => {
                         // Record that we used this rule
-                        let rule_index = context.push_operation(crate::OperationKind::RuleUsed {
-                            rule_ref: rule_ref.clone(),
-                            value: value.clone(),
-                        });
+                        let rule_index = context.push_operation(
+                            crate::OperationKind::RuleUsed {
+                                rule_ref: rule_ref.clone(),
+                                value: value.clone(),
+                            },
+                            expr.id,
+                        );
 
                         // Inline the operations that computed this rule's value with this rule as parent
                         if let Some(rule_ops) = context.rule_operations.get(&lookup_path) {
@@ -180,12 +186,15 @@ pub fn evaluate_expression(
             // Extract the original expression text from the source
             let expr_text = context.extract_expr_text(expr, rule_doc);
 
-            context.push_operation(crate::OperationKind::Computation {
-                kind: ComputationKind::Arithmetic(op.clone()),
-                inputs: vec![left_val.clone(), right_val.clone()],
-                result: result.clone(),
-                expr: expr_text,
-            });
+            context.push_operation(
+                crate::OperationKind::Computation {
+                    kind: ComputationKind::Arithmetic(op.clone()),
+                    inputs: vec![left_val.clone(), right_val.clone()],
+                    result: result.clone(),
+                    expr: expr_text,
+                },
+                expr.id,
+            );
 
             Ok(OperationResult::Value(result))
         }
@@ -211,12 +220,15 @@ pub fn evaluate_expression(
             // Extract the original expression text from the source
             let expr_text = context.extract_expr_text(expr, rule_doc);
 
-            context.push_operation(crate::OperationKind::Computation {
-                kind: ComputationKind::Comparison(op.clone()),
-                inputs: vec![left_val.clone(), right_val.clone()],
-                result: LiteralValue::Boolean(result),
-                expr: expr_text,
-            });
+            context.push_operation(
+                crate::OperationKind::Computation {
+                    kind: ComputationKind::Comparison(op.clone()),
+                    inputs: vec![left_val.clone(), right_val.clone()],
+                    result: LiteralValue::Boolean(result),
+                    expr: expr_text,
+                },
+                expr.id,
+            );
 
             Ok(OperationResult::Value(LiteralValue::Boolean(result)))
         }
@@ -310,8 +322,14 @@ pub fn evaluate_expression(
 
         ExpressionKind::MathematicalComputation(op, operand) => {
             let expr_text = context.extract_expr_text(expr, rule_doc);
-            let result =
-                evaluate_mathematical_operator(op, operand, rule_doc, context, fact_prefix)?;
+            let result = evaluate_mathematical_operator(
+                op,
+                operand,
+                expr.id,
+                rule_doc,
+                context,
+                fact_prefix,
+            )?;
 
             // Inject the expression text into the last operation record
             if let Some(OperationRecord {
@@ -351,6 +369,7 @@ pub fn evaluate_expression(
 fn evaluate_mathematical_operator(
     op: &MathematicalComputation,
     operand: &Expression,
+    expression_id: crate::ExpressionId,
     rule_doc: &crate::LemmaDoc,
     context: &mut EvaluationContext,
     fact_prefix: &[String],
@@ -402,53 +421,68 @@ fn evaluate_mathematical_operator(
                             )
                         })?;
                     let result_value = LiteralValue::Number(decimal_result);
-                    context.push_operation(crate::OperationKind::Computation {
-                        kind: ComputationKind::Mathematical(op.clone()),
-                        inputs: vec![value.clone()],
-                        result: result_value.clone(),
-                        expr: None,
-                    });
+                    context.push_operation(
+                        crate::OperationKind::Computation {
+                            kind: ComputationKind::Mathematical(op.clone()),
+                            inputs: vec![value.clone()],
+                            result: result_value.clone(),
+                            expr: None,
+                        },
+                        expression_id,
+                    );
                     Ok(OperationResult::Value(result_value))
                 }
                 // Decimal-native functions
                 MathematicalComputation::Abs => {
                     let result_value = LiteralValue::Number(n.abs());
-                    context.push_operation(crate::OperationKind::Computation {
-                        kind: ComputationKind::Mathematical(op.clone()),
-                        inputs: vec![value.clone()],
-                        result: result_value.clone(),
-                        expr: None,
-                    });
+                    context.push_operation(
+                        crate::OperationKind::Computation {
+                            kind: ComputationKind::Mathematical(op.clone()),
+                            inputs: vec![value.clone()],
+                            result: result_value.clone(),
+                            expr: None,
+                        },
+                        expression_id,
+                    );
                     Ok(OperationResult::Value(result_value))
                 }
                 MathematicalComputation::Floor => {
                     let result_value = LiteralValue::Number(n.floor());
-                    context.push_operation(crate::OperationKind::Computation {
-                        kind: ComputationKind::Mathematical(op.clone()),
-                        inputs: vec![value.clone()],
-                        result: result_value.clone(),
-                        expr: None,
-                    });
+                    context.push_operation(
+                        crate::OperationKind::Computation {
+                            kind: ComputationKind::Mathematical(op.clone()),
+                            inputs: vec![value.clone()],
+                            result: result_value.clone(),
+                            expr: None,
+                        },
+                        expression_id,
+                    );
                     Ok(OperationResult::Value(result_value))
                 }
                 MathematicalComputation::Ceil => {
                     let result_value = LiteralValue::Number(n.ceil());
-                    context.push_operation(crate::OperationKind::Computation {
-                        kind: ComputationKind::Mathematical(op.clone()),
-                        inputs: vec![value.clone()],
-                        result: result_value.clone(),
-                        expr: None,
-                    });
+                    context.push_operation(
+                        crate::OperationKind::Computation {
+                            kind: ComputationKind::Mathematical(op.clone()),
+                            inputs: vec![value.clone()],
+                            result: result_value.clone(),
+                            expr: None,
+                        },
+                        expression_id,
+                    );
                     Ok(OperationResult::Value(result_value))
                 }
                 MathematicalComputation::Round => {
                     let result_value = LiteralValue::Number(n.round());
-                    context.push_operation(crate::OperationKind::Computation {
-                        kind: ComputationKind::Mathematical(op.clone()),
-                        inputs: vec![value.clone()],
-                        result: result_value.clone(),
-                        expr: None,
-                    });
+                    context.push_operation(
+                        crate::OperationKind::Computation {
+                            kind: ComputationKind::Mathematical(op.clone()),
+                            inputs: vec![value.clone()],
+                            result: result_value.clone(),
+                            expr: None,
+                        },
+                        expression_id,
+                    );
                     Ok(OperationResult::Value(result_value))
                 }
             }

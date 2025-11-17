@@ -454,6 +454,7 @@ mod tests {
         OperationRecord {
             parent_index: None,
             depth,
+            expression_id: lemma::ExpressionId::new(0),
             kind,
         }
     }

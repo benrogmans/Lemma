@@ -53,22 +53,28 @@ pub fn evaluate_rule(
             }
 
             let result_value = result.value().unwrap().clone();
-            context.push_operation(crate::OperationKind::RuleBranchEvaluated {
-                index: Some(index),
-                matched: true,
-                condition_expr,
-                result_expr,
-                result_value: Some(result_value.clone()),
-            });
+            context.push_operation(
+                crate::OperationKind::RuleBranchEvaluated {
+                    index: Some(index),
+                    matched: true,
+                    condition_expr,
+                    result_expr,
+                    result_value: Some(result_value.clone()),
+                },
+                unless_clause.result.id,
+            );
             return Ok(OperationResult::Value(result_value));
         } else {
-            context.push_operation(crate::OperationKind::RuleBranchEvaluated {
-                index: Some(index),
-                matched: false,
-                condition_expr,
-                result_expr,
-                result_value: None,
-            });
+            context.push_operation(
+                crate::OperationKind::RuleBranchEvaluated {
+                    index: Some(index),
+                    matched: false,
+                    condition_expr,
+                    result_expr,
+                    result_value: None,
+                },
+                unless_clause.condition.id,
+            );
         }
     }
 
@@ -82,12 +88,15 @@ pub fn evaluate_rule(
     }
 
     let default_value = default_result.value().unwrap().clone();
-    context.push_operation(crate::OperationKind::RuleBranchEvaluated {
-        index: None,
-        matched: true,
-        condition_expr: None,
-        result_expr: default_expr,
-        result_value: Some(default_value.clone()),
-    });
+    context.push_operation(
+        crate::OperationKind::RuleBranchEvaluated {
+            index: None,
+            matched: true,
+            condition_expr: None,
+            result_expr: default_expr,
+            result_value: Some(default_value.clone()),
+        },
+        rule.expression.id,
+    );
     Ok(OperationResult::Value(default_value))
 }

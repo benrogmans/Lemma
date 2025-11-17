@@ -50,7 +50,6 @@ pub struct EvaluationContext<'a> {
     /// Operation records - records every operation for the current rule
     pub operations: Vec<OperationRecord>,
 
-    /// Current parent operation index in the operations vector (for nesting)
     pub current_parent_index: Option<usize>,
 }
 
@@ -79,9 +78,11 @@ impl<'a> EvaluationContext<'a> {
     }
 
     /// Push an operation and return its index in the operations vector
-    ///
-    /// The index can be used to set this operation as the parent for subsequent operations.
-    pub fn push_operation(&mut self, kind: crate::OperationKind) -> usize {
+    pub fn push_operation(
+        &mut self,
+        kind: crate::OperationKind,
+        expression_id: crate::ExpressionId,
+    ) -> usize {
         let depth = self.current_parent_index.map_or(0, |parent_idx| {
             // O(1) access to parent's depth
             self.operations.get(parent_idx).map_or(1, |op| op.depth + 1)
@@ -90,6 +91,7 @@ impl<'a> EvaluationContext<'a> {
         self.operations.push(OperationRecord {
             parent_index: self.current_parent_index,
             depth,
+            expression_id,
             kind,
         });
         index

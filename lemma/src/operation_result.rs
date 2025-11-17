@@ -11,12 +11,10 @@ pub enum OperationResult {
 }
 
 impl OperationResult {
-    /// Check if this is a vetoed result
     pub fn is_vetoed(&self) -> bool {
         matches!(self, OperationResult::Veto(_))
     }
 
-    /// Get the value if present, None if vetoed
     #[must_use]
     pub fn value(&self) -> Option<&LiteralValue> {
         match self {

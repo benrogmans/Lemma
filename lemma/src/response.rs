@@ -1,4 +1,7 @@
-use crate::{ArithmeticComputation, ComparisonComputation, LiteralValue, MathematicalComputation};
+use crate::{
+    ArithmeticComputation, ComparisonComputation, ExpressionId, LiteralValue,
+    MathematicalComputation,
+};
 use serde::Serialize;
 
 /// A fact with its name and optional value
@@ -38,12 +41,11 @@ pub enum ComputationKind {
 /// by directly referencing its position in the operations vector.
 #[derive(Debug, Clone, Serialize)]
 pub struct OperationRecord {
-    /// Index of the parent operation in the operations vector (None for root operations)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_index: Option<usize>,
-    /// Depth in the operation tree (0 for root, increases with nesting)
     pub depth: usize,
-    /// The operation data
+    /// Expression ID for direct lookup of the Expression AST node
+    pub expression_id: ExpressionId,
     #[serde(flatten)]
     pub kind: OperationKind,
 }
@@ -69,18 +71,15 @@ pub enum OperationKind {
         expr: Option<String>,
     },
     RuleBranchEvaluated {
-        /// Index of the unless clause (None for default expression)
         #[serde(skip_serializing_if = "Option::is_none")]
         index: Option<usize>,
-        /// Whether this branch was selected (true for matched unless or default, false for rejected unless)
         matched: bool,
-        /// The condition expression as written in source (None for default expression)
+        /// The condition expression as written in source
         #[serde(skip_serializing_if = "Option::is_none", default)]
         condition_expr: Option<String>,
         /// The result expression as written in source
         #[serde(skip_serializing_if = "Option::is_none", default)]
         result_expr: Option<String>,
-        /// The result value (None if branch was rejected)
         #[serde(skip_serializing_if = "Option::is_none", default)]
         result_value: Option<LiteralValue>,
     },
@@ -106,6 +105,7 @@ impl OperationRecord {
         OperationRecord {
             parent_index: Some(new_parent_index),
             depth: self.depth + 1,
+            expression_id: self.expression_id,
             kind: self.kind.clone(),
         }
     }
