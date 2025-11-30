@@ -12,7 +12,7 @@ name = "lemma"
 path = "src/main.rs"
 
 [dependencies]
-lemma = { package = "lemma-engine", version = "0.6.9", path = "../lemma" }
+lemma = { package = "lemma-engine", version = "0.7.0", path = "../lemma" }
 clap.workspace = true
 anyhow.workspace = true
 ariadne.workspace = true
@@ -37,7 +37,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = tr
 default = ["server", "mcp"]
 server = ["axum", "tokio", "tower", "tower-http", "serde", "serde_json", "tracing", "tracing-subscriber"]
 mcp = ["serde", "serde_json", "tracing", "tracing-subscriber"]
-inversion = ["lemma/inversion"]
 
 [dev-dependencies]
 assert_cmd = "2.0"

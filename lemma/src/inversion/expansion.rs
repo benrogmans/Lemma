@@ -584,14 +584,14 @@ fn expand_expression_recursive(expr: Expression, plan: &ExecutionPlan) -> LemmaR
 /// * `Err(LemmaError)` - If rule not found
 ///
 /// # Example
-/// ```rust
+/// ```rust,no_run
 /// // Rule: tier = "bronze" unless points >= 100 then "silver" unless points >= 500 then "gold"
 /// // Returns:
-/// [
-///     (true, "bronze"),                                    // Default branch
-///     (points >= 100 AND NOT(points >= 500), "silver"),  // Second branch
-///     (points >= 500, "gold"),                            // Third branch
-/// ]
+/// // [
+/// //     (true, "bronze"),                                    // Default branch
+/// //     (points >= 100 AND NOT(points >= 500), "silver"),  // Second branch
+/// //     (points >= 500, "gold"),                            // Third branch
+/// // ]
 /// ```
 /// Expand a rule reference into its branch structure
 ///
