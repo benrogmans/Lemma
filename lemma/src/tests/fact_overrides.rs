@@ -1,5 +1,5 @@
-use crate::parser::parse;
-use crate::{FactType, FactValue, LiteralValue};
+use crate::parsing::parse;
+use crate::{FactValue, LiteralValue};
 
 #[test]
 fn test_parse_simple_document_reference() {
@@ -41,8 +41,8 @@ fact contract.base.rate = 100"#;
     assert_eq!(result[0].facts.len(), 6);
 
     assert_eq!(
-        result[0].facts[0].fact_type,
-        FactType::Local("contract".to_string())
+        result[0].facts[0].reference,
+        crate::FactReference::from_path(vec!["contract".to_string()])
     );
     if let FactValue::DocumentReference(doc_name) = &result[0].facts[0].value {
         assert_eq!(doc_name, "employment_contract");
@@ -51,10 +51,8 @@ fact contract.base.rate = 100"#;
     }
 
     assert_eq!(
-        result[0].facts[1].fact_type,
-        FactType::Foreign(crate::ForeignFact {
-            reference: vec!["contract".to_string(), "start_date".to_string()]
-        })
+        result[0].facts[1].reference,
+        crate::FactReference::from_path(vec!["contract".to_string(), "start_date".to_string()])
     );
     assert!(
         matches!(
@@ -65,10 +63,8 @@ fact contract.base.rate = 100"#;
     );
 
     assert_eq!(
-        result[0].facts[2].fact_type,
-        FactType::Foreign(crate::ForeignFact {
-            reference: vec!["contract".to_string(), "end_date".to_string()]
-        })
+        result[0].facts[2].reference,
+        crate::FactReference::from_path(vec!["contract".to_string(), "end_date".to_string()])
     );
     assert!(
         matches!(&result[0].facts[2].value, FactValue::TypeAnnotation(_)),
@@ -76,10 +72,11 @@ fact contract.base.rate = 100"#;
     );
 
     assert_eq!(
-        result[0].facts[3].fact_type,
-        FactType::Foreign(crate::ForeignFact {
-            reference: vec!["contract".to_string(), "employment_type".to_string()]
-        })
+        result[0].facts[3].reference,
+        crate::FactReference::from_path(vec![
+            "contract".to_string(),
+            "employment_type".to_string()
+        ])
     );
     if let FactValue::Literal(LiteralValue::Text(s)) = &result[0].facts[3].value {
         assert_eq!(s, "contractor");
@@ -88,10 +85,8 @@ fact contract.base.rate = 100"#;
     }
 
     assert_eq!(
-        result[0].facts[4].fact_type,
-        FactType::Foreign(crate::ForeignFact {
-            reference: vec!["contract".to_string(), "base".to_string()]
-        })
+        result[0].facts[4].reference,
+        crate::FactReference::from_path(vec!["contract".to_string(), "base".to_string()])
     );
     if let FactValue::DocumentReference(doc_name) = &result[0].facts[4].value {
         assert_eq!(doc_name, "base_contract");
@@ -100,14 +95,12 @@ fact contract.base.rate = 100"#;
     }
 
     assert_eq!(
-        result[0].facts[5].fact_type,
-        FactType::Foreign(crate::ForeignFact {
-            reference: vec![
-                "contract".to_string(),
-                "base".to_string(),
-                "rate".to_string()
-            ]
-        })
+        result[0].facts[5].reference,
+        crate::FactReference::from_path(vec![
+            "contract".to_string(),
+            "base".to_string(),
+            "rate".to_string()
+        ])
     );
     if let FactValue::Literal(LiteralValue::Number(n)) = &result[0].facts[5].value {
         assert_eq!(*n, rust_decimal::Decimal::new(100, 0));

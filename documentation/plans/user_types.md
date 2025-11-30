@@ -7,7 +7,7 @@ title: User Types
 
 ## Overview
 
-Extend Lemma to support user-defined types within documents. Types define units with optional numeric values, enabling custom enumerations, priorities, statuses, and domain-specific measurements. Types are scoped to their document and accessed via existing doc reference syntax.
+Extend Lemma to support user-defined types within documents. Types define units with optional numeric values, enabling custom enumerations, priorities, statuses, and domain-specific measurements. Types are scoped to the workspace.
 
 ## Design
 
@@ -23,6 +23,14 @@ type temperature
 unit celsius = 1
 unit fahrenheit = celsius * 9/5 + 32
 unit kelvin = celsius + 273.15
+
+type currency
+"""
+No relationships between currencies (yet) - no conversions possible.
+"""
+unit eur = 1
+unit usd = 1
+unit gbp = 1
 ```
 
 Loaded at engine initialization. Available everywhere without qualification.
@@ -30,22 +38,27 @@ Loaded at engine initialization. Available everywhere without qualification.
 ### User Types (Doc-Scoped)
 
 ```lemma
-doc order_workflow
-
 type order_status
 unit draft
 unit pending
 unit approved
 
 type priority
+"""
+A generic priority type
+"""
+
 unit low = 1
 unit medium = 2
 unit high = 3
 
-fact status = [order_status]
-fact urgency = [priority]
 
-rule can_process = status is approved
+doc order_workflow
+
+fact status = [type @coolblue/order_status]
+fact urgency = [type priority]
+
+rule can_process = status is order_status.approved
 rule needs_escalation = urgency > 2
 ```
 
@@ -58,28 +71,27 @@ doc shipment
 fact order = doc order_workflow
 fact order.status = approved
 
-rule can_ship = order.status is order_workflow.approved
+rule can_ship = order.status is order_status.approved
 ```
 
-Access units from other docs using doc reference syntax: `doc_name.unit_name`
+Access units from other docs using doc reference syntax: `type_name.unit_name`
 
 ### Type Annotations
 
 ```lemma
-doc order_workflow
-
 type order_status
 unit draft
 unit approved
 
+doc order_workflow
 fact status = [order_status]
 
 doc shipment
 fact weight = [mass]
-fact order_status = [order_workflow.order_status]
+fact order_status = [order_status]
 ```
 
-Type annotations use the type name in brackets. Cross-doc types use `doc_name.type_name` syntax.
+Type annotations use the type name in brackets.
 
 ## Grammar Changes
 
@@ -93,153 +105,14 @@ type_def = { "type" ~ identifier ~ unit+ }
 unit = { "unit" ~ identifier ~ ("=" ~ expression)? }
 ```
 
-Types are defined within docs alongside facts and rules.
 
-## Semantic Model
-
-**File: `lemma/src/semantic.rs`**
-
-```rust
-pub struct LemmaUnit {
-    pub name: String,
-    pub expression: Option<Expression>,  // None for value-less units
-}
-
-pub struct LemmaType {
-    pub name: String,
-    pub units: Vec<LemmaUnit>,
-}
-
-pub struct LemmaDoc {
-    pub name: String,
-    pub source: Option<String>,
-    pub start_line: usize,
-    pub commentary: Option<String>,
-    pub types: Vec<LemmaType>,      // NEW
-    pub facts: Vec<LemmaFact>,
-    pub rules: Vec<LemmaRule>,
-}
-
-pub enum LiteralValue {
-    Number(Decimal),
-    CustomTyped {
-        value: Decimal,
-        type_name: String,
-        unit_name: String,
-    },
-    // ... existing variants
-}
-```
-
-## Unit Resolution
-
-**Within a doc:**
-1. Parse `approved` as identifier
-2. Search local types for unit `approved`
-3. If found, resolve to `CustomTyped { type_name: "order_status", unit_name: "approved", value: <optional> }`
-4. If not found, search global types (stdlib)
-5. If not found, error: "Unknown unit 'approved'"
-
-**Cross-doc access:**
-1. Parse `order_workflow.approved` as qualified reference
-2. Look up doc `order_workflow`
-3. Find unit `approved` in that doc's types
-4. Resolve type and unit
-
-## Validation
-
-**Type Definition Validation:**
-
-For numeric types with conversions:
-- Identify base unit (one unit with static numeric value)
-- Validate all other units reference the base unit (directly or indirectly)
-- Validate no circular references
-
-For ordered enums (units with numeric values but no references):
-- Allow any numeric assignments
-- Enable comparisons (`>`, `<`, `>=`, `<=`)
-- No conversion support
-
-For value-less enums:
-- Allow equality checks only (`is`, `is not`)
-- No comparisons or conversions
-
-**Global Uniqueness (Stdlib Only):**
-
-Stdlib types have globally unique unit names. User types are scoped to docs, so no global conflicts.
-
-## Transpilation Strategy
-
-### Base + Derived Units (Conversions)
-
-For types with a base unit and conversions:
-
-```lemma
-type temperature
-unit celsius = 1
-unit fahrenheit = celsius * 9/5 + 32
-```
-
-Transpile to Prolog module:
-
-```prolog
-:- module(temperature, [to_base_celsius/2, to_base_fahrenheit/2,
-                        from_base_celsius/2, from_base_fahrenheit/2,
-                        convert_temperature/4]).
-
-% Base unit (identity)
-to_base_celsius(Value, Value).
-from_base_celsius(Value, Value).
-
-% Derived unit (algebraic inversion)
-to_base_fahrenheit(Value, Result) :- Result is (Value - 32) * 5/9.
-from_base_fahrenheit(Value, Result) :- Result is Value * 9/5 + 32.
-
-% Conversion predicate
-convert_temperature(Value, FromUnit, ToUnit, Result) :-
-    call(to_base_ + FromUnit, Value, BaseValue),
-    call(from_base_ + ToUnit, BaseValue, Result).
-```
-
-### Ordered Enums (No Conversions)
-
-```lemma
-type priority
-unit low = 1
-unit high = 3
-```
-
-Transpile to simple value mappings:
-
-```prolog
-priority_value(low, 1).
-priority_value(high, 3).
-```
-
-Used for comparisons only.
-
-### Value-less Enums
-
-```lemma
-type status
-unit draft
-unit approved
-```
-
-Transpile to atoms:
-
-```prolog
-status_unit(draft).
-status_unit(approved).
-```
-
-Used for equality checks only.
+This means that all existing types, in semantic and all processing, need to be removed and replaced by a generic NumericUnit type. This is a major clean up.
 
 ## Expression Inversion
 
 **File: `lemma/src/evaluator/expression_inverter.rs`** (new)
 
-Use general symbolic inversion. If the base unit appears **exactly once** in the expression, invert by unwinding operations:
+Use general symbolic inversion. Find relationships between the units, invert by unwinding operations:
 
 **Algorithm:**
 
@@ -373,64 +246,3 @@ unit newton = 1
 unit kilonewton = newton * 1000
 unit lbf = newton * 4.44822
 ```
-
-Remove `units.pl` conversion predicates entirely.
-
-## Implementation Phases
-
-### Phase 1: Parser (1 day)
-- Add `type` and `unit` to grammar
-- Parse types within doc declarations
-- Parse unit definitions with optional expressions
-
-### Phase 2: Semantic Model (1 day)
-- Add `LemmaType` and `LemmaUnit` structs
-- Add `types` field to `LemmaDoc`
-- Add `CustomTyped` literal variant
-- Unit resolution within doc scope
-- Cross-doc unit resolution
-
-### Phase 3: Validation (1 day)
-- Validate type definitions (base unit, references, no cycles)
-- Classify types: convertible, ordered enum, value-less enum
-- Type compatibility checking
-- Global uniqueness for stdlib
-
-### Phase 4: Transpilation (3 days)
-- Expression inverter for algebraic patterns
-- Type module transpilation (to_base/from_base predicates)
-- Ordered enum transpilation (value mappings)
-- Value-less enum transpilation (atoms)
-- Update conversion expression handling
-
-### Phase 5: Standard Library (1 day)
-- Create `stdlib/types.lemma` with all units
-- Auto-load in `Engine::new()`
-- Remove `units.pl` conversion logic
-
-### Phase 6: Testing (2 days)
-- Parser tests (type and unit parsing)
-- Validation tests (base unit, references, cycles)
-- Transpilation tests (inversion patterns)
-- Integration tests (conversions, enums, cross-doc access)
-- Stdlib loading tests
-
-### Phase 7: Examples & Documentation (1 day)
-- Update language docs with type syntax
-- Add example: custom type with conversions
-- Add example: enum types for business logic
-- Update reference with supported patterns
-
-## Timeline
-
-**Total: 10 days**
-
-## Key Design Points
-
-1. **Doc-scoped types** - Types belong to docs, accessed via doc references
-2. **Declarative equations** - Unit definitions are relationships, not functions
-3. **Algebraic inversion** - Automatic bidirectional conversions
-4. **Three type modes** - Convertible, ordered enum, value-less enum
-5. **Stdlib as types** - Replace hardcoded conversions with Lemma definitions
-6. **Unqualified within doc** - Clean syntax for domain experts
-7. **No transition enforcement** - Business rules stay in doc logic

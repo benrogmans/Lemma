@@ -1,5 +1,6 @@
 use lemma::{Engine, LiteralValue, OperationResult};
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 
 #[test]
 fn test_proof_generated_during_evaluation() {
@@ -14,18 +15,20 @@ rule doubled = base_value * 2
 "#;
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test_proof", None, None).unwrap();
+    let response = engine
+        .evaluate("test_proof", vec![], HashMap::new())
+        .unwrap();
 
     let doubled_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "doubled")
         .expect("doubled rule should exist");
 
     // Verify result
     assert_eq!(
         doubled_result.result,
-        OperationResult::Value(LiteralValue::Number(Decimal::from(200)))
+        OperationResult::Value(LiteralValue::number(200))
     );
 
     // Verify proof was built
@@ -37,7 +40,7 @@ rule doubled = base_value * 2
     assert_eq!(proof.rule_path.rule, "doubled");
     assert_eq!(
         proof.result,
-        OperationResult::Value(LiteralValue::Number(Decimal::from(200)))
+        OperationResult::Value(LiteralValue::number(200))
     );
 
     // Verify proof tree structure exists
@@ -63,18 +66,20 @@ rule quadruple = doubled? * 2
 "#;
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test_proof_ref", None, None).unwrap();
+    let response = engine
+        .evaluate("test_proof_ref", vec![], HashMap::new())
+        .unwrap();
 
     let quadruple_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "quadruple")
         .expect("quadruple rule should exist");
 
     // Verify result
     assert_eq!(
         quadruple_result.result,
-        OperationResult::Value(LiteralValue::Number(Decimal::from(200)))
+        OperationResult::Value(LiteralValue::number(200))
     );
 
     // Verify proof exists
@@ -88,7 +93,7 @@ rule quadruple = doubled? * 2
         lemma::proof::ProofNode::Computation {
             operands, result, ..
         } => {
-            assert_eq!(*result, LiteralValue::Number(Decimal::from(200)));
+            assert_eq!(*result, LiteralValue::number(200));
 
             // First operand should be a rule reference to doubled
             match &operands[0] {
@@ -102,7 +107,7 @@ rule quadruple = doubled? * 2
                     // Expansion should contain the proof for doubled
                     match &**expansion {
                         lemma::proof::ProofNode::Computation { result, .. } => {
-                            assert_eq!(*result, LiteralValue::Number(Decimal::from(100)));
+                            assert_eq!(*result, LiteralValue::number(100));
                         }
                         other => panic!("Expected Computation in expansion, got {:?}", other),
                     }
@@ -131,11 +136,13 @@ rule discount_percentage = 0%
 "#;
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test_unless", None, None).unwrap();
+    let response = engine
+        .evaluate("test_unless", vec![], HashMap::new())
+        .unwrap();
 
     let discount_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "discount_percentage")
         .expect("discount_percentage rule should exist");
 
@@ -192,11 +199,13 @@ rule age_validation = accept
 "#;
 
     engine.add_lemma_code(doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test_veto", None, None).unwrap();
+    let response = engine
+        .evaluate("test_veto", vec![], HashMap::new())
+        .unwrap();
 
     let validation_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "age_validation")
         .expect("age_validation rule should exist");
 
@@ -238,18 +247,18 @@ rule result = base_ref.doubled? + 50
     engine.add_lemma_code(base_doc, "base.lemma").unwrap();
     engine.add_lemma_code(main_doc, "main.lemma").unwrap();
 
-    let response = engine.evaluate("main", None, None).unwrap();
+    let response = engine.evaluate("main", vec![], HashMap::new()).unwrap();
 
     let result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "result")
         .expect("result rule should exist");
 
     // Verify result
     assert_eq!(
         result.result,
-        OperationResult::Value(LiteralValue::Number(Decimal::from(250)))
+        OperationResult::Value(LiteralValue::number(250))
     );
 
     // Verify proof exists
@@ -311,11 +320,11 @@ rule use_cross_doc = base_ref.doubled? + 1
     engine.add_lemma_code(base_doc, "base.lemma").unwrap();
     engine.add_lemma_code(main_doc, "main.lemma").unwrap();
 
-    let response = engine.evaluate("main", None, None).unwrap();
+    let response = engine.evaluate("main", vec![], HashMap::new()).unwrap();
 
     let main_rule = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "use_cross_doc")
         .expect("use_cross_doc rule should exist");
 
@@ -376,11 +385,11 @@ rule use_doubled = base_ref.doubled? + 10
     engine.add_lemma_code(base_doc, "base.lemma").unwrap();
     engine.add_lemma_code(main_doc, "main.lemma").unwrap();
 
-    let response = engine.evaluate("main", None, None).unwrap();
+    let response = engine.evaluate("main", vec![], HashMap::new()).unwrap();
 
     let main_rule = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "use_doubled")
         .expect("use_doubled rule should exist");
 
@@ -393,13 +402,16 @@ rule use_doubled = base_ref.doubled? + 10
     // Now serialize and check the RuleReference path in the JSON
     let json_value = serde_json::to_value(&response).expect("Should serialize");
 
-    // Debug: print the JSON to see the actual structure
+    // Serialize to JSON for validation
     let json_str = serde_json::to_string_pretty(&response).unwrap();
 
     // Navigate to the proof for use_doubled -> tree -> operands[0] (the RuleReference)
-    let result = json_value["results"].as_array().unwrap();
-    let first_result = &result[0];
-    let proof_tree = &first_result["proof"]["tree"];
+    // results is now an IndexMap (object), so we need to find the use_doubled rule by key
+    let results_obj = json_value["results"].as_object().unwrap();
+    let use_doubled_result = results_obj
+        .get("use_doubled")
+        .expect("use_doubled result not found");
+    let proof_tree = &use_doubled_result["proof"]["tree"];
 
     // The tree should be a Computation variant with operands
     let computation = proof_tree["Computation"].as_object().unwrap_or_else(|| {

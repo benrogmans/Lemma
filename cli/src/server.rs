@@ -95,36 +95,15 @@ pub mod http {
             ));
         }
 
-        let facts: Vec<String> = params.iter().map(|(k, v)| format!("{k}={v}")).collect();
-        let fact_refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
-        let parsed_facts = if !fact_refs.is_empty() {
-            match lemma::parse_facts(&fact_refs) {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    error!("Failed to parse facts: {}", e);
-                    return Err((
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            error: format!("Failed to parse facts: {e}"),
-                        }),
-                    ));
-                }
-            }
-        } else {
-            None
-        };
-
-        let response: Response = engine
-            .evaluate(&doc_name, None, parsed_facts)
-            .map_err(|e| {
-                error!("Evaluation failed: {}", e);
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: format!("Evaluation failed: {e}"),
-                    }),
-                )
-            })?;
+        let response: Response = engine.evaluate(&doc_name, vec![], params).map_err(|e| {
+            error!("Evaluation failed: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Evaluation failed: {e}"),
+                }),
+            )
+        })?;
 
         let results = convert_results(&response);
         info!(
@@ -174,41 +153,23 @@ pub mod http {
             )
         })?;
 
-        let facts: Vec<String> = payload
+        let fact_overrides: HashMap<String, String> = payload
             .facts
             .iter()
-            .map(|(k, v)| format!("{k}={}", json_value_to_lemma(v)))
+            .map(|(k, v)| (k.clone(), json_value_to_string(v)))
             .collect();
-        let fact_refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
-        let parsed_facts = if !fact_refs.is_empty() {
-            match lemma::parse_facts(&fact_refs) {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    error!("Failed to parse facts: {}", e);
-                    return Err((
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            error: format!("Failed to parse facts: {e}"),
-                        }),
-                    ));
-                }
-            }
-        } else {
-            None
-        };
 
-        let response: Response =
-            temp_engine
-                .evaluate(doc_name, None, parsed_facts)
-                .map_err(|e| {
-                    error!("Evaluation failed: {}", e);
-                    (
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            error: format!("Evaluation failed: {e}"),
-                        }),
-                    )
-                })?;
+        let response: Response = temp_engine
+            .evaluate(doc_name, vec![], fact_overrides)
+            .map_err(|e| {
+                error!("Evaluation failed: {}", e);
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: format!("Evaluation failed: {e}"),
+                    }),
+                )
+            })?;
 
         let results = convert_results(&response);
 
@@ -224,7 +185,7 @@ pub mod http {
     fn convert_results(response: &Response) -> Vec<RuleResultJson> {
         response
             .results
-            .iter()
+            .values()
             .map(|r| {
                 let (value, veto_reason) = match &r.result {
                     lemma::OperationResult::Value(v) => (Some(v.to_string()), None),
@@ -239,12 +200,13 @@ pub mod http {
             .collect()
     }
 
-    fn json_value_to_lemma(value: &serde_json::Value) -> String {
+    fn json_value_to_string(value: &serde_json::Value) -> String {
         match value {
-            serde_json::Value::String(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+            serde_json::Value::String(s) => s.clone(),
             serde_json::Value::Number(n) => n.to_string(),
             serde_json::Value::Bool(b) => b.to_string(),
-            _ => format!("\"{}\"", value.to_string().replace('"', "\\\"")),
+            serde_json::Value::Null => String::new(),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => value.to_string(),
         }
     }
 }

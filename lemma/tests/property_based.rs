@@ -1,17 +1,17 @@
-use lemma::{Engine, LiteralValue, MoneyUnit, NumericUnit};
 use proptest::prelude::*;
-use rust_decimal::prelude::FromPrimitive;
-use rust_decimal::Decimal;
-use std::str::FromStr;
+use rust_decimal::{prelude::FromPrimitive, Decimal};
+use std::{collections::HashMap, str::FromStr};
+
+use lemma::{Engine, LiteralValue};
 
 /// Get the result of a rule evaluation.
 /// Panics if the rule is not found (test failure).
 /// Returns the OperationResult which must be checked explicitly.
 fn get_rule_result(engine: &mut Engine, doc_name: &str, rule_name: &str) -> lemma::OperationResult {
-    let response = engine.evaluate(doc_name, None, None).unwrap();
+    let response = engine.evaluate(doc_name, vec![], HashMap::new()).unwrap();
     response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == rule_name)
         .map(|r| r.result.clone())
         .unwrap_or_else(|| panic!("Rule '{}' not found in document '{}'", rule_name, doc_name))
@@ -121,13 +121,12 @@ rule doubled = x * 2
 "#;
         engine.add_lemma_code(code, "test").unwrap();
 
-        let override_fact = format!("x={}", n);
-        let facts = lemma::parse_facts(&[override_fact.as_str()]).unwrap();
-        let response = engine.evaluate("test", None, Some(facts)).unwrap();
+        let mut facts: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        facts.insert("x".to_string(), format!("{}", n));
+        let response = engine.evaluate("test", vec![], facts).unwrap();
 
         let result = response
-            .results
-            .iter()
+            .results.values()
             .find(|r| r.rule.name == "doubled")
             .expect("Rule 'doubled' not found");
         let val = result
@@ -642,45 +641,6 @@ rule to_km = distance in kilometers
         );
     } else {
         panic!("to_km should be a Number after conversion");
-    }
-}
-
-#[test]
-fn test_money_properties() {
-    let mut engine = Engine::new();
-    let code = r#"
-doc test
-fact price1 = 50
-fact price2 = 30
-rule total = price1 + price2
-rule difference = price1 - price2
-"#;
-    engine.add_lemma_code(code, "test").unwrap();
-
-    let result = get_rule_result(&mut engine, "test", "total");
-    let val = result
-        .value()
-        .expect("Expected value result, got veto")
-        .clone();
-    if let LiteralValue::Unit(NumericUnit::Money(amount, currency)) = val {
-        assert!(matches!(currency, MoneyUnit::Usd));
-        assert!(
-            (amount - Decimal::from_str("80").unwrap()).abs() < Decimal::from_str("0.01").unwrap(),
-            "Money addition failed"
-        );
-    }
-
-    let result = get_rule_result(&mut engine, "test", "difference");
-    let val = result
-        .value()
-        .expect("Expected value result, got veto")
-        .clone();
-    if let LiteralValue::Unit(NumericUnit::Money(amount, currency)) = val {
-        assert!(matches!(currency, MoneyUnit::Usd));
-        assert!(
-            (amount - Decimal::from_str("20").unwrap()).abs() < Decimal::from_str("0.01").unwrap(),
-            "Money subtraction failed"
-        );
     }
 }
 

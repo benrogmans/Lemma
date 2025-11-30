@@ -1,4 +1,5 @@
 use lemma::Engine;
+use std::collections::HashMap;
 
 /// Test cross-document fact references (should work)
 #[test]
@@ -20,10 +21,10 @@ rule total = base_data.price * base_data.quantity
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "total")
         .unwrap();
 
@@ -50,10 +51,10 @@ rule derived_value = base_data.doubled? + 10
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let derived_value = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "derived_value")
         .unwrap();
 
@@ -81,10 +82,10 @@ rule manager_bonus = employee.annual_salary? * 0.15
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("manager", None, None).unwrap();
+    let response = engine.evaluate("manager", vec![], HashMap::new()).unwrap();
     let bonus = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "manager_bonus")
         .unwrap();
 
@@ -114,10 +115,10 @@ rule derived_total = config.total?
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "derived_total")
         .unwrap();
 
@@ -153,10 +154,10 @@ rule total_days = settings.standard_processing_days? + order_info.processing_day
     engine.add_lemma_code(order_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "total_days")
         .unwrap();
 
@@ -185,10 +186,10 @@ rule status = "invalid"
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let status = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "status")
         .unwrap();
 
@@ -215,10 +216,10 @@ rule combined = base_data.input + base_data.calculated?
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let combined = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "combined")
         .unwrap();
 
@@ -248,10 +249,10 @@ rule sum = data.x + data.y + data.z
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let sum = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "sum")
         .unwrap();
 
@@ -282,10 +283,10 @@ rule total = config.price * config.quantity
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "total")
         .unwrap();
 
@@ -324,17 +325,17 @@ rule total2 = base2.base.total?
     engine.add_lemma_code(example2_doc, "test.lemma").unwrap();
     engine.add_lemma_code(example3_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("example3", None, None).unwrap();
+    let response = engine.evaluate("example3", vec![], HashMap::new()).unwrap();
 
     let total1 = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "total1")
         .unwrap();
 
     let total2 = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "total2")
         .unwrap();
 

@@ -1,11 +1,12 @@
 use lemma::Engine;
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 
 fn get_rule_value(engine: &Engine, doc_name: &str, rule_name: &str) -> lemma::LiteralValue {
-    let response = engine.evaluate(doc_name, None, None).unwrap();
+    let response = engine.evaluate(doc_name, vec![], HashMap::new()).unwrap();
     response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == rule_name)
         .unwrap()
         .result

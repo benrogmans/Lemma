@@ -1,4 +1,5 @@
 use lemma::*;
+use std::collections::HashMap;
 
 #[test]
 fn test_same_unit_mass_comparison() {
@@ -13,22 +14,14 @@ rule lighter = weight1 < weight2
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     // 3 kg = 3000 g, so 3000 g > 300 g = true
-    let heavier = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "heavier")
-        .unwrap();
+    let heavier = response.results.get("heavier").unwrap();
     assert_eq!(heavier.result.value().unwrap().to_string(), "true");
 
     // 3 kg < 300 g should be false
-    let lighter = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "lighter")
-        .unwrap();
+    let lighter = response.results.get("lighter").unwrap();
     assert_eq!(lighter.result.value().unwrap().to_string(), "false");
 }
 
@@ -45,22 +38,14 @@ rule equal = 1000 meters == 1 kilometer
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     // 100 m < 1 km (1000 m) = true
-    let shorter = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "shorter")
-        .unwrap();
+    let shorter = response.results.get("shorter").unwrap();
     assert_eq!(shorter.result.value().unwrap().to_string(), "true");
 
     // 1000 m == 1 km = true
-    let equal = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "equal")
-        .unwrap();
+    let equal = response.results.get("equal").unwrap();
     assert_eq!(equal.result.value().unwrap().to_string(), "true");
 }
 
@@ -76,14 +61,10 @@ rule less_time = time1 < time2
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     // 90 seconds < 2 minutes (120 seconds) = true
-    let less_time = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "less_time")
-        .unwrap();
+    let less_time = response.results.get("less_time").unwrap();
     assert_eq!(less_time.result.value().unwrap().to_string(), "true");
 }
 
@@ -99,14 +80,10 @@ rule weight_greater = weight > distance
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     // Different categories: compares numeric values (5 > 3 = true)
-    let weight_greater = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "weight_greater")
-        .unwrap();
+    let weight_greater = response.results.get("weight_greater").unwrap();
     assert_eq!(weight_greater.result.value().unwrap().to_string(), "true");
 }
 
@@ -122,22 +99,14 @@ rule less_than_10 = weight < 10
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     // 5 kg > 3 (extracts value: 5 > 3 = true)
-    let greater = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "greater_than_3")
-        .unwrap();
+    let greater = response.results.get("greater_than_3").unwrap();
     assert_eq!(greater.result.value().unwrap().to_string(), "true");
 
     // 5 kg < 10 (extracts value: 5 < 10 = true)
-    let less = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "less_than_10")
-        .unwrap();
+    let less = response.results.get("less_than_10").unwrap();
     assert_eq!(less.result.value().unwrap().to_string(), "true");
 }
 
@@ -153,14 +122,10 @@ rule total = weight1 + weight2
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     // 2 kg + 500 g = 2.5 kg (preserved left unit)
-    let total = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "total")
-        .unwrap();
+    let total = response.results.get("total").unwrap();
     let result_str = total.result.value().unwrap().to_string();
     assert!(result_str.contains("2.5") || result_str.contains("2.50"));
     assert!(result_str.contains("kilogram"));
@@ -178,14 +143,10 @@ rule speed = distance / time
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     // 15 meters / 3 seconds = 5 (dimensionless number)
-    let speed = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "speed")
-        .unwrap();
+    let speed = response.results.get("speed").unwrap();
     assert_eq!(speed.result.value().unwrap().to_string(), "5");
 }
 
@@ -201,14 +162,10 @@ rule same_temp = temp1 == temp2
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     // 0°C == 32°F = true (both are freezing point)
-    let same_temp = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "same_temp")
-        .unwrap();
+    let same_temp = response.results.get("same_temp").unwrap();
     assert_eq!(same_temp.result.value().unwrap().to_string(), "true");
 }
 
@@ -224,13 +181,9 @@ rule less_power = power1 < power2
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     // 500 W < 1 kW (1000 W) = true
-    let less_power = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "less_power")
-        .unwrap();
+    let less_power = response.results.get("less_power").unwrap();
     assert_eq!(less_power.result.value().unwrap().to_string(), "true");
 }

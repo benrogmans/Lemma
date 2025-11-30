@@ -1,5 +1,6 @@
 use lemma::*;
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 #[test]
@@ -17,16 +18,12 @@ rule remainder = a % b
         )
         .unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
-    let result = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "remainder")
-        .unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let result = response.results.get("remainder").unwrap();
 
     match &result.result {
         lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
-            assert_eq!(*n, Decimal::from_str("1").unwrap())
+            assert_eq!(n, &Decimal::from_str("1").unwrap())
         }
         _ => panic!("Expected number, got {:?}", result.result),
     }
@@ -47,16 +44,12 @@ rule result = base ^ exponent
         )
         .unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
-    let result = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "result")
-        .unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let result = response.results.get("result").unwrap();
 
     match &result.result {
         lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
-            assert_eq!(*n, Decimal::from_str("8").unwrap())
+            assert_eq!(n, &Decimal::from_str("8").unwrap())
         }
         _ => panic!("Expected number, got {:?}", result.result),
     }
@@ -77,23 +70,15 @@ rule is_odd = (value % 2) == 1
         )
         .unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
-    let is_even = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "is_even")
-        .unwrap();
+    let is_even = response.results.get("is_even").unwrap();
     assert_eq!(
         is_even.result,
         lemma::OperationResult::Value(lemma::LiteralValue::Boolean(lemma::BooleanValue::False))
     );
 
-    let is_odd = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "is_odd")
-        .unwrap();
+    let is_odd = response.results.get("is_odd").unwrap();
     assert_eq!(
         is_odd.result,
         lemma::OperationResult::Value(lemma::LiteralValue::Boolean(lemma::BooleanValue::True))
@@ -114,16 +99,12 @@ rule square_root = base ^ 0.5
         )
         .unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
-    let result = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "square_root")
-        .unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let result = response.results.get("square_root").unwrap();
 
     match &result.result {
         lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
-            assert_eq!(*n, Decimal::from_str("2").unwrap())
+            assert_eq!(n, &Decimal::from_str("2").unwrap())
         }
         _ => panic!("Expected number, got {:?}", result.result),
     }
@@ -144,16 +125,12 @@ rule calculation = (x % y) + (2 ^ 3)
         )
         .unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
-    let result = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "calculation")
-        .unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let result = response.results.get("calculation").unwrap();
 
     match &result.result {
         lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
-            assert_eq!(*n, Decimal::from_str("9").unwrap())
+            assert_eq!(n, &Decimal::from_str("9").unwrap())
         }
         _ => panic!("Expected number, got {:?}", result.result),
     }

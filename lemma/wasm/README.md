@@ -222,7 +222,7 @@ interface EvaluationResponse {
     document: string;
     rules: {
       [ruleName: string]: {
-        value: any;  // The computed value (e.g., {Number: "100"}, {Unit: "50 EUR"})
+        value: any;  // The computed value (e.g., {Number: "100"})
         veto?: string;  // Present if rule was vetoed
         missing_facts?: string[];  // Present if rule couldn't be evaluated
         operations?: Array<{  // Operation records (always present if rule was evaluated)
@@ -254,8 +254,6 @@ async function typedExample() {
 
   if (result.success && result.data) {
     const price = result.data.rules.final_price?.value;
-    // price might be {Unit: "100 USD"} or {Number: "100"}
-    // depending on the rule's result type
   }
 }
 ```

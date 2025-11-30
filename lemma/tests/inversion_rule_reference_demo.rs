@@ -1,5 +1,4 @@
 use lemma::{Engine, LiteralValue, Target};
-use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 #[test]
@@ -20,21 +19,17 @@ fn demonstrate_rule_reference_with_vetos() {
 
     // Query: another == 3
     let solutions = engine
-        .invert(
+        .invert_strict(
             "example",
             "another",
-            Target::value(LiteralValue::Number(Decimal::from(3))),
+            Target::value(LiteralValue::number(3)),
             HashMap::new(),
         )
         .expect("inversion should succeed");
 
     println!("\n=== Inversion Result ===");
     println!("Query: another == 3");
-    // Shape is now solutions;
-    println!(
-        "Free variables: {:?}",
-        solutions.iter().flat_map(|r| r.keys())
-    );
+    println!("Free variables: {:?}", solutions.free_variables);
     println!("========================\n");
 
     // Expect a solution solution
@@ -60,10 +55,10 @@ fn demonstrate_no_solution_for_value_7() {
     engine.add_lemma_code(code, "test").unwrap();
 
     // Query: another == 7 should have no satisfying inputs because base vetoes for x > 3
-    let result = engine.invert(
+    let result = engine.invert_strict(
         "example",
         "another",
-        Target::value(LiteralValue::Number(Decimal::from(7))),
+        Target::value(LiteralValue::number(7)),
         HashMap::new(),
     );
 
@@ -97,28 +92,24 @@ fn demonstrate_inversion_with_given_x() {
 
     // Query: another == 3, given x = 3
     let mut given = HashMap::new();
-    given.insert("x".to_string(), LiteralValue::Number(Decimal::from(3)));
+    given.insert("x".to_string(), LiteralValue::number(3));
 
     let solutions = engine
-        .invert(
+        .invert_strict(
             "example",
             "another",
-            Target::value(LiteralValue::Number(Decimal::from(3))),
+            Target::value(LiteralValue::number(3)),
             given,
         )
         .expect("inversion should succeed");
 
     println!("\n=== Inversion with x=3 ===");
     println!("Query: another == 3, given x = 3");
-    // Shape is now solutions;
-    println!(
-        "Free variables: {:?}",
-        solutions.iter().flat_map(|r| r.keys())
-    );
+    println!("Free variables: {:?}", solutions.free_variables);
     println!("==========================\n");
 
     // With x given, there should be no free variables
-    assert_eq!(solutions.iter().flat_map(|r| r.keys()).count(), 0);
+    assert!(solutions.free_variables.is_empty());
 }
 
 #[test]
@@ -139,7 +130,7 @@ fn demonstrate_veto_query() {
 
     // Query: when does "another" produce "way too much" veto?
     let solutions = engine
-        .invert(
+        .invert_strict(
             "example",
             "another",
             Target::veto(Some("way too much".to_string())),
@@ -149,11 +140,7 @@ fn demonstrate_veto_query() {
 
     println!("\n=== Veto Query ===");
     println!("Query: when does another veto with 'way too much'?");
-    // Shape is now solutions;
-    println!(
-        "Free variables: {:?}",
-        solutions.iter().flat_map(|r| r.keys())
-    );
+    println!("Free variables: {:?}", solutions.free_variables);
     println!("==================\n");
 
     // Should show that x > 5 triggers this veto
@@ -177,7 +164,7 @@ fn demonstrate_any_veto_query() {
 
     // Query: when does "another" produce ANY veto?
     let solutions = engine
-        .invert(
+        .invert_strict(
             "example",
             "another",
             Target::any_veto(), // None = any veto
@@ -187,11 +174,7 @@ fn demonstrate_any_veto_query() {
 
     println!("\n=== Any Veto Query ===");
     println!("Query: when does another produce any veto?");
-    // Shape is now solutions;
-    println!(
-        "Free variables: {:?}",
-        solutions.iter().flat_map(|r| r.keys())
-    );
+    println!("Free variables: {:?}", solutions.free_variables);
     println!("======================\n");
 
     // Should show all veto conditions: x < 0, x > 3, x > 5

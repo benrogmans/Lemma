@@ -1,11 +1,12 @@
 use lemma::Engine;
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 
 fn get_rule_value(engine: &Engine, doc_name: &str, rule_name: &str) -> lemma::LiteralValue {
-    let response = engine.evaluate(doc_name, None, None).unwrap();
+    let response = engine.evaluate(doc_name, vec![], HashMap::new()).unwrap();
     response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == rule_name)
         .unwrap()
         .result
@@ -27,7 +28,7 @@ rule check = leap_date
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
     let response = engine
-        .evaluate("test", None, None)
+        .evaluate("test", vec![], HashMap::new())
         .expect("Failed to evaluate");
     assert!(!response.results.is_empty());
 }
@@ -45,7 +46,7 @@ rule check = leap_date
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
     let response = engine
-        .evaluate("test", None, None)
+        .evaluate("test", vec![], HashMap::new())
         .expect("Failed to evaluate");
     assert!(!response.results.is_empty());
 }

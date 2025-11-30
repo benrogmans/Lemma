@@ -1,11 +1,6 @@
-use lemma::FactReference;
+use lemma::FactPath;
 use lemma::{Bound, Domain, Shape};
-use rust_decimal::Decimal;
 use serde_json::json;
-
-fn lit_num(n: i32) -> lemma::LiteralValue {
-    lemma::LiteralValue::Number(Decimal::from(n))
-}
 
 fn lit_bool(b: bool) -> lemma::LiteralValue {
     lemma::LiteralValue::Boolean(b.into())
@@ -26,7 +21,7 @@ fn display_equation() {
     let shape = Shape::new(
         vec![ShapeBranch {
             condition: expr_lit(lit_bool(true)),
-            outcome: BranchOutcome::Value(expr_lit(lit_num(42))),
+            outcome: BranchOutcome::Value(expr_lit(lemma::LiteralValue::number(42))),
         }],
         vec![],
     );
@@ -39,15 +34,15 @@ fn display_piecewise_and_domain() {
     // Domain display basic sanity
     let d1 = Domain::Range {
         min: Bound::Unbounded,
-        max: Bound::Inclusive(lit_num(10)),
+        max: Bound::Inclusive(lemma::LiteralValue::number(10)),
     };
-    assert_eq!(d1.to_string(), "(-∞, 10]");
+    assert_eq!(d1.to_string(), "(-inf, 10]");
 
-    let d2 = Domain::Enumeration(vec![lit_num(5)]);
-    // Union prints parts with a union glyph
+    let d2 = Domain::Enumeration(vec![lemma::LiteralValue::number(5)]);
+    // Union prints parts with a pipe separator
     let du = Domain::Union(vec![d2, d1]);
     let su = du.to_string();
-    assert!(su.contains("{") && su.contains("} ") || su.contains("} ∪ "));
+    assert!(su.contains("{") && su.contains("|"));
 }
 
 #[test]
@@ -57,24 +52,27 @@ fn serialize_equation() {
     let shape = Shape::new(
         vec![ShapeBranch {
             condition: expr_lit(lit_bool(true)),
-            outcome: BranchOutcome::Value(expr_lit(lit_num(7))),
+            outcome: BranchOutcome::Value(expr_lit(lemma::LiteralValue::number(7))),
         }],
-        vec![FactReference {
-            reference: vec!["doc".to_string(), "y".to_string()],
-        }],
+        vec![FactPath::from_path(vec![
+            "doc".to_string(),
+            "y".to_string(),
+        ])],
     );
     let v = serde_json::to_value(&shape).expect("serialize shape");
 
     // Shape serializes as a struct with branches and free_variables fields
     assert!(v["branches"].is_array());
-    assert_eq!(v["free_variables"], json!(["doc.y"]));
+    // FactPath serializes as an object with segments and fact fields
+    assert!(v["free_variables"].is_array());
+    assert_eq!(v["free_variables"][0]["fact"], json!("y"));
 }
 
 #[test]
 fn serialize_domain_range() {
     let d = Domain::Range {
-        min: Bound::Inclusive(lit_num(0)),
-        max: Bound::Exclusive(lit_num(10)),
+        min: Bound::Inclusive(lemma::LiteralValue::number(0)),
+        max: Bound::Exclusive(lemma::LiteralValue::number(10)),
     };
     let v = serde_json::to_value(&d).expect("serialize domain");
 

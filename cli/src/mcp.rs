@@ -297,18 +297,17 @@ pub mod server {
                 .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
 
-            let parsed_facts = if !facts.is_empty() {
-                Some(lemma::parse_facts(&facts).map_err(|e| {
-                    error!("Failed to parse facts: {}", e);
-                    McpError::internal_error(format!("Failed to parse facts: {e}"))
-                })?)
-            } else {
-                None
-            };
+            let fact_overrides: std::collections::HashMap<String, String> = facts
+                .iter()
+                .filter_map(|s| {
+                    s.split_once('=')
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                })
+                .collect();
 
             let response = self
                 .engine
-                .evaluate(document, None, parsed_facts)
+                .evaluate(document, vec![], fact_overrides)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
@@ -321,7 +320,7 @@ pub mod server {
 
             if !response.results.is_empty() {
                 output.push_str("## Results\n\n");
-                for result in &response.results {
+                for result in response.results.values() {
                     output.push_str(&format!("**{}**: ", result.rule.name));
                     match &result.result {
                         lemma::OperationResult::Value(value) => {
@@ -379,7 +378,7 @@ pub mod server {
                 output.push_str("(none)\n");
             } else {
                 for fact in &facts {
-                    let fact_name = lemma::analysis::fact_display_name(fact);
+                    let fact_name = fact.reference.to_string();
                     output.push_str(&format!("- **{fact_name}**: {}\n", fact.value));
                 }
             }

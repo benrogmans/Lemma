@@ -16,13 +16,13 @@
 //!     // Load Lemma code
 //!     engine.add_lemma_code(r#"
 //!         doc example
-//!         fact price = 100 USD
+//!         fact price = 100
 //!         fact quantity = 5
 //!         rule total = price * quantity
 //!     "#, "example.lemma")?;
 //!
-//!     // Evaluate the document
-//!     let response = engine.evaluate("example", None, None)?;
+//!     // Evaluate the document (all rules, no fact overrides)
+//!     let response = engine.evaluate("example", vec![], std::collections::HashMap::new())?;
 //!
 //!     Ok(())
 //! }
@@ -36,7 +36,7 @@
 //!
 //! ### Facts
 //! Facts are named values: numbers, text, dates, booleans, or typed units
-//! like `50 kilograms` or `100 USD`.
+//! like `50 kilograms` or `100`.
 //!
 //! ### Rules
 //! Rules compute values based on facts and other rules. They support
@@ -46,39 +46,33 @@
 //! Lemma has a rich type system including units (mass, length, time, money)
 //! with automatic conversions.
 
-pub mod analysis;
-pub mod ast;
 pub mod engine;
 pub mod error;
-pub mod evaluator;
+pub mod evaluation;
 pub mod inversion;
-pub mod operation_result;
-pub mod parser;
-pub mod proof;
-pub mod resource_limits;
-pub mod response;
+pub mod limits;
+pub mod parsing;
+pub mod planning;
 pub mod semantic;
-pub mod serializers;
-pub mod source_location;
-pub mod validator;
+pub mod serialization;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-pub use ast::{ExpressionId, ExpressionIdGenerator, Span};
 pub use engine::Engine;
-pub use source_location::SourceLocation;
-/// Temporary alias to align with the Inversion plan's unified naming.
-/// Workspace is functionally identical to Engine and will eventually replace it.
-pub type Workspace = Engine;
 pub use error::LemmaError;
-pub use inversion::{Bound, BranchOutcome, Domain, Shape, ShapeBranch, Target, TargetOp};
-pub use operation_result::OperationResult;
-pub use parser::{parse, parse_facts};
-pub use resource_limits::ResourceLimits;
-pub use response::{ComputationKind, Fact, OperationKind, OperationRecord, Response, RuleResult};
+pub use evaluation::operations::{
+    ComputationKind, OperationKind, OperationRecord, OperationResult,
+};
+pub use evaluation::proof;
+pub use evaluation::response::{Facts, Response, RuleResult};
+pub use inversion::{
+    Bound, BranchOutcome, Domain, InversionResponse, Shape, ShapeBranch, Solution, Target, TargetOp,
+};
+pub use limits::ResourceLimits;
+pub use parsing::parse;
+pub use parsing::{ExpressionId, ExpressionIdGenerator, Source, Span};
 pub use semantic::*;
-pub use validator::{ValidatedDocuments, Validator};
 
 /// Result type for Lemma operations
 pub type LemmaResult<T> = Result<T, LemmaError>;

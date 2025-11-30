@@ -1,3 +1,5 @@
+//! Target specification for inversion queries
+
 use crate::{LiteralValue, OperationResult};
 
 /// Desired outcome for an inversion query
@@ -16,15 +18,15 @@ pub struct Target {
 pub enum TargetOp {
     /// Equal to (=)
     Eq,
-    /// Not equal to (≠)
+    /// Not equal to (!=)
     Neq,
     /// Less than (<)
     Lt,
-    /// Less than or equal to (≤)
+    /// Less than or equal to (<=)
     Lte,
     /// Greater than (>)
     Gt,
-    /// Greater than or equal to (≥)
+    /// Greater than or equal to (>=)
     Gte,
 }
 

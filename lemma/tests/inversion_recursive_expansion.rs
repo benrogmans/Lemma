@@ -1,16 +1,11 @@
-use lemma::{Engine, LiteralValue, MoneyUnit, NumericUnit, Target};
-use rust_decimal::Decimal;
+use lemma::{Engine, LiteralValue, Target};
 use std::collections::HashMap;
-
-fn money_eur(amount: i32) -> LiteralValue {
-    LiteralValue::Unit(NumericUnit::Money(Decimal::from(amount), MoneyUnit::Eur))
-}
 
 #[test]
 fn test_recursive_rule_reference_expansion_enables_solving() {
     let code = r#"
         doc pricing
-        fact base_price = [money]
+        fact base_price = [number]
 
         rule rate_a = 0.21
         rule rate_b = rate_a? + 0.01
@@ -22,11 +17,11 @@ fn test_recursive_rule_reference_expansion_enables_solving() {
         .add_lemma_code(code, "test")
         .expect("Failed to parse lemma code");
 
-    // Invert: total = 122 EUR
-    let result = engine.invert(
+    // Invert: total = 122
+    let result = engine.invert_strict(
         "pricing",
         "total",
-        Target::value(money_eur(122)),
+        Target::value(LiteralValue::number(122)),
         HashMap::new(),
     );
     assert!(result.is_ok(), "Inversion should succeed: {:?}", result);
@@ -41,7 +36,7 @@ fn test_recursive_rule_reference_expansion_enables_solving() {
 
     // For fully-solved single-unknown cases, the algebraic solver determines the exact value
     // The test validates that recursive rule expansion happens during inversion,
-    // allowing the solver to compute base_price = 100 EUR from total = 122 EUR
+    // allowing the solver to compute base_price = 100 from total = 122
     // with rate_a = 0.21 and rate_b = 0.22
     //
     // Note: The current domain extraction doesn't yet extract values from algebraically-solved

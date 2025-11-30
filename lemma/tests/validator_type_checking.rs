@@ -75,50 +75,6 @@ rule doubled = rate
 }
 
 #[test]
-fn test_money_requires_same_currency_in_comparison() {
-    let code = r#"
-doc test
-fact price_usd = 100 USD
-fact price_eur = 80 EUR
-rule comparison = price_usd > price_eur
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(
-        result.is_err(),
-        "Should reject different currency comparison"
-    );
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .to_lowercase()
-        .contains("currenc"));
-}
-
-#[test]
-fn test_money_requires_same_currency_in_arithmetic() {
-    let code = r#"
-doc test
-fact price_usd = 100 USD
-fact price_gbp = 80 GBP
-rule total = price_usd + price_gbp
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(
-        result.is_err(),
-        "Should reject different currency arithmetic"
-    );
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .to_lowercase()
-        .contains("currenc"));
-}
-
-#[test]
 fn test_text_number_comparison_allowed() {
     let code = r#"
 doc test
@@ -209,7 +165,7 @@ rule as_percentage = ratio in percentage
 }
 
 #[test]
-fn test_veto_type_is_never() {
+fn test_veto_type_is_compatible_with_other_types() {
     let code = r#"
 doc test
 fact age = 15
@@ -228,24 +184,6 @@ rule result = 100
 }
 
 #[test]
-fn test_mixed_number_and_money_not_allowed() {
-    let code = r#"
-doc test
-fact base = 100
-rule amount = base
-  unless base > 50 then 200 USD
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(
-        result.is_err(),
-        "Should reject mixing number and money types"
-    );
-    assert!(result.unwrap_err().to_string().contains("incompatible"));
-}
-
-#[test]
 fn test_mixed_text_and_number_not_allowed() {
     let code = r#"
 doc test
@@ -260,7 +198,12 @@ rule value = "default"
         result.is_err(),
         "Should reject mixing text and number types"
     );
-    assert!(result.unwrap_err().to_string().contains("incompatible"));
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
+        "Error message should contain type mismatch info: {}",
+        err_msg
+    );
 }
 
 #[test]
@@ -278,7 +221,12 @@ rule value = 2024-01-01
         result.is_err(),
         "Should reject mixing date and number types"
     );
-    assert!(result.unwrap_err().to_string().contains("incompatible"));
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
+        "Error message should contain type mismatch info: {}",
+        err_msg
+    );
 }
 
 #[test]
@@ -370,7 +318,12 @@ rule value = 10
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");
     assert!(result.is_err(), "Mixed number/text should be rejected");
-    assert!(result.unwrap_err().to_string().contains("incompatible"));
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
+        "Error message should contain type mismatch info: {}",
+        err_msg
+    );
 }
 
 #[test]
@@ -405,5 +358,118 @@ rule another = derived?
         result.is_ok(),
         "Rule reference types should propagate: {:?}",
         result
+    );
+}
+
+#[test]
+fn test_time_type_validation() {
+    let code = r#"
+doc test
+fact meeting_time = 14:30:00
+rule is_afternoon = meeting_time > 12:00:00
+"#;
+
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(
+        result.is_ok(),
+        "Time type should be validated correctly: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_time_cannot_use_in_logical_operators() {
+    let code = r#"
+doc test
+fact time1 = 14:30:00
+fact time2 = 15:00:00
+rule result = time1 and time2
+"#;
+
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(
+        result.is_err(),
+        "Should reject time values in logical operators"
+    );
+    assert!(result.unwrap_err().to_string().contains("boolean"));
+}
+
+#[test]
+fn test_regex_type_validation() {
+    let code = r#"
+doc test
+fact pattern = /[a-z]+/
+fact text = "hello"
+"#;
+
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(
+        result.is_ok(),
+        "Regex type should be validated correctly: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_regex_cannot_use_in_logical_operators() {
+    let code = r#"
+doc test
+fact pattern1 = /[a-z]+/
+fact pattern2 = /[0-9]+/
+rule result = pattern1 and pattern2
+"#;
+
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(
+        result.is_err(),
+        "Should reject regex values in logical operators"
+    );
+    assert!(result.unwrap_err().to_string().contains("boolean"));
+}
+
+#[test]
+fn test_mixed_time_and_number_not_allowed() {
+    let code = r#"
+doc test
+fact use_time = true
+rule value = 14:30:00
+  unless use_time then 100
+"#;
+
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(
+        result.is_err(),
+        "Should reject mixing time and number types"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
+        "Error message should contain type mismatch info: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn test_mixed_regex_and_text_not_allowed() {
+    let code = r#"
+doc test
+fact use_pattern = true
+rule value = /[a-z]+/
+  unless use_pattern then "plain text"
+"#;
+
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(result.is_err(), "Should reject mixing regex and text types");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
+        "Error message should contain type mismatch info: {}",
+        err_msg
     );
 }

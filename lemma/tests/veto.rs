@@ -8,6 +8,7 @@
 
 use lemma::{Engine, LiteralValue, OperationResult};
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 #[test]
@@ -22,10 +23,12 @@ rule is_adult = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("age_check", None, None).unwrap();
+    let response = engine
+        .evaluate("age_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "is_adult")
         .unwrap();
 
@@ -47,10 +50,12 @@ rule is_valid = value > 0
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("validation", None, None).unwrap();
+    let response = engine
+        .evaluate("validation", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "is_valid")
         .unwrap();
 
@@ -69,10 +74,12 @@ rule is_adult = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("age_check", None, None).unwrap();
+    let response = engine
+        .evaluate("age_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "is_adult")
         .unwrap();
 
@@ -96,10 +103,12 @@ rule eligible = age >= 18 and score >= 80
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("validation", None, None).unwrap();
+    let response = engine
+        .evaluate("validation", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
@@ -123,10 +132,12 @@ rule eligible = age >= 18 and score >= 80
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("validation", None, None).unwrap();
+    let response = engine
+        .evaluate("validation", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
@@ -149,10 +160,12 @@ rule valid_compensation = salary >= 40000
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("salary_check", None, None).unwrap();
+    let response = engine
+        .evaluate("salary_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "valid_compensation")
         .unwrap();
 
@@ -178,10 +191,12 @@ rule can_drive = age >= 16
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("mixed_validation", None, None).unwrap();
+    let response = engine
+        .evaluate("mixed_validation", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "can_drive")
         .unwrap();
 
@@ -203,10 +218,12 @@ rule can_ship = package_weight <= 50 kilograms
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("weight_check", None, None).unwrap();
+    let response = engine
+        .evaluate("weight_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "can_ship")
         .unwrap();
 
@@ -228,10 +245,12 @@ rule is_affordable = price <= 1000
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("pricing_check", None, None).unwrap();
+    let response = engine
+        .evaluate("pricing_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "is_affordable")
         .unwrap();
 
@@ -254,10 +273,12 @@ rule is_valid_date = event_date >= min_date
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("date_validation", None, None).unwrap();
+    let response = engine
+        .evaluate("date_validation", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "is_valid_date")
         .unwrap();
 
@@ -279,10 +300,12 @@ rule is_complete = completion >= 95%
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("completion_check", None, None).unwrap();
+    let response = engine
+        .evaluate("completion_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "is_complete")
         .unwrap();
 
@@ -306,10 +329,12 @@ rule eligible = has_permission
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("eligibility", None, None).unwrap();
+    let response = engine
+        .evaluate("eligibility", vec![], HashMap::new())
+        .unwrap();
     let eligible_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
@@ -332,10 +357,12 @@ rule within_budget = expenses < income
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("budget_check", None, None).unwrap();
+    let response = engine
+        .evaluate("budget_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "within_budget")
         .unwrap();
 
@@ -357,10 +384,12 @@ rule is_active = status == "active"
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("status_check", None, None).unwrap();
+    let response = engine
+        .evaluate("status_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "is_active")
         .unwrap();
 
@@ -384,11 +413,13 @@ rule double_value = value * 2
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("multi_rule", None, None).unwrap();
+    let response = engine
+        .evaluate("multi_rule", vec![], HashMap::new())
+        .unwrap();
 
     let check_positive = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "check_positive")
         .unwrap();
     assert_eq!(
@@ -398,7 +429,7 @@ rule double_value = value * 2
 
     let check_negative = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "check_negative")
         .unwrap();
     assert_eq!(
@@ -408,12 +439,12 @@ rule double_value = value * 2
 
     let double_value = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "double_value")
         .unwrap();
     assert_eq!(
         double_value.result,
-        OperationResult::Value(LiteralValue::Number(Decimal::from_str("-20.0").unwrap()))
+        OperationResult::Value(LiteralValue::number(Decimal::from_str("-20.0").unwrap()))
     );
 }
 
@@ -429,10 +460,12 @@ rule is_valid = value > 0
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("edge_case", None, None).unwrap();
+    let response = engine
+        .evaluate("edge_case", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "is_valid")
         .unwrap();
 
@@ -451,10 +484,12 @@ rule valid = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("special_chars", None, None).unwrap();
+    let response = engine
+        .evaluate("special_chars", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "valid")
         .unwrap();
 
@@ -483,10 +518,12 @@ rule valid = value > 0
     let mut engine = Engine::new();
     engine.add_lemma_code(&code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("long_message", None, None).unwrap();
+    let response = engine
+        .evaluate("long_message", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "valid")
         .unwrap();
 
@@ -509,10 +546,12 @@ rule check = value > 10
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("priority_test", None, None).unwrap();
+    let response = engine
+        .evaluate("priority_test", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "check")
         .unwrap();
 
@@ -536,10 +575,12 @@ rule eligible = age >= 18 and score >= 80
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("double_veto", None, None).unwrap();
+    let response = engine
+        .evaluate("double_veto", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
@@ -559,10 +600,12 @@ rule eligible = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("or_condition", None, None).unwrap();
+    let response = engine
+        .evaluate("or_condition", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
@@ -584,10 +627,12 @@ rule can_proceed = true
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("negation_test", None, None).unwrap();
+    let response = engine
+        .evaluate("negation_test", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "can_proceed")
         .unwrap();
 

@@ -250,17 +250,9 @@ rule can_approve_loan
 rule needs_manager_review
   = loan_amount > 100000
     or risk_score > 7
-
-rule has_cosigner
-  = have application.cosigner_name
-
-rule missing_documentation
-  = not have applicant.tax_returns
 ```
 
-Operators: `and`, `or`, `not`, `have`, `have not`, `not have`
-
-The `have` operator checks if a fact has any value (useful for optional fields).
+Operators: `and`, `or`, `not`
 
 See: [reference.md - Logical](reference.md#logical)
 

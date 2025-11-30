@@ -1,8 +1,8 @@
-use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
 
 #[test]
 fn test_server_command_available() {
-    let mut cmd = Command::cargo_bin("lemma").unwrap();
+    let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("--help");
 
     cmd.assert()
@@ -14,7 +14,7 @@ fn test_server_command_available() {
 fn test_serve_requires_dir() {
     // Just verify the server command is recognized in help
     // We don't actually start the server as it would hang the test
-    let mut cmd = Command::cargo_bin("lemma").unwrap();
+    let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("server").arg("--help");
 
     cmd.assert()

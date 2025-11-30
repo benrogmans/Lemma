@@ -62,7 +62,11 @@ rule result = 100
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("type") || err.to_string().contains("incompatible"));
+    assert!(
+        err.to_string().contains("type")
+            || err.to_string().contains("incompatible")
+            || err.to_string().contains("Type mismatch")
+    );
 }
 
 #[test]
@@ -80,7 +84,11 @@ rule result = "text"
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("type") || err.to_string().contains("incompatible"));
+    assert!(
+        err.to_string().contains("type")
+            || err.to_string().contains("incompatible")
+            || err.to_string().contains("Type mismatch")
+    );
 }
 
 #[test]
@@ -98,7 +106,11 @@ rule result = 42
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("type") || err.to_string().contains("incompatible"));
+    assert!(
+        err.to_string().contains("type")
+            || err.to_string().contains("incompatible")
+            || err.to_string().contains("Type mismatch")
+    );
 }
 
 #[test]
@@ -135,7 +147,11 @@ rule result = 1
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("type") || err.to_string().contains("incompatible"));
+    assert!(
+        err.to_string().contains("type")
+            || err.to_string().contains("incompatible")
+            || err.to_string().contains("Type mismatch")
+    );
 }
 
 #[test]
@@ -172,7 +188,11 @@ rule result = 10
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("type") || err.to_string().contains("incompatible"));
+    assert!(
+        err.to_string().contains("type")
+            || err.to_string().contains("incompatible")
+            || err.to_string().contains("Type mismatch")
+    );
 }
 
 #[test]
@@ -193,13 +213,13 @@ rule result = 10
 }
 
 #[test]
-fn test_consistent_money_types() {
+fn test_consistent_length_types() {
     let code = r#"
 doc test
 fact condition = true
 
-rule price = 100 USD
-    unless condition then 200 USD
+rule distance = 100 meters
+    unless condition then 200 meters
 "#;
 
     let mut engine = Engine::new();
@@ -208,12 +228,12 @@ rule price = 100 USD
 }
 
 #[test]
-fn test_mixed_money_and_number_rejected() {
+fn test_mixed_length_and_number_rejected() {
     let code = r#"
 doc test
 fact condition = true
 
-rule price = 100 USD
+rule distance = 100 meters
     unless condition then 200
 "#;
 
@@ -222,7 +242,11 @@ rule price = 100 USD
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("type") || err.to_string().contains("incompatible"));
+    assert!(
+        err.to_string().contains("type")
+            || err.to_string().contains("incompatible")
+            || err.to_string().contains("Type mismatch")
+    );
 }
 
 #[test]
@@ -255,7 +279,11 @@ rule weight = 10 kilograms
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("type") || err.to_string().contains("incompatible"));
+    assert!(
+        err.to_string().contains("type")
+            || err.to_string().contains("incompatible")
+            || err.to_string().contains("Type mismatch")
+    );
 }
 
 #[test]

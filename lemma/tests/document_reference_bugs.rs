@@ -1,4 +1,5 @@
 use lemma::Engine;
+use std::collections::HashMap;
 
 /// Bug: Cross-document rule references through nested document references fail
 ///
@@ -25,10 +26,12 @@ rule line_total = pricing.final_price? * quantity
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(line_item_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("line_item", None, None).unwrap();
+    let response = engine
+        .evaluate("line_item", vec![], HashMap::new())
+        .unwrap();
     let line_total = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "line_total")
         .unwrap();
 
@@ -66,16 +69,16 @@ rule top_calc = middle_ref.middle_calc?
     engine.add_lemma_code(middle_doc, "test.lemma").unwrap();
     engine.add_lemma_code(top_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("top", None, None).unwrap();
+    let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
 
     println!("Available rules:");
-    for result in &response.results {
+    for result in response.results.values() {
         println!("  - {}: {:?}", result.rule.name, result.result);
     }
 
     let top_calc = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "top_calc")
         .expect("top_calc rule not found in results");
 
@@ -83,34 +86,32 @@ rule top_calc = middle_ref.middle_calc?
     assert_eq!(top_calc.result.value().unwrap().to_string(), "250");
 }
 
-/// Bug: Overriding document reference facts in nested structures fails
+/// Document reference overrides are supported when adding lemma documents
 ///
-/// When we override a nested document reference (e.g., line.pricing = doc wholesale),
-/// the override doesn't properly propagate through rule evaluations.
+/// When you add lemma documents, you can override document references (e.g., `fact line.pricing = doc wholesale_pricing`).
+/// This allows you to customize which document a fact references, enabling composition and reuse.
+///
+/// Note: Document reference overrides are only supported when adding documents, not via fact_overrides
+/// at evaluation time (which only accepts LiteralValue).
 #[test]
 fn test_nested_document_override_with_rule_reference() {
     let mut engine = Engine::new();
 
-    let pricing_doc = r#"
+    let doc = r#"
 doc pricing
 fact base_price = 100
 rule final_price = base_price * 1.1
-"#;
 
-    let wholesale_doc = r#"
 doc wholesale_pricing
 fact base_price = 75
 rule final_price = base_price * 1.1
-"#;
 
-    let line_item_doc = r#"
 doc line_item
 fact pricing = doc pricing
 fact quantity = 10
 rule line_total = pricing.final_price? * quantity
-"#;
 
-    let order_doc = r#"
+
 doc order
 fact line = doc line_item
 fact line.pricing = doc wholesale_pricing
@@ -118,25 +119,18 @@ fact line.quantity = 100
 rule order_total = line.line_total?
 "#;
 
-    engine.add_lemma_code(pricing_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(wholesale_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(line_item_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(order_doc, "test.lemma").unwrap();
+    engine.add_lemma_code(doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("order", None, None).unwrap();
-
-    println!("Available rules:");
-    for result in &response.results {
-        println!("  - {}: {:?}", result.rule.name, result.result);
-    }
+    let response = engine.evaluate("order", vec![], HashMap::new()).unwrap();
 
     let order_total = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "order_total")
         .expect("order_total rule not found in results");
 
-    // Should use wholesale pricing: (75 * 1.1) * 100 = 8250
+    // Document reference override works: line.pricing now points to wholesale_pricing
+    // So it uses wholesale pricing: (75 * 1.1) * 100 = 8,250
     assert_eq!(order_total.result.value().unwrap().to_string(), "8,250");
 }
 
@@ -169,10 +163,10 @@ rule final_value = settings.config.value * 2
     engine.add_lemma_code(middle_doc, "test.lemma").unwrap();
     engine.add_lemma_code(top_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("top", None, None).unwrap();
+    let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
     let final_value = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "final_value")
         .unwrap();
 

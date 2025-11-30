@@ -1,20 +1,11 @@
-use lemma::{Engine, LiteralValue, MoneyUnit, NumericUnit, Target};
-use rust_decimal::Decimal;
+use lemma::{Engine, LiteralValue, Target};
 use std::collections::HashMap;
-
-fn money_eur(amount: i32) -> LiteralValue {
-    LiteralValue::Unit(NumericUnit::Money(Decimal::from(amount), MoneyUnit::Eur))
-}
-
-fn number(amount: i32) -> LiteralValue {
-    LiteralValue::Number(Decimal::from(amount))
-}
 
 #[test]
 fn test_rule_reference_expansion_simple_constant() {
     let code = r#"
         doc pricing
-        fact base_price = [money]
+        fact base_price = [number]
 
         rule tax_rate = 0.21
         rule total_price = base_price * (1 + tax_rate?)
@@ -25,11 +16,11 @@ fn test_rule_reference_expansion_simple_constant() {
         .add_lemma_code(code, "test")
         .expect("Failed to parse");
 
-    // Invert for total_price = 121 EUR, given no facts
-    let result = engine.invert(
+    // Invert for total_price = 121, given no facts
+    let result = engine.invert_strict(
         "pricing",
         "total_price",
-        Target::value(money_eur(121)),
+        Target::value(LiteralValue::number(121)),
         HashMap::new(),
     );
 
@@ -60,7 +51,12 @@ fn test_enhanced_error_message_lists_values() {
         .expect("Failed to parse");
 
     // Try to invert for a value that doesn't exist
-    let result = engine.invert("test", "result", Target::value(number(15)), HashMap::new());
+    let result = engine.invert_strict(
+        "test",
+        "result",
+        Target::value(LiteralValue::number(15)),
+        HashMap::new(),
+    );
 
     assert!(result.is_err(), "Should fail for non-existent value");
 

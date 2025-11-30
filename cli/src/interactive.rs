@@ -1,12 +1,17 @@
 use anyhow::{Context, Result};
+use inquire::validator::Validation;
 use inquire::{DateSelect, MultiSelect, Select, Text};
-use lemma::{Engine, LemmaType, TypeAnnotation};
+use lemma::{Engine, FactValue, LemmaType, TypeAnnotation};
+use std::collections::HashMap;
+
+pub type InteractiveResult = (String, Option<Vec<String>>, HashMap<String, String>);
 
 pub fn run_interactive(
     engine: &Engine,
     doc_name: Option<String>,
     rule_names: Option<Vec<String>>,
-) -> Result<(String, Option<Vec<String>>, Vec<String>)> {
+    provided_facts: &HashMap<String, String>,
+) -> Result<InteractiveResult> {
     let doc = match doc_name {
         Some(name) => name,
         None => select_document(engine)?,
@@ -17,7 +22,7 @@ pub fn run_interactive(
         None => select_rules(engine, &doc)?,
     };
 
-    let facts = prompt_facts(engine, &doc, &rules)?;
+    let facts = prompt_facts(engine, &doc, &rules, provided_facts)?;
 
     Ok((doc, rules, facts))
 }
@@ -89,111 +94,140 @@ fn select_rules(engine: &Engine, doc_name: &str) -> Result<Option<Vec<String>>> 
 fn prompt_facts(
     engine: &Engine,
     doc_name: &str,
-    rule_names: &Option<Vec<String>>,
-) -> Result<Vec<String>> {
-    let all_rules = engine.get_document_rules(doc_name);
+    _rule_names: &Option<Vec<String>>,
+    provided_facts: &HashMap<String, String>,
+) -> Result<HashMap<String, String>> {
     let doc_facts = engine.get_document_facts(doc_name);
 
-    let all_rules_vec: Vec<_> = all_rules.iter().map(|r| (*r).clone()).collect();
-    let doc_facts_vec: Vec<_> = doc_facts.iter().map(|f| (*f).clone()).collect();
-
-    let required_fact_names = if let Some(rules) = rule_names {
-        let mut required = std::collections::HashSet::new();
-        for rule_name in rules {
-            if let Some(rule) = all_rules.iter().find(|r| &r.name == rule_name) {
-                let rule_facts = lemma::analysis::find_required_facts_recursive(
-                    rule,
-                    &all_rules_vec,
-                    &doc_facts_vec,
-                );
-                required.extend(rule_facts);
-            }
-        }
-        required
-    } else {
-        doc_facts
-            .iter()
-            .map(|f| lemma::analysis::fact_display_name(f))
-            .collect()
-    };
-
-    let required_facts: Vec<_> = doc_facts
+    let promptable_facts: Vec<_> = doc_facts
         .into_iter()
-        .filter(|f| required_fact_names.contains(&lemma::analysis::fact_display_name(f)))
+        .filter(|f| {
+            let fact_name = f.reference.to_string();
+            let is_document_reference = matches!(f.value, FactValue::DocumentReference(_));
+            !is_document_reference && !provided_facts.contains_key(&fact_name)
+        })
         .collect();
 
-    if required_facts.is_empty() {
-        return Ok(Vec::new());
+    if promptable_facts.is_empty() {
+        return Ok(HashMap::new());
     }
 
-    let mut fact_values = Vec::new();
+    let mut facts = HashMap::new();
 
-    println!("\nEnter fact values:");
+    println!("\nEnter values for facts (press Enter to accept defaults):");
 
-    for fact in required_facts {
-        let fact_name = lemma::analysis::fact_display_name(fact);
+    for fact in promptable_facts {
+        let fact_name = fact.reference.to_string();
 
         let (type_ann, default_value) = match &fact.value {
-            lemma::FactValue::TypeAnnotation(type_ann) => (type_ann.clone(), None),
-            lemma::FactValue::Literal(lit) => (
-                TypeAnnotation::LemmaType(lit.to_type()),
-                Some(format!("{}", lit)),
-            ),
-            lemma::FactValue::DocumentReference(_) => continue,
+            FactValue::TypeAnnotation(type_ann) => (type_ann.clone(), None),
+            FactValue::Literal(lit) => {
+                let default = match lit {
+                    lemma::LiteralValue::Text(s) => s.clone(),
+                    _ => format!("{}", lit),
+                };
+                (TypeAnnotation::LemmaType(lit.to_type()), Some(default))
+            }
+            FactValue::DocumentReference(_) => continue,
         };
 
         let type_str = type_ann.to_string();
 
-        let value = match &type_ann {
+        let input_value = match &type_ann {
             TypeAnnotation::LemmaType(LemmaType::Date) => {
-                let date = DateSelect::new(&format!("{} [date]", fact_name))
-                    .with_help_message("Use arrow keys to navigate, Enter to select")
-                    .prompt()
-                    .context(format!("Failed to get date for {}", fact_name))?;
-
-                format!("{}T00:00:00Z", date.format("%Y-%m-%d"))
+                prompt_date_fact(&fact_name, default_value.as_deref())?
             }
             TypeAnnotation::LemmaType(LemmaType::Boolean) => {
-                let options = vec!["true", "false"];
-
-                let default_index = if let Some(default) = &default_value {
-                    if default == "true" || default == "yes" || default == "accept" {
-                        0
-                    } else {
-                        1
-                    }
-                } else {
-                    0
-                };
-
-                let selected = Select::new(&format!("{} [boolean]", fact_name), options)
-                    .with_help_message("Use arrow keys to select, Enter to confirm")
-                    .with_starting_cursor(default_index)
-                    .prompt()
-                    .context(format!("Failed to get boolean value for {}", fact_name))?;
-
-                selected.to_string()
+                prompt_boolean_fact(&fact_name, default_value.as_deref())?
             }
-            _ => {
-                let prompt_message = format!("{} [{}]", fact_name, type_str);
-
-                if let Some(default) = &default_value {
-                    Text::new(&prompt_message)
-                        .with_help_message(&format!("Example: {}", type_ann.example_value()))
-                        .with_default(default)
-                        .prompt()
-                        .context(format!("Failed to get value for {}", fact_name))?
-                } else {
-                    Text::new(&prompt_message)
-                        .with_help_message(&format!("Example: {}", type_ann.example_value()))
-                        .prompt()
-                        .context(format!("Failed to get value for {}", fact_name))?
-                }
-            }
+            _ => prompt_text_fact(&fact_name, &type_str, &type_ann, default_value.as_deref())?,
         };
 
-        fact_values.push(format!("{}={}", fact_name, value));
+        facts.insert(fact_name, input_value);
     }
 
-    Ok(fact_values)
+    Ok(facts)
+}
+
+fn prompt_date_fact(fact_name: &str, default_value: Option<&str>) -> Result<String> {
+    let help_message = if default_value.is_some() {
+        "Use arrow keys to navigate, Enter to select (or accept default)"
+    } else {
+        "Use arrow keys to navigate, Enter to select"
+    };
+
+    let date = DateSelect::new(&format!("{} [date]", fact_name))
+        .with_help_message(help_message)
+        .prompt()
+        .context(format!("Failed to get date for {}", fact_name))?;
+
+    Ok(format!("{}T00:00:00Z", date.format("%Y-%m-%d")))
+}
+
+fn prompt_boolean_fact(fact_name: &str, default_value: Option<&str>) -> Result<String> {
+    let options = vec!["true", "false"];
+
+    let default_index = match default_value {
+        Some(default) if default == "true" || default == "yes" || default == "accept" => 0,
+        Some(_) => 1,
+        None => 0,
+    };
+
+    let help_message = if default_value.is_some() {
+        format!(
+            "Default: {} - Use arrow keys to change, Enter to confirm",
+            options[default_index]
+        )
+    } else {
+        "Use arrow keys to select, Enter to confirm".to_string()
+    };
+
+    let selected = Select::new(&format!("{} [boolean]", fact_name), options)
+        .with_help_message(&help_message)
+        .with_starting_cursor(default_index)
+        .prompt()
+        .context(format!("Failed to get boolean value for {}", fact_name))?;
+
+    Ok(selected.to_string())
+}
+
+fn prompt_text_fact(
+    fact_name: &str,
+    type_str: &str,
+    type_ann: &TypeAnnotation,
+    default_value: Option<&str>,
+) -> Result<String> {
+    let prompt_message = format!("{} [{}]", fact_name, type_str);
+
+    match default_value {
+        Some(default) => {
+            let help_message = format!(
+                "Press Enter to keep current value, or type a new value. Example: {}",
+                type_ann.example_value()
+            );
+
+            Text::new(&prompt_message)
+                .with_help_message(&help_message)
+                .with_default(default)
+                .prompt()
+                .context(format!("Failed to get value for {}", fact_name))
+        }
+        None => {
+            let validator = |input: &str| {
+                if input.trim().is_empty() {
+                    Ok(Validation::Invalid("Value is required".into()))
+                } else {
+                    Ok(Validation::Valid)
+                }
+            };
+
+            let help_message = format!("Example: {}", type_ann.example_value());
+
+            Text::new(&prompt_message)
+                .with_help_message(&help_message)
+                .with_validator(validator)
+                .prompt()
+                .context(format!("Failed to get value for {}", fact_name))
+        }
+    }
 }

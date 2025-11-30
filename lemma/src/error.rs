@@ -1,5 +1,5 @@
-use crate::ast::Span;
-use crate::SourceLocation;
+use crate::parsing::ast::Span;
+use crate::Source;
 use std::fmt;
 use std::sync::Arc;
 
@@ -7,7 +7,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct ErrorDetails {
     pub message: String,
-    pub source_location: SourceLocation,
+    pub source_location: Source,
     pub source_text: Arc<str>,
     pub doc_start_line: usize,
     pub suggestion: Option<String>,
@@ -29,7 +29,7 @@ pub enum LemmaError {
     Engine(String),
 
     /// Missing fact error during evaluation
-    MissingFact(crate::FactReference),
+    MissingFact(crate::FactPath),
 
     /// Circular dependency error
     CircularDependency(String),
@@ -58,7 +58,7 @@ impl LemmaError {
     ) -> Self {
         Self::Parse(Box::new(ErrorDetails {
             message: message.into(),
-            source_location: SourceLocation::new(source_id, span, doc_name),
+            source_location: Source::new(source_id, span, doc_name),
             source_text,
             doc_start_line,
             suggestion: None,
@@ -77,7 +77,7 @@ impl LemmaError {
     ) -> Self {
         Self::Parse(Box::new(ErrorDetails {
             message: message.into(),
-            source_location: SourceLocation::new(source_id, span, doc_name),
+            source_location: Source::new(source_id, span, doc_name),
             source_text,
             doc_start_line,
             suggestion: Some(suggestion.into()),
@@ -95,7 +95,7 @@ impl LemmaError {
     ) -> Self {
         Self::Semantic(Box::new(ErrorDetails {
             message: message.into(),
-            source_location: SourceLocation::new(source_id, span, doc_name),
+            source_location: Source::new(source_id, span, doc_name),
             source_text,
             doc_start_line,
             suggestion: None,
@@ -114,7 +114,7 @@ impl LemmaError {
     ) -> Self {
         Self::Semantic(Box::new(ErrorDetails {
             message: message.into(),
-            source_location: SourceLocation::new(source_id, span, doc_name),
+            source_location: Source::new(source_id, span, doc_name),
             source_text,
             doc_start_line,
             suggestion: Some(suggestion.into()),

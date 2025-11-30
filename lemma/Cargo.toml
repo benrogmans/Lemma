@@ -24,12 +24,18 @@ regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rust_decimal.workspace = true
-# BDD-based boolean simplification for inversion
+strum = "0.26"
+strum_macros = "0.26"
+indexmap = { version = "2.0", features = ["serde"] }
 boolean_expression = "0.4"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen.workspace = true
 console_error_panic_hook.workspace = true
+
+[features]
+inversion = []
+planning_internal_tests = []
 
 [dev-dependencies]
 proptest = "1.4"

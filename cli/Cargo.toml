@@ -18,8 +18,7 @@ anyhow.workspace = true
 ariadne.workspace = true
 chrono.workspace = true
 walkdir = "2.4"
-crossterm = "0.27"
-comfy-table = "7.2"
+super-table = { version = "1.1.1", features = ["custom_styling"] }
 inquire = { version = "0.9", features = ["date"] }
 rust_decimal = "1.36"
 strip-ansi-escapes = "0.2"
@@ -38,6 +37,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = tr
 default = ["server", "mcp"]
 server = ["axum", "tokio", "tower", "tower-http", "serde", "serde_json", "tracing", "tracing-subscriber"]
 mcp = ["serde", "serde_json", "tracing", "tracing-subscriber"]
+inversion = ["lemma/inversion"]
 
 [dev-dependencies]
 assert_cmd = "2.0"

@@ -1,5 +1,6 @@
-use lemma::{Engine, FactReference, LiteralValue};
-use rust_decimal::Decimal;
+#![cfg(feature = "inversion")]
+
+use lemma::{Engine, FactPath, LiteralValue};
 use std::collections::HashMap;
 
 #[test]
@@ -18,7 +19,7 @@ fn piecewise_creates_multiple_domains() {
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
     let solutions = engine
-        .invert(
+        .invert_strict(
             "pricing",
             "final_discount",
             lemma::Target::any_value(),
@@ -42,33 +43,28 @@ fn exclusive_ranges_create_multiple_domains() {
         doc insurance
         fact age = [number]
 
-        rule premium = 100 EUR
+        rule premium = 100
           unless age < 25 then veto "too young"
           unless age > 65 then veto "too old"
-          unless (age >= 30 and age <= 40) then 80 EUR
+          unless (age >= 30 and age <= 40) then 80
     "#;
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
-    // Ask for age ranges that give 80 EUR premium
-    let age_path = FactReference {
-        reference: vec!["insurance".to_string(), "age".to_string()],
-    };
+    // Ask for age ranges that give 80 premium
+    let age_path = FactPath::from_path(vec!["insurance".to_string(), "age".to_string()]);
 
     let given = HashMap::new();
     let solutions = engine
-        .invert(
+        .invert_strict(
             "insurance",
             "premium",
-            lemma::Target::value(LiteralValue::Unit(lemma::NumericUnit::Money(
-                Decimal::from(80),
-                lemma::MoneyUnit::Eur,
-            ))),
+            lemma::Target::value(LiteralValue::number(80)),
             given.clone(),
         )
         .expect("should invert");
 
-    println!("\nAge solutions for 80 EUR premium:");
+    println!("\nAge solutions for 80 premium:");
     for (i, solution) in solutions.iter().enumerate() {
         if let Some(domain) = solution.get(&age_path) {
             println!("  Solution {}: {:?}", i + 1, domain);
@@ -77,7 +73,7 @@ fn exclusive_ranges_create_multiple_domains() {
 
     // For get_valid_domain, we want non-veto values
     let solutions = engine
-        .invert(
+        .invert_strict(
             "insurance",
             "premium",
             lemma::Target::any_value(),
@@ -107,7 +103,7 @@ fn disjoint_valid_ranges() {
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
     let solutions = engine
-        .invert(
+        .invert_strict(
             "thermostat",
             "status",
             lemma::Target::any_value(),
@@ -141,7 +137,7 @@ fn multiple_conditions_create_solutions() {
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
     let solutions = engine
-        .invert(
+        .invert_strict(
             "shipping",
             "can_ship",
             lemma::Target::any_value(),
@@ -153,7 +149,7 @@ fn multiple_conditions_create_solutions() {
     for (i, solution) in solutions.iter().enumerate() {
         println!("  Solution {}:", i + 1);
         for (fact, domain) in solution.iter() {
-            println!("    {}: {:?}", fact.reference.join("."), domain);
+            println!("    {}: {:?}", fact, domain);
         }
     }
 
@@ -179,12 +175,10 @@ fn enum_values_create_multiple_domains() {
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
 
-    let status_path = FactReference {
-        reference: vec!["order".to_string(), "status".to_string()],
-    };
+    let status_path = FactPath::from_path(vec!["order".to_string(), "status".to_string()]);
 
     let solutions = engine
-        .invert(
+        .invert_strict(
             "order",
             "can_ship",
             lemma::Target::any_value(),
@@ -207,7 +201,7 @@ fn given_facts_affect_domain_count() {
         doc pricing
         fact quantity = [number]
         fact is_member = [boolean]
-        fact base_price = [money]
+        fact base_price = [number]
 
         rule discount = 0%
           unless quantity >= 10 then 5%
@@ -221,7 +215,7 @@ fn given_facts_affect_domain_count() {
     // Without given facts - multiple solutions possible
     println!("\n=== Without given facts ===");
     let domains_no_given = engine
-        .invert(
+        .invert_strict(
             "pricing",
             "discount",
             lemma::Target::any_value(),
@@ -238,12 +232,12 @@ fn given_facts_affect_domain_count() {
     println!("\n=== With is_member = false ===");
     let mut given = HashMap::new();
     given.insert(
-        "pricing.is_member".to_string(),
+        "is_member".to_string(),
         LiteralValue::Boolean(lemma::BooleanValue::False),
     );
 
     let domains_with_given = engine
-        .invert("pricing", "discount", lemma::Target::any_value(), given)
+        .invert_strict("pricing", "discount", lemma::Target::any_value(), given)
         .expect("should get domains");
 
     println!("Quantity domains: {} solutions", domains_with_given.len());
@@ -274,7 +268,7 @@ fn overlapping_conditions_may_unify() {
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
     let solutions = engine
-        .invert(
+        .invert_strict(
             "validation",
             "grade",
             lemma::Target::any_value(),

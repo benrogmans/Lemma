@@ -1,0 +1,35 @@
+doc recipe_scaling
+"""
+Recipe Scaling
+
+Demonstrates calculations and unit conversions.
+Scale a recipe up or down based on servings needed.
+"""
+
+fact original_servings = [number]
+fact desired_servings = [number]
+fact recipe_name = [text]
+
+rule scaling_factor = desired_servings / original_servings
+
+fact flour_needed = 2
+fact sugar_needed = 1.5
+fact butter_needed = 0.5
+fact eggs_needed = 3
+
+rule scaled_flour = flour_needed * scaling_factor?
+rule scaled_sugar = sugar_needed * scaling_factor?
+rule scaled_butter = butter_needed * scaling_factor?
+rule scaled_eggs = eggs_needed * scaling_factor?
+
+rule total_dry_ingredients = scaled_flour? + scaled_sugar?
+
+rule baking_time_minutes = 30
+  unless desired_servings <= 4 then 35
+  unless desired_servings >= 8 then 40
+
+rule oven_temperature = 350 fahrenheit
+  unless recipe_name == "chocolate_cake" then 350 fahrenheit
+  unless recipe_name == "bread" then 375 fahrenheit
+  unless recipe_name != "chocolate_cake" and recipe_name != "bread" then veto "Unknown recipe name"
+

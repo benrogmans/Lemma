@@ -37,9 +37,6 @@ Quick reference for all operators, units, and types in Lemma.
 | `and` | Logical AND | `is_valid and not is_blocked` |
 | `or` | Logical OR | `is_admin or is_manager` |
 | `not` | Logical NOT | `not is_suspended` |
-| `have` | Has value | `have user.email` |
-| `have not` | Doesn't have value | `have not user.middle_name` |
-| `not have` | Doesn't have value | `not have document.signature` |
 
 ### Mathematical
 | Operator | Description | Example |
@@ -63,14 +60,6 @@ Note: Mathematical operators are prefix operators, not functions. Parentheses ar
 | `in` | Convert units | `weight in pounds` |
 
 ## Unit Types
-
-### Money
-**Currencies:** `USD`, `EUR`, `GBP`, `JPY`, `CNY`
-
-```lemma
-fact price = 100
-fact budget = 50000
-```
 
 ### Mass
 **Units:** `kilogram`, `gram`, `milligram`, `pound`, `ounce`
@@ -220,14 +209,6 @@ rule result = value
 ```
 
 Not a boolean - prevents any valid verdict from the rule.
-
-### Have Operator
-Checks if a fact has any value:
-
-```lemma
-rule has_email = have user.email
-rule missing_phone = not have user.phone
-```
 
 ## Date Formats
 

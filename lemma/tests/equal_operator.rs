@@ -1,4 +1,5 @@
 use lemma::Engine;
+use std::collections::HashMap;
 
 #[test]
 fn test_equal_operator_numbers() {
@@ -19,20 +20,14 @@ rule equal_false = a == c
         )
         .unwrap();
 
-    let response = engine.evaluate("test_equal_numbers", None, None).unwrap();
-
-    let equal_true = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "equal_true")
+    let response = engine
+        .evaluate("test_equal_numbers", vec![], HashMap::new())
         .unwrap();
+
+    let equal_true = response.results.get("equal_true").unwrap();
     assert_eq!(equal_true.result.value().unwrap().to_string(), "true");
 
-    let equal_false = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "equal_false")
-        .unwrap();
+    let equal_false = response.results.get("equal_false").unwrap();
     assert_eq!(equal_false.result.value().unwrap().to_string(), "false");
 }
 
@@ -54,20 +49,14 @@ rule different_greeting = greeting == other
         )
         .unwrap();
 
-    let response = engine.evaluate("test_equal_text", None, None).unwrap();
-
-    let same = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "same_greeting")
+    let response = engine
+        .evaluate("test_equal_text", vec![], HashMap::new())
         .unwrap();
+
+    let same = response.results.get("same_greeting").unwrap();
     assert_eq!(same.result.value().unwrap().to_string(), "true");
 
-    let different = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "different_greeting")
-        .unwrap();
+    let different = response.results.get("different_greeting").unwrap();
     assert_eq!(different.result.value().unwrap().to_string(), "false");
 }
 
@@ -90,20 +79,14 @@ rule different_price = price_a == price_c
         )
         .unwrap();
 
-    let response = engine.evaluate("test_equal_money", None, None).unwrap();
-
-    let same = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "same_price")
+    let response = engine
+        .evaluate("test_equal_money", vec![], HashMap::new())
         .unwrap();
+
+    let same = response.results.get("same_price").unwrap();
     assert_eq!(same.result.value().unwrap().to_string(), "true");
 
-    let different = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "different_price")
-        .unwrap();
+    let different = response.results.get("different_price").unwrap();
     assert_eq!(different.result.value().unwrap().to_string(), "false");
 }
 
@@ -126,20 +109,14 @@ rule mixed = flag_a == flag_c
         )
         .unwrap();
 
-    let response = engine.evaluate("test_equal_booleans", None, None).unwrap();
-
-    let both_true = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "both_true")
+    let response = engine
+        .evaluate("test_equal_booleans", vec![], HashMap::new())
         .unwrap();
+
+    let both_true = response.results.get("both_true").unwrap();
     assert_eq!(both_true.result.value().unwrap().to_string(), "true");
 
-    let mixed = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "mixed")
-        .unwrap();
+    let mixed = response.results.get("mixed").unwrap();
     assert_eq!(mixed.result.value().unwrap().to_string(), "false");
 }
 
@@ -163,14 +140,10 @@ rule message = "inactive"
         .unwrap();
 
     let response = engine
-        .evaluate("test_equal_conditions", None, None)
+        .evaluate("test_equal_conditions", vec![], HashMap::new())
         .unwrap();
 
-    let message = response
-        .results
-        .iter()
-        .find(|r| r.rule.name == "message")
-        .unwrap();
+    let message = response.results.get("message").unwrap();
     assert_eq!(
         message.result.value().unwrap().to_string(),
         "\"count is 10\""

@@ -19,12 +19,10 @@ rule effective_tax_rate = (total_tax / income)
         result.is_err(),
         "Should reject mixing number and percentage types"
     );
-    let err = result.unwrap_err().to_string();
+    let err = result.unwrap_err().to_string().to_lowercase();
     assert!(
-        err.contains("incompatible return types")
-            || err.contains("number") && err.contains("percentage"),
-        "Error should mention type incompatibility: {}",
-        err
+        err.contains("incompatible") || (err.contains("number") && err.contains("percentage")),
+        "Error should mention type incompatibility"
     );
 }
 
@@ -46,12 +44,10 @@ rule adjusted_rate = rate
         result.is_err(),
         "Should reject mixing percentage and number types"
     );
-    let err = result.unwrap_err().to_string();
+    let err = result.unwrap_err().to_string().to_lowercase();
     assert!(
-        err.contains("incompatible return types")
-            || err.contains("percentage") && err.contains("number"),
-        "Error should mention type incompatibility: {}",
-        err
+        err.contains("incompatible") || (err.contains("percentage") && err.contains("number")),
+        "Error should mention type incompatibility"
     );
 }
 
@@ -73,11 +69,10 @@ rule measurement = weight
         result.is_err(),
         "Should reject mixing mass and length types"
     );
-    let err = result.unwrap_err().to_string();
+    let err = result.unwrap_err().to_string().to_lowercase();
     assert!(
-        err.contains("incompatible return types") || err.contains("mass") && err.contains("length"),
-        "Error should mention type incompatibility: {}",
-        err
+        err.contains("incompatible") || (err.contains("mass") && err.contains("length")),
+        "Error should mention type incompatibility"
     );
 }
 
@@ -99,12 +94,10 @@ rule result = capacity
         result.is_err(),
         "Should reject mixing volume and duration types"
     );
-    let err = result.unwrap_err().to_string();
+    let err = result.unwrap_err().to_string().to_lowercase();
     assert!(
-        err.contains("incompatible return types")
-            || err.contains("volume") && err.contains("duration"),
-        "Error should mention type incompatibility: {}",
-        err
+        err.contains("incompatible") || (err.contains("volume") && err.contains("duration")),
+        "Error should mention type incompatibility"
     );
 }
 
@@ -126,12 +119,10 @@ rule result = consumption
         result.is_err(),
         "Should reject mixing power and energy types"
     );
-    let err = result.unwrap_err().to_string();
+    let err = result.unwrap_err().to_string().to_lowercase();
     assert!(
-        err.contains("incompatible return types")
-            || err.contains("power") && err.contains("energy"),
-        "Error should mention type incompatibility: {}",
-        err
+        err.contains("incompatible") || (err.contains("power") && err.contains("energy")),
+        "Error should mention type incompatibility"
     );
 }
 
@@ -153,12 +144,10 @@ rule result = freq
         result.is_err(),
         "Should reject mixing frequency and pressure types"
     );
-    let err = result.unwrap_err().to_string();
+    let err = result.unwrap_err().to_string().to_lowercase();
     assert!(
-        err.contains("incompatible return types")
-            || err.contains("frequency") && err.contains("pressure"),
-        "Error should mention type incompatibility: {}",
-        err
+        err.contains("incompatible") || (err.contains("frequency") && err.contains("pressure")),
+        "Error should mention type incompatibility"
     );
 }
 
@@ -180,24 +169,22 @@ rule result = size
         result.is_err(),
         "Should reject mixing data size and force types"
     );
-    let err = result.unwrap_err().to_string();
+    let err = result.unwrap_err().to_string().to_lowercase();
     assert!(
-        err.contains("incompatible return types")
-            || err.contains("data size") && err.contains("force"),
-        "Error should mention type incompatibility: {}",
-        err
+        err.contains("incompatible") || (err.contains("data") && err.contains("force")),
+        "Error should mention type incompatibility"
     );
 }
 
 #[test]
-fn test_temperature_vs_money_type_mismatch() {
+fn test_temperature_vs_length_type_mismatch() {
     let code = r#"
 doc test
 
 fact temp = 25 celsius
 
 rule result = temp
-  unless temp > 30 celsius then 100 USD
+  unless temp > 30 celsius then 100 meters
 "#;
 
     let mut engine = Engine::new();
@@ -205,14 +192,12 @@ rule result = temp
 
     assert!(
         result.is_err(),
-        "Should reject mixing temperature and money types"
+        "Should reject mixing temperature and length types"
     );
-    let err = result.unwrap_err().to_string();
+    let err = result.unwrap_err().to_string().to_lowercase();
     assert!(
-        err.contains("incompatible return types")
-            || err.contains("temperature") && err.contains("money"),
-        "Error should mention type incompatibility: {}",
-        err
+        err.contains("incompatible") || (err.contains("temperature") && err.contains("length")),
+        "Error should mention type incompatibility"
     );
 }
 

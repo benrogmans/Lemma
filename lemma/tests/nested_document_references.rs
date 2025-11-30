@@ -1,4 +1,5 @@
 use lemma::Engine;
+use std::collections::HashMap;
 
 /// Rule references work through one level of document reference.
 #[test]
@@ -24,10 +25,12 @@ rule line_total = pricing.final_price? * quantity
         .add_lemma_code(line_item_doc, "line_item.lemma")
         .unwrap();
 
-    let response = engine.evaluate("line_item", None, None).unwrap();
+    let response = engine
+        .evaluate("line_item", vec![], HashMap::new())
+        .unwrap();
     let line_total = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "line_total")
         .unwrap();
 
@@ -64,24 +67,23 @@ rule top_calc = middle_ref.middle_calc?
     engine.add_lemma_code(middle_doc, "test.lemma").unwrap();
     engine.add_lemma_code(top_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("top", None, None).unwrap();
+    let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
 
     println!("Response results:");
-    for r in &response.results {
+    for r in response.results.values() {
         println!("  Rule: {} = {:?}", r.rule.name, r.result);
-        let missing: Vec<&str> = r
+        let missing: Vec<String> = r
             .facts
             .iter()
-            .filter(|f| f.value.is_none())
-            .map(|f| f.name.as_str())
+            .filter(|f| matches!(f.value, lemma::FactValue::TypeAnnotation(_)))
+            .map(|f| f.reference.to_string())
             .collect();
         println!("       missing: {:?}", missing);
-        println!("       veto: {:?}", r.result.veto_message());
     }
 
     let top_calc = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "top_calc")
         .expect("top_calc rule not found in results");
 
@@ -127,11 +129,11 @@ rule order_total = line.line_total?
     engine.add_lemma_code(line_item_doc, "test.lemma").unwrap();
     engine.add_lemma_code(order_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("order", None, None).unwrap();
+    let response = engine.evaluate("order", vec![], HashMap::new()).unwrap();
 
     let order_total = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "order_total")
         .expect("order_total rule not found in results");
 
@@ -164,10 +166,10 @@ rule final_value = settings.config.value * 2
     engine.add_lemma_code(middle_doc, "test.lemma").unwrap();
     engine.add_lemma_code(top_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("top", None, None).unwrap();
+    let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
     let final_value = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "final_value")
         .unwrap();
 
@@ -207,11 +209,11 @@ rule order_total = line.line_total?
     engine.add_lemma_code(line_item_doc, "test.lemma").unwrap();
     engine.add_lemma_code(order_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("order", None, None).unwrap();
+    let response = engine.evaluate("order", vec![], HashMap::new()).unwrap();
 
     let order_total = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "order_total")
         .expect("order_total rule not found");
 
@@ -252,21 +254,23 @@ rule difference = total2? - total1?
     engine.add_lemma_code(wrapper_doc, "test.lemma").unwrap();
     engine.add_lemma_code(comparison_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("comparison", None, None).unwrap();
+    let response = engine
+        .evaluate("comparison", vec![], HashMap::new())
+        .unwrap();
 
     let total1 = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "total1")
         .unwrap();
     let total2 = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "total2")
         .unwrap();
     let difference = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "difference")
         .unwrap();
 
@@ -308,16 +312,16 @@ rule product = c1.value * c2.value
     engine.add_lemma_code(config2_doc, "test.lemma").unwrap();
     engine.add_lemma_code(combined_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("combined", None, None).unwrap();
+    let response = engine.evaluate("combined", vec![], HashMap::new()).unwrap();
 
     let sum = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "sum")
         .unwrap();
     let product = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "product")
         .unwrap();
 
@@ -356,11 +360,11 @@ rule final_result = middle_config.x_squared_plus_ten? * 2
     engine.add_lemma_code(middle_doc, "middle.lemma").unwrap();
     engine.add_lemma_code(top_doc, "top.lemma").unwrap();
 
-    let response = engine.evaluate("top", None, None).unwrap();
+    let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
 
     let final_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "final_result")
         .unwrap();
 
@@ -398,21 +402,23 @@ rule price_difference = retail_final? - wholesale_final?
     engine.add_lemma_code(pricing_doc, "test.lemma").unwrap();
     engine.add_lemma_code(scenario_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("scenarios", None, None).unwrap();
+    let response = engine
+        .evaluate("scenarios", vec![], HashMap::new())
+        .unwrap();
 
     let retail_final = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "retail_final")
         .unwrap();
     let wholesale_final = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "wholesale_final")
         .unwrap();
     let price_difference = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "price_difference")
         .unwrap();
 

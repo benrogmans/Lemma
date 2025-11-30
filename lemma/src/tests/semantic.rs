@@ -106,39 +106,6 @@ fn test_literal_value_to_type() {
         LiteralValue::Unit(NumericUnit::Data(one, DataUnit::Byte)).to_type(),
         LemmaType::Data
     );
-    assert_eq!(
-        LiteralValue::Unit(NumericUnit::Money(one, MoneyUnit::Usd)).to_type(),
-        LemmaType::Money
-    );
-}
-
-#[test]
-fn test_numeric_unit_validate_same_currency() {
-    let one = Decimal::from_str("1").unwrap();
-    let money_usd = NumericUnit::Money(one, MoneyUnit::Usd);
-    let money_eur = NumericUnit::Money(one, MoneyUnit::Eur);
-    let mass = NumericUnit::Mass(one, MassUnit::Kilogram);
-
-    assert!(money_usd.validate_same_currency(&money_usd).is_ok());
-    assert!(money_usd.validate_same_currency(&mass).is_ok());
-    assert!(money_usd.validate_same_currency(&money_eur).is_err());
-}
-
-#[test]
-fn test_display_implementations() {
-    let hundred = Decimal::from_str("100").unwrap();
-    assert_eq!(format!("{}", ArithmeticComputation::Add), "+");
-    assert_eq!(
-        format!("{}", ComparisonComputation::GreaterThanOrEqual),
-        ">="
-    );
-    assert_eq!(
-        format!(
-            "{}",
-            LiteralValue::Unit(NumericUnit::Money(hundred, MoneyUnit::Eur))
-        ),
-        "100 EUR"
-    );
 }
 
 #[test]
@@ -151,7 +118,6 @@ fn test_numeric_unit_value() {
         NumericUnit::Length(twenty, LengthUnit::Meter).value(),
         twenty
     );
-    assert_eq!(NumericUnit::Money(ten, MoneyUnit::Usd).value(), ten);
     assert_eq!(
         NumericUnit::Duration(twenty, DurationUnit::Second).value(),
         twenty
@@ -185,23 +151,6 @@ fn test_numeric_unit_with_value() {
     assert_eq!(updated.value(), fifty);
     assert!(original.same_category(&updated));
     assert_eq!(format!("{}", updated), "50 kilogram");
-}
-
-#[test]
-fn test_numeric_unit_validate_currency_mismatch() {
-    let ten = Decimal::from_str("10").unwrap();
-    let usd = NumericUnit::Money(ten, MoneyUnit::Usd);
-    let eur = NumericUnit::Money(ten, MoneyUnit::Eur);
-    let kg = NumericUnit::Mass(ten, MassUnit::Kilogram);
-
-    // Same currency should pass
-    assert!(usd.validate_same_currency(&usd).is_ok());
-
-    // Different currencies should fail
-    assert!(usd.validate_same_currency(&eur).is_err());
-
-    // Non-money units should pass
-    assert!(kg.validate_same_currency(&usd).is_ok());
 }
 
 #[test]
@@ -271,13 +220,7 @@ fn test_unit_display_formats() {
 }
 
 #[test]
-fn test_money_unit_display() {
-    assert_eq!(format!("{}", MoneyUnit::Usd), "USD");
-    assert_eq!(format!("{}", MoneyUnit::Eur), "EUR");
-    assert_eq!(format!("{}", MoneyUnit::Gbp), "GBP");
-    assert_eq!(format!("{}", MoneyUnit::Jpy), "JPY");
-    assert_eq!(format!("{}", MoneyUnit::Cny), "CNY");
-}
+fn test_money_unit_display() {}
 
 #[test]
 fn test_conversion_target_display() {
@@ -288,10 +231,6 @@ fn test_conversion_target_display() {
     assert_eq!(
         format!("{}", ConversionTarget::Length(LengthUnit::Meter)),
         "meter"
-    );
-    assert_eq!(
-        format!("{}", ConversionTarget::Money(MoneyUnit::Usd)),
-        "USD"
     );
     assert_eq!(format!("{}", ConversionTarget::Percentage), "percentage");
 }
@@ -304,7 +243,6 @@ fn test_lemma_type_display() {
     assert_eq!(format!("{}", LemmaType::Boolean), "boolean");
     assert_eq!(format!("{}", LemmaType::Percentage), "percentage");
     assert_eq!(format!("{}", LemmaType::Mass), "mass");
-    assert_eq!(format!("{}", LemmaType::Money), "money");
 }
 
 #[test]
@@ -325,9 +263,6 @@ fn test_literal_value_display_value() {
         "false"
     );
     assert_eq!(LiteralValue::Percentage(ten).display_value(), "10%");
-
-    let money = LiteralValue::Unit(NumericUnit::Money(ten, MoneyUnit::Usd));
-    assert_eq!(money.display_value(), "10 USD");
 
     let time = TimeValue {
         hour: 14,
@@ -420,15 +355,12 @@ fn test_all_unit_categories() {
     let _ = NumericUnit::Energy(v, EnergyUnit::Joule);
     let _ = NumericUnit::Frequency(v, FrequencyUnit::Hertz);
     let _ = NumericUnit::Data(v, DataUnit::Byte);
-    let _ = NumericUnit::Money(v, MoneyUnit::Usd);
 }
 
 #[test]
 fn test_negation_types() {
     // Ensure all negation types exist
     let _ = NegationType::Not;
-    let _ = NegationType::HaveNot;
-    let _ = NegationType::NotHave;
 }
 
 #[test]
@@ -447,7 +379,7 @@ fn test_veto_expression() {
 
 #[test]
 fn test_expression_get_source_text_with_location() {
-    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue, SourceLocation, Span};
+    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue, Source, Span};
     use std::collections::HashMap;
 
     let source = "fact value = 42";
@@ -460,7 +392,7 @@ fn test_expression_get_source_text_with_location() {
         line: 1,
         col: 13,
     };
-    let source_location = Some(SourceLocation::new("test.lemma", span, "test"));
+    let source_location = Some(Source::new("test.lemma", span, "test"));
     let expr = Expression::new(
         ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
         source_location,
@@ -489,7 +421,7 @@ fn test_expression_get_source_text_no_location() {
 
 #[test]
 fn test_expression_get_source_text_source_not_found() {
-    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue, SourceLocation, Span};
+    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue, Source, Span};
     use std::collections::HashMap;
 
     let sources = HashMap::new();
@@ -499,7 +431,7 @@ fn test_expression_get_source_text_source_not_found() {
         line: 1,
         col: 0,
     };
-    let source_location = Some(SourceLocation::new("missing.lemma", span, "test"));
+    let source_location = Some(Source::new("missing.lemma", span, "test"));
     let expr = Expression::new(
         ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
         source_location,

@@ -1,5 +1,6 @@
+#![cfg(feature = "inversion")]
+
 use lemma::{Engine, LiteralValue, Target};
-use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 #[test]
@@ -14,19 +15,17 @@ fn modulo_operator_not_supported() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let solutions = engine
-        .invert(
+        .invert_strict(
             "test",
             "y",
-            Target::value(LiteralValue::Number(Decimal::from(3))),
+            Target::value(LiteralValue::number(3)),
             HashMap::new(),
         )
         .expect("invert should succeed");
 
     // Should have free variable x (modulo is not algebraically solvable)
-    assert!(solutions
-        .iter()
-        .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "x"));
+    let x_ref = lemma::FactPath::new(vec![], "x".to_string());
+    assert!(solutions.iter().flat_map(|r| r.keys()).any(|v| v == &x_ref));
 }
 
 #[test]
@@ -41,10 +40,10 @@ fn power_operator_supported() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let solutions = engine
-        .invert(
+        .invert_strict(
             "test",
             "y",
-            Target::value(LiteralValue::Number(Decimal::from(16))),
+            Target::value(LiteralValue::number(16)),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -65,10 +64,10 @@ fn nested_arithmetic_single_unknown() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let solutions = engine
-        .invert(
+        .invert_strict(
             "test",
             "y",
-            Target::value(LiteralValue::Number(Decimal::from(17))),
+            Target::value(LiteralValue::number(17)),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -91,18 +90,10 @@ fn divide_by_zero_stays_symbolic() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let mut given = HashMap::new();
-    given.insert(
-        "test.divisor".to_string(),
-        LiteralValue::Number(Decimal::from(0)),
-    );
+    given.insert("divisor".to_string(), LiteralValue::number(0));
 
     let solutions = engine
-        .invert(
-            "test",
-            "y",
-            Target::value(LiteralValue::Number(Decimal::from(10))),
-            given,
-        )
+        .invert_strict("test", "y", Target::value(LiteralValue::number(10)), given)
         .expect("invert should succeed");
 
     // When divisor=0 is given, hydration produces x/0, but algebraic solving
@@ -114,7 +105,7 @@ fn divide_by_zero_stays_symbolic() {
 fn rule_reference_in_expression_stays_opaque() {
     let code = r#"
         doc test
-        fact base_price = [money]
+        fact base_price = [number]
         rule markup = 1.2
         rule final_price = base_price * markup?
     "#;
@@ -122,18 +113,15 @@ fn rule_reference_in_expression_stays_opaque() {
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
 
-    let target = LiteralValue::Unit(lemma::NumericUnit::Money(
-        Decimal::from(120),
-        lemma::MoneyUnit::Eur,
-    ));
+    let target = LiteralValue::number(120);
 
     let solutions = engine
-        .invert("test", "final_price", Target::value(target), HashMap::new())
+        .invert_strict("test", "final_price", Target::value(target), HashMap::new())
         .expect("invert should succeed");
 
     // Rule references to simple constants should be substituted during hydration
-    // markup = 1.2, so final_price = base_price * 1.2 = 120 EUR
-    // Should solve: base_price = 100 EUR
+    // markup = 1.2, so final_price = base_price * 1.2 = 120
+    // Should solve: base_price = 100
     assert!(!solutions.is_empty(), "Expected at least one solution");
 }
 
@@ -141,7 +129,7 @@ fn rule_reference_in_expression_stays_opaque() {
 fn rule_reference_with_dependencies_stays_symbolic() {
     let code = r#"
         doc test
-        fact base_price = [money]
+        fact base_price = [number]
         fact markup_factor = [number]
         rule markup = markup_factor * 1.2
         rule final_price = base_price * markup?
@@ -150,13 +138,10 @@ fn rule_reference_with_dependencies_stays_symbolic() {
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
 
-    let target = LiteralValue::Unit(lemma::NumericUnit::Money(
-        Decimal::from(120),
-        lemma::MoneyUnit::Eur,
-    ));
+    let target = LiteralValue::number(120);
 
     let solutions = engine
-        .invert("test", "final_price", Target::value(target), HashMap::new())
+        .invert_strict("test", "final_price", Target::value(target), HashMap::new())
         .expect("invert should succeed");
 
     // markup has a dependency (markup_factor), so it stays symbolic
@@ -164,15 +149,17 @@ fn rule_reference_with_dependencies_stays_symbolic() {
     assert!(!solutions.is_empty(), "Expected at least one solution");
 
     // Both base_price and (transitively) markup_factor should be free variables
+    let base_price_ref = lemma::FactPath::new(vec![], "base_price".to_string());
+    let markup_factor_ref = lemma::FactPath::new(vec![], "markup_factor".to_string());
     assert!(solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "base_price"));
+        .any(|v| v == &base_price_ref));
     assert!(
         solutions
             .iter()
             .flat_map(|r| r.keys())
-            .any(|v| v.reference.join(".") == "markup_factor"),
+            .any(|v| v == &markup_factor_ref),
         "should track transitive dependencies through rule references"
     );
 }

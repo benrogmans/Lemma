@@ -26,7 +26,7 @@ fn invert_exp_simple() {
 
     // y = e^2 ≈ 7.38905609893065
     let solutions = engine
-        .invert(
+        .invert_strict(
             "math",
             "y",
             Target::value(LiteralValue::Number(dec("7.38905609893065"))),
@@ -46,10 +46,10 @@ fn invert_power_exponent_unknown() {
     "#;
     let engine = setup_engine(code);
     let solutions = engine
-        .invert(
+        .invert_strict(
             "math",
             "y",
-            Target::value(LiteralValue::Number(Decimal::from(8))),
+            Target::value(LiteralValue::number(8)),
             HashMap::new(),
         )
         .expect("invert OK");
@@ -66,10 +66,10 @@ fn invert_power_base_unknown() {
     "#;
     let engine = setup_engine(code);
     let solutions = engine
-        .invert(
+        .invert_strict(
             "math",
             "y",
-            Target::value(LiteralValue::Number(Decimal::from(9))),
+            Target::value(LiteralValue::number(9)),
             HashMap::new(),
         )
         .expect("invert OK");

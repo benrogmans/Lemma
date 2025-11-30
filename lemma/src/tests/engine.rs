@@ -1,5 +1,6 @@
 use crate::engine::Engine;
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 #[test]
@@ -18,12 +19,12 @@ fn test_evaluate_document_all_rules() {
         )
         .unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
     assert_eq!(response.results.len(), 2);
 
     let sum_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "sum")
         .unwrap();
     assert_eq!(
@@ -35,7 +36,7 @@ fn test_evaluate_document_all_rules() {
 
     let product_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "product")
         .unwrap();
     assert_eq!(
@@ -60,10 +61,10 @@ fn test_evaluate_empty_facts() {
         )
         .unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
     assert_eq!(response.results.len(), 1);
     assert_eq!(
-        response.results[0].result,
+        response.results.values().next().unwrap().result,
         crate::OperationResult::Value(crate::LiteralValue::Number(
             Decimal::from_str("200").unwrap()
         ))
@@ -84,9 +85,9 @@ fn test_evaluate_boolean_rule() {
         )
         .unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
     assert_eq!(
-        response.results[0].result,
+        response.results.values().next().unwrap().result,
         crate::OperationResult::Value(crate::LiteralValue::Boolean(crate::BooleanValue::True))
     );
 }
@@ -106,9 +107,9 @@ fn test_evaluate_with_unless_clause() {
         )
         .unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
     assert_eq!(
-        response.results[0].result,
+        response.results.values().next().unwrap().result,
         crate::OperationResult::Value(crate::LiteralValue::Number(
             Decimal::from_str("10").unwrap()
         ))
@@ -118,7 +119,7 @@ fn test_evaluate_with_unless_clause() {
 #[test]
 fn test_document_not_found() {
     let engine = Engine::new();
-    let result = engine.evaluate("nonexistent", None, None);
+    let result = engine.evaluate("nonexistent", vec![], HashMap::new());
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("not found"));
 }
@@ -148,7 +149,7 @@ fn test_multiple_documents() {
         )
         .unwrap();
 
-    let response1 = engine.evaluate("doc1", None, None).unwrap();
+    let response1 = engine.evaluate("doc1", vec![], HashMap::new()).unwrap();
     assert_eq!(
         response1.results[0].result,
         crate::OperationResult::Value(crate::LiteralValue::Number(
@@ -156,7 +157,7 @@ fn test_multiple_documents() {
         ))
     );
 
-    let response2 = engine.evaluate("doc2", None, None).unwrap();
+    let response2 = engine.evaluate("doc2", vec![], HashMap::new()).unwrap();
     assert_eq!(
         response2.results[0].result,
         crate::OperationResult::Value(crate::LiteralValue::Number(
@@ -180,10 +181,31 @@ fn test_runtime_error_mapping() {
         )
         .unwrap();
 
-    let result = engine.evaluate("test", None, None);
-    // Division by zero returns an error from the evaluator
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Division by zero"));
+    let result = engine.evaluate("test", vec![], HashMap::new());
+    // Division by zero returns a Veto (not an error) in the new evaluation design
+    assert!(result.is_ok(), "Evaluation should succeed");
+    let response = result.unwrap();
+    let division_result = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "division");
+    assert!(
+        division_result.is_some(),
+        "Should have division rule result"
+    );
+    match &division_result.unwrap().result {
+        crate::OperationResult::Veto(message) => {
+            assert!(
+                message
+                    .as_ref()
+                    .map(|m| m.contains("Division by zero"))
+                    .unwrap_or(false),
+                "Veto message should mention division by zero: {:?}",
+                message
+            );
+        }
+        other => panic!("Expected Veto for division by zero, got {:?}", other),
+    }
 }
 
 #[test]
@@ -203,11 +225,11 @@ fn test_rules_sorted_by_source_order() {
         )
         .unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
     assert_eq!(response.results.len(), 3);
 
     // Check they all have span information for ordering
-    for result in &response.results {
+    for result in response.results.values() {
         assert!(
             result.rule.source_location.is_some(),
             "Rule {} missing source_location",
@@ -218,7 +240,7 @@ fn test_rules_sorted_by_source_order() {
     // Verify source positions increase (z < y < x)
     let z_pos = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "z")
         .unwrap()
         .rule
@@ -229,7 +251,7 @@ fn test_rules_sorted_by_source_order() {
         .start;
     let y_pos = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "y")
         .unwrap()
         .rule
@@ -240,7 +262,7 @@ fn test_rules_sorted_by_source_order() {
         .start;
     let x_pos = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "x")
         .unwrap()
         .rule
@@ -252,4 +274,39 @@ fn test_rules_sorted_by_source_order() {
 
     assert!(z_pos < y_pos);
     assert!(y_pos < x_pos);
+}
+
+#[test]
+fn test_rule_filtering_evaluates_dependencies() {
+    let mut engine = Engine::new();
+    engine
+        .add_lemma_code(
+            r#"
+        doc test
+        fact base = 100
+        rule subtotal = base * 2
+        rule tax = subtotal? * 10%
+        rule total = subtotal? + tax?
+    "#,
+            "test.lemma",
+        )
+        .unwrap();
+
+    // Request only 'total', but it depends on 'subtotal' and 'tax'
+    let response = engine
+        .evaluate("test", vec!["total".to_string()], HashMap::new())
+        .unwrap();
+
+    // Only 'total' should be in results
+    assert_eq!(response.results.len(), 1);
+    assert_eq!(response.results.keys().next().unwrap(), "total");
+
+    // But the value should be correct (dependencies were computed)
+    let total = response.results.values().next().unwrap();
+    assert_eq!(
+        total.result,
+        crate::OperationResult::Value(crate::LiteralValue::Number(
+            Decimal::from_str("220").unwrap()
+        ))
+    );
 }

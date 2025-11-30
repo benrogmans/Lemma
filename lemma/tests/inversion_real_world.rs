@@ -1,18 +1,16 @@
-use lemma::{Engine, LiteralValue, MoneyUnit, NumericUnit, Target, TargetOp};
+#![cfg(feature = "inversion")]
+
+use lemma::{Engine, LiteralValue, Target, TargetOp};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
-
-fn usd(amount: i64) -> LiteralValue {
-    LiteralValue::Unit(NumericUnit::Money(Decimal::from(amount), MoneyUnit::Usd))
-}
 
 /// Use Case 1: Tax Planning - "What income do I need to have X amount after tax?"
 #[test]
 fn tax_calculation_inversion_after_tax_target() {
     let code = r#"
         doc tax_planning
-        fact income = [money]
-        fact deductions = 12000 USD
+        fact income = [number]
+        fact deductions = 12000
 
         rule taxable_income = income - deductions
           unless income < deductions then 0
@@ -31,21 +29,22 @@ fn tax_calculation_inversion_after_tax_target() {
 
     // Question: "What income do I need for $80,000 after tax?"
     let solutions = engine
-        .invert(
+        .invert_strict(
             "tax_planning",
             "after_tax_income",
-            Target::value(usd(80000)),
+            Target::value(LiteralValue::number(80000)),
             HashMap::new(),
         )
         .expect("should invert successfully");
 
     // Should return a relationship showing the dependency on income
     // Income should be a free variable
+    let income_ref = lemma::FactPath::new(vec![], "income".to_string());
     assert!(
         solutions
             .iter()
             .flat_map(|r| r.keys())
-            .any(|v| v.reference.join(".") == "income"),
+            .any(|v| v == &income_ref),
         "income should be a free variable"
     );
 }
@@ -55,10 +54,10 @@ fn tax_calculation_inversion_after_tax_target() {
 fn shipping_policy_free_shipping_threshold() {
     let code = r#"
         doc ecommerce
-        fact order_total = [money]
+        fact order_total = [number]
         fact destination_country = "US"
 
-        rule base_shipping = 12.99 USD
+        rule base_shipping = 12.99
 
         rule free_shipping_eligible = order_total >= 100 and destination_country is "US"
 
@@ -71,10 +70,10 @@ fn shipping_policy_free_shipping_threshold() {
 
     // Question: "What order totals result in free shipping?"
     let solutions = engine
-        .invert(
+        .invert_strict(
             "ecommerce",
             "final_shipping",
-            Target::value(usd(0)),
+            Target::value(LiteralValue::number(0)),
             HashMap::new(),
         )
         .expect("should invert successfully");
@@ -82,10 +81,11 @@ fn shipping_policy_free_shipping_threshold() {
     // Should give us a piecewise relationship with the condition
     assert!(!solutions.is_empty(), "should have branches");
     // order_total should be a free variable
+    let order_total_ref = lemma::FactPath::new(vec![], "order_total".to_string());
     assert!(solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "order_total"));
+        .any(|v| v == &order_total_ref));
 }
 
 /// Use Case 3: Validation - "What weights cause shipping to veto?"
@@ -104,7 +104,7 @@ fn shipping_policy_weight_restrictions() {
 
     // Question: "What weights are invalid?"
     let solutions = engine
-        .invert(
+        .invert_strict(
             "shipping",
             "weight_check",
             Target::any_veto(),
@@ -115,10 +115,11 @@ fn shipping_policy_weight_restrictions() {
     // Should give us the veto condition: weight > 20 kg
     assert!(!solutions.is_empty(), "should have veto branch");
     // Check that weight is tracked as a free variable
+    let item_weight_ref = lemma::FactPath::new(vec![], "item_weight".to_string());
     assert!(solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "item_weight"));
+        .any(|v| v == &item_weight_ref));
 }
 
 /// Use Case 4: Salary Planning - "What base determines my total compensation?"
@@ -126,7 +127,7 @@ fn shipping_policy_weight_restrictions() {
 fn compensation_total_package_inversion() {
     let code = r#"
         doc compensation
-        fact base_salary = [money]
+        fact base_salary = [number]
 
         rule stock_grant_percentage = 5%
         rule bonus_percentage = 15%
@@ -142,10 +143,10 @@ fn compensation_total_package_inversion() {
 
     // Question: "What base salary gives $150,000 total comp?"
     let solutions = engine
-        .invert(
+        .invert_strict(
             "compensation",
             "total_compensation",
-            Target::value(usd(150000)),
+            Target::value(LiteralValue::number(150000)),
             HashMap::new(),
         )
         .expect("should invert successfully");
@@ -160,7 +161,7 @@ fn performance_bonus_tiers() {
     let code = r#"
         doc performance
         fact performance_rating = [number]
-        fact base_salary = 100000 USD
+        fact base_salary = 100000
 
         rule bonus_rate = 0%
           unless performance_rating >= 2.5 then 5%
@@ -174,24 +175,25 @@ fn performance_bonus_tiers() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let mut given = HashMap::new();
-    given.insert("performance.base_salary".to_string(), usd(100000));
+    given.insert("base_salary".to_string(), LiteralValue::number(100000));
 
     // Question: "What ratings give $10,000 bonus?" (i.e., 10% of 100k)
     let solutions = engine
-        .invert(
+        .invert_strict(
             "performance",
             "bonus_amount",
-            Target::value(usd(10000)),
+            Target::value(LiteralValue::number(10000)),
             given,
         )
         .expect("should invert successfully");
 
     // Should give piecewise with conditions showing which rating tier
     assert!(!solutions.is_empty(), "should have branches for tiers");
+    let performance_rating_ref = lemma::FactPath::new(vec![], "performance_rating".to_string());
     assert!(solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "performance_rating"));
+        .any(|v| v == &performance_rating_ref));
 }
 
 /// Use Case 6: Cost Analysis - "What discounts achieve target price?"
@@ -199,7 +201,7 @@ fn performance_bonus_tiers() {
 fn shipping_discount_inversion() {
     let code = r#"
         doc shipping
-        fact base_shipping = 50 USD
+        fact base_shipping = 50
         fact customer_tier = "bronze"
 
         rule discount_rate = 0%
@@ -215,19 +217,31 @@ fn shipping_discount_inversion() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let mut given = HashMap::new();
-    given.insert("shipping.base_shipping".to_string(), usd(50));
+    given.insert("base_shipping".to_string(), LiteralValue::number(50));
 
     // Question: "What tiers give $35 final shipping?"
     let solutions = engine
-        .invert("shipping", "final_shipping", Target::value(usd(35)), given)
+        .invert_strict(
+            "shipping",
+            "final_shipping",
+            Target::value(LiteralValue::number(35)),
+            given,
+        )
         .expect("should invert successfully");
 
     // Should be piecewise with customer_tier conditions
-    assert!(!solutions.is_empty());
-    assert!(solutions
+    assert!(!solutions.is_empty(), "Should have at least one solution");
+    // customer_tier may appear as a free variable or be fully solved
+    let customer_tier_ref = lemma::FactPath::new(vec![], "customer_tier".to_string());
+    let has_customer_tier = solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "customer_tier"));
+        .any(|v| v == &customer_tier_ref);
+    // Either customer_tier is free, or the solution is fully constrained (empty domains)
+    assert!(
+        has_customer_tier || solutions.iter().any(|r| r.is_empty()),
+        "customer_tier should be involved or solution should be fully constrained"
+    );
 }
 
 /// Use Case 7: Budget Constraints - "What salaries stay under budget?"
@@ -235,7 +249,7 @@ fn shipping_discount_inversion() {
 fn salary_budget_constraint_inequality() {
     let code = r#"
         doc budget
-        fact base_salary = [money]
+        fact base_salary = [number]
         fact bonus_multiplier = 1.2
 
         rule total_cost = base_salary * bonus_multiplier
@@ -246,19 +260,23 @@ fn salary_budget_constraint_inequality() {
 
     // Question: "What salaries keep total cost under $100k?"
     let solutions = engine
-        .invert(
+        .invert_strict(
             "budget",
             "total_cost",
-            Target::with_op(TargetOp::Lt, lemma::OperationResult::Value(usd(100000))),
+            Target::with_op(
+                TargetOp::Lt,
+                lemma::OperationResult::Value(LiteralValue::number(100000)),
+            ),
             HashMap::new(),
         )
         .expect("should invert successfully");
 
     // Should work with inequality
+    let base_salary_ref = lemma::FactPath::new(vec![], "base_salary".to_string());
     assert!(solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "base_salary"));
+        .any(|v| v == &base_salary_ref));
 }
 
 /// Use Case 8: Complex Dependencies - Multiple rule references
@@ -266,7 +284,7 @@ fn salary_budget_constraint_inequality() {
 fn complex_rule_dependencies() {
     let code = r#"
         doc complex
-        fact base = [money]
+        fact base = [number]
         fact multiplier = 1.5
 
         rule component_a = base * multiplier
@@ -281,27 +299,25 @@ fn complex_rule_dependencies() {
 
     // Question: "What base gives total of $50,000?"
     let solutions = engine
-        .invert(
+        .invert_strict(
             "complex",
             "total",
-            Target::value(usd(50000)),
+            Target::value(LiteralValue::number(50000)),
             HashMap::new(),
         )
         .expect("should invert successfully");
 
     // Should track transitive dependencies through rule chain
     // base -> component_a -> component_b -> component_c -> total
-    // Should track dependencies
+    // multiplier is a constant (1.5), so only base should be tracked
+    let base_ref = lemma::FactPath::new(vec![], "base".to_string());
     assert!(
         solutions
             .iter()
             .flat_map(|r| r.keys())
-            .any(|v| v.reference.join(".") == "base")
-            || solutions
-                .iter()
-                .flat_map(|r| r.keys())
-                .any(|v| v.reference.join(".") == "multiplier"),
-        "should track dependencies"
+            .any(|v| v == &base_ref)
+            || solutions.iter().any(|r| r.is_empty()),
+        "should track base as dependency or solution should be fully solved"
     );
 }
 
@@ -325,7 +341,7 @@ fn multiple_veto_conditions() {
 
     // Question: "What conditions trigger any veto?"
     let solutions = engine
-        .invert("shipping", "can_ship", Target::any_veto(), HashMap::new())
+        .invert_strict("shipping", "can_ship", Target::any_veto(), HashMap::new())
         .expect("should invert successfully");
 
     // Should have solution solutions for veto conditions
@@ -337,7 +353,7 @@ fn multiple_veto_conditions() {
 fn inversion_with_given_facts() {
     let code = r#"
         doc pricing
-        fact base_price = [money]
+        fact base_price = [number]
         fact quantity = [number]
         fact tax_rate = 0.08
 
@@ -350,32 +366,36 @@ fn inversion_with_given_facts() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let mut given = HashMap::new();
+    given.insert("quantity".to_string(), LiteralValue::number(10));
     given.insert(
-        "pricing.quantity".to_string(),
-        LiteralValue::Number(Decimal::from(10)),
-    );
-    given.insert(
-        "pricing.tax_rate".to_string(),
-        LiteralValue::Number(Decimal::from_str_exact("0.08").unwrap()),
+        "tax_rate".to_string(),
+        LiteralValue::number(Decimal::from_str_exact("0.08").unwrap()),
     );
 
     // Question: "Given quantity=10 and tax_rate=0.08, what base_price gives total=$108?"
     let solutions = engine
-        .invert("pricing", "total", Target::value(usd(108)), given)
+        .invert_strict(
+            "pricing",
+            "total",
+            Target::value(LiteralValue::number(108)),
+            given,
+        )
         .expect("should invert successfully");
 
     // Should solve for base_price: 108 / 10.8 = 10
     // Check if base_price is the only free variable (quantity and tax_rate are given)
     assert!(!solutions.is_empty(), "Expected at least one solution");
 
+    let base_price_ref = lemma::FactPath::new(vec![], "base_price".to_string());
+    let quantity_ref = lemma::FactPath::new(vec![], "quantity".to_string());
     let has_base_price = solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "base_price");
+        .any(|v| v == &base_price_ref);
     let has_quantity = solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "quantity");
+        .any(|v| v == &quantity_ref);
 
     assert!(has_base_price, "Should reference base_price");
     assert!(

@@ -34,7 +34,7 @@ let mut engine = Engine::new();
 
 engine.add_lemma_code(r#"
     doc compensation
-    fact base_salary = 60000 USD
+    fact base_salary = 60000
     fact bonus_rate = 10%
     rule bonus = base_salary * bonus_rate
     rule total = base_salary + bonus?
@@ -49,10 +49,11 @@ for result in response.results {
 }
 ```
 
-### Overriding facts at runtime
+### Providing values at runtime
 
 ```rust
-use lemma::{Engine, parse_facts};
+use lemma::Engine;
+use std::collections::HashMap;
 
 let mut engine = Engine::new();
 
@@ -62,41 +63,20 @@ engine.add_lemma_code(r#"
     fact weight = 5 kilogram
     fact destination = "domestic"
 
-    rule rate = 10 USD
-      unless weight > 10 kilogram           then 15 USD
-      unless destination is "international" then 25 USD
+    rule rate = 10
+      unless weight > 10 kilogram           then 15
+      unless destination is "international" then 25
 
     rule valid = weight <= 30 kilogram
       unless veto "Package too heavy for shipping"
 
 "#, "shipping.lemma")?;
 
-let overrides = parse_facts(&["weight=12 kilogram"])?;
-let response = engine.evaluate("shipping", None, Some(overrides))?;
-```
+let mut values = HashMap::new();
+values.insert("weight".to_string(), "12 kilogram".to_string());
+values.insert("destination".to_string(), "international".to_string());
 
-### Working with JSON
-
-```rust
-use lemma::{Engine, serializers};
-
-let mut engine = Engine::new();
-engine.add_lemma_code(r#"
-    doc pricing
-
-    fact base_price = 100 USD
-    fact discount = 15%
-
-    rule final_price = base_price - discount
-
-"#, "pricing.lemma")?;
-
-let json = br#"{"base_price": "150 USD", "discount": 0.2}"#;
-let doc = engine.get_document("pricing").unwrap();
-let facts_raw = serializers::from_json(json, doc, engine.get_all_documents())?;
-let overrides = lemma::parse_facts(&facts_raw.iter().map(|s| s.as_str()).collect::<Vec<_>>())?;
-
-let response = engine.evaluate("pricing", None, Some(overrides))?;
+let response = engine.evaluate("shipping", None, Some(values))?;
 ```
 
 ## Features
@@ -119,7 +99,7 @@ cargo add lemma-engine
 
 ```bash
 cargo install lemma-cli
-lemma run examples/pricing quantity=10
+lemma run pricing quantity=10
 ```
 
 ### HTTP server

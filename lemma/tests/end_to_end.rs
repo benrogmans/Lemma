@@ -1,5 +1,6 @@
 use lemma::*;
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 #[test]
@@ -17,10 +18,10 @@ rule discount = 0
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
     // Query the discount rule
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
     let discount_result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "discount")
         .unwrap();
 
@@ -49,10 +50,10 @@ rule can_drive = age >= 18 and has_license
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "can_drive")
         .unwrap();
 
@@ -78,10 +79,10 @@ rule result = base * multiplier
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "result")
         .unwrap();
 
@@ -111,10 +112,10 @@ rule final_price = 100 - discount?
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("test", None, None).unwrap();
+    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
+        .values()
         .find(|r| r.rule.name == "final_price")
         .unwrap();
 

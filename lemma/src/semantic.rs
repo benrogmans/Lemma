@@ -1,8 +1,11 @@
-use crate::ast::ExpressionId;
-use crate::SourceLocation;
+use crate::error::LemmaError;
+use crate::parsing::ast::ExpressionId;
+use crate::parsing::source::Source;
+use chrono::{Datelike, Timelike};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use std::fmt;
+use std::str::FromStr;
 
 /// A Lemma document containing facts, rules
 #[derive(Debug, Clone, PartialEq)]
@@ -15,23 +18,11 @@ pub struct LemmaDoc {
     pub rules: Vec<LemmaRule>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct LemmaFact {
-    pub fact_type: FactType,
+    pub reference: FactReference,
     pub value: FactValue,
-    pub source_location: Option<SourceLocation>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum FactType {
-    Local(String),
-    Foreign(ForeignFact),
-}
-
-/// A fact that references another document
-#[derive(Debug, Clone, PartialEq)]
-pub struct ForeignFact {
-    pub reference: Vec<String>,
+    pub source_location: Option<Source>,
 }
 
 /// An unless clause that provides an alternative result
@@ -43,7 +34,7 @@ pub struct ForeignFact {
 pub struct UnlessClause {
     pub condition: Expression,
     pub result: Expression,
-    pub source_location: Option<SourceLocation>,
+    pub source_location: Option<Source>,
 }
 
 /// A rule with a single expression and optional unless clauses
@@ -52,25 +43,21 @@ pub struct LemmaRule {
     pub name: String,
     pub expression: Expression,
     pub unless_clauses: Vec<UnlessClause>,
-    pub source_location: Option<SourceLocation>,
+    pub source_location: Option<Source>,
 }
 
 /// An expression that can be evaluated, with source location and unique ID
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Expression {
     pub kind: ExpressionKind,
-    pub source_location: Option<SourceLocation>,
+    pub source_location: Option<Source>,
     pub id: ExpressionId,
 }
 
 impl Expression {
     /// Create a new expression with kind, source location, and ID
     #[must_use]
-    pub fn new(
-        kind: ExpressionKind,
-        source_location: Option<SourceLocation>,
-        id: ExpressionId,
-    ) -> Self {
+    pub fn new(kind: ExpressionKind, source_location: Option<Source>, id: ExpressionId) -> Self {
         Self {
             kind,
             source_location,
@@ -91,6 +78,32 @@ impl Expression {
                 .and_then(|source| loc.extract_text(source))
         })
     }
+
+    /// Collect all FactPath references from this expression tree.
+    pub fn collect_fact_paths(&self, facts: &mut std::collections::HashSet<FactPath>) {
+        match &self.kind {
+            ExpressionKind::FactPath(fp) => {
+                facts.insert(fp.clone());
+            }
+            ExpressionKind::LogicalAnd(left, right)
+            | ExpressionKind::LogicalOr(left, right)
+            | ExpressionKind::Arithmetic(left, _, right)
+            | ExpressionKind::Comparison(left, _, right) => {
+                left.collect_fact_paths(facts);
+                right.collect_fact_paths(facts);
+            }
+            ExpressionKind::UnitConversion(inner, _)
+            | ExpressionKind::LogicalNegation(inner, _)
+            | ExpressionKind::MathematicalComputation(_, inner) => {
+                inner.collect_fact_paths(facts);
+            }
+            ExpressionKind::Literal(_)
+            | ExpressionKind::FactReference(_)
+            | ExpressionKind::RuleReference(_)
+            | ExpressionKind::Veto(_)
+            | ExpressionKind::RulePath(_) => {}
+        }
+    }
 }
 
 /// The kind/type of expression
@@ -103,28 +116,174 @@ pub enum ExpressionKind {
     LogicalOr(Box<Expression>, Box<Expression>),
     Arithmetic(Box<Expression>, ArithmeticComputation, Box<Expression>),
     Comparison(Box<Expression>, ComparisonComputation, Box<Expression>),
-    FactHasAnyValue(FactReference),
     UnitConversion(Box<Expression>, ConversionTarget),
     LogicalNegation(Box<Expression>, NegationType),
     MathematicalComputation(MathematicalComputation, Box<Expression>),
     Veto(VetoExpression),
+    /// Resolved fact path (used after planning, converted from FactReference)
+    FactPath(FactPath),
+    /// Resolved rule path (used after planning, converted from RuleReference)
+    RulePath(RulePath),
 }
 
 /// Reference to a fact
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Fact references use dot notation to traverse documents.
+/// Examples:
+/// - Local fact "age": segments=[], fact="age"
+/// - Cross-document "employee.salary": segments=["employee"], fact="salary"
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct FactReference {
-    pub reference: Vec<String>, // ["file", "size"]
+    pub segments: Vec<String>,
+    pub fact: String,
 }
 
 /// Reference to a rule
 ///
 /// Rule references use a question mark suffix to distinguish them from fact references.
-/// Example: `has_license?` references the `has_license` rule in the current document.
-/// Cross-document example: `employee.is_eligible?` where `employee` is a fact with value `doc some_doc`,
-/// references the `is_eligible` rule from the document referenced by the `employee` fact.
+/// Examples:
+/// - Local rule "has_license?": segments=[], rule="has_license"
+/// - Cross-document "employee.is_eligible?": segments=["employee"], rule="is_eligible"
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct RuleReference {
-    pub reference: Vec<String>, // ["employee", "is_eligible"] or just ["is_eligible"]
+    pub segments: Vec<String>,
+    pub rule: String,
+}
+
+/// A single segment in a path traversal
+///
+/// Used in both FactPath and RulePath to represent document traversal.
+/// Each segment contains a fact name that points to a document.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+pub struct PathSegment {
+    /// Fact name at this segment
+    pub fact: String,
+
+    /// Document name this fact points to
+    pub doc: String,
+}
+
+/// A resolved path to a fact, with document traversal segments
+///
+/// Used after planning to represent fully resolved fact references.
+/// Public because used in ExecutionPlan and evaluation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+pub struct FactPath {
+    /// Path segments: each segment is a fact name that points to a document
+    pub segments: Vec<PathSegment>,
+
+    /// Final fact name
+    pub fact: String,
+}
+
+impl FactPath {
+    /// Returns true if this is a local fact (no document traversal)
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    /// Create a new FactPath from segments and fact name
+    #[must_use]
+    pub fn new(segments: Vec<PathSegment>, fact: String) -> Self {
+        Self { segments, fact }
+    }
+
+    /// Create a local fact path (no document traversal)
+    #[must_use]
+    pub fn local(fact: String) -> Self {
+        Self {
+            segments: Vec::new(),
+            fact,
+        }
+    }
+
+    /// Create a FactPath from a full path of strings
+    ///
+    /// The last element becomes the fact name, all others become segments.
+    /// Segment doc fields are left empty since we only have fact names.
+    /// This is for backward compatibility with tests.
+    #[must_use]
+    pub fn from_path(mut path: Vec<String>) -> Self {
+        if path.is_empty() {
+            return Self {
+                segments: Vec::new(),
+                fact: String::new(),
+            };
+        }
+        let fact = path.pop().unwrap_or_default();
+        let segments = path
+            .into_iter()
+            .map(|fact_name| PathSegment {
+                fact: fact_name,
+                doc: String::new(),
+            })
+            .collect();
+        Self { segments, fact }
+    }
+
+    /// Get all path segments as fact names including the final fact name
+    #[must_use]
+    pub fn full_path(&self) -> Vec<String> {
+        let mut path: Vec<String> = self.segments.iter().map(|s| s.fact.clone()).collect();
+        path.push(self.fact.clone());
+        path
+    }
+}
+
+/// A resolved path to a rule, with document traversal segments
+///
+/// Used after planning to represent fully resolved rule references.
+/// Public because used in ExecutionPlan and evaluation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+pub struct RulePath {
+    /// Path segments: each segment is a fact name that points to a document
+    pub segments: Vec<PathSegment>,
+
+    /// Final rule name
+    pub rule: String,
+}
+
+impl RulePath {
+    /// Returns true if this is a local rule (no document traversal)
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    /// Create a local rule path (no document traversal)
+    #[must_use]
+    pub fn local(rule: String) -> Self {
+        Self {
+            segments: Vec::new(),
+            rule,
+        }
+    }
+}
+
+impl RuleReference {
+    /// Create from a full path (last element becomes rule)
+    pub fn from_path(mut full_path: Vec<String>) -> Self {
+        let rule = full_path.pop().unwrap_or_default();
+        Self {
+            segments: full_path,
+            rule,
+        }
+    }
+
+    /// Returns true if this is a local rule reference (no path segments)
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    /// Get all path segments including the rule name
+    #[must_use]
+    pub fn full_path(&self) -> Vec<String> {
+        let mut path = self.segments.clone();
+        path.push(self.rule.clone());
+        path
+    }
 }
 
 /// Arithmetic computations
@@ -149,6 +308,19 @@ impl ArithmeticComputation {
             ArithmeticComputation::Divide => "division",
             ArithmeticComputation::Modulo => "modulo",
             ArithmeticComputation::Power => "exponentiation",
+        }
+    }
+
+    /// Returns the operator symbol
+    #[must_use]
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            ArithmeticComputation::Add => "+",
+            ArithmeticComputation::Subtract => "-",
+            ArithmeticComputation::Multiply => "*",
+            ArithmeticComputation::Divide => "/",
+            ArithmeticComputation::Modulo => "%",
+            ArithmeticComputation::Power => "^",
         }
     }
 }
@@ -181,6 +353,21 @@ impl ComparisonComputation {
             ComparisonComputation::IsNot => "is not",
         }
     }
+
+    /// Returns the operator symbol
+    #[must_use]
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            ComparisonComputation::GreaterThan => ">",
+            ComparisonComputation::LessThan => "<",
+            ComparisonComputation::GreaterThanOrEqual => ">=",
+            ComparisonComputation::LessThanOrEqual => "<=",
+            ComparisonComputation::Equal => "==",
+            ComparisonComputation::NotEqual => "!=",
+            ComparisonComputation::Is => "is",
+            ComparisonComputation::IsNot => "is not",
+        }
+    }
 }
 
 /// The target unit for unit conversion expressions
@@ -197,16 +384,13 @@ pub enum ConversionTarget {
     Energy(EnergyUnit),
     Frequency(FrequencyUnit),
     Data(DataUnit),
-    Money(MoneyUnit),
     Percentage,
 }
 
 /// Types of logical negation
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum NegationType {
-    Not,     // "not expression"
-    HaveNot, // "have not expression"
-    NotHave, // "not have expression"
+    Not, // "not expression"
 }
 
 /// Logical computations
@@ -247,20 +431,20 @@ pub enum MathematicalComputation {
     Round, // Round to nearest
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum FactValue {
     Literal(LiteralValue),
     DocumentReference(String),
     TypeAnnotation(TypeAnnotation),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum TypeAnnotation {
     LemmaType(LemmaType),
 }
 
 /// A type for type annotations (both literal types and document types)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum LemmaType {
     Text,
     Number,
@@ -279,11 +463,224 @@ pub enum LemmaType {
     Pressure,
     Frequency,
     Data,
-    Money,
+}
+
+impl LemmaType {
+    pub fn is_numeric(&self) -> bool {
+        matches!(
+            self,
+            LemmaType::Number
+                | LemmaType::Percentage
+                | LemmaType::Mass
+                | LemmaType::Length
+                | LemmaType::Volume
+                | LemmaType::Duration
+                | LemmaType::Temperature
+                | LemmaType::Power
+                | LemmaType::Energy
+                | LemmaType::Force
+                | LemmaType::Pressure
+                | LemmaType::Frequency
+                | LemmaType::Data
+        )
+    }
+
+    pub fn is_temporal(&self) -> bool {
+        matches!(self, LemmaType::Date)
+    }
+
+    pub fn is_unit(&self) -> bool {
+        matches!(
+            self,
+            LemmaType::Mass
+                | LemmaType::Length
+                | LemmaType::Volume
+                | LemmaType::Duration
+                | LemmaType::Temperature
+                | LemmaType::Power
+                | LemmaType::Energy
+                | LemmaType::Force
+                | LemmaType::Pressure
+                | LemmaType::Frequency
+                | LemmaType::Data
+        )
+    }
+
+    /// Parse a raw string value into a LiteralValue according to this type.
+    /// This is the main entry point for type-aware parsing from user input.
+    pub fn parse_value(&self, raw: &str) -> Result<LiteralValue, LemmaError> {
+        match self {
+            LemmaType::Text => Self::parse_text(raw),
+            LemmaType::Number => Self::parse_number(raw),
+            LemmaType::Boolean => Self::parse_boolean(raw),
+            LemmaType::Percentage => Self::parse_percentage(raw),
+            LemmaType::Date => Self::parse_date(raw),
+            LemmaType::Regex => Self::parse_regex(raw),
+            LemmaType::Mass => Self::parse_unit_value(raw, LemmaType::Mass),
+            LemmaType::Length => Self::parse_unit_value(raw, LemmaType::Length),
+            LemmaType::Volume => Self::parse_unit_value(raw, LemmaType::Volume),
+            LemmaType::Duration => Self::parse_unit_value(raw, LemmaType::Duration),
+            LemmaType::Temperature => Self::parse_unit_value(raw, LemmaType::Temperature),
+            LemmaType::Power => Self::parse_unit_value(raw, LemmaType::Power),
+            LemmaType::Energy => Self::parse_unit_value(raw, LemmaType::Energy),
+            LemmaType::Force => Self::parse_unit_value(raw, LemmaType::Force),
+            LemmaType::Pressure => Self::parse_unit_value(raw, LemmaType::Pressure),
+            LemmaType::Frequency => Self::parse_unit_value(raw, LemmaType::Frequency),
+            LemmaType::Data => Self::parse_unit_value(raw, LemmaType::Data),
+        }
+    }
+
+    fn parse_text(raw: &str) -> Result<LiteralValue, LemmaError> {
+        Ok(LiteralValue::Text(raw.to_string()))
+    }
+
+    fn parse_number(raw: &str) -> Result<LiteralValue, LemmaError> {
+        let clean_number = raw.replace(['_', ','], "");
+        let decimal = Decimal::from_str(&clean_number).map_err(|_| {
+            LemmaError::Engine(format!(
+                "Invalid number: '{}'. Expected a valid decimal number (e.g., 42, 3.14, 1_000_000)",
+                raw
+            ))
+        })?;
+        Ok(LiteralValue::Number(decimal))
+    }
+
+    fn parse_boolean(raw: &str) -> Result<LiteralValue, LemmaError> {
+        let boolean_value: BooleanValue = raw.parse().map_err(|_| {
+            LemmaError::Engine(format!(
+                "Invalid boolean: '{}'. Expected one of: true, false, yes, no, accept, reject",
+                raw
+            ))
+        })?;
+        Ok(LiteralValue::Boolean(boolean_value))
+    }
+
+    fn parse_percentage(raw: &str) -> Result<LiteralValue, LemmaError> {
+        let trimmed = raw.trim();
+        let number_str = if trimmed.ends_with('%') {
+            trimmed.strip_suffix('%').unwrap_or(trimmed)
+        } else if trimmed.to_lowercase().ends_with("percent") {
+            trimmed.strip_suffix("percent").unwrap_or(trimmed).trim()
+        } else {
+            trimmed
+        };
+
+        let clean_number = number_str.replace(['_', ','], "");
+        let decimal = Decimal::from_str(&clean_number).map_err(|_| {
+            LemmaError::Engine(format!(
+                "Invalid percentage: '{}'. Expected a number optionally followed by % (e.g., 50, 50%, 50 percent)",
+                raw
+            ))
+        })?;
+        Ok(LiteralValue::Percentage(decimal))
+    }
+
+    fn parse_date(raw: &str) -> Result<LiteralValue, LemmaError> {
+        let datetime_str = raw.trim();
+
+        if let Ok(dt) = datetime_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
+            let offset = dt.offset().local_minus_utc();
+            return Ok(LiteralValue::Date(DateTimeValue {
+                year: dt.year(),
+                month: dt.month(),
+                day: dt.day(),
+                hour: dt.hour(),
+                minute: dt.minute(),
+                second: dt.second(),
+                timezone: Some(TimezoneValue {
+                    offset_hours: (offset / 3600) as i8,
+                    offset_minutes: ((offset % 3600) / 60) as u8,
+                }),
+            }));
+        }
+
+        if let Ok(dt) = datetime_str.parse::<chrono::NaiveDateTime>() {
+            return Ok(LiteralValue::Date(DateTimeValue {
+                year: dt.year(),
+                month: dt.month(),
+                day: dt.day(),
+                hour: dt.hour(),
+                minute: dt.minute(),
+                second: dt.second(),
+                timezone: None,
+            }));
+        }
+
+        if let Ok(d) = datetime_str.parse::<chrono::NaiveDate>() {
+            return Ok(LiteralValue::Date(DateTimeValue {
+                year: d.year(),
+                month: d.month(),
+                day: d.day(),
+                hour: 0,
+                minute: 0,
+                second: 0,
+                timezone: None,
+            }));
+        }
+
+        Err(LemmaError::Engine(format!(
+            "Invalid date/time format: '{}'. Expected one of: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, or YYYY-MM-DDTHH:MM:SSZ",
+            raw
+        )))
+    }
+
+    fn parse_regex(raw: &str) -> Result<LiteralValue, LemmaError> {
+        let trimmed = raw.trim();
+        let pattern = if trimmed.starts_with('/') && trimmed.ends_with('/') && trimmed.len() >= 2 {
+            &trimmed[1..trimmed.len() - 1]
+        } else {
+            trimmed
+        };
+
+        regex::Regex::new(pattern)
+            .map_err(|e| LemmaError::Engine(format!("Invalid regex pattern '{}': {}", raw, e)))?;
+
+        if trimmed.starts_with('/') && trimmed.ends_with('/') {
+            Ok(LiteralValue::Regex(trimmed.to_string()))
+        } else {
+            Ok(LiteralValue::Regex(format!("/{}/", pattern)))
+        }
+    }
+
+    fn parse_unit_value(raw: &str, expected_type: LemmaType) -> Result<LiteralValue, LemmaError> {
+        let trimmed = raw.trim();
+        let parts: Vec<&str> = trimmed.splitn(2, |c: char| c.is_whitespace()).collect();
+
+        if parts.len() != 2 {
+            return Err(LemmaError::Engine(format!(
+                "Invalid {} value: '{}'. Expected format: '<number> <unit>' (e.g., '100 kilogram')",
+                expected_type, raw
+            )));
+        }
+
+        let number_str = parts[0];
+        let unit_str = parts[1].trim();
+
+        let clean_number = number_str.replace(['_', ','], "");
+        let value = Decimal::from_str(&clean_number).map_err(|_| {
+            LemmaError::Engine(format!(
+                "Invalid number in {} value: '{}'. Expected a valid decimal number",
+                expected_type, number_str
+            ))
+        })?;
+
+        let literal = crate::parsing::units::resolve_unit(value, unit_str)?;
+
+        let actual_type = literal.to_type();
+        if actual_type != expected_type {
+            return Err(LemmaError::Engine(format!(
+                "Unit type mismatch: '{}' is a {} unit, but expected {}",
+                unit_str, actual_type, expected_type
+            )));
+        }
+
+        Ok(literal)
+    }
 }
 
 /// Boolean value with original input preserved
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, strum_macros::EnumString, strum_macros::Display)]
+#[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum BooleanValue {
     True,
     False,
@@ -317,19 +714,6 @@ impl From<bool> for BooleanValue {
             BooleanValue::True
         } else {
             BooleanValue::False
-        }
-    }
-}
-
-impl fmt::Display for BooleanValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BooleanValue::True => write!(f, "true"),
-            BooleanValue::False => write!(f, "false"),
-            BooleanValue::Yes => write!(f, "yes"),
-            BooleanValue::No => write!(f, "no"),
-            BooleanValue::Accept => write!(f, "accept"),
-            BooleanValue::Reject => write!(f, "reject"),
         }
     }
 }
@@ -372,6 +756,11 @@ pub enum LiteralValue {
 }
 
 impl LiteralValue {
+    /// Create a Number literal value from any type that can convert to Decimal
+    pub fn number<T: Into<Decimal>>(value: T) -> Self {
+        LiteralValue::Number(value.into())
+    }
+
     /// Get the display value as a string (uses the Display implementation)
     #[must_use]
     pub fn display_value(&self) -> String {
@@ -416,7 +805,6 @@ impl LiteralValue {
                 NumericUnit::Energy(_, _) => LemmaType::Energy,
                 NumericUnit::Frequency(_, _) => LemmaType::Frequency,
                 NumericUnit::Data(_, _) => LemmaType::Data,
-                NumericUnit::Money(_, _) => LemmaType::Money,
             },
         }
     }
@@ -477,11 +865,11 @@ impl_unit_serialize!(
     PressureUnit,
     EnergyUnit,
     FrequencyUnit,
-    DataUnit,
-    MoneyUnit
+    DataUnit
 );
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum MassUnit {
     Kilogram,
     Gram,
@@ -491,10 +879,12 @@ pub enum MassUnit {
     Ounce,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum LengthUnit {
     Kilometer,
     Mile,
+    #[strum(serialize = "nautical_mile")]
     NauticalMile,
     Meter,
     Decimeter,
@@ -505,9 +895,12 @@ pub enum LengthUnit {
     Inch,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum VolumeUnit {
+    #[strum(serialize = "cubic_meter")]
     CubicMeter,
+    #[strum(serialize = "cubic_centimeter")]
     CubicCentimeter,
     Liter,
     Deciliter,
@@ -516,10 +909,12 @@ pub enum VolumeUnit {
     Gallon,
     Quart,
     Pint,
+    #[strum(serialize = "fluid_ounce")]
     FluidOunce,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum DurationUnit {
     Year,
     Month,
@@ -532,14 +927,16 @@ pub enum DurationUnit {
     Microsecond,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum TemperatureUnit {
     Celsius,
     Fahrenheit,
     Kelvin,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum PowerUnit {
     Megawatt,
     Kilowatt,
@@ -548,14 +945,16 @@ pub enum PowerUnit {
     Horsepower,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum ForceUnit {
     Newton,
     Kilonewton,
     Lbf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum PressureUnit {
     Megapascal,
     Kilopascal,
@@ -567,7 +966,8 @@ pub enum PressureUnit {
     Mmhg,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum EnergyUnit {
     Megajoule,
     Kilojoule,
@@ -579,7 +979,8 @@ pub enum EnergyUnit {
     Btu,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum FrequencyUnit {
     Hertz,
     Kilohertz,
@@ -587,7 +988,8 @@ pub enum FrequencyUnit {
     Gigahertz,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub enum DataUnit {
     Petabyte,
     Terabyte,
@@ -601,20 +1003,7 @@ pub enum DataUnit {
     Kibibyte,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MoneyUnit {
-    Eur,
-    Usd,
-    Gbp,
-    Jpy,
-    Cny,
-    Chf,
-    Cad,
-    Aud,
-    Inr,
-}
-
-/// A unified type for all numeric units (physical quantities and money)
+/// A unified type for all numeric units (physical quantities)
 ///
 /// This provides consistent behavior for all unit types:
 /// - Comparisons always compare numeric values (ignoring units)
@@ -633,7 +1022,6 @@ pub enum NumericUnit {
     Energy(Decimal, EnergyUnit),
     Frequency(Decimal, FrequencyUnit),
     Data(Decimal, DataUnit),
-    Money(Decimal, MoneyUnit),
 }
 
 impl NumericUnit {
@@ -651,8 +1039,7 @@ impl NumericUnit {
             | NumericUnit::Pressure(v, _)
             | NumericUnit::Energy(v, _)
             | NumericUnit::Frequency(v, _)
-            | NumericUnit::Data(v, _)
-            | NumericUnit::Money(v, _) => *v,
+            | NumericUnit::Data(v, _) => *v,
         }
     }
 
@@ -677,22 +1064,7 @@ impl NumericUnit {
             NumericUnit::Energy(_, u) => NumericUnit::Energy(new_value, u.clone()),
             NumericUnit::Frequency(_, u) => NumericUnit::Frequency(new_value, u.clone()),
             NumericUnit::Data(_, u) => NumericUnit::Data(new_value, u.clone()),
-            NumericUnit::Money(_, u) => NumericUnit::Money(new_value, u.clone()),
         }
-    }
-
-    /// Validate that two Money units have the same currency
-    /// Returns Ok for non-Money units or matching currencies
-    pub fn validate_same_currency(&self, other: &NumericUnit) -> Result<(), crate::LemmaError> {
-        if let (NumericUnit::Money(_, l_curr), NumericUnit::Money(_, r_curr)) = (self, other) {
-            if l_curr != r_curr {
-                return Err(crate::LemmaError::Engine(format!(
-                    "Cannot operate on different currencies: {:?} and {:?}",
-                    l_curr, r_curr
-                )));
-            }
-        }
-        Ok(())
     }
 }
 
@@ -721,54 +1093,6 @@ fn format_decimal_with_unit(value: &Decimal, unit: &impl fmt::Display) -> String
     }
 }
 
-fn format_money_with_unit(value: &Decimal, unit: &impl fmt::Display) -> String {
-    let normalized = value.normalize();
-    if normalized.fract().is_zero() {
-        let int_part = normalized.trunc().to_string();
-        let formatted = int_part
-            .chars()
-            .rev()
-            .enumerate()
-            .flat_map(|(i, c)| {
-                if i > 0 && i % 3 == 0 && c != '-' {
-                    vec![',', c]
-                } else {
-                    vec![c]
-                }
-            })
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect::<String>();
-        format!("{} {}", formatted, unit)
-    } else {
-        let rounded = normalized.round_dp(2);
-        let int_part = rounded.trunc();
-        let fract_part = (rounded.fract() * Decimal::from(100))
-            .trunc()
-            .to_string()
-            .parse::<u64>()
-            .unwrap_or(0);
-        let formatted_int = int_part
-            .to_string()
-            .chars()
-            .rev()
-            .enumerate()
-            .flat_map(|(i, c)| {
-                if i > 0 && i % 3 == 0 && c != '-' {
-                    vec![',', c]
-                } else {
-                    vec![c]
-                }
-            })
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect::<String>();
-        format!("{}.{:02} {}", formatted_int, fract_part, unit)
-    }
-}
-
 impl fmt::Display for NumericUnit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -783,43 +1107,76 @@ impl fmt::Display for NumericUnit {
             NumericUnit::Energy(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
             NumericUnit::Frequency(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
             NumericUnit::Data(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
-            NumericUnit::Money(v, u) => write!(f, "{}", format_money_with_unit(v, u)),
         }
     }
 }
 
-impl LemmaRule {
+impl FactReference {
+    /// Create a new FactReference from segments and fact name
     #[must_use]
-    pub fn new(name: String, expression: Expression) -> Self {
+    pub fn new(segments: Vec<String>, fact: String) -> Self {
+        Self { segments, fact }
+    }
+
+    /// Create a FactReference from a single fact name (local reference)
+    #[must_use]
+    pub fn local(fact: String) -> Self {
         Self {
-            name,
-            expression,
-            unless_clauses: Vec::new(),
-            source_location: None,
+            segments: Vec::new(),
+            fact,
         }
     }
 
+    /// Create a FactReference from a Vec<String> path (for backward compatibility during migration)
     #[must_use]
-    pub fn add_unless_clause(mut self, unless_clause: UnlessClause) -> Self {
-        self.unless_clauses.push(unless_clause);
-        self
+    pub fn from_path(path: Vec<String>) -> Self {
+        if path.is_empty() {
+            Self {
+                segments: Vec::new(),
+                fact: String::new(),
+            }
+        } else {
+            let fact = path.last().unwrap().clone();
+            let segments = path[..path.len() - 1].to_vec();
+            Self { segments, fact }
+        }
+    }
+
+    /// Returns true if this is a local reference (no path segments)
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    /// Get all path segments including the fact name
+    #[must_use]
+    pub fn full_path(&self) -> Vec<String> {
+        let mut path = self.segments.clone();
+        path.push(self.fact.clone());
+        path
     }
 }
 
 impl LemmaFact {
     #[must_use]
-    pub fn new(fact_type: FactType, value: FactValue) -> Self {
+    pub fn new(reference: FactReference, value: FactValue) -> Self {
         Self {
-            fact_type,
+            reference,
             value,
             source_location: None,
         }
     }
 
     #[must_use]
-    pub fn with_source_location(mut self, source_location: SourceLocation) -> Self {
+    pub fn with_source_location(mut self, source_location: Source) -> Self {
         self.source_location = Some(source_location);
         self
+    }
+
+    /// Returns true if this fact is local (not a cross-document reference)
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        self.reference.is_local()
     }
 }
 
@@ -868,25 +1225,23 @@ impl LemmaDoc {
 
     /// Get the expected type for a fact by path
     /// Returns None if the fact is not found in this document or if the fact is a document reference
-    pub fn get_fact_type(&self, fact_ref: &FactReference) -> Option<LemmaType> {
+    pub fn get_fact_type(&self, fact_ref: &[String]) -> Option<LemmaType> {
+        let fact_path: Vec<String> = fact_ref.to_vec();
+        let fact_name = fact_path.last()?.clone();
+        let segments: Vec<String> = fact_path[..fact_path.len().saturating_sub(1)].to_vec();
+        let target_ref = FactReference {
+            segments,
+            fact: fact_name,
+        };
         self.facts
             .iter()
-            .find(|fact| match &fact.fact_type {
-                FactType::Local(name) => {
-                    fact_ref.reference.len() == 1 && fact_ref.reference[0] == *name
-                }
-                FactType::Foreign(foreign_ref) => fact_ref.reference == foreign_ref.reference,
-            })
+            .find(|fact| fact.reference == target_ref)
             .and_then(|fact| match &fact.value {
                 FactValue::Literal(lit) => Some(lit.to_type()),
                 FactValue::TypeAnnotation(TypeAnnotation::LemmaType(lemma_type)) => {
                     Some(lemma_type.clone())
                 }
-                FactValue::DocumentReference(_) => {
-                    // Document references don't have a single type
-                    // They import all facts from the referenced document
-                    None
-                }
+                FactValue::DocumentReference(_) => None,
             })
     }
 }
@@ -913,9 +1268,18 @@ impl fmt::Display for LemmaDoc {
     }
 }
 
+impl fmt::Display for FactReference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for segment in &self.segments {
+            write!(f, "{}.", segment)?;
+        }
+        write!(f, "{}", self.fact)
+    }
+}
+
 impl fmt::Display for LemmaFact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "fact {} = {}", self.fact_type, self.value)
+        writeln!(f, "fact {} = {}", self.reference, self.value)
     }
 }
 
@@ -941,26 +1305,20 @@ impl fmt::Display for Expression {
         match &self.kind {
             ExpressionKind::Literal(lit) => write!(f, "{}", lit),
             ExpressionKind::FactReference(fact_ref) => write!(f, "{}", fact_ref),
+            ExpressionKind::FactPath(fact_path) => write!(f, "{}", fact_path),
             ExpressionKind::RuleReference(rule_ref) => write!(f, "{}", rule_ref),
+            ExpressionKind::RulePath(rule_path) => write!(f, "{}", rule_path),
             ExpressionKind::Arithmetic(left, op, right) => {
                 write!(f, "{} {} {}", left, op, right)
             }
             ExpressionKind::Comparison(left, op, right) => {
                 write!(f, "{} {} {}", left, op, right)
             }
-            ExpressionKind::FactHasAnyValue(fact_ref) => {
-                write!(f, "have {}", fact_ref)
-            }
             ExpressionKind::UnitConversion(value, target) => {
                 write!(f, "{} in {}", value, target)
             }
-            ExpressionKind::LogicalNegation(expr, negation_type) => {
-                let prefix = match negation_type {
-                    NegationType::Not => "not",
-                    NegationType::HaveNot => "have not",
-                    NegationType::NotHave => "not have",
-                };
-                write!(f, "{} {}", prefix, expr)
+            ExpressionKind::LogicalNegation(expr, _) => {
+                write!(f, "not {}", expr)
             }
             ExpressionKind::LogicalAnd(left, right) => {
                 write!(f, "{} and {}", left, right)
@@ -1021,7 +1379,10 @@ impl fmt::Display for LiteralValue {
                     write!(f, "{}", normalized)
                 }
             }
-            LiteralValue::Text(s) => write!(f, "\"{}\"", s),
+            LiteralValue::Text(s) => {
+                let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                write!(f, "\"{}\"", escaped)
+            }
             LiteralValue::Date(dt) => write!(f, "{}", dt),
             LiteralValue::Boolean(b) => write!(f, "{}", b),
             LiteralValue::Percentage(p) => {
@@ -1041,199 +1402,6 @@ impl fmt::Display for LiteralValue {
     }
 }
 
-impl LiteralValue {
-    /// Provides a descriptive string for error messages and debugging
-    pub fn describe(&self) -> String {
-        match self {
-            LiteralValue::Text(s) => format!("text value \"{}\"", s),
-            LiteralValue::Number(n) => format!("number {}", n),
-            LiteralValue::Boolean(b) => format!("boolean {}", b),
-            LiteralValue::Percentage(p) => format!("percentage {}%", p),
-            LiteralValue::Date(_) => "date value".to_string(),
-            LiteralValue::Unit(unit) => {
-                format!(
-                    "{} value {}",
-                    LiteralValue::Unit(unit.clone()).to_type(),
-                    unit
-                )
-            }
-            LiteralValue::Regex(s) => format!("regex value {}", s),
-            LiteralValue::Time(time) => {
-                format!("time value {}:{}:{}", time.hour, time.minute, time.second)
-            }
-        }
-    }
-}
-
-impl fmt::Display for MassUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MassUnit::Kilogram => write!(f, "kilogram"),
-            MassUnit::Gram => write!(f, "gram"),
-            MassUnit::Milligram => write!(f, "milligram"),
-            MassUnit::Ton => write!(f, "ton"),
-            MassUnit::Pound => write!(f, "pound"),
-            MassUnit::Ounce => write!(f, "ounce"),
-        }
-    }
-}
-
-impl fmt::Display for LengthUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LengthUnit::Kilometer => write!(f, "kilometer"),
-            LengthUnit::Mile => write!(f, "mile"),
-            LengthUnit::NauticalMile => write!(f, "nautical_mile"),
-            LengthUnit::Meter => write!(f, "meter"),
-            LengthUnit::Decimeter => write!(f, "decimeter"),
-            LengthUnit::Centimeter => write!(f, "centimeter"),
-            LengthUnit::Millimeter => write!(f, "millimeter"),
-            LengthUnit::Yard => write!(f, "yard"),
-            LengthUnit::Foot => write!(f, "foot"),
-            LengthUnit::Inch => write!(f, "inch"),
-        }
-    }
-}
-
-impl fmt::Display for VolumeUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            VolumeUnit::CubicMeter => write!(f, "cubic_meter"),
-            VolumeUnit::CubicCentimeter => write!(f, "cubic_centimeter"),
-            VolumeUnit::Liter => write!(f, "liter"),
-            VolumeUnit::Deciliter => write!(f, "deciliter"),
-            VolumeUnit::Centiliter => write!(f, "centiliter"),
-            VolumeUnit::Milliliter => write!(f, "milliliter"),
-            VolumeUnit::Gallon => write!(f, "gallon"),
-            VolumeUnit::Quart => write!(f, "quart"),
-            VolumeUnit::Pint => write!(f, "pint"),
-            VolumeUnit::FluidOunce => write!(f, "fluid_ounce"),
-        }
-    }
-}
-
-impl fmt::Display for DurationUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DurationUnit::Year => write!(f, "year"),
-            DurationUnit::Month => write!(f, "month"),
-            DurationUnit::Week => write!(f, "week"),
-            DurationUnit::Day => write!(f, "day"),
-            DurationUnit::Hour => write!(f, "hour"),
-            DurationUnit::Minute => write!(f, "minute"),
-            DurationUnit::Second => write!(f, "second"),
-            DurationUnit::Millisecond => write!(f, "millisecond"),
-            DurationUnit::Microsecond => write!(f, "microsecond"),
-        }
-    }
-}
-
-impl fmt::Display for TemperatureUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TemperatureUnit::Celsius => write!(f, "celsius"),
-            TemperatureUnit::Fahrenheit => write!(f, "fahrenheit"),
-            TemperatureUnit::Kelvin => write!(f, "kelvin"),
-        }
-    }
-}
-
-impl fmt::Display for PowerUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PowerUnit::Megawatt => write!(f, "megawatt"),
-            PowerUnit::Kilowatt => write!(f, "kilowatt"),
-            PowerUnit::Watt => write!(f, "watt"),
-            PowerUnit::Milliwatt => write!(f, "milliwatt"),
-            PowerUnit::Horsepower => write!(f, "horsepower"),
-        }
-    }
-}
-
-impl fmt::Display for ForceUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ForceUnit::Newton => write!(f, "newton"),
-            ForceUnit::Kilonewton => write!(f, "kilonewton"),
-            ForceUnit::Lbf => write!(f, "lbf"),
-        }
-    }
-}
-
-impl fmt::Display for PressureUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PressureUnit::Megapascal => write!(f, "megapascal"),
-            PressureUnit::Kilopascal => write!(f, "kilopascal"),
-            PressureUnit::Pascal => write!(f, "pascal"),
-            PressureUnit::Atmosphere => write!(f, "atmosphere"),
-            PressureUnit::Bar => write!(f, "bar"),
-            PressureUnit::Psi => write!(f, "psi"),
-            PressureUnit::Torr => write!(f, "torr"),
-            PressureUnit::Mmhg => write!(f, "mmhg"),
-        }
-    }
-}
-
-impl fmt::Display for EnergyUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EnergyUnit::Megajoule => write!(f, "megajoule"),
-            EnergyUnit::Kilojoule => write!(f, "kilojoule"),
-            EnergyUnit::Joule => write!(f, "joule"),
-            EnergyUnit::Kilowatthour => write!(f, "kilowatthour"),
-            EnergyUnit::Watthour => write!(f, "watthour"),
-            EnergyUnit::Kilocalorie => write!(f, "kilocalorie"),
-            EnergyUnit::Calorie => write!(f, "calorie"),
-            EnergyUnit::Btu => write!(f, "btu"),
-        }
-    }
-}
-
-impl fmt::Display for FrequencyUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FrequencyUnit::Hertz => write!(f, "hertz"),
-            FrequencyUnit::Kilohertz => write!(f, "kilohertz"),
-            FrequencyUnit::Megahertz => write!(f, "megahertz"),
-            FrequencyUnit::Gigahertz => write!(f, "gigahertz"),
-        }
-    }
-}
-
-impl fmt::Display for DataUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DataUnit::Petabyte => write!(f, "petabyte"),
-            DataUnit::Terabyte => write!(f, "terabyte"),
-            DataUnit::Gigabyte => write!(f, "gigabyte"),
-            DataUnit::Megabyte => write!(f, "megabyte"),
-            DataUnit::Kilobyte => write!(f, "kilobyte"),
-            DataUnit::Byte => write!(f, "byte"),
-            DataUnit::Tebibyte => write!(f, "tebibyte"),
-            DataUnit::Gibibyte => write!(f, "gibibyte"),
-            DataUnit::Mebibyte => write!(f, "mebibyte"),
-            DataUnit::Kibibyte => write!(f, "kibibyte"),
-        }
-    }
-}
-
-impl fmt::Display for MoneyUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MoneyUnit::Eur => write!(f, "EUR"),
-            MoneyUnit::Usd => write!(f, "USD"),
-            MoneyUnit::Gbp => write!(f, "GBP"),
-            MoneyUnit::Jpy => write!(f, "JPY"),
-            MoneyUnit::Cny => write!(f, "CNY"),
-            MoneyUnit::Chf => write!(f, "CHF"),
-            MoneyUnit::Cad => write!(f, "CAD"),
-            MoneyUnit::Aud => write!(f, "AUD"),
-            MoneyUnit::Inr => write!(f, "INR"),
-        }
-    }
-}
-
 impl fmt::Display for ConversionTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1248,7 +1416,6 @@ impl fmt::Display for ConversionTarget {
             ConversionTarget::Energy(unit) => write!(f, "{}", unit),
             ConversionTarget::Frequency(unit) => write!(f, "{}", unit),
             ConversionTarget::Data(unit) => write!(f, "{}", unit),
-            ConversionTarget::Money(unit) => write!(f, "{}", unit),
             ConversionTarget::Percentage => write!(f, "percentage"),
         }
     }
@@ -1274,7 +1441,6 @@ impl fmt::Display for LemmaType {
             LemmaType::Energy => write!(f, "energy"),
             LemmaType::Frequency => write!(f, "frequency"),
             LemmaType::Data => write!(f, "data"),
-            LemmaType::Money => write!(f, "money"),
         }
     }
 }
@@ -1295,7 +1461,6 @@ impl LemmaType {
             LemmaType::Text => "\"hello world\"",
             LemmaType::Number => "3.14",
             LemmaType::Boolean => "true",
-            LemmaType::Money => "99.99 EUR",
             LemmaType::Date => "2023-12-25T14:30:00Z",
             LemmaType::Duration => "90 minutes",
             LemmaType::Mass => "5.5 kilograms",
@@ -1331,33 +1496,6 @@ impl fmt::Display for FactValue {
             FactValue::TypeAnnotation(type_ann) => write!(f, "[{}]", type_ann),
             FactValue::DocumentReference(doc_name) => write!(f, "doc {}", doc_name),
         }
-    }
-}
-
-impl fmt::Display for FactReference {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.reference.join("."))
-    }
-}
-
-impl fmt::Display for ForeignFact {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.reference.join("."))
-    }
-}
-
-impl fmt::Display for FactType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FactType::Local(name) => write!(f, "{}", name),
-            FactType::Foreign(foreign_ref) => write!(f, "{}", foreign_ref),
-        }
-    }
-}
-
-impl fmt::Display for RuleReference {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}?", self.reference.join("."))
     }
 }
 
@@ -1441,95 +1579,30 @@ impl fmt::Display for DateTimeValue {
     }
 }
 
-/// A segment in a rule path representing one fact-to-document traversal
-///
-/// E.g., for `employee.is_eligible?` where `employee` is a fact with value `doc hr_doc`,
-/// the segment would be `RulePathSegment { fact: "employee", doc: "hr_doc" }`
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub struct RulePathSegment {
-    pub fact: String,
-    pub doc: String,
-}
-
-/// Uniquely identifies a rule by tracking the complete fact traversal path
-///
-/// E.g., `employee.department.head.salary?` would have segments for each fact
-/// in the chain (employee, department, head) leading to the final rule (salary)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub struct RulePath {
-    pub rule: String,
-    pub segments: Vec<RulePathSegment>,
-}
-
-impl RulePath {
-    pub fn from_reference(
-        reference: &[String],
-        current_doc: &LemmaDoc,
-        all_documents: &std::collections::HashMap<String, LemmaDoc>,
-    ) -> Result<Self, crate::LemmaError> {
-        let mut doc = current_doc;
-        let mut segments = Vec::new();
-
-        for fact_name in &reference[..reference.len() - 1] {
-            let fact = doc
-                .facts
-                .iter()
-                .find(|f| matches!(&f.fact_type, FactType::Local(name) if name == fact_name))
-                .ok_or_else(|| {
-                    crate::LemmaError::Engine(format!(
-                        "Fact {} not found in document {}",
-                        fact_name, doc.name
-                    ))
-                })?;
-
-            let target_doc_name = match &fact.value {
-                FactValue::DocumentReference(name) => name.clone(),
-                _ => {
-                    return Err(crate::LemmaError::Engine(format!(
-                        "Fact {} is not a document reference",
-                        fact_name
-                    )))
-                }
-            };
-
-            segments.push(RulePathSegment {
-                fact: fact_name.clone(),
-                doc: target_doc_name.clone(),
-            });
-
-            doc = all_documents.get(&target_doc_name).ok_or_else(|| {
-                crate::LemmaError::Engine(format!("Document {} not found", target_doc_name))
-            })?;
+impl fmt::Display for RuleReference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.segments.is_empty() {
+            write!(f, "{}?", self.rule)
+        } else {
+            write!(f, "{}.{}?", self.segments.join("."), self.rule)
         }
-
-        // Get the rule name (last element of reference)
-        let rule_name = reference.last().ok_or_else(|| {
-            crate::LemmaError::Engine("Rule reference cannot be empty".to_string())
-        })?;
-
-        Ok(RulePath {
-            rule: rule_name.clone(),
-            segments,
-        })
     }
+}
 
-    /// Returns the name of the document that contains the rule identified by this path.
-    ///
-    /// For local rules (no segments), returns `main_doc`.
-    /// For cross-document references, returns the document from the last segment.
-    pub fn containing_document<'a>(&'a self, main_doc: &'a str) -> &'a str {
-        self.segments
-            .last()
-            .map(|s| s.doc.as_str())
-            .unwrap_or(main_doc)
+impl fmt::Display for FactPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for segment in &self.segments {
+            write!(f, "{}.", segment.fact)?;
+        }
+        write!(f, "{}", self.fact)
     }
 }
 
 impl fmt::Display for RulePath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for seg in &self.segments {
-            write!(f, "{}.", seg.fact)?;
+        for segment in &self.segments {
+            write!(f, "{}.", segment.fact)?;
         }
-        write!(f, "{}", self.rule)
+        write!(f, "{}?", self.rule)
     }
 }

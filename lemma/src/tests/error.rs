@@ -1,11 +1,11 @@
-use crate::ast::Span;
 use crate::error::LemmaError;
+use crate::parsing::ast::Span;
 use std::sync::Arc;
 
 fn create_test_error(
     variant: fn(String, Span, String, Arc<str>, String, usize) -> LemmaError,
 ) -> LemmaError {
-    let source_text = "fact amount = 100 EUR";
+    let source_text = "fact amount = 100";
     let span = Span {
         start: 14,
         end: 21,

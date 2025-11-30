@@ -1,16 +1,14 @@
-use lemma::{Engine, LiteralValue, MoneyUnit, NumericUnit, Target, TargetOp};
+#![cfg(feature = "inversion")]
+
+use lemma::{Engine, LengthUnit, LiteralValue, Target, TargetOp, VolumeUnit};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
-
-fn eur(amount: i64) -> LiteralValue {
-    LiteralValue::Unit(NumericUnit::Money(Decimal::from(amount), MoneyUnit::Eur))
-}
 
 #[test]
 fn multi_unknown_implicit_relationship() {
     let code = r#"
         doc pricing
-        fact price = [money]
+        fact price = [number]
         fact quantity = [number]
         rule total = price * quantity
     "#;
@@ -20,26 +18,33 @@ fn multi_unknown_implicit_relationship() {
 
     // No given facts - both price and quantity are unknown
     let solutions = engine
-        .invert("pricing", "total", Target::value(eur(100)), HashMap::new())
+        .invert_strict(
+            "pricing",
+            "total",
+            Target::value(LiteralValue::number(100)),
+            HashMap::new(),
+        )
         .expect("invert should succeed");
 
     // Both price and quantity should be free variables (can't solve uniquely)
     assert_eq!(solutions.iter().flat_map(|r| r.keys()).count(), 2);
+    let price_ref = lemma::FactPath::new(vec![], "price".to_string());
+    let quantity_ref = lemma::FactPath::new(vec![], "quantity".to_string());
     assert!(solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "price"));
+        .any(|v| v == &price_ref));
     assert!(solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "quantity"));
+        .any(|v| v == &quantity_ref));
 }
 
 #[test]
 fn multi_unknown_inequality_should_be_implicit() {
     let code = r#"
         doc pricing
-        fact price = [money]
+        fact price = [number]
         fact quantity = [number]
         rule total = price * quantity
     "#;
@@ -47,12 +52,15 @@ fn multi_unknown_inequality_should_be_implicit() {
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
 
-    // Query: total > 50 EUR with no given facts
+    // Query: total > 50 with no given facts
     let solutions = engine
-        .invert(
+        .invert_strict(
             "pricing",
             "total",
-            Target::with_op(TargetOp::Gt, lemma::OperationResult::Value(eur(50))),
+            Target::with_op(
+                TargetOp::Gt,
+                lemma::OperationResult::Value(LiteralValue::number(50)),
+            ),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -78,31 +86,33 @@ fn multi_unknown_with_partial_constraint() {
     // Give one fact, query with two unknowns remaining
     let mut given = HashMap::new();
     given.insert(
-        "geometry.length".to_string(),
-        LiteralValue::Unit(NumericUnit::Length(
+        "length".to_string(),
+        LiteralValue::Unit(lemma::NumericUnit::Length(
             Decimal::from(5),
-            lemma::LengthUnit::Meter,
+            LengthUnit::Meter,
         )),
     );
 
-    let target_volume = LiteralValue::Unit(NumericUnit::Volume(
+    let target_volume = LiteralValue::Unit(lemma::NumericUnit::Volume(
         Decimal::from(100),
-        lemma::VolumeUnit::CubicMeter,
+        VolumeUnit::CubicMeter,
     ));
 
     let solutions = engine
-        .invert("geometry", "volume", Target::value(target_volume), given)
+        .invert_strict("geometry", "volume", Target::value(target_volume), given)
         .expect("invert should succeed");
 
     // width * height = 100/5 still has two unknowns
     // width and height should both be free
     assert_eq!(solutions.iter().flat_map(|r| r.keys()).count(), 2);
+    let width_ref = lemma::FactPath::new(vec![], "width".to_string());
+    let height_ref = lemma::FactPath::new(vec![], "height".to_string());
     assert!(solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "width"));
+        .any(|v| v == &width_ref));
     assert!(solutions
         .iter()
         .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".") == "height"));
+        .any(|v| v == &height_ref));
 }

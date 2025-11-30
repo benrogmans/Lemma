@@ -1,4 +1,5 @@
-use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
+
 use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
@@ -20,7 +21,7 @@ rule product = x * y
     )
     .unwrap();
 
-    let mut cmd = Command::cargo_bin("lemma").unwrap();
+    let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("simple_test")
         .arg("--dir")
@@ -49,7 +50,7 @@ rule doubled = base * 2
     )
     .unwrap();
 
-    let mut cmd = Command::cargo_bin("lemma").unwrap();
+    let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("override_test")
         .arg("base=7")
@@ -66,7 +67,7 @@ rule doubled = base * 2
 fn test_cli_run_nonexistent_document() {
     let temp_dir = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("lemma").unwrap();
+    let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("nonexistent")
         .arg("--dir")
@@ -94,7 +95,7 @@ rule discount = 0
     )
     .unwrap();
 
-    let mut cmd = Command::cargo_bin("lemma").unwrap();
+    let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("discount_test")
         .arg("--dir")
@@ -122,7 +123,7 @@ rule doubled = value * 2
     )
     .unwrap();
 
-    let mut cmd = Command::cargo_bin("lemma").unwrap();
+    let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("show")
         .arg("inspect_test")
         .arg("--dir")
@@ -157,7 +158,7 @@ fact y = 2
     )
     .unwrap();
 
-    let mut cmd = Command::cargo_bin("lemma").unwrap();
+    let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("list").arg(temp_dir.path());
 
     cmd.assert()
@@ -169,23 +170,23 @@ fact y = 2
 }
 
 #[test]
-fn test_cli_run_with_money_units() {
+fn test_cli_run_with_arithmetic() {
     let temp_dir = TempDir::new().unwrap();
     let lemma_file = temp_dir.path().join("test.lemma");
 
     fs::write(
         &lemma_file,
         r#"
-doc money_test
-fact price = 100 USD
+doc arithmetic_test
+fact price = 100
 rule with_tax = price * 1.21
 "#,
     )
     .unwrap();
 
-    let mut cmd = Command::cargo_bin("lemma").unwrap();
+    let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("money_test")
+        .arg("arithmetic_test")
         .arg("--dir")
         .arg(temp_dir.path());
 
@@ -209,7 +210,7 @@ this is not valid lemma syntax
     )
     .unwrap();
 
-    let mut cmd = Command::cargo_bin("lemma").unwrap();
+    let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("invalid")
         .arg("--dir")

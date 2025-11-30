@@ -236,11 +236,10 @@ rule compound = principal * (1 + rate) ^ years
 rule is_eligible = age >= 18 and income > 30000
 ```
 
-**Logical**: `and`, `or`, `not`, `have`, `have not`
+**Logical**: `and`, `or`, `not`
 
 ```lemma
 rule can_approve = is_manager? and not is_suspended?
-rule has_email = have customer.email
 ```
 
 **Mathematical**: `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `abs`, `floor`, `ceil`, `round`
@@ -284,13 +283,6 @@ fact email_pattern = /^[\w]+@[\w]+\.[\w]+$/
 ### 4.2 Unit types
 
 Lemma has built-in support for physical and business units:
-
-**Money**: USD, EUR, GBP, JPY, CNY, CHF, CAD, AUD, INR, etc.
-
-```lemma
-fact revenue = 1000000 usd
-fact cost = 500000 eur
-```
 
 **Mass**: kilogram, gram, milligram, pound, ounce
 
@@ -1046,7 +1038,7 @@ Rule Definition:
 Expressions:
   <arithmetic>        // +, -, *, /, %, ^
   <comparison>        // >, <, >=, <=, ==, !=, is, is not
-  <logical>          // and, or, not, have, have not
+  <logical>          // and, or, not
   <mathematical>     // sqrt, sin, cos, tan, log, exp, abs, floor, ceil, round
   <unit-conversion>  // <value> in <unit>
   <rule-reference>   // <name>?

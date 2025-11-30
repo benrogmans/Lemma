@@ -1,10 +1,11 @@
 use lemma::{Engine, LemmaError};
+use std::collections::HashMap;
 
 /// Test suite for error messages as documented in ERROR_MESSAGES_IMPLEMENTATION.md
 /// Covers parse errors, semantic errors, and runtime errors with proper span tracking
 
 // ============================================================================
-// SEMANTIC ERRORS - Duplicate Definitions
+// VALIDATION ERRORS - Duplicate Definitions
 // ============================================================================
 
 #[test]
@@ -21,14 +22,19 @@ fn test_duplicate_fact_definition_error() {
     );
 
     match result {
-        Err(LemmaError::Semantic(details)) => {
-            assert!(details.message.contains("Duplicate fact definition"));
-            assert!(details.message.contains("salary"));
-            assert_eq!(details.source_location.doc_name, "test");
-            assert_eq!(details.source_location.source_id, "test.lemma");
-            assert!(details.source_location.span.line >= 3);
+        Err(LemmaError::Engine(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("duplicate") && msg.to_lowercase().contains("fact"),
+                "Error should mention duplicate fact, got: {}",
+                msg
+            );
+            assert!(
+                msg.contains("salary"),
+                "Error should mention fact name, got: {}",
+                msg
+            );
         }
-        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
+        Err(e) => panic!("Expected Engine error for duplicate fact, got: {e:?}"),
         Ok(_) => panic!("Expected error for duplicate fact"),
     }
 }
@@ -48,20 +54,25 @@ fn test_duplicate_rule_definition_error() {
     );
 
     match result {
-        Err(LemmaError::Semantic(details)) => {
-            assert!(details.message.contains("Duplicate rule definition"));
-            assert!(details.message.contains("total"));
-            assert_eq!(details.source_location.doc_name, "test");
-            assert_eq!(details.source_location.source_id, "test.lemma");
-            assert!(details.source_location.span.line >= 4);
+        Err(LemmaError::Engine(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("duplicate") && msg.to_lowercase().contains("rule"),
+                "Error should mention duplicate rule, got: {}",
+                msg
+            );
+            assert!(
+                msg.contains("total"),
+                "Error should mention rule name, got: {}",
+                msg
+            );
         }
-        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
+        Err(e) => panic!("Expected Engine error for duplicate rule, got: {e:?}"),
         Ok(_) => panic!("Expected error for duplicate rule"),
     }
 }
 
 #[test]
-fn test_duplicate_fact_shows_both_locations() {
+fn test_duplicate_fact_shows_name() {
     let mut engine = Engine::new();
 
     let result = engine.add_lemma_code(
@@ -75,15 +86,19 @@ fn test_duplicate_fact_shows_both_locations() {
     );
 
     match result {
-        Err(LemmaError::Semantic(details)) => {
-            assert!(details.message.contains("Duplicate fact definition"));
-            assert!(details.message.contains("name"));
-            // Suggestion should mention where first definition was
-            if let Some(ref sugg) = details.suggestion {
-                assert!(sugg.contains("already defined"));
-            }
+        Err(LemmaError::Engine(msg)) => {
+            assert!(
+                msg.contains("Duplicate"),
+                "Error should mention duplicate, got: {}",
+                msg
+            );
+            assert!(
+                msg.contains("name"),
+                "Error should mention fact name, got: {}",
+                msg
+            );
         }
-        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
+        Err(e) => panic!("Expected Engine error for duplicate fact, got: {e:?}"),
         Ok(_) => panic!("Expected error for duplicate fact"),
     }
 }
@@ -137,7 +152,7 @@ fn test_parse_error_malformed_input() {
 }
 
 // ============================================================================
-// RUNTIME ERRORS - Division by Zero
+// RUNTIME ERRORS - Division by Zero (now returns Veto, not Error)
 // ============================================================================
 
 #[test]
@@ -156,28 +171,28 @@ fn test_runtime_error_division_by_zero() {
         )
         .unwrap();
 
-    let result = engine.evaluate("test", None, None);
+    let response = engine
+        .evaluate("test", vec![], HashMap::new())
+        .expect("Division by zero should return Veto, not Error");
 
-    match result {
-        Err(LemmaError::Runtime(details)) => {
-            assert!(
-                details.message.contains("division")
-                    || details.message.contains("zero")
-                    || details.message.contains("error"),
-                "Error message should mention division or zero, got: {}",
-                details.message
-            );
-            assert_eq!(details.source_location.doc_name, "test");
-            assert_eq!(details.source_location.source_id, "test.lemma");
-            assert!(details.source_location.span.line >= 4);
+    let result_rule = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "result")
+        .expect("result rule should exist");
 
-            // Should have a helpful suggestion
-            if let Some(ref sugg) = details.suggestion {
-                assert!(sugg.contains("zero") || sugg.contains("guard") || sugg.contains("check"));
-            }
-        }
-        Err(e) => panic!("Expected Runtime error, got: {e:?}"),
-        Ok(_) => panic!("Expected runtime error for division by zero"),
+    assert!(
+        result_rule.result.is_veto(),
+        "Division by zero should return Veto, got: {:?}",
+        result_rule.result
+    );
+
+    if let lemma::OperationResult::Veto(Some(msg)) = &result_rule.result {
+        assert!(
+            msg.to_lowercase().contains("division") || msg.to_lowercase().contains("zero"),
+            "Veto message should mention division or zero, got: {}",
+            msg
+        );
     }
 }
 
@@ -197,21 +212,24 @@ fn test_runtime_error_division_by_zero_with_cli_facts() {
         )
         .unwrap();
 
-    let facts = lemma::parse_facts(&["hours_worked=0"]).unwrap();
-    let result = engine.evaluate("test", None, Some(facts));
+    let mut facts = std::collections::HashMap::new();
+    facts.insert("hours_worked".to_string(), "0".to_string());
 
-    match result {
-        Err(LemmaError::Runtime(details)) => {
-            assert!(
-                details.message.contains("division")
-                    || details.message.contains("zero")
-                    || details.message.contains("error")
-            );
-            assert_eq!(details.source_location.doc_name, "test");
-        }
-        Err(e) => panic!("Expected Runtime error, got: {e:?}"),
-        Ok(_) => panic!("Expected runtime error for division by zero"),
-    }
+    let response = engine
+        .evaluate("test", vec![], facts)
+        .expect("Division by zero should return Veto, not Error");
+
+    let hourly_rate = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "hourly_rate")
+        .expect("hourly_rate rule should exist");
+
+    assert!(
+        hourly_rate.result.is_veto(),
+        "Division by zero should return Veto, got: {:?}",
+        hourly_rate.result
+    );
 }
 
 // ============================================================================
@@ -246,77 +264,73 @@ fn test_transpile_error_self_referencing_rule() {
 }
 
 // ============================================================================
-// RUNTIME ERRORS - Type Mismatches
+// VALIDATION ERRORS - Type Mismatches (now caught at validation time)
 // ============================================================================
 
 #[test]
-fn test_runtime_error_type_mismatch_text_in_arithmetic() {
+fn test_validation_error_type_mismatch_text_in_arithmetic() {
     let mut engine = Engine::new();
 
-    engine
-        .add_lemma_code(
-            r#"
+    let result = engine.add_lemma_code(
+        r#"
         doc test
         fact name = "Alice"
         fact salary = 50000
         rule result = salary + name
     "#,
-            "test.lemma",
-        )
-        .unwrap();
-
-    let result = engine.evaluate("test", None, None);
+        "test.lemma",
+    );
 
     match result {
-        Err(LemmaError::Runtime(details)) => {
+        Err(LemmaError::Engine(msg)) => {
             assert!(
-                details.message.contains("type")
-                    || details.message.contains("error")
-                    || details.message.contains("mismatch")
+                msg.to_lowercase().contains("type")
+                    || msg.to_lowercase().contains("arithmetic")
+                    || msg.to_lowercase().contains("numeric"),
+                "Error should mention type issue, got: {}",
+                msg
             );
-
-            if let Some(ref sugg) = details.suggestion {
-                assert!(!sugg.is_empty());
-            }
         }
-        Err(e) => panic!("Expected Runtime error for type mismatch, got: {e:?}"),
-        Ok(_) => panic!("Expected runtime error for type mismatch"),
+        Err(e) => panic!("Expected Engine error for type mismatch, got: {e:?}"),
+        Ok(_) => panic!("Expected validation error for type mismatch"),
     }
 }
 
 #[test]
-fn test_runtime_error_boolean_in_arithmetic() {
+fn test_validation_error_boolean_in_arithmetic() {
     let mut engine = Engine::new();
 
-    engine
-        .add_lemma_code(
-            r#"
+    let result = engine.add_lemma_code(
+        r#"
         doc test
         fact is_active = true
         fact count = 10
         rule result = count * is_active
     "#,
-            "test.lemma",
-        )
-        .unwrap();
-
-    let result = engine.evaluate("test", None, None);
+        "test.lemma",
+    );
 
     match result {
-        Err(LemmaError::Runtime(details)) => {
-            assert!(details.message.contains("type") || details.message.contains("error"));
+        Err(LemmaError::Engine(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("arithmetic")
+                    || msg.to_lowercase().contains("type")
+                    || msg.to_lowercase().contains("numeric"),
+                "Error should mention arithmetic or type issue, got: {}",
+                msg
+            );
         }
-        Err(e) => panic!("Expected Runtime error for type mismatch, got: {e:?}"),
-        Ok(_) => panic!("Expected runtime error for type mismatch"),
+        Err(e) => panic!("Expected Engine error for invalid arithmetic, got: {e:?}"),
+        Ok(_) => panic!("Expected validation error for boolean in arithmetic"),
     }
 }
 
 // ============================================================================
-// ERROR MESSAGE FORMATTING - Spans and Line Numbers
+// ERROR MESSAGE FORMATTING - Duplicate Detection
 // ============================================================================
 
 #[test]
-fn test_error_contains_doc_name_and_source() {
+fn test_duplicate_error_contains_fact_name() {
     let mut engine = Engine::new();
 
     let result = engine.add_lemma_code(
@@ -329,17 +343,17 @@ fn test_error_contains_doc_name_and_source() {
     );
 
     match result {
-        Err(LemmaError::Semantic(details)) => {
-            assert_eq!(details.source_location.doc_name, "my_document");
-            assert_eq!(details.source_location.source_id, "my_file.lemma");
+        Err(LemmaError::Engine(msg)) => {
+            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
+            assert!(msg.contains("price"), "Error should mention fact name");
         }
-        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
+        Err(e) => panic!("Expected Engine error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
 
 #[test]
-fn test_error_has_valid_span() {
+fn test_duplicate_error_is_reported() {
     let mut engine = Engine::new();
 
     let result = engine.add_lemma_code(
@@ -352,30 +366,19 @@ fn test_error_has_valid_span() {
     );
 
     match result {
-        Err(LemmaError::Semantic(details)) => {
-            assert!(
-                details.source_location.span.line > 0,
-                "Line number should be positive"
-            );
-            assert!(
-                details.source_location.span.col > 0,
-                "Column number should be positive"
-            );
-            assert!(
-                details.source_location.span.start < details.source_location.span.end,
-                "Start should be before end"
-            );
+        Err(LemmaError::Engine(msg)) => {
+            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
+            assert!(msg.contains("x"), "Error should mention fact name");
         }
-        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
+        Err(e) => panic!("Expected Engine error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
 
 #[test]
-fn test_error_with_doc_start_line() {
+fn test_duplicate_in_second_doc_is_caught() {
     let mut engine = Engine::new();
 
-    // Simulate multi-doc file - second doc starts at line 5
     let result = engine.add_lemma_code(
         r#"
         doc first_doc
@@ -389,21 +392,21 @@ fn test_error_with_doc_start_line() {
     );
 
     match result {
-        Err(LemmaError::Semantic(details)) => {
-            assert_eq!(details.source_location.doc_name, "second_doc");
-            assert!(details.doc_start_line >= 1);
+        Err(LemmaError::Engine(msg)) => {
+            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
+            assert!(msg.contains("b"), "Error should mention fact name");
         }
-        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
+        Err(e) => panic!("Expected Engine error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
 
 // ============================================================================
-// ERROR MESSAGE DISPLAY - Ariadne Formatting
+// ERROR MESSAGE DISPLAY
 // ============================================================================
 
 #[test]
-fn test_error_display_format() {
+fn test_error_display_contains_duplicate_info() {
     let mut engine = Engine::new();
 
     let result = engine.add_lemma_code(
@@ -416,27 +419,21 @@ fn test_error_display_format() {
     );
 
     match result {
-        Err(e) => {
-            let error_str = format!("{e}");
-
-            // Should contain ariadne-formatted output
-            assert!(error_str.contains("Error:") || error_str.contains("error:"));
-            assert!(error_str.contains("test.lemma"));
-            assert!(error_str.contains("value"));
-
-            // Should have some formatting (colors/boxes represented in output)
-            assert!(error_str.len() > 100, "Error message should be detailed");
+        Err(LemmaError::Engine(msg)) => {
+            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
+            assert!(msg.contains("value"), "Error should mention fact name");
         }
+        Err(e) => panic!("Expected Engine error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
 
 // ============================================================================
-// RUNTIME ERROR SUGGESTIONS
+// VETO MESSAGES - Division by Zero
 // ============================================================================
 
 #[test]
-fn test_division_by_zero_has_helpful_suggestion() {
+fn test_division_by_zero_returns_veto_with_message() {
     let mut engine = Engine::new();
 
     engine
@@ -451,18 +448,28 @@ fn test_division_by_zero_has_helpful_suggestion() {
         )
         .unwrap();
 
-    let result = engine.evaluate("test", None, None);
+    let response = engine
+        .evaluate("test", vec![], HashMap::new())
+        .expect("Should return Veto, not Error");
 
-    match result {
-        Err(LemmaError::Runtime(details)) => {
-            let sugg = details
-                .suggestion
-                .as_ref()
-                .expect("Should have suggestion for division by zero");
-            assert!(sugg.contains("zero") || sugg.contains("guard") || sugg.contains("unless"));
+    let result_rule = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "result")
+        .expect("result rule should exist");
+
+    match &result_rule.result {
+        lemma::OperationResult::Veto(Some(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("zero") || msg.to_lowercase().contains("division"),
+                "Veto message should mention zero or division, got: {}",
+                msg
+            );
         }
-        Err(e) => panic!("Expected Runtime error, got: {e:?}"),
-        Ok(_) => panic!("Expected error"),
+        lemma::OperationResult::Veto(None) => {
+            panic!("Expected Veto with message");
+        }
+        other => panic!("Expected Veto, got: {:?}", other),
     }
 }
 
@@ -492,11 +499,11 @@ fn test_circular_dependency_has_helpful_suggestion() {
 }
 
 // ============================================================================
-// SOURCE LOCATION ACCURACY
+// DUPLICATE DETECTION ACCURACY
 // ============================================================================
 
 #[test]
-fn test_error_points_to_correct_line() {
+fn test_duplicate_fact_is_detected() {
     let mut engine = Engine::new();
 
     let lemma_code = r#"doc test
@@ -508,20 +515,20 @@ fact line4 = 4"#;
     let result = engine.add_lemma_code(lemma_code, "test.lemma");
 
     match result {
-        Err(LemmaError::Semantic(details)) => {
-            // The duplicate 'line4' is on line 5 (1-based)
-            assert_eq!(
-                details.source_location.span.line, 5,
-                "Should point to line 5 where duplicate is"
+        Err(LemmaError::Engine(msg)) => {
+            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
+            assert!(
+                msg.contains("line4"),
+                "Error should mention the duplicated fact name"
             );
         }
-        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
+        Err(e) => panic!("Expected Engine error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
 
 #[test]
-fn test_runtime_error_has_source_context() {
+fn test_division_by_zero_returns_veto() {
     let mut engine = Engine::new();
 
     engine
@@ -536,28 +543,29 @@ fn test_runtime_error_has_source_context() {
         )
         .unwrap();
 
-    let result = engine.evaluate("test", None, None);
+    let response = engine
+        .evaluate("test", vec![], HashMap::new())
+        .expect("Should return Veto, not Error");
 
-    match result {
-        Err(LemmaError::Runtime(details)) => {
-            assert!(
-                !details.source_text.is_empty(),
-                "Should include source text"
-            );
-            assert!(details.source_text.contains("numerator"));
-            assert!(details.source_text.contains("denominator"));
-        }
-        Err(e) => panic!("Expected Runtime error, got: {e:?}"),
-        Ok(_) => panic!("Expected error"),
-    }
+    let division_result = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "division_result")
+        .expect("division_result rule should exist");
+
+    assert!(
+        division_result.result.is_veto(),
+        "Division by zero should return Veto, got: {:?}",
+        division_result.result
+    );
 }
 
 // ============================================================================
-// NON-FILE SOURCES
+// DUPLICATE DETECTION FROM VARIOUS SOURCES
 // ============================================================================
 
 #[test]
-fn test_error_with_database_source() {
+fn test_duplicate_detected_from_database_source() {
     let mut engine = Engine::new();
 
     let result = engine.add_lemma_code(
@@ -570,16 +578,17 @@ fn test_error_with_database_source() {
     );
 
     match result {
-        Err(LemmaError::Semantic(details)) => {
-            assert_eq!(details.source_location.source_id, "db://contracts/123");
+        Err(LemmaError::Engine(msg)) => {
+            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
+            assert!(msg.contains("amount"), "Error should mention fact name");
         }
-        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
+        Err(e) => panic!("Expected Engine error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
 
 #[test]
-fn test_error_with_api_source() {
+fn test_duplicate_detected_from_api_source() {
     let mut engine = Engine::new();
 
     let result = engine.add_lemma_code(
@@ -592,16 +601,17 @@ fn test_error_with_api_source() {
     );
 
     match result {
-        Err(LemmaError::Semantic(details)) => {
-            assert_eq!(details.source_location.source_id, "api://policies/endpoint");
+        Err(LemmaError::Engine(msg)) => {
+            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
+            assert!(msg.contains("rate"), "Error should mention rule name");
         }
-        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
+        Err(e) => panic!("Expected Engine error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }
 
 #[test]
-fn test_error_with_runtime_source() {
+fn test_duplicate_detected_from_runtime_source() {
     let mut engine = Engine::new();
 
     let result = engine.add_lemma_code(
@@ -614,10 +624,11 @@ fn test_error_with_runtime_source() {
     );
 
     match result {
-        Err(LemmaError::Semantic(details)) => {
-            assert_eq!(details.source_location.source_id, "<runtime>");
+        Err(LemmaError::Engine(msg)) => {
+            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
+            assert!(msg.contains("x"), "Error should mention fact name");
         }
-        Err(e) => panic!("Expected Semantic error, got: {e:?}"),
+        Err(e) => panic!("Expected Engine error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
     }
 }

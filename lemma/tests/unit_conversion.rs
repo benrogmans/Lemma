@@ -1,5 +1,6 @@
 use lemma::*;
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 #[test]
@@ -16,11 +17,10 @@ rule weight_lbs = weight_kg in pounds
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", None, None).unwrap();
+    let response = engine.evaluate("test1", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "weight_lbs")
+        .get("weight_lbs")
         .unwrap()
         .result
         .value()
@@ -49,18 +49,17 @@ rule weight_kg = weight_tons in kilograms
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", None, None).unwrap();
+    let response = engine.evaluate("test2", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "weight_kg")
+        .get("weight_kg")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("2000").unwrap());
+            assert_eq!(amount, &Decimal::from_str("2000").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -81,11 +80,10 @@ rule distance_miles = distance_km in miles
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", None, None).unwrap();
+    let response = engine.evaluate("test1", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "distance_miles")
+        .get("distance_miles")
         .unwrap()
         .result
         .value()
@@ -113,11 +111,10 @@ rule distance_meters = distance_yards in meters
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", None, None).unwrap();
+    let response = engine.evaluate("test2", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "distance_meters")
+        .get("distance_meters")
         .unwrap()
         .result
         .value()
@@ -145,18 +142,17 @@ rule length_cm = length_dm in centimeters
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test3", None, None).unwrap();
+    let response = engine.evaluate("test3", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "length_cm")
+        .get("length_cm")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("500.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("500.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -177,18 +173,17 @@ rule volume_ml = volume_l in milliliters
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", None, None).unwrap();
+    let response = engine.evaluate("test1", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "volume_ml")
+        .get("volume_ml")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("2000.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("2000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -204,11 +199,10 @@ rule volume_l = volume_gal in liters
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", None, None).unwrap();
+    let response = engine.evaluate("test2", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "volume_l")
+        .get("volume_l")
         .unwrap()
         .result
         .value()
@@ -236,18 +230,17 @@ rule volume_pt = volume_qt in pints
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test3", None, None).unwrap();
+    let response = engine.evaluate("test3", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "volume_pt")
+        .get("volume_pt")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("16.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("16.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -263,11 +256,10 @@ rule volume_dl = volume_cl in deciliters
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test4", None, None).unwrap();
+    let response = engine.evaluate("test4", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "volume_dl")
+        .get("volume_dl")
         .unwrap()
         .result
         .value()
@@ -300,11 +292,10 @@ rule time_min = time_h in minutes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", None, None).unwrap();
+    let response = engine.evaluate("test1", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "time_min")
+        .get("time_min")
         .unwrap()
         .result
         .value()
@@ -312,7 +303,7 @@ rule time_min = time_h in minutes
     match result {
         LiteralValue::Number(n) => {
             // 3 hours = 180 minutes
-            assert_eq!(*n, Decimal::from_str("180.0").unwrap());
+            assert_eq!(n, &Decimal::from_str("180.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -328,11 +319,10 @@ rule time_ms = time_s in milliseconds
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", None, None).unwrap();
+    let response = engine.evaluate("test2", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "time_ms")
+        .get("time_ms")
         .unwrap()
         .result
         .value()
@@ -340,7 +330,7 @@ rule time_ms = time_s in milliseconds
     match result {
         LiteralValue::Number(n) => {
             // 5 seconds = 5000 milliseconds
-            assert_eq!(*n, Decimal::from_str("5000.0").unwrap());
+            assert_eq!(n, &Decimal::from_str("5000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -356,11 +346,10 @@ rule time_us = time_ms in microseconds
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test3", None, None).unwrap();
+    let response = engine.evaluate("test3", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "time_us")
+        .get("time_us")
         .unwrap()
         .result
         .value()
@@ -368,7 +357,7 @@ rule time_us = time_ms in microseconds
     match result {
         LiteralValue::Number(n) => {
             // 1 second = 1000000 microseconds
-            assert_eq!(*n, Decimal::from_str("1000000.0").unwrap());
+            assert_eq!(n, &Decimal::from_str("1000000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -389,18 +378,17 @@ rule power_w = power_kw in watts
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", None, None).unwrap();
+    let response = engine.evaluate("test1", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "power_w")
+        .get("power_w")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("5000.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("5000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -416,18 +404,17 @@ rule power_mw = power_w in milliwatts
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", None, None).unwrap();
+    let response = engine.evaluate("test2", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "power_mw")
+        .get("power_mw")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("2000000.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("2000000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -448,18 +435,17 @@ rule energy_j = energy_kj in joules
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", None, None).unwrap();
+    let response = engine.evaluate("test1", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "energy_j")
+        .get("energy_j")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("10000.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("10000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -475,18 +461,17 @@ rule energy_wh = energy_kwh in watthours
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", None, None).unwrap();
+    let response = engine.evaluate("test2", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "energy_wh")
+        .get("energy_wh")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("2000.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("2000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -502,18 +487,17 @@ rule energy_cal = energy_kcal in calories
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test3", None, None).unwrap();
+    let response = engine.evaluate("test3", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "energy_cal")
+        .get("energy_cal")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("5000.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("5000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -534,18 +518,17 @@ rule pressure_pa = pressure_kpa in pascals
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", None, None).unwrap();
+    let response = engine.evaluate("test1", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "pressure_pa")
+        .get("pressure_pa")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("250000.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("250000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -561,18 +544,17 @@ rule pressure_kpa = pressure_mpa in kilopascals
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", None, None).unwrap();
+    let response = engine.evaluate("test2", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "pressure_kpa")
+        .get("pressure_kpa")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("3000.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("3000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -593,18 +575,17 @@ rule size_mb = size_gb in megabytes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test1", None, None).unwrap();
+    let response = engine.evaluate("test1", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "size_mb")
+        .get("size_mb")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("10000.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("10000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -620,18 +601,17 @@ rule size_gb = size_tb in gigabytes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test2", None, None).unwrap();
+    let response = engine.evaluate("test2", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "size_gb")
+        .get("size_gb")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("2000.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("2000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -647,18 +627,17 @@ rule size_tb = size_pb in terabytes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test3", None, None).unwrap();
+    let response = engine.evaluate("test3", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "size_tb")
+        .get("size_tb")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("1000.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("1000.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -674,18 +653,17 @@ rule size_mib = size_gib in mebibytes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test4", None, None).unwrap();
+    let response = engine.evaluate("test4", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "size_mib")
+        .get("size_mib")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("8192.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("8192.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -701,18 +679,17 @@ rule size_b = size_kib in bytes
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("test5", None, None).unwrap();
+    let response = engine.evaluate("test5", vec![], HashMap::new()).unwrap();
     let result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "size_b")
+        .get("size_b")
         .unwrap()
         .result
         .value()
         .unwrap();
     match result {
         LiteralValue::Number(amount) => {
-            assert_eq!(*amount, Decimal::from_str("2097152.0").unwrap());
+            assert_eq!(amount, &Decimal::from_str("2097152.0").unwrap());
         }
         _ => panic!("Expected Number (from 'in' conversion), got {:?}", result),
     }
@@ -739,12 +716,11 @@ rule discounted_price = base_price * (1 - discount)
             "test.lemma",
         )
         .unwrap();
-    let response = engine.evaluate("complex", None, None).unwrap();
+    let response = engine.evaluate("complex", vec![], HashMap::new()).unwrap();
 
     let weight_result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "weight_lbs")
+        .get("weight_lbs")
         .unwrap()
         .result
         .value()
@@ -761,8 +737,7 @@ rule discounted_price = base_price * (1 - discount)
 
     let distance_result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "distance_miles")
+        .get("distance_miles")
         .unwrap()
         .result
         .value()
@@ -779,15 +754,14 @@ rule discounted_price = base_price * (1 - discount)
 
     let price_result = response
         .results
-        .iter()
-        .find(|r| r.rule.name == "discounted_price")
+        .get("discounted_price")
         .unwrap()
         .result
         .value()
         .unwrap();
     match price_result {
         LiteralValue::Number(n) => {
-            assert_eq!(*n, Decimal::from_str("90.0").unwrap());
+            assert_eq!(n, &Decimal::from_str("90.0").unwrap());
         }
         _ => panic!("Expected Number"),
     }

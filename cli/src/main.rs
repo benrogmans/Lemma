@@ -8,6 +8,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use formatter::Formatter;
 use lemma::Engine;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -101,6 +102,7 @@ enum Commands {
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
     },
+
     /// Invert a rule to find what inputs produce desired outputs
     ///
     /// Uses symbolic inversion to derive input constraints from rule definitions.
@@ -116,10 +118,10 @@ enum Commands {
         ///   any                - any non-veto value (default)
         ///   veto               - any veto
         ///   100                - specific value
-        ///   >50                - greater than 50
-        ///   >=50               - greater than or equal to 50
-        /// > <100               - less than 100
-        /// > <=100              - less than or equal to 100
+        ///   \>50                - greater than 50
+        ///   \>=50               - greater than or equal to 50
+        ///   \<100               - less than 100
+        ///   \<=100              - less than or equal to 100
         #[arg(short = 't', long, default_value = "any")]
         target: String,
         /// Facts to provide as given (format: name=value)
@@ -138,9 +140,9 @@ fn main() {
             workdir,
             doc_name,
             facts,
-            raw,
             interactive,
-        } => run_command(workdir, doc_name.as_ref(), facts, *raw, *interactive),
+            ..
+        } => run_command(workdir, doc_name.as_ref(), facts, *interactive),
         Commands::Show { workdir, doc_name } => show_command(workdir, doc_name),
         Commands::List { root } => list_command(root),
         Commands::Server {
@@ -149,6 +151,7 @@ fn main() {
             port,
         } => server_command(workdir, host, *port),
         Commands::Mcp { workdir } => mcp_command(workdir),
+
         Commands::Invert {
             workdir,
             doc_name,
@@ -173,7 +176,6 @@ fn run_command(
     workdir: &Path,
     doc_name: Option<&String>,
     facts: &[String],
-    raw: bool,
     interactive: bool,
 ) -> Result<()> {
     let mut engine = Engine::new();
@@ -203,32 +205,39 @@ fn run_command(
             (Some(doc), rules)
         });
 
+        let cli_facts: std::collections::HashMap<String, String> = parse_fact_strings(facts);
+
         let (d, r, interactive_facts) =
-            interactive::run_interactive(&engine, parsed_doc, parsed_rules)?;
-        let mut all_facts = facts.to_vec();
+            interactive::run_interactive(&engine, parsed_doc, parsed_rules, &cli_facts)?;
+
+        let mut all_facts = cli_facts;
         all_facts.extend(interactive_facts);
-        (d, r, all_facts)
+        (d, r.unwrap_or_default(), all_facts)
     } else if let Some(name) = doc_name {
         let (doc, rules) = parse_doc_and_rules(name);
-        (doc, rules, facts.to_vec())
+        let fact_overrides = parse_fact_strings(facts);
+        (doc, rules.unwrap_or_default(), fact_overrides)
     } else {
         unreachable!()
     };
 
-    // Parse facts
-    let facts = if !final_facts.is_empty() {
-        let refs: Vec<&str> = final_facts.iter().map(|s| s.as_str()).collect();
-        Some(lemma::parse_facts(&refs)?)
-    } else {
-        None
-    };
+    let response = engine.evaluate(&doc, rules, final_facts)?;
 
-    // Evaluate
-    let response = engine.evaluate(&doc, rules, facts)?;
-    let formatter = Formatter::default();
-    print!("{}", formatter.format_response(&response, raw));
+    let formatter = Formatter;
+    print!("{}", formatter.format_response(&response));
 
     Ok(())
+}
+
+/// Parse fact override strings in "key=value" format into a HashMap
+fn parse_fact_strings(facts: &[String]) -> std::collections::HashMap<String, String> {
+    facts
+        .iter()
+        .filter_map(|s| {
+            s.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
+        .collect()
 }
 
 fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
@@ -239,7 +248,7 @@ fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
         let facts = engine.get_document_facts(doc_name);
         let rules = engine.get_document_rules(doc_name);
 
-        let formatter = Formatter::default();
+        let formatter = Formatter;
         print!(
             "{}",
             formatter.format_document_inspection(doc, &facts, &rules)
@@ -255,8 +264,6 @@ fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
 fn list_command(root: &PathBuf) -> Result<()> {
     let mut engine = Engine::new();
 
-    println!("Loading workspace from {}...", root.display());
-
     let mut file_count = 0;
     for entry in WalkDir::new(root) {
         let entry = entry?;
@@ -270,7 +277,7 @@ fn list_command(root: &PathBuf) -> Result<()> {
 
     let documents = engine.list_documents();
 
-    let doc_stats: Vec<(String, usize, usize)> = documents
+    let mut doc_stats: Vec<(String, usize, usize)> = documents
         .iter()
         .map(|doc_name| {
             let facts_count = engine.get_document_facts(doc_name).len();
@@ -278,10 +285,10 @@ fn list_command(root: &PathBuf) -> Result<()> {
             (doc_name.clone(), facts_count, rules_count)
         })
         .collect();
+    doc_stats.sort_by(|a, b| a.0.cmp(&b.0));
 
-    println!();
-    let formatter = Formatter::default();
-    print!(
+    let formatter = Formatter;
+    println!(
         "{}",
         formatter.format_workspace_summary(file_count, documents.len(), &doc_stats)
     );
@@ -349,36 +356,24 @@ fn invert_command(
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
-    // Parse target
     let target = parse_target(target_str)?;
 
-    // Parse facts
-    let given_facts = if !facts.is_empty() {
-        let refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
-        let parsed_facts = lemma::parse_facts(&refs)?;
-
-        // Convert Vec<LemmaFact> to HashMap<String, LiteralValue>
-        let mut fact_map = std::collections::HashMap::new();
-        for fact in parsed_facts {
-            if let lemma::FactValue::Literal(value) = fact.value {
-                let fact_name = match &fact.fact_type {
-                    lemma::FactType::Local(name) => format!("{}.{}", doc_name, name),
-                    lemma::FactType::Foreign(foreign) => foreign.reference.join("."),
-                };
-                fact_map.insert(fact_name, value);
+    let given: HashMap<String, String> = facts
+        .iter()
+        .filter_map(|f| {
+            let parts: Vec<&str> = f.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                Some((parts[0].to_string(), parts[1].to_string()))
+            } else {
+                None
             }
-        }
-        fact_map
-    } else {
-        std::collections::HashMap::new()
-    };
+        })
+        .collect();
 
-    // Perform inversion
-    let solutions = engine.invert(doc_name, rule_name, target, given_facts)?;
+    let response = engine.invert(doc_name, rule_name, target, given)?;
 
-    // Format output
-    let formatter = Formatter::default();
-    print!("{}", formatter.format_inversion_result(&solutions));
+    let formatter = Formatter;
+    print!("{}", formatter.format_inversion_response(&response));
 
     Ok(())
 }
@@ -416,7 +411,6 @@ fn parse_target(target_str: &str) -> Result<lemma::Target> {
             Ok(Target::with_op(TargetOp::Lt, OperationResult::Value(value)))
         }
         _ => {
-            // Try to parse as a specific value
             let value = parse_literal_value(target_str)?;
             Ok(Target::value(value))
         }
@@ -427,7 +421,6 @@ fn parse_literal_value(s: &str) -> Result<lemma::LiteralValue> {
     use lemma::LiteralValue;
     use rust_decimal::Decimal;
 
-    // Try parsing as various types
     if s == "true" {
         Ok(LiteralValue::Boolean(lemma::BooleanValue::True))
     } else if s == "false" {
