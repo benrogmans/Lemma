@@ -18,7 +18,7 @@ pub struct LemmaDoc {
     pub rules: Vec<LemmaRule>,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LemmaFact {
     pub reference: FactReference,
     pub value: FactValue,
@@ -47,7 +47,7 @@ pub struct LemmaRule {
 }
 
 /// An expression that can be evaluated, with source location and unique ID
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Expression {
     pub kind: ExpressionKind,
     pub source_location: Option<Source>,
@@ -107,7 +107,7 @@ impl Expression {
 }
 
 /// The kind/type of expression
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ExpressionKind {
     Literal(LiteralValue),
     FactReference(FactReference),
@@ -132,7 +132,7 @@ pub enum ExpressionKind {
 /// Examples:
 /// - Local fact "age": segments=[], fact="age"
 /// - Cross-document "employee.salary": segments=["employee"], fact="salary"
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct FactReference {
     pub segments: Vec<String>,
     pub fact: String,
@@ -144,7 +144,7 @@ pub struct FactReference {
 /// Examples:
 /// - Local rule "has_license?": segments=[], rule="has_license"
 /// - Cross-document "employee.is_eligible?": segments=["employee"], rule="is_eligible"
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct RuleReference {
     pub segments: Vec<String>,
     pub rule: String,
@@ -154,7 +154,7 @@ pub struct RuleReference {
 ///
 /// Used in both FactPath and RulePath to represent document traversal.
 /// Each segment contains a fact name that points to a document.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PathSegment {
     /// Fact name at this segment
     pub fact: String,
@@ -167,7 +167,7 @@ pub struct PathSegment {
 ///
 /// Used after planning to represent fully resolved fact references.
 /// Public because used in ExecutionPlan and evaluation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct FactPath {
     /// Path segments: each segment is a fact name that points to a document
     pub segments: Vec<PathSegment>,
@@ -235,7 +235,7 @@ impl FactPath {
 ///
 /// Used after planning to represent fully resolved rule references.
 /// Public because used in ExecutionPlan and evaluation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct RulePath {
     /// Path segments: each segment is a fact name that points to a document
     pub segments: Vec<PathSegment>,
@@ -287,7 +287,7 @@ impl RuleReference {
 }
 
 /// Arithmetic computations
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub enum ArithmeticComputation {
     Add,
     Subtract,
@@ -326,7 +326,7 @@ impl ArithmeticComputation {
 }
 
 /// Comparison computations
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub enum ComparisonComputation {
     GreaterThan,
     LessThan,
@@ -371,7 +371,7 @@ impl ComparisonComputation {
 }
 
 /// The target unit for unit conversion expressions
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ConversionTarget {
     Mass(MassUnit),
     Length(LengthUnit),
@@ -388,7 +388,7 @@ pub enum ConversionTarget {
 }
 
 /// Types of logical negation
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum NegationType {
     Not, // "not expression"
 }
@@ -408,13 +408,13 @@ pub enum LogicalComputation {
 /// validation and constraint enforcement.
 ///
 /// Example: `veto "Must be over 18"` - blocks the rule entirely with a message
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VetoExpression {
     pub message: Option<String>,
 }
 
 /// Mathematical computations
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub enum MathematicalComputation {
     Sqrt,  // Square root
     Sin,   // Sine
@@ -431,20 +431,20 @@ pub enum MathematicalComputation {
     Round, // Round to nearest
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum FactValue {
     Literal(LiteralValue),
     DocumentReference(String),
     TypeAnnotation(TypeAnnotation),
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TypeAnnotation {
     LemmaType(LemmaType),
 }
 
 /// A type for type annotations (both literal types and document types)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum LemmaType {
     Text,
     Number,
@@ -679,7 +679,15 @@ impl LemmaType {
 }
 
 /// Boolean value with original input preserved
-#[derive(Debug, Clone, PartialEq, Serialize, strum_macros::EnumString, strum_macros::Display)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    serde::Deserialize,
+    strum_macros::EnumString,
+    strum_macros::Display,
+)]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum BooleanValue {
     True,
@@ -743,7 +751,7 @@ impl std::ops::Not for &BooleanValue {
 }
 
 /// A literal value
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub enum LiteralValue {
     Number(Decimal),
     Text(String),
@@ -811,7 +819,7 @@ impl LiteralValue {
 }
 
 /// A time value
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
 pub struct TimeValue {
     pub hour: u8,
     pub minute: u8,
@@ -820,14 +828,14 @@ pub struct TimeValue {
 }
 
 /// A timezone value
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct TimezoneValue {
     pub offset_hours: i8,
     pub offset_minutes: u8,
 }
 
 /// A datetime value that preserves timezone information
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct DateTimeValue {
     pub year: i32,
     pub month: u32,
@@ -868,7 +876,16 @@ impl_unit_serialize!(
     DataUnit
 );
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum MassUnit {
     Kilogram,
@@ -879,7 +896,16 @@ pub enum MassUnit {
     Ounce,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum LengthUnit {
     Kilometer,
@@ -895,7 +921,16 @@ pub enum LengthUnit {
     Inch,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum VolumeUnit {
     #[strum(serialize = "cubic_meter")]
@@ -913,7 +948,16 @@ pub enum VolumeUnit {
     FluidOunce,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum DurationUnit {
     Year,
@@ -927,7 +971,16 @@ pub enum DurationUnit {
     Microsecond,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum TemperatureUnit {
     Celsius,
@@ -935,7 +988,16 @@ pub enum TemperatureUnit {
     Kelvin,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum PowerUnit {
     Megawatt,
@@ -945,7 +1007,16 @@ pub enum PowerUnit {
     Horsepower,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum ForceUnit {
     Newton,
@@ -953,7 +1024,16 @@ pub enum ForceUnit {
     Lbf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum PressureUnit {
     Megapascal,
@@ -966,7 +1046,16 @@ pub enum PressureUnit {
     Mmhg,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum EnergyUnit {
     Megajoule,
@@ -979,7 +1068,16 @@ pub enum EnergyUnit {
     Btu,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum FrequencyUnit {
     Hertz,
@@ -988,7 +1086,16 @@ pub enum FrequencyUnit {
     Gigahertz,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, strum_macros::Display, strum_macros::EnumString)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum DataUnit {
     Petabyte,
@@ -1009,7 +1116,7 @@ pub enum DataUnit {
 /// - Comparisons always compare numeric values (ignoring units)
 /// - Same-unit arithmetic preserves the unit
 /// - Cross-unit arithmetic produces dimensionless numbers
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub enum NumericUnit {
     Mass(Decimal, MassUnit),
     Length(Decimal, LengthUnit),

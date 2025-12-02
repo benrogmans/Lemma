@@ -1,9 +1,10 @@
 use crate::planning::ExecutionPlan;
-use crate::semantic::{BooleanValue, LemmaType, LiteralValue};
+use crate::semantic::{BooleanValue, FactPath, LemmaFact, LemmaType, LiteralValue};
 use crate::LemmaError;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Deserializer, Serializer};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Convert JSON values to typed Lemma values using the ExecutionPlan for type information.
 ///
@@ -344,6 +345,76 @@ where
             map.end()
         }
     }
+}
+
+/// Custom serializer for HashMap<FactPath, LemmaFact>
+///
+/// JSON object keys must be strings, so FactPath keys are serialized as strings
+/// using their Display implementation (e.g., "age" or "employee.salary").
+pub fn serialize_fact_path_map<S>(
+    map: &HashMap<FactPath, LemmaFact>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut map_serializer = serializer.serialize_map(Some(map.len()))?;
+    for (key, value) in map {
+        map_serializer.serialize_entry(&key.to_string(), value)?;
+    }
+    map_serializer.end()
+}
+
+/// Custom deserializer for HashMap<FactPath, LemmaFact>
+///
+/// Deserializes string keys back to FactPath using FactPath::from_path().
+pub fn deserialize_fact_path_map<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<FactPath, LemmaFact>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let map: HashMap<String, LemmaFact> = HashMap::deserialize(deserializer)?;
+    let mut result = HashMap::new();
+    for (key_str, value) in map {
+        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
+        let fact_path = FactPath::from_path(path_parts);
+        result.insert(fact_path, value);
+    }
+    Ok(result)
+}
+
+/// Custom serializer for HashSet<FactPath>
+///
+/// Serializes as a JSON array of strings using FactPath's Display implementation.
+pub fn serialize_fact_path_set<S>(set: &HashSet<FactPath>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use serde::ser::SerializeSeq;
+    let mut seq = serializer.serialize_seq(Some(set.len()))?;
+    for item in set {
+        seq.serialize_element(&item.to_string())?;
+    }
+    seq.end()
+}
+
+/// Custom deserializer for HashSet<FactPath>
+///
+/// Deserializes array of strings back to FactPath using FactPath::from_path().
+pub fn deserialize_fact_path_set<'de, D>(deserializer: D) -> Result<HashSet<FactPath>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let vec: Vec<String> = Vec::deserialize(deserializer)?;
+    let mut result = HashSet::new();
+    for key_str in vec {
+        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
+        let fact_path = FactPath::from_path(path_parts);
+        result.insert(fact_path);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

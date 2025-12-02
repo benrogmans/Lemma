@@ -28,6 +28,9 @@ mod msgpack;
 mod protobuf;
 
 pub use json::from_json;
-pub use json::{serialize_literal_value, serialize_operation_result};
+pub use json::{
+    deserialize_fact_path_map, deserialize_fact_path_set, serialize_fact_path_map,
+    serialize_fact_path_set, serialize_literal_value, serialize_operation_result,
+};
 pub use msgpack::from_msgpack;
 pub use protobuf::from_protobuf;

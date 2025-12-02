@@ -4,7 +4,7 @@ use crate::parsing::ast::Span;
 ///
 /// Combines source file identifier, span, and document name
 /// for consistent source location tracking across the codebase.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Source {
     /// Source file identifier (e.g., filename or "<input>")
     pub source_id: String,
