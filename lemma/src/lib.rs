@@ -7,7 +7,7 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,no_run
+//! ```rust
 //! use lemma::{Engine, LemmaResult};
 //!
 //! fn main() -> LemmaResult<()> {

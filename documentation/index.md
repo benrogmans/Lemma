@@ -321,6 +321,50 @@ rule is_overdue = today > deadline
 
 See: [examples/05_date_handling.lemma](examples/05_date_handling.lemma)
 
+## Inverse Reasoning
+
+Inversion allows you to find what input values produce a desired output. This is useful for questions like "What quantity gives me a 30% discount?" or "What salary produces a total compensation of $100,000?"
+
+**Note:** Inversion is available in the Rust engine library.
+
+### Example
+
+```rust
+use lemma::{Engine, Target, LiteralValue};
+use std::collections::HashMap;
+
+let mut engine = Engine::new();
+
+engine.add_lemma_code(r#"
+    doc pricing
+    fact quantity = [number]
+    fact is_vip = false
+
+    rule discount = 0%
+      unless quantity >= 10 then 10%
+      unless quantity >= 50 then 20%
+      unless is_vip then 25%
+"#, "pricing.lemma")?;
+
+// Find what gives a 25% discount
+use rust_decimal::Decimal;
+let response = engine.invert(
+    "pricing",
+    "discount",
+    Target::value(LiteralValue::Percentage(Decimal::from(25))),
+    HashMap::new()
+)?;
+
+// Response shows: is_vip must be true (regardless of quantity)
+```
+
+The inversion response contains:
+- **Solutions**: Domain constraints for each variable
+- **Shape**: Symbolic representation of all valid solutions
+- **Free variables**: Facts that can vary while still satisfying the target
+
+See the [engine README](../lemma/README.md#inverse-reasoning) for detailed API documentation.
+
 ## Complete Examples
 
 Browse [examples/](examples/) directory:

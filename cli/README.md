@@ -32,7 +32,7 @@ lemma run tax_calculation income=75000 filing_status="married"
 lemma run --interactive
 
 # Show document structure
-lemma show examples/pricing
+lemma show pricing
 
 # List available documents
 lemma list ./documentation/examples

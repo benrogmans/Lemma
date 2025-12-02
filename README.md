@@ -20,10 +20,10 @@ rule discount = 0%
   unless quantity >= 50 then 20%
   unless is_vip         then 25%
 
-rule price = quantity * 20 eur - discount?
+rule price = quantity * 20 - discount?
 ```
 
-Note how Lemma automatically deducts the discount percentage in the expression `quantity * 20 eur - discount?`.
+Note how Lemma automatically deducts the discount percentage in the expression `quantity * 20 - discount?`.
 
 ## Why Lemma?
 
