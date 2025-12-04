@@ -1,5 +1,7 @@
-use lemma::Engine;
+use lemma::{Engine, LiteralValue, OperationResult};
+use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::str::FromStr;
 
 #[test]
 fn test_employee_contract_comprehensive() {
@@ -47,12 +49,18 @@ rule contract_valid = is_salary_valid? and vacation_days_ok? and is_adult?
         .values()
         .find(|r| r.rule.name == "total_compensation")
         .unwrap();
-    assert!(total_comp
-        .result
-        .value()
-        .unwrap()
-        .to_string()
-        .contains("82,500"));
+    match &total_comp.result {
+        OperationResult::Value(LiteralValue::Number(n)) => {
+            let expected = Decimal::from_str("82500").unwrap();
+            let diff = (*n - expected).abs();
+            assert!(
+                diff < Decimal::from_str("1").unwrap(),
+                "total_compensation should be approximately 82500, got {}",
+                n
+            );
+        }
+        other => panic!("total_compensation should be a number, got: {:?}", other),
+    }
 
     let contract_valid = response
         .results
@@ -60,9 +68,6 @@ rule contract_valid = is_salary_valid? and vacation_days_ok? and is_adult?
         .find(|r| r.rule.name == "contract_valid")
         .unwrap();
     assert_eq!(contract_valid.result.value().unwrap().to_string(), "true");
-
-    engine.remove_document("employment_terms");
-    engine.remove_document("base_contract");
 }
 
 #[test]
@@ -105,12 +110,19 @@ rule final_cost = (base_shipping? + distance_fee?) * express_multiplier?
         .values()
         .find(|r| r.rule.name == "weight_in_pounds")
         .unwrap();
-    assert!(weight_pounds
-        .result
-        .value()
-        .unwrap()
-        .to_string()
-        .contains("11.02"));
+    match &weight_pounds.result {
+        OperationResult::Value(LiteralValue::Number(n)) => {
+            // 5 kg ≈ 11.0231 lbs
+            let expected = Decimal::from_str("11.0231").unwrap();
+            let diff = (*n - expected).abs();
+            assert!(
+                diff < Decimal::from_str("0.1").unwrap(),
+                "weight_in_pounds should be approximately 11.02 lbs (5 kg), got {}",
+                n
+            );
+        }
+        other => panic!("weight_in_pounds should be a number, got: {:?}", other),
+    }
 
     let weight_surcharge = response
         .results
@@ -118,8 +130,6 @@ rule final_cost = (base_shipping? + distance_fee?) * express_multiplier?
         .find(|r| r.rule.name == "weight_surcharge")
         .unwrap();
     assert_eq!(weight_surcharge.result.value().unwrap().to_string(), "true");
-
-    engine.remove_document("shipping");
 }
 
 #[test]
@@ -161,12 +171,13 @@ rule effective_rate = (tax_amount? / income) * 100%
         .values()
         .find(|r| r.rule.name == "taxable_income")
         .unwrap();
-    assert!(taxable
-        .result
-        .value()
-        .unwrap()
-        .to_string()
-        .contains("70,000"));
+    match &taxable.result {
+        OperationResult::Value(LiteralValue::Number(n)) => {
+            // income = 80000, deductions = 10000, so taxable_income = 70000
+            assert_eq!(*n, Decimal::from_str("70000").unwrap());
+        }
+        other => panic!("taxable_income should be 70000, got: {:?}", other),
+    }
 
     let in_mid = response
         .results
@@ -180,9 +191,13 @@ rule effective_rate = (tax_amount? / income) * 100%
         .values()
         .find(|r| r.rule.name == "tax_rate")
         .unwrap();
-    assert!(tax_rate.result.value().unwrap().to_string().contains("20"));
-
-    engine.remove_document("tax_calculation");
+    match &tax_rate.result {
+        OperationResult::Value(LiteralValue::Percentage(n)) => {
+            // taxable_income = 70000 is in mid bracket, so tax_rate = 20%
+            assert_eq!(*n, Decimal::from_str("20").unwrap());
+        }
+        other => panic!("tax_rate should be 20%, got: {:?}", other),
+    }
 }
 
 #[test]
@@ -284,9 +299,6 @@ rule status = "OK"
         status2.result.value().unwrap().to_string(),
         "\"USAGE_ALERT\""
     );
-
-    engine.remove_document("monitoring");
-    engine.remove_document("config");
 }
 
 #[test]
@@ -327,12 +339,19 @@ rule trip_summary = is_high_speed? and is_long_distance? and is_high_power?
         .values()
         .find(|r| r.rule.name == "mass_in_pounds")
         .unwrap();
-    assert!(mass_pounds
-        .result
-        .value()
-        .unwrap()
-        .to_string()
-        .contains("22.04"));
+    match &mass_pounds.result {
+        OperationResult::Value(LiteralValue::Number(n)) => {
+            // 10 kg ≈ 22.0462 lbs
+            let expected = Decimal::from_str("22.0462").unwrap();
+            let diff = (*n - expected).abs();
+            assert!(
+                diff < Decimal::from_str("0.1").unwrap(),
+                "mass_in_pounds should be approximately 22.04 lbs (10 kg), got {}",
+                n
+            );
+        }
+        other => panic!("mass_in_pounds should be a number, got: {:?}", other),
+    }
 
     let trip_summary = response
         .results
@@ -340,8 +359,6 @@ rule trip_summary = is_high_speed? and is_long_distance? and is_high_power?
         .find(|r| r.rule.name == "trip_summary")
         .unwrap();
     assert_eq!(trip_summary.result.value().unwrap().to_string(), "true");
-
-    engine.remove_document("physics_calculation");
 }
 
 #[test]
@@ -394,8 +411,6 @@ rule status = "LOW"
         .find(|r| r.rule.name == "status")
         .unwrap();
     assert_eq!(status2.result.value().unwrap().to_string(), "\"HIGH\"");
-
-    engine.remove_document("dynamic_config");
 }
 
 #[test]
@@ -442,8 +457,6 @@ rule is_on_schedule = elapsed_time? <= phase1_duration + phase2_duration
         .find(|r| r.rule.name == "is_phase2_complete")
         .unwrap();
     assert_eq!(phase2_complete.result.value().unwrap().to_string(), "false");
-
-    engine.remove_document("project_timeline");
 }
 
 // ============================================================================
@@ -471,9 +484,17 @@ rule end_date = start + duration
         .unwrap();
 
     assert!(end_date.result.value().is_some());
-    let result_str = end_date.result.value().unwrap().to_string();
-    assert!(result_str.contains("2024"));
-    assert!(result_str.contains("2") && result_str.contains("14"));
+    let result_value = end_date.result.value().unwrap();
+    
+    // Verify exact date: 2024-01-15 + 30 days = 2024-02-14
+    match result_value {
+        LiteralValue::Date(dt) => {
+            assert_eq!(dt.year, 2024, "end_date year should be 2024");
+            assert_eq!(dt.month, 2, "end_date month should be 2 (February)");
+            assert_eq!(dt.day, 14, "end_date day should be 14");
+        }
+        other => panic!("end_date should be a Date, got: {:?}", other),
+    }
 }
 
 #[test]
@@ -497,9 +518,17 @@ rule start_date = end - duration
         .unwrap();
 
     assert!(start_date.result.value().is_some());
-    let result_str = start_date.result.value().unwrap().to_string();
-    assert!(result_str.contains("2024"));
-    assert!(result_str.contains("1") && result_str.contains("15"));
+    let result_value = start_date.result.value().unwrap();
+    
+    // Verify exact date: 2024-02-14 - 30 days = 2024-01-15
+    match result_value {
+        LiteralValue::Date(dt) => {
+            assert_eq!(dt.year, 2024, "start_date year should be 2024");
+            assert_eq!(dt.month, 1, "start_date month should be 1 (January)");
+            assert_eq!(dt.day, 15, "start_date day should be 15");
+        }
+        other => panic!("start_date should be a Date, got: {:?}", other),
+    }
 }
 
 #[test]
@@ -523,10 +552,23 @@ rule duration = end - start
         .unwrap();
 
     assert!(duration.result.value().is_some());
-    let result_str = duration.result.value().unwrap().to_string();
-    // Date - Date returns seconds (30 days = 2,592,000 seconds)
-    assert!(result_str.contains("2,592,000"));
-    assert!(result_str.contains("second"));
+    let result_value = duration.result.value().unwrap();
+    
+    // Date - Date returns duration in seconds (30 days = 2,592,000 seconds)
+    match result_value {
+        LiteralValue::Unit(lemma::NumericUnit::Duration(value, unit)) => {
+            assert_eq!(*unit, lemma::DurationUnit::Second, "duration unit should be seconds");
+            // 30 days = 30 * 24 * 60 * 60 = 2,592,000 seconds
+            let expected = Decimal::from_str("2592000").unwrap();
+            let diff = (value - expected).abs();
+            assert!(
+                diff < Decimal::from_str("1").unwrap(),
+                "duration should be approximately 2,592,000 seconds (30 days), got {}",
+                value
+            );
+        }
+        other => panic!("duration should be a Duration unit with seconds, got: {:?}", other),
+    }
 }
 
 #[test]
@@ -785,7 +827,15 @@ rule probation_end = base_contract.project_start + base_contract.probation_perio
         .unwrap();
 
     assert!(probation_end.result.value().is_some());
-    let result_str = probation_end.result.value().unwrap().to_string();
-    assert!(result_str.contains("2024"));
-    assert!(result_str.contains("4") && result_str.contains("14"));
+    let result_value = probation_end.result.value().unwrap();
+    
+    // Verify exact date: 2024-01-15 + 90 days = 2024-04-14
+    match result_value {
+        lemma::LiteralValue::Date(dt) => {
+            assert_eq!(dt.year, 2024, "probation_end year should be 2024");
+            assert_eq!(dt.month, 4, "probation_end month should be 4 (April)");
+            assert_eq!(dt.day, 14, "probation_end day should be 14");
+        }
+        other => panic!("probation_end should be a Date, got: {:?}", other),
+    }
 }

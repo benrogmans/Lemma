@@ -1,3 +1,15 @@
+//! Multi-level nested document reference tests
+//!
+//! This file tests complex scenarios with multiple levels of document nesting:
+//! - Multi-level document references (A -> B -> C)
+//! - Rule references through nested document chains
+//! - Fact overrides at multiple nesting levels
+//! - Deep nested fact access
+//! - Document reference overrides in nested structures
+//!
+//! For basic cross-document functionality, see `cross_document_references.rs`.
+//! For regression tests of specific bugs, see `document_reference_bugs.rs`.
+
 use lemma::Engine;
 use std::collections::HashMap;
 

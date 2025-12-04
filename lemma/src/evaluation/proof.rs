@@ -6,7 +6,7 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 pub struct Proof {
     pub rule_path: RulePath,
-    pub source: Option<Source>,
+    pub source: Source,
     pub result: OperationResult,
     pub tree: ProofNode,
 }
@@ -15,13 +15,13 @@ pub struct Proof {
 pub enum ProofNode {
     Value {
         value: LiteralValue,
-        source: ValueSource,
-        source_location: Option<Source>,
+        origin: ValueOrigin,
+        source: Source,
     },
     RuleReference {
         rule_path: RulePath,
         result: OperationResult,
-        source_location: Option<Source>,
+        source: Source,
         expansion: Box<ProofNode>,
     },
     Computation {
@@ -29,29 +29,29 @@ pub enum ProofNode {
         original_expression: String,
         expression: String,
         result: LiteralValue,
-        source_location: Option<Source>,
+        source: Source,
         operands: Vec<ProofNode>,
     },
     Branches {
         matched: Box<Branch>,
         non_matched: Vec<NonMatchedBranch>,
-        source_location: Option<Source>,
+        source: Source,
     },
     Condition {
         original_expression: String,
         expression: String,
         result: bool,
-        source_location: Option<Source>,
+        source: Source,
         operands: Vec<ProofNode>,
     },
     Veto {
         message: Option<String>,
-        source_location: Option<Source>,
+        source: Source,
     },
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub enum ValueSource {
+pub enum ValueOrigin {
     Fact { fact_ref: FactPath },
     Literal,
     Computed,
@@ -59,10 +59,10 @@ pub enum ValueSource {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Branch {
-    pub condition: Option<Box<ProofNode>>,
+    pub condition: Box<ProofNode>,
     pub result: Box<ProofNode>,
     pub clause_index: Option<usize>,
-    pub source_location: Option<Source>,
+    pub source: Source,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,5 +70,5 @@ pub struct NonMatchedBranch {
     pub condition: Box<ProofNode>,
     pub result: Option<Box<ProofNode>>,
     pub clause_index: Option<usize>,
-    pub source_location: Option<Source>,
+    pub source: Source,
 }

@@ -1,3 +1,12 @@
+//! Regression tests for document reference bugs
+//!
+//! This file contains tests that were created to verify fixes for specific bugs
+//! related to cross-document references. These tests ensure that previously
+//! broken functionality now works correctly.
+//!
+//! For basic cross-document functionality, see `cross_document_references.rs`.
+//! For multi-level nesting scenarios, see `nested_document_references.rs`.
+
 use lemma::Engine;
 use std::collections::HashMap;
 

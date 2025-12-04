@@ -1,3 +1,14 @@
+//! Basic cross-document reference functionality tests
+//!
+//! This file tests fundamental cross-document reference capabilities:
+//! - Fact references across documents
+//! - Rule references across documents
+//! - Fact overrides with cross-document references
+//! - Simple nested document references
+//!
+//! For multi-level nesting scenarios, see `nested_document_references.rs`.
+//! For regression tests of specific bugs, see `document_reference_bugs.rs`.
+
 use lemma::Engine;
 use std::collections::HashMap;
 

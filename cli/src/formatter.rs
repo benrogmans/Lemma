@@ -1,4 +1,4 @@
-use lemma::evaluation::proof::{NonMatchedBranch, ProofNode, ValueSource};
+use lemma::evaluation::proof::{NonMatchedBranch, ProofNode, ValueOrigin};
 use lemma::{
     InversionResponse, LemmaDoc, LemmaFact, LemmaRule, LiteralValue, NumericUnit, OperationResult,
     Response, RuleResult,
@@ -136,13 +136,21 @@ impl Formatter {
     pub fn format_inversion_response(&self, response: &InversionResponse) -> String {
         let mut output = String::new();
         if response.is_empty() {
-            output.push_str("No response found.\n");
+            output.push_str("No solutions found.\n");
         } else {
             output.push_str(&format!("Found {} solution(s):\n\n", response.len()));
-            for (i, solution) in response.iter().enumerate() {
+            for (i, solution) in response.solutions.iter().enumerate() {
                 output.push_str(&format!("Solution {}:\n", i + 1));
-                for (fact_ref, domain) in solution {
-                    output.push_str(&format!("  {} = {:?}\n", fact_ref, domain));
+                output.push_str(&format!("  Outcome: {}\n", solution.outcome));
+
+                if i < response.domains.len() {
+                    let domain_map = &response.domains[i];
+                    if !domain_map.is_empty() {
+                        output.push_str("  Domains:\n");
+                        for (fact_ref, domain) in domain_map {
+                            output.push_str(&format!("    {}: {}\n", fact_ref, domain));
+                        }
+                    }
                 }
                 output.push('\n');
             }
@@ -329,7 +337,8 @@ impl Formatter {
             ]);
         }
 
-        if let Some(source) = &result.rule.source_location {
+        if true {
+            let source = &result.rule.source;
             let location = format!(
                 "Source: {}:{}:{}",
                 source.source_id, source.span.line, source.span.col
@@ -362,8 +371,8 @@ impl Formatter {
             indent,
         };
         match node {
-            ProofNode::Value { value, source, .. } => {
-                self.render_value(value, source, &mut ctx);
+            ProofNode::Value { value, origin, .. } => {
+                self.render_value(value, origin, &mut ctx);
             }
             ProofNode::RuleReference {
                 rule_path,
@@ -417,10 +426,10 @@ impl Formatter {
             indent,
         };
         match node {
-            ProofNode::Value { value, source, .. } => {
-                let display = match source {
-                    ValueSource::Fact { fact_ref } => fact_ref.to_string(),
-                    ValueSource::Literal | ValueSource::Computed => value.to_string(),
+            ProofNode::Value { value, origin, .. } => {
+                let display = match origin {
+                    ValueOrigin::Fact { fact_ref } => fact_ref.to_string(),
+                    ValueOrigin::Literal | ValueOrigin::Computed => value.to_string(),
                 };
                 ctx.rows.push(Row {
                     left: format!(
@@ -447,10 +456,10 @@ impl Formatter {
         }
     }
 
-    fn render_value(&self, value: &LiteralValue, source: &ValueSource, ctx: &mut RenderContext) {
+    fn render_value(&self, value: &LiteralValue, source: &ValueOrigin, ctx: &mut RenderContext) {
         let display = match source {
-            ValueSource::Fact { fact_ref } => fact_ref.to_string(),
-            ValueSource::Literal | ValueSource::Computed => value.to_string(),
+            ValueOrigin::Fact { fact_ref } => fact_ref.to_string(),
+            ValueOrigin::Literal | ValueOrigin::Computed => value.to_string(),
         };
         ctx.rows.push(Row {
             left: format!("{}└─ {}", ctx.indent, display),
@@ -559,19 +568,19 @@ impl Formatter {
         for (_, branch_item) in all_branches {
             match branch_item {
                 BranchItem::Matched(branch) => {
-                    let has_condition = branch.condition.is_some();
+                    // All branches now have explicit conditions (normalized)
+                    let has_condition = true;
 
-                    if let Some(condition) = &branch.condition {
-                        ctx.rows.push(Row {
-                            left: format!(
-                                "{}✓ {}",
-                                ctx.indent,
-                                self.extract_condition_text(condition)
-                            ),
-                            unit: String::new(),
-                            value: String::new(),
-                        });
-                    }
+                    // Condition is always present after normalization
+                    ctx.rows.push(Row {
+                        left: format!(
+                            "{}✓ {}",
+                            ctx.indent,
+                            self.extract_condition_text(&branch.condition)
+                        ),
+                        unit: String::new(),
+                        value: String::new(),
+                    });
 
                     if !matches!(&*branch.result, ProofNode::Value { .. }) {
                         let result_indent = if has_condition {
@@ -721,9 +730,9 @@ impl Formatter {
                 original_expression,
                 ..
             } => original_expression.clone(),
-            ProofNode::Value { value, source, .. } => match source {
-                ValueSource::Fact { fact_ref } => fact_ref.to_string(),
-                ValueSource::Literal | ValueSource::Computed => value.to_string(),
+            ProofNode::Value { value, origin, .. } => match origin {
+                ValueOrigin::Fact { fact_ref } => fact_ref.to_string(),
+                ValueOrigin::Literal | ValueOrigin::Computed => value.to_string(),
             },
             ProofNode::RuleReference { rule_path, .. } => rule_path.to_string(),
             ProofNode::Branches { .. } => "<branches>".to_string(),

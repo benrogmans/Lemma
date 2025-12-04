@@ -31,7 +31,7 @@ pub(crate) fn parse_fact_definition(
 
     let mut fact = LemmaFact::new(FactReference::local(name), value);
     if let (Some(source_id), Some(doc_name)) = (source_id, doc_name) {
-        fact = fact.with_source_location(Source::new(
+        fact = fact.with_source(Source::new(
             source_id.to_string(),
             span,
             doc_name.to_string(),
@@ -69,7 +69,7 @@ pub(crate) fn parse_fact_override(
     let override_ref = FactReference::from_path(override_ref_path);
     let mut fact = LemmaFact::new(override_ref, value);
     if let (Some(source_id), Some(doc_name)) = (source_id, doc_name) {
-        fact = fact.with_source_location(Source::new(
+        fact = fact.with_source(Source::new(
             source_id.to_string(),
             span,
             doc_name.to_string(),
@@ -167,4 +167,118 @@ fn parse_fact_literal(pair: Pair<Rule>) -> Result<FactValue, LemmaError> {
             LemmaError::Engine("Grammar error: literal must contain a literal value".to_string())
         })?)?;
     Ok(FactValue::Literal(literal_value))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parsing::parse;
+    use crate::{FactValue, LiteralValue};
+
+    #[test]
+    fn test_parse_simple_document_reference() {
+        let input = r#"doc person
+fact name = "John"
+fact contract = doc employment_contract"#;
+        let result = parse(
+            input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].facts.len(), 2);
+
+        if let FactValue::DocumentReference(doc_name) = &result[0].facts[1].value {
+            assert_eq!(doc_name, "employment_contract");
+        } else {
+            panic!("Expected DocumentReference");
+        }
+    }
+
+    #[test]
+    fn test_parse_fact_overrides() {
+        let input = r#"doc person
+fact contract = doc employment_contract
+fact contract.start_date = 2024-02-01
+fact contract.end_date = [date]
+fact contract.employment_type = "contractor"
+fact contract.base = doc base_contract
+fact contract.base.rate = 100"#;
+        let result = parse(
+            input,
+            Some("test.lemma".to_string()),
+            &crate::ResourceLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].facts.len(), 6);
+
+        assert_eq!(
+            result[0].facts[0].reference,
+            crate::FactReference::from_path(vec!["contract".to_string()])
+        );
+        if let FactValue::DocumentReference(doc_name) = &result[0].facts[0].value {
+            assert_eq!(doc_name, "employment_contract");
+        } else {
+            panic!("Expected DocumentReference");
+        }
+
+        assert_eq!(
+            result[0].facts[1].reference,
+            crate::FactReference::from_path(vec!["contract".to_string(), "start_date".to_string()])
+        );
+        assert!(
+            matches!(
+                &result[0].facts[1].value,
+                FactValue::Literal(LiteralValue::Date(_))
+            ),
+            "Expected Date literal"
+        );
+
+        assert_eq!(
+            result[0].facts[2].reference,
+            crate::FactReference::from_path(vec!["contract".to_string(), "end_date".to_string()])
+        );
+        assert!(
+            matches!(&result[0].facts[2].value, FactValue::TypeAnnotation(_)),
+            "Expected TypeAnnotation"
+        );
+
+        assert_eq!(
+            result[0].facts[3].reference,
+            crate::FactReference::from_path(vec![
+                "contract".to_string(),
+                "employment_type".to_string()
+            ])
+        );
+        if let FactValue::Literal(LiteralValue::Text(s)) = &result[0].facts[3].value {
+            assert_eq!(s, "contractor");
+        } else {
+            panic!("Expected Text literal");
+        }
+
+        assert_eq!(
+            result[0].facts[4].reference,
+            crate::FactReference::from_path(vec!["contract".to_string(), "base".to_string()])
+        );
+        if let FactValue::DocumentReference(doc_name) = &result[0].facts[4].value {
+            assert_eq!(doc_name, "base_contract");
+        } else {
+            panic!("Expected DocumentReference");
+        }
+
+        assert_eq!(
+            result[0].facts[5].reference,
+            crate::FactReference::from_path(vec![
+                "contract".to_string(),
+                "base".to_string(),
+                "rate".to_string()
+            ])
+        );
+        if let FactValue::Literal(LiteralValue::Number(n)) = &result[0].facts[5].value {
+            assert_eq!(*n, rust_decimal::Decimal::new(100, 0));
+        } else {
+            panic!("Expected Number literal");
+        }
+    }
 }

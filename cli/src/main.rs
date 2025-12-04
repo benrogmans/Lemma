@@ -297,51 +297,31 @@ fn list_command(root: &PathBuf) -> Result<()> {
 }
 
 fn server_command(workdir: &Path, host: &str, port: u16) -> Result<()> {
-    #[cfg(feature = "server")]
-    {
-        use tokio::runtime::Runtime;
-        let rt = Runtime::new()?;
-        rt.block_on(async {
-            let mut engine = Engine::new();
-            load_workspace(&mut engine, workdir)?;
+    use tokio::runtime::Runtime;
+    let rt = Runtime::new()?;
+    rt.block_on(async {
+        let mut engine = Engine::new();
+        load_workspace(&mut engine, workdir)?;
 
-            println!(
-                "Starting HTTP server with {} document(s) loaded",
-                engine.list_documents().len()
-            );
-            server::http::start_server(engine, host, port).await
-        })?;
-    }
-
-    #[cfg(not(feature = "server"))]
-    {
-        eprintln!("Error: Server feature not enabled");
-        eprintln!("Recompile with: cargo build --features server");
-        std::process::exit(1);
-    }
+        println!(
+            "Starting HTTP server with {} document(s) loaded",
+            engine.list_documents().len()
+        );
+        server::http::start_server(engine, host, port).await
+    })?;
 
     Ok(())
 }
 
 fn mcp_command(workdir: &Path) -> Result<()> {
-    #[cfg(feature = "mcp")]
-    {
-        let mut engine = Engine::new();
-        load_workspace(&mut engine, workdir)?;
+    let mut engine = Engine::new();
+    load_workspace(&mut engine, workdir)?;
 
-        println!(
-            "Starting MCP server with {} document(s) loaded",
-            engine.list_documents().len()
-        );
-        mcp::server::start_server(engine)?;
-    }
-
-    #[cfg(not(feature = "mcp"))]
-    {
-        eprintln!("Error: MCP feature not enabled");
-        eprintln!("Recompile with: cargo build --features mcp");
-        std::process::exit(1);
-    }
+    println!(
+        "Starting MCP server with {} document(s) loaded",
+        engine.list_documents().len()
+    );
+    mcp::server::start_server(engine)?;
 
     Ok(())
 }

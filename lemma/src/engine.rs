@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 pub struct Engine {
     execution_plans: HashMap<String, crate::planning::ExecutionPlan>,
     documents: HashMap<String, LemmaDoc>,
-    sources: HashMap<String, String>,
+    sources: HashMap<String, (String, String)>,
     evaluator: Evaluator,
     limits: ResourceLimits,
 }
@@ -43,12 +43,23 @@ impl Engine {
         }
     }
 
-    pub fn add_lemma_code(&mut self, lemma_code: &str, source: &str) -> LemmaResult<()> {
-        let new_docs = parse(lemma_code, Some(source.to_owned()), &self.limits)?;
+    pub fn add_lemma_code(&mut self, lemma_code: &str, source_id: &str) -> LemmaResult<()> {
+        let new_docs = parse(lemma_code, Some(source_id.to_owned()), &self.limits)?;
 
         for doc in &new_docs {
-            let source_id = doc.source.clone().unwrap_or_else(|| doc.name.clone());
-            self.sources.insert(source_id, lemma_code.to_owned());
+            if self.documents.contains_key(&doc.name) {
+                return Err(LemmaError::Engine(format!(
+                    "Document '{}' already exists. Use remove_document() first to replace it.",
+                    doc.name
+                )));
+            }
+        }
+
+        for doc in &new_docs {
+            self.sources.insert(
+                doc.name.clone(),
+                (source_id.to_string(), lemma_code.to_string()),
+            );
             self.documents.insert(doc.name.clone(), doc.clone());
         }
 
@@ -83,6 +94,7 @@ impl Engine {
     pub fn remove_document(&mut self, doc_name: &str) {
         self.execution_plans.remove(doc_name);
         self.documents.remove(doc_name);
+        self.sources.remove(doc_name);
     }
 
     pub fn list_documents(&self) -> Vec<String> {
@@ -190,14 +202,14 @@ impl Engine {
 
     /// Invert a rule to find input domains that produce a desired outcome with JSON values.
     ///
-    /// This is a convenience method that accepts JSON directly and converts it
-    /// to typed values using the document's fact type declarations.
+    /// Uses world-based enumeration for accurate handling of correlated rule references.
+    /// Includes proof generation explaining why each solution is valid.
     ///
     /// Returns an InversionResponse containing:
-    /// - `solutions`: Concrete domain constraints for each free variable
-    /// - `shape`: The symbolic representation of the solution space
-    /// - `free_variables`: Facts that are not fully determined
-    /// - `is_fully_constrained`: Whether all facts have concrete values
+    /// - `solutions`: Solutions with conditions, outcomes, and proofs
+    /// - `domains`: Concrete domain constraints for each undetermined fact
+    /// - `undetermined_facts`: Facts that remain free variables
+    /// - `is_determined`: Whether all facts have concrete values
     ///
     /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
     /// They are automatically parsed to the expected type based on the document schema.
@@ -220,14 +232,14 @@ impl Engine {
 
     /// Invert a rule to find input domains that produce a desired outcome.
     ///
-    /// This is the user-friendly API that accepts raw string values and parses them
-    /// to the appropriate types based on the document's fact type declarations.
+    /// Uses world-based enumeration for accurate handling of correlated rule references.
+    /// Includes proof generation explaining why each solution is valid.
     ///
     /// Returns an InversionResponse containing:
-    /// - `solutions`: Concrete domain constraints for each free variable
-    /// - `shape`: The symbolic representation of the solution space
-    /// - `free_variables`: Facts that are not fully determined
-    /// - `is_fully_constrained`: Whether all facts have concrete values
+    /// - `solutions`: Solutions with conditions, outcomes, and proofs
+    /// - `domains`: Concrete domain constraints for each undetermined fact
+    /// - `undetermined_facts`: Facts that remain free variables
+    /// - `is_determined`: Whether all facts have concrete values
     ///
     /// Values are provided as name -> value string pairs (e.g., "quantity" -> "5").
     /// They are automatically parsed to the expected type based on the document schema.
@@ -243,7 +255,6 @@ impl Engine {
             .get(doc_name)
             .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
 
-        // Resolve value keys to FactPaths for inversion
         let provided_facts: HashSet<crate::FactPath> = values
             .keys()
             .filter_map(|k| base_plan.get_fact_by_path_str(k).map(|(fp, _)| fp.clone()))
@@ -256,15 +267,14 @@ impl Engine {
 
     /// Invert a rule to find input domains that produce a desired outcome.
     ///
-    /// This is the strict API that accepts pre-typed LiteralValue values.
-    /// Use this for programmatic APIs, protobuf, msgpack, FFI, and other
-    /// strongly-typed interfaces where values are already parsed.
+    /// Uses world-based enumeration for accurate handling of correlated rule references.
+    /// Includes proof generation explaining why each solution is valid.
     ///
     /// Returns an InversionResponse containing:
-    /// - `solutions`: Concrete domain constraints for each free variable
-    /// - `shape`: The symbolic representation of the solution space
-    /// - `free_variables`: Facts that are not fully determined
-    /// - `is_fully_constrained`: Whether all facts have concrete values
+    /// - `solutions`: Solutions with conditions, outcomes, and proofs
+    /// - `domains`: Concrete domain constraints for each undetermined fact
+    /// - `undetermined_facts`: Facts that remain free variables
+    /// - `is_determined`: Whether all facts have concrete values
     ///
     /// Values are provided as name -> LiteralValue pairs (e.g., "quantity" -> Number(5)).
     pub fn invert_strict(
@@ -279,7 +289,6 @@ impl Engine {
             .get(doc_name)
             .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
 
-        // Resolve value keys to FactPaths for inversion
         let provided_facts: HashSet<crate::FactPath> = values
             .keys()
             .filter_map(|k| base_plan.get_fact_by_path_str(k).map(|(fp, _)| fp.clone()))
@@ -311,8 +320,168 @@ impl Engine {
         target: crate::Target,
         provided_facts: HashSet<crate::FactPath>,
     ) -> LemmaResult<crate::InversionResponse> {
-        let shape = crate::inversion::invert(rule_name, target, &plan, &provided_facts)?;
-        let solutions = crate::inversion::shape_to_domains(&shape)?;
-        Ok(crate::InversionResponse::new(shape, solutions))
+        crate::inversion::invert(rule_name, target, &plan, &provided_facts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_number_type_validation_rejects_text() {
+        let code = r#"
+doc test
+fact age = [number]
+rule doubled = age * 2
+"#;
+
+        let mut engine = Engine::new();
+        engine.add_lemma_code(code, "test.lemma").unwrap();
+
+        let mut facts = HashMap::new();
+        facts.insert("age".to_string(), "twenty".to_string());
+
+        let result = engine.evaluate("test", vec![], facts);
+
+        assert!(result.is_err(), "Expected error but got: {:?}", result);
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("Failed to parse fact 'age'"),
+            "Error was: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn test_multiple_type_validations() {
+        let code = r#"
+doc test
+fact price = [number]
+fact quantity = [number]
+fact active = [boolean]
+rule total = price * quantity
+"#;
+
+        let mut engine = Engine::new();
+        engine.add_lemma_code(code, "test.lemma").unwrap();
+
+        let mut facts = HashMap::new();
+        facts.insert("price".to_string(), "expensive".to_string());
+        facts.insert("quantity".to_string(), "5".to_string());
+        facts.insert("active".to_string(), "true".to_string());
+
+        let result = engine.evaluate("test", vec![], facts);
+        assert!(result.is_err(), "Expected type mismatch error");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to parse fact 'price'"));
+
+        let mut facts = HashMap::new();
+        facts.insert("price".to_string(), "100".to_string());
+        facts.insert("quantity".to_string(), "five".to_string());
+        facts.insert("active".to_string(), "true".to_string());
+
+        let result = engine.evaluate("test", vec![], facts);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to parse fact 'quantity'"));
+
+        let mut facts = HashMap::new();
+        facts.insert("price".to_string(), "100".to_string());
+        facts.insert("quantity".to_string(), "5".to_string());
+        facts.insert("active".to_string(), "maybe".to_string());
+
+        let result = engine.evaluate("test", vec![], facts);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to parse fact 'active'"));
+
+        let mut facts = HashMap::new();
+        facts.insert("price".to_string(), "100".to_string());
+        facts.insert("quantity".to_string(), "5".to_string());
+        facts.insert("active".to_string(), "true".to_string());
+
+        let result = engine.evaluate("test", vec![], facts);
+        assert!(result.is_ok(), "Should succeed with all valid fact types");
+        
+        // Verify the calculation is correct
+        let response = result.unwrap();
+        let total_rule = response.results.get("total").expect("Should have total rule");
+        match &total_rule.result {
+            crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
+                // total = price * quantity = 100 * 5 = 500
+                assert_eq!(*n, Decimal::from_str("500").unwrap());
+            }
+            other => panic!("total should be 500, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_literal_fact_type_validation() {
+        let code = r#"
+doc test
+fact base_price = 50
+rule total = base_price * 1.2
+"#;
+
+        let mut engine = Engine::new();
+        engine.add_lemma_code(code, "test.lemma").unwrap();
+
+        let mut facts = HashMap::new();
+        facts.insert("base_price".to_string(), "sixty".to_string());
+
+        let result = engine.evaluate("test", vec![], facts);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to parse fact 'base_price'"));
+
+        // When base_price is overridden, it uses the override value
+        let mut facts = HashMap::new();
+        facts.insert("base_price".to_string(), "60".to_string());
+
+        let result = engine.evaluate("test", vec![], facts);
+        assert!(result.is_ok(), "Should succeed with valid literal fact type");
+        
+        // Verify the calculation is correct
+        let response = result.unwrap();
+        let total_rule = response.results.get("total").expect("Should have total rule");
+        match &total_rule.result {
+            crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
+                // total = base_price * 1.2 = 60 * 1.2 = 72 (override value, not literal 50)
+                assert_eq!(*n, Decimal::from_str("72").unwrap());
+            }
+            other => panic!("total should be 72 (60 * 1.2), got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_unknown_fact_override_rejected() {
+        let code = r#"
+doc test
+fact price = [number]
+rule total = price * 1.1
+"#;
+
+        let mut engine = Engine::new();
+        engine.add_lemma_code(code, "test.lemma").unwrap();
+
+        let mut facts = HashMap::new();
+        facts.insert("price".to_string(), "100".to_string());
+        facts.insert("unknown_fact".to_string(), "42".to_string());
+
+        let result = engine.evaluate("test", vec![], facts);
+        assert!(result.is_err(), "Expected error for unknown fact override");
+        assert!(result.unwrap_err().to_string().contains("unknown_fact"));
     }
 }

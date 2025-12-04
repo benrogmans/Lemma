@@ -2,6 +2,11 @@
 //!
 //! Tests the planning module end-to-end, including validation,
 //! type inference, dependency analysis, and execution plan building.
+//!
+//! Note: These tests require the `planning_internal_tests` feature to be enabled.
+//! This feature flag is used because these tests access internal planning APIs
+//! that are not part of the public API surface. To run these tests, use:
+//! `cargo test --features planning_internal_tests -p lemma-engine`
 
 #![cfg(feature = "planning_internal_tests")]
 
@@ -23,7 +28,12 @@ rule is_adult = age >= 18"#;
     .unwrap();
 
     let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), input.to_string());
+    for doc in &docs {
+        sources.insert(
+            doc.name.clone(),
+            ("test.lemma".to_string(), input.to_string()),
+        );
+    }
 
     for doc in &docs {
         let result = planning::plan(doc, &docs, sources.clone());
@@ -49,7 +59,10 @@ fact name = "Jane""#;
     .unwrap();
 
     let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), input.to_string());
+    sources.insert(
+        docs[0].name.clone(),
+        ("test.lemma".to_string(), input.to_string()),
+    );
 
     let result = planning::plan(&docs[0], &docs, sources);
 
@@ -86,7 +99,10 @@ rule is_adult = age >= 21"#;
     .unwrap();
 
     let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), input.to_string());
+    sources.insert(
+        docs[0].name.clone(),
+        ("test.lemma".to_string(), input.to_string()),
+    );
 
     let result = planning::plan(&docs[0], &docs, sources);
 
@@ -122,7 +138,10 @@ rule b = a?"#;
     .unwrap();
 
     let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), input.to_string());
+    sources.insert(
+        docs[0].name.clone(),
+        ("test.lemma".to_string(), input.to_string()),
+    );
 
     let result = planning::plan(&docs[0], &docs, sources);
 
@@ -156,7 +175,10 @@ rule test2 = is_adult"#;
     .unwrap();
 
     let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), input.to_string());
+    sources.insert(
+        docs[0].name.clone(),
+        ("test.lemma".to_string(), input.to_string()),
+    );
 
     let result = planning::plan(&docs[0], &docs, sources);
 
@@ -195,7 +217,12 @@ fact employee = doc person"#;
     .unwrap();
 
     let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), input.to_string());
+    for doc in &docs {
+        sources.insert(
+            doc.name.clone(),
+            ("test.lemma".to_string(), input.to_string()),
+        );
+    }
 
     let result = planning::plan(&docs[0], &docs, sources);
 
@@ -220,7 +247,10 @@ fact contract = doc nonexistent"#;
     .unwrap();
 
     let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), input.to_string());
+    sources.insert(
+        docs[0].name.clone(),
+        ("test.lemma".to_string(), input.to_string()),
+    );
 
     let result = planning::plan(&docs[0], &docs, sources);
 

@@ -1,4 +1,3 @@
-#[cfg(feature = "server")]
 pub mod http {
     use axum::{
         extract::{Path, Query, State},
@@ -208,16 +207,5 @@ pub mod http {
             serde_json::Value::Null => String::new(),
             serde_json::Value::Array(_) | serde_json::Value::Object(_) => value.to_string(),
         }
-    }
-}
-
-#[cfg(not(feature = "server"))]
-pub mod http {
-    pub async fn start_server(
-        _engine: lemma::Engine,
-        _host: &str,
-        _port: u16,
-    ) -> anyhow::Result<()> {
-        anyhow::bail!("Server feature not enabled. Recompile with --features server")
     }
 }

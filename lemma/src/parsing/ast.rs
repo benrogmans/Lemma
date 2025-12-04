@@ -2,10 +2,7 @@
 //!
 //! This module contains metadata types used throughout the parser and compiler:
 //! - `Span` for tracking source code locations
-//! - `ExpressionId` for uniquely identifying AST nodes
-//! - `ExpressionIdGenerator` for generating unique IDs during parsing
-
-use std::fmt;
+//! - `ExpressionDepthTracker` for tracking expression depth during parsing
 
 /// Span representing a location in source code
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -28,47 +25,22 @@ impl Span {
     }
 }
 
-/// Unique identifier for each expression in the AST
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct ExpressionId(u64);
-
-impl ExpressionId {
-    #[must_use]
-    pub fn new(id: u64) -> Self {
-        Self(id)
-    }
-}
-
-impl fmt::Display for ExpressionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "expr_{}", self.0)
-    }
-}
-
-/// Counter for generating unique expression IDs
-pub struct ExpressionIdGenerator {
-    next_id: u64,
+/// Tracks expression depth for resource limiting
+pub struct ExpressionDepthTracker {
     depth: usize,
     max_depth: usize,
 }
 
-impl ExpressionIdGenerator {
+impl ExpressionDepthTracker {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn with_max_depth(max_depth: usize) -> Self {
         Self {
-            next_id: 0,
             depth: 0,
             max_depth,
         }
-    }
-
-    pub fn next_id(&mut self) -> ExpressionId {
-        let id = ExpressionId(self.next_id);
-        self.next_id += 1;
-        id
     }
 
     pub fn push_depth(&mut self) -> Result<(), String> {
@@ -93,12 +65,11 @@ impl ExpressionIdGenerator {
     }
 }
 
-impl Default for ExpressionIdGenerator {
+impl Default for ExpressionDepthTracker {
     fn default() -> Self {
         Self {
-            next_id: 0,
             depth: 0,
-            max_depth: 100, // Default limit
+            max_depth: 100,
         }
     }
 }

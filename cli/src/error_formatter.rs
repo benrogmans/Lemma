@@ -16,31 +16,31 @@ pub fn format_error(error: &LemmaError) -> String {
                 _ => unreachable!(),
             };
 
-            let doc_line = if details.source_location.span.line >= details.doc_start_line {
-                details.source_location.span.line - details.doc_start_line + 1
+            let doc_line = if details.source.span.line >= details.doc_start_line {
+                details.source.span.line - details.doc_start_line + 1
             } else {
-                details.source_location.span.line
+                details.source.span.line
             };
 
             let enhanced_message = format!(
                 "{error_type}: {} (in doc '{}' at line {}, file {}:{})",
                 details.message,
-                details.source_location.doc_name,
+                details.source.doc_name,
                 doc_line,
-                details.source_location.source_id,
-                details.source_location.span.line
+                details.source.source_id,
+                details.source.span.line
             );
 
             let mut report = Report::build(
                 ReportKind::Error,
-                &details.source_location.source_id,
-                details.source_location.span.start,
+                &details.source.source_id,
+                details.source.span.start,
             )
             .with_message(enhanced_message)
             .with_label(
                 Label::new((
-                    &details.source_location.source_id,
-                    details.source_location.span.start..details.source_location.span.end,
+                    &details.source.source_id,
+                    details.source.span.start..details.source.span.end,
                 ))
                 .with_message("")
                 .with_color(Color::Red),
@@ -52,7 +52,7 @@ pub fn format_error(error: &LemmaError) -> String {
 
             match report.finish().write(
                 (
-                    &details.source_location.source_id,
+                    &details.source.source_id,
                     Source::from(details.source_text.as_ref()),
                 ),
                 &mut output,

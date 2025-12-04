@@ -1,4 +1,3 @@
-#[cfg(feature = "mcp")]
 pub mod server {
     use anyhow::Result;
     use lemma::Engine;
@@ -474,15 +473,5 @@ pub mod server {
 
         info!("MCP server shutting down");
         Ok(())
-    }
-}
-
-#[cfg(not(feature = "mcp"))]
-pub mod server {
-    use anyhow::Result;
-    use lemma::Engine;
-
-    pub fn start_server(_engine: Engine) -> Result<()> {
-        anyhow::bail!("MCP feature not enabled. Recompile with --features mcp")
     }
 }

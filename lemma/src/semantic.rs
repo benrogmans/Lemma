@@ -1,17 +1,17 @@
 use crate::error::LemmaError;
-use crate::parsing::ast::ExpressionId;
 use crate::parsing::source::Source;
 use chrono::{Datelike, Timelike};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 /// A Lemma document containing facts, rules
 #[derive(Debug, Clone, PartialEq)]
 pub struct LemmaDoc {
     pub name: String,
-    pub source: Option<String>,
+    pub source_text: Option<String>,
     pub start_line: usize,
     pub commentary: Option<String>,
     pub facts: Vec<LemmaFact>,
@@ -22,7 +22,7 @@ pub struct LemmaDoc {
 pub struct LemmaFact {
     pub reference: FactReference,
     pub value: FactValue,
-    pub source_location: Option<Source>,
+    pub source: Source,
 }
 
 /// An unless clause that provides an alternative result
@@ -34,7 +34,7 @@ pub struct LemmaFact {
 pub struct UnlessClause {
     pub condition: Expression,
     pub result: Expression,
-    pub source_location: Option<Source>,
+    pub source: Source,
 }
 
 /// A rule with a single expression and optional unless clauses
@@ -43,40 +43,91 @@ pub struct LemmaRule {
     pub name: String,
     pub expression: Expression,
     pub unless_clauses: Vec<UnlessClause>,
-    pub source_location: Option<Source>,
+    pub source: Source,
 }
 
-/// An expression that can be evaluated, with source location and unique ID
+/// An expression that can be evaluated, with source location
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Expression {
     pub kind: ExpressionKind,
-    pub source_location: Option<Source>,
-    pub id: ExpressionId,
+    pub source: Source,
 }
 
 impl Expression {
-    /// Create a new expression with kind, source location, and ID
+    /// Create a new expression with kind and source location
     #[must_use]
-    pub fn new(kind: ExpressionKind, source_location: Option<Source>, id: ExpressionId) -> Self {
-        Self {
-            kind,
-            source_location,
-            id,
-        }
+    pub fn new(kind: ExpressionKind, source: Source) -> Self {
+        Self { kind, source }
     }
 
-    /// Get the source text for this expression from the given sources map
+    /// Compute a semantic hash of this expression
     ///
-    /// Returns `None` if the expression has no source location or the source is not found.
-    pub fn get_source_text(
-        &self,
-        sources: &std::collections::HashMap<String, String>,
-    ) -> Option<String> {
-        self.source_location.as_ref().and_then(|loc| {
-            sources
-                .get(&loc.source_id)
-                .and_then(|source| loc.extract_text(source))
-        })
+    /// Hashes only the semantic content (kind and recursive children), excluding source location.
+    /// Semantically equal expressions produce the same hash.
+    pub fn semantic_hash<H: Hasher>(&self, state: &mut H) {
+        match &self.kind {
+            ExpressionKind::Literal(lit) => {
+                0u8.hash(state);
+                lit.hash(state);
+            }
+            ExpressionKind::FactPath(path) => {
+                1u8.hash(state);
+                path.hash(state);
+            }
+            ExpressionKind::RulePath(path) => {
+                2u8.hash(state);
+                path.hash(state);
+            }
+            ExpressionKind::Arithmetic(left, op, right) => {
+                3u8.hash(state);
+                op.hash(state);
+                left.semantic_hash(state);
+                right.semantic_hash(state);
+            }
+            ExpressionKind::LogicalAnd(left, right) => {
+                4u8.hash(state);
+                left.semantic_hash(state);
+                right.semantic_hash(state);
+            }
+            ExpressionKind::LogicalOr(left, right) => {
+                5u8.hash(state);
+                left.semantic_hash(state);
+                right.semantic_hash(state);
+            }
+            ExpressionKind::Comparison(left, op, right) => {
+                6u8.hash(state);
+                op.hash(state);
+                left.semantic_hash(state);
+                right.semantic_hash(state);
+            }
+            ExpressionKind::LogicalNegation(inner, neg_type) => {
+                7u8.hash(state);
+                neg_type.hash(state);
+                inner.semantic_hash(state);
+            }
+            ExpressionKind::MathematicalComputation(op, inner) => {
+                8u8.hash(state);
+                op.hash(state);
+                inner.semantic_hash(state);
+            }
+            ExpressionKind::UnitConversion(inner, target) => {
+                9u8.hash(state);
+                target.hash(state);
+                inner.semantic_hash(state);
+            }
+            ExpressionKind::Veto(veto) => {
+                10u8.hash(state);
+                veto.message.hash(state);
+            }
+            ExpressionKind::FactReference(fref) => {
+                11u8.hash(state);
+                fref.hash(state);
+            }
+            ExpressionKind::RuleReference(rref) => {
+                12u8.hash(state);
+                rref.hash(state);
+            }
+        }
     }
 
     /// Collect all FactPath references from this expression tree.
@@ -104,7 +155,46 @@ impl Expression {
             | ExpressionKind::RulePath(_) => {}
         }
     }
+
+    /// Returns true if this expression is a boolean false literal
+    #[must_use]
+    pub fn is_boolean_false(&self) -> bool {
+        matches!(
+            self.kind,
+            ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False))
+        )
+    }
+
+    /// Returns true if this expression is a boolean true literal
+    #[must_use]
+    pub fn is_boolean_true(&self) -> bool {
+        matches!(
+            self.kind,
+            ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True))
+        )
+    }
+
+    /// Check if this expression is semantically equal to another expression
+    ///
+    /// Compares semantic hashes for equality.
+    #[must_use]
+    pub fn semantically_equal(&self, other: &Expression) -> bool {
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher1 = DefaultHasher::new();
+        let mut hasher2 = DefaultHasher::new();
+        self.semantic_hash(&mut hasher1);
+        other.semantic_hash(&mut hasher2);
+        hasher1.finish() == hasher2.finish()
+    }
 }
+
+impl Hash for Expression {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.semantic_hash(state);
+    }
+}
+
+impl Eq for Expression {}
 
 /// The kind/type of expression
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -325,6 +415,16 @@ impl ArithmeticComputation {
     }
 }
 
+/// Notation style for equality comparisons (for display purposes)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize, Default)]
+pub enum EqualityNotation {
+    /// Symbol notation: == or !=
+    #[default]
+    Symbol,
+    /// Word notation: is or is not
+    Word,
+}
+
 /// Comparison computations
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub enum ComparisonComputation {
@@ -332,10 +432,8 @@ pub enum ComparisonComputation {
     LessThan,
     GreaterThanOrEqual,
     LessThanOrEqual,
-    Equal,
-    NotEqual,
-    Is,
-    IsNot,
+    Equal(EqualityNotation),
+    NotEqual(EqualityNotation),
 }
 
 impl ComparisonComputation {
@@ -347,10 +445,10 @@ impl ComparisonComputation {
             ComparisonComputation::LessThan => "less than",
             ComparisonComputation::GreaterThanOrEqual => "greater than or equal",
             ComparisonComputation::LessThanOrEqual => "less than or equal",
-            ComparisonComputation::Equal => "equal",
-            ComparisonComputation::NotEqual => "not equal",
-            ComparisonComputation::Is => "is",
-            ComparisonComputation::IsNot => "is not",
+            ComparisonComputation::Equal(EqualityNotation::Symbol) => "equal",
+            ComparisonComputation::Equal(EqualityNotation::Word) => "is",
+            ComparisonComputation::NotEqual(EqualityNotation::Symbol) => "not equal",
+            ComparisonComputation::NotEqual(EqualityNotation::Word) => "is not",
         }
     }
 
@@ -362,11 +460,23 @@ impl ComparisonComputation {
             ComparisonComputation::LessThan => "<",
             ComparisonComputation::GreaterThanOrEqual => ">=",
             ComparisonComputation::LessThanOrEqual => "<=",
-            ComparisonComputation::Equal => "==",
-            ComparisonComputation::NotEqual => "!=",
-            ComparisonComputation::Is => "is",
-            ComparisonComputation::IsNot => "is not",
+            ComparisonComputation::Equal(EqualityNotation::Symbol) => "==",
+            ComparisonComputation::Equal(EqualityNotation::Word) => "is",
+            ComparisonComputation::NotEqual(EqualityNotation::Symbol) => "!=",
+            ComparisonComputation::NotEqual(EqualityNotation::Word) => "is not",
         }
+    }
+
+    /// Check if this is an equality comparison (== or is)
+    #[must_use]
+    pub fn is_equal(&self) -> bool {
+        matches!(self, ComparisonComputation::Equal(_))
+    }
+
+    /// Check if this is an inequality comparison (!= or is not)
+    #[must_use]
+    pub fn is_not_equal(&self) -> bool {
+        matches!(self, ComparisonComputation::NotEqual(_))
     }
 }
 
@@ -818,8 +928,118 @@ impl LiteralValue {
     }
 }
 
+impl Hash for LiteralValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            LiteralValue::Number(d) => {
+                0u8.hash(state);
+                d.to_string().hash(state);
+            }
+            LiteralValue::Text(s) => {
+                1u8.hash(state);
+                s.hash(state);
+            }
+            LiteralValue::Date(dt) => {
+                2u8.hash(state);
+                dt.year.hash(state);
+                dt.month.hash(state);
+                dt.day.hash(state);
+                dt.hour.hash(state);
+                dt.minute.hash(state);
+                dt.second.hash(state);
+                dt.timezone.hash(state);
+            }
+            LiteralValue::Time(t) => {
+                3u8.hash(state);
+                t.hour.hash(state);
+                t.minute.hash(state);
+                t.second.hash(state);
+                t.timezone.hash(state);
+            }
+            LiteralValue::Boolean(b) => {
+                4u8.hash(state);
+                format!("{:?}", b).hash(state);
+            }
+            LiteralValue::Percentage(d) => {
+                5u8.hash(state);
+                d.to_string().hash(state);
+            }
+            LiteralValue::Unit(u) => {
+                6u8.hash(state);
+                u.hash(state);
+            }
+            LiteralValue::Regex(s) => {
+                7u8.hash(state);
+                s.hash(state);
+            }
+        }
+    }
+}
+
+impl Hash for NumericUnit {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            NumericUnit::Mass(v, unit) => {
+                0u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Length(v, unit) => {
+                1u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Volume(v, unit) => {
+                2u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Duration(v, unit) => {
+                3u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Temperature(v, unit) => {
+                4u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Power(v, unit) => {
+                5u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Force(v, unit) => {
+                6u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Pressure(v, unit) => {
+                7u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Energy(v, unit) => {
+                8u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Frequency(v, unit) => {
+                9u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Data(v, unit) => {
+                10u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+        }
+    }
+}
+
 /// A time value
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, serde::Deserialize)]
 pub struct TimeValue {
     pub hour: u8,
     pub minute: u8,
@@ -828,14 +1048,14 @@ pub struct TimeValue {
 }
 
 /// A timezone value
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub struct TimezoneValue {
     pub offset_hours: i8,
     pub offset_minutes: u8,
 }
 
 /// A datetime value that preserves timezone information
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub struct DateTimeValue {
     pub year: i32,
     pub month: u32,
@@ -1243,7 +1463,10 @@ impl FactReference {
                 fact: String::new(),
             }
         } else {
-            let fact = path.last().unwrap().clone();
+            let fact = path
+                .last()
+                .expect("bug: path was checked for empty but last() returned None")
+                .clone();
             let segments = path[..path.len() - 1].to_vec();
             Self { segments, fact }
         }
@@ -1270,13 +1493,22 @@ impl LemmaFact {
         Self {
             reference,
             value,
-            source_location: None,
+            source: Source::new(
+                "<unknown>",
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "unknown",
+            ),
         }
     }
 
     #[must_use]
-    pub fn with_source_location(mut self, source_location: Source) -> Self {
-        self.source_location = Some(source_location);
+    pub fn with_source(mut self, source: Source) -> Self {
+        self.source = source;
         self
     }
 
@@ -1292,7 +1524,7 @@ impl LemmaDoc {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            source: None,
+            source_text: None,
             start_line: 1,
             commentary: None,
             facts: Vec::new(),
@@ -1301,8 +1533,8 @@ impl LemmaDoc {
     }
 
     #[must_use]
-    pub fn with_source(mut self, source: String) -> Self {
-        self.source = Some(source);
+    pub fn with_source_text(mut self, source_text: String) -> Self {
+        self.source_text = Some(source_text);
         self
     }
 
@@ -1626,10 +1858,10 @@ impl fmt::Display for ComparisonComputation {
             ComparisonComputation::LessThan => write!(f, "<"),
             ComparisonComputation::GreaterThanOrEqual => write!(f, ">="),
             ComparisonComputation::LessThanOrEqual => write!(f, "<="),
-            ComparisonComputation::Equal => write!(f, "=="),
-            ComparisonComputation::NotEqual => write!(f, "!="),
-            ComparisonComputation::Is => write!(f, "is"),
-            ComparisonComputation::IsNot => write!(f, "is not"),
+            ComparisonComputation::Equal(EqualityNotation::Symbol) => write!(f, "=="),
+            ComparisonComputation::Equal(EqualityNotation::Word) => write!(f, "is"),
+            ComparisonComputation::NotEqual(EqualityNotation::Symbol) => write!(f, "!="),
+            ComparisonComputation::NotEqual(EqualityNotation::Word) => write!(f, "is not"),
         }
     }
 }
@@ -1711,5 +1943,793 @@ impl fmt::Display for RulePath {
             write!(f, "{}.", segment.fact)?;
         }
         write!(f, "{}?", self.rule)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_arithmetic_operation_name() {
+        assert_eq!(ArithmeticComputation::Add.name(), "addition");
+        assert_eq!(ArithmeticComputation::Subtract.name(), "subtraction");
+        assert_eq!(ArithmeticComputation::Multiply.name(), "multiplication");
+        assert_eq!(ArithmeticComputation::Divide.name(), "division");
+        assert_eq!(ArithmeticComputation::Modulo.name(), "modulo");
+        assert_eq!(ArithmeticComputation::Power.name(), "exponentiation");
+    }
+
+    #[test]
+    fn test_comparison_operator_name() {
+        assert_eq!(ComparisonComputation::GreaterThan.name(), "greater than");
+        assert_eq!(ComparisonComputation::LessThan.name(), "less than");
+        assert_eq!(
+            ComparisonComputation::GreaterThanOrEqual.name(),
+            "greater than or equal"
+        );
+        assert_eq!(
+            ComparisonComputation::LessThanOrEqual.name(),
+            "less than or equal"
+        );
+        assert_eq!(
+            ComparisonComputation::Equal(EqualityNotation::Symbol).name(),
+            "equal"
+        );
+        assert_eq!(
+            ComparisonComputation::NotEqual(EqualityNotation::Symbol).name(),
+            "not equal"
+        );
+        assert_eq!(
+            ComparisonComputation::Equal(EqualityNotation::Word).name(),
+            "is"
+        );
+        assert_eq!(
+            ComparisonComputation::NotEqual(EqualityNotation::Word).name(),
+            "is not"
+        );
+    }
+
+    #[test]
+    fn test_literal_value_to_type() {
+        let one = Decimal::from_str("1").unwrap();
+
+        assert_eq!(
+            LiteralValue::Text("".to_string()).to_type(),
+            LemmaType::Text
+        );
+        assert_eq!(LiteralValue::Number(one).to_type(), LemmaType::Number);
+        assert_eq!(
+            LiteralValue::Boolean(crate::BooleanValue::True).to_type(),
+            LemmaType::Boolean
+        );
+
+        let dt = DateTimeValue {
+            year: 2024,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            timezone: None,
+        };
+        assert_eq!(LiteralValue::Date(dt).to_type(), LemmaType::Date);
+        assert_eq!(
+            LiteralValue::Percentage(one).to_type(),
+            LemmaType::Percentage
+        );
+        assert_eq!(
+            LiteralValue::Regex("".to_string()).to_type(),
+            LemmaType::Regex
+        );
+        assert_eq!(
+            LiteralValue::Unit(NumericUnit::Mass(one, MassUnit::Kilogram)).to_type(),
+            LemmaType::Mass
+        );
+        assert_eq!(
+            LiteralValue::Unit(NumericUnit::Length(one, LengthUnit::Meter)).to_type(),
+            LemmaType::Length
+        );
+        assert_eq!(
+            LiteralValue::Unit(NumericUnit::Volume(one, VolumeUnit::Liter)).to_type(),
+            LemmaType::Volume
+        );
+        assert_eq!(
+            LiteralValue::Unit(NumericUnit::Duration(one, DurationUnit::Second)).to_type(),
+            LemmaType::Duration
+        );
+        assert_eq!(
+            LiteralValue::Unit(NumericUnit::Temperature(one, TemperatureUnit::Celsius)).to_type(),
+            LemmaType::Temperature
+        );
+        assert_eq!(
+            LiteralValue::Unit(NumericUnit::Power(one, PowerUnit::Watt)).to_type(),
+            LemmaType::Power
+        );
+        assert_eq!(
+            LiteralValue::Unit(NumericUnit::Force(one, ForceUnit::Newton)).to_type(),
+            LemmaType::Force
+        );
+        assert_eq!(
+            LiteralValue::Unit(NumericUnit::Pressure(one, PressureUnit::Pascal)).to_type(),
+            LemmaType::Pressure
+        );
+        assert_eq!(
+            LiteralValue::Unit(NumericUnit::Energy(one, EnergyUnit::Joule)).to_type(),
+            LemmaType::Energy
+        );
+        assert_eq!(
+            LiteralValue::Unit(NumericUnit::Frequency(one, FrequencyUnit::Hertz)).to_type(),
+            LemmaType::Frequency
+        );
+        assert_eq!(
+            LiteralValue::Unit(NumericUnit::Data(one, DataUnit::Byte)).to_type(),
+            LemmaType::Data
+        );
+    }
+
+    #[test]
+    fn test_numeric_unit_value() {
+        let ten = Decimal::from_str("10").unwrap();
+        let twenty = Decimal::from_str("20").unwrap();
+
+        assert_eq!(NumericUnit::Mass(ten, MassUnit::Kilogram).value(), ten);
+        assert_eq!(
+            NumericUnit::Length(twenty, LengthUnit::Meter).value(),
+            twenty
+        );
+        assert_eq!(
+            NumericUnit::Duration(twenty, DurationUnit::Second).value(),
+            twenty
+        );
+    }
+
+    #[test]
+    fn test_numeric_unit_same_category() {
+        let ten = Decimal::from_str("10").unwrap();
+        let twenty = Decimal::from_str("20").unwrap();
+
+        let kg = NumericUnit::Mass(ten, MassUnit::Kilogram);
+        let lb = NumericUnit::Mass(twenty, MassUnit::Pound);
+        let meter = NumericUnit::Length(ten, LengthUnit::Meter);
+
+        assert!(kg.same_category(&lb), "Same mass units should match");
+        assert!(
+            !kg.same_category(&meter),
+            "Different unit types should not match"
+        );
+    }
+
+    #[test]
+    fn test_numeric_unit_with_value() {
+        let ten = Decimal::from_str("10").unwrap();
+        let fifty = Decimal::from_str("50").unwrap();
+
+        let original = NumericUnit::Mass(ten, MassUnit::Kilogram);
+        let updated = original.with_value(fifty);
+
+        assert_eq!(updated.value(), fifty);
+        assert!(original.same_category(&updated));
+        assert_eq!(format!("{}", updated), "50 kilogram");
+    }
+
+    #[test]
+    fn test_arithmetic_operation_display() {
+        assert_eq!(format!("{}", ArithmeticComputation::Add), "+");
+        assert_eq!(format!("{}", ArithmeticComputation::Subtract), "-");
+        assert_eq!(format!("{}", ArithmeticComputation::Multiply), "*");
+        assert_eq!(format!("{}", ArithmeticComputation::Divide), "/");
+        assert_eq!(format!("{}", ArithmeticComputation::Modulo), "%");
+        assert_eq!(format!("{}", ArithmeticComputation::Power), "^");
+    }
+
+    #[test]
+    fn test_comparison_operator_display() {
+        assert_eq!(format!("{}", ComparisonComputation::GreaterThan), ">");
+        assert_eq!(format!("{}", ComparisonComputation::LessThan), "<");
+        assert_eq!(
+            format!("{}", ComparisonComputation::GreaterThanOrEqual),
+            ">="
+        );
+        assert_eq!(format!("{}", ComparisonComputation::LessThanOrEqual), "<=");
+        assert_eq!(
+            format!("{}", ComparisonComputation::Equal(EqualityNotation::Symbol)),
+            "=="
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                ComparisonComputation::NotEqual(EqualityNotation::Symbol)
+            ),
+            "!="
+        );
+        assert_eq!(
+            format!("{}", ComparisonComputation::Equal(EqualityNotation::Word)),
+            "is"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                ComparisonComputation::NotEqual(EqualityNotation::Word)
+            ),
+            "is not"
+        );
+    }
+
+    #[test]
+    fn test_unit_display_formats() {
+        let one = Decimal::from_str("1").unwrap();
+
+        assert_eq!(format!("{}", MassUnit::Kilogram), "kilogram");
+        assert_eq!(format!("{}", MassUnit::Pound), "pound");
+        assert_eq!(
+            format!("{}", NumericUnit::Mass(one, MassUnit::Gram)),
+            "1 gram"
+        );
+
+        assert_eq!(format!("{}", LengthUnit::Meter), "meter");
+        assert_eq!(format!("{}", LengthUnit::Mile), "mile");
+
+        assert_eq!(format!("{}", VolumeUnit::Liter), "liter");
+        assert_eq!(format!("{}", VolumeUnit::Gallon), "gallon");
+
+        assert_eq!(format!("{}", DurationUnit::Second), "second");
+        assert_eq!(format!("{}", DurationUnit::Hour), "hour");
+
+        assert_eq!(format!("{}", TemperatureUnit::Celsius), "celsius");
+        assert_eq!(format!("{}", TemperatureUnit::Fahrenheit), "fahrenheit");
+
+        assert_eq!(format!("{}", PowerUnit::Watt), "watt");
+        assert_eq!(format!("{}", PowerUnit::Kilowatt), "kilowatt");
+
+        assert_eq!(format!("{}", ForceUnit::Newton), "newton");
+        assert_eq!(format!("{}", PressureUnit::Pascal), "pascal");
+        assert_eq!(format!("{}", EnergyUnit::Joule), "joule");
+        assert_eq!(format!("{}", FrequencyUnit::Hertz), "hertz");
+        assert_eq!(format!("{}", DataUnit::Byte), "byte");
+        assert_eq!(format!("{}", DataUnit::Gigabyte), "gigabyte");
+    }
+
+    #[test]
+    fn test_money_unit_display() {}
+
+    #[test]
+    fn test_conversion_target_display() {
+        assert_eq!(
+            format!("{}", ConversionTarget::Mass(MassUnit::Kilogram)),
+            "kilogram"
+        );
+        assert_eq!(
+            format!("{}", ConversionTarget::Length(LengthUnit::Meter)),
+            "meter"
+        );
+        assert_eq!(format!("{}", ConversionTarget::Percentage), "percentage");
+    }
+
+    #[test]
+    fn test_lemma_type_display() {
+        assert_eq!(format!("{}", LemmaType::Text), "text");
+        assert_eq!(format!("{}", LemmaType::Number), "number");
+        assert_eq!(format!("{}", LemmaType::Date), "date");
+        assert_eq!(format!("{}", LemmaType::Boolean), "boolean");
+        assert_eq!(format!("{}", LemmaType::Percentage), "percentage");
+        assert_eq!(format!("{}", LemmaType::Mass), "mass");
+    }
+
+    #[test]
+    fn test_literal_value_display_value() {
+        let ten = Decimal::from_str("10").unwrap();
+
+        assert_eq!(
+            LiteralValue::Text("hello".to_string()).display_value(),
+            "\"hello\""
+        );
+        assert_eq!(LiteralValue::Number(ten).display_value(), "10");
+        assert_eq!(
+            LiteralValue::Boolean(crate::BooleanValue::True).display_value(),
+            "true"
+        );
+        assert_eq!(
+            LiteralValue::Boolean(crate::BooleanValue::False).display_value(),
+            "false"
+        );
+        assert_eq!(LiteralValue::Percentage(ten).display_value(), "10%");
+
+        let time = TimeValue {
+            hour: 14,
+            minute: 30,
+            second: 0,
+            timezone: None,
+        };
+        let time_display = LiteralValue::Time(time).display_value();
+        assert!(time_display.contains("14"));
+        assert!(time_display.contains("30"));
+    }
+
+    #[test]
+    fn test_literal_value_time_type() {
+        let time = TimeValue {
+            hour: 14,
+            minute: 30,
+            second: 0,
+            timezone: None,
+        };
+        assert_eq!(LiteralValue::Time(time).to_type(), LemmaType::Date);
+    }
+
+    #[test]
+    fn test_datetime_value_display() {
+        let dt = DateTimeValue {
+            year: 2024,
+            month: 12,
+            day: 25,
+            hour: 14,
+            minute: 30,
+            second: 45,
+            timezone: Some(TimezoneValue {
+                offset_hours: 1,
+                offset_minutes: 0,
+            }),
+        };
+        let display = format!("{}", dt);
+        assert!(display.contains("2024"));
+        assert!(display.contains("12"));
+        assert!(display.contains("25"));
+    }
+
+    #[test]
+    fn test_time_value_display() {
+        let time = TimeValue {
+            hour: 14,
+            minute: 30,
+            second: 45,
+            timezone: Some(TimezoneValue {
+                offset_hours: -5,
+                offset_minutes: 30,
+            }),
+        };
+        let display = format!("{}", time);
+        assert!(display.contains("14"));
+        assert!(display.contains("30"));
+        assert!(display.contains("45"));
+    }
+
+    #[test]
+    fn test_timezone_value() {
+        let tz_positive = TimezoneValue {
+            offset_hours: 5,
+            offset_minutes: 30,
+        };
+        assert_eq!(tz_positive.offset_hours, 5);
+        assert_eq!(tz_positive.offset_minutes, 30);
+
+        let tz_negative = TimezoneValue {
+            offset_hours: -8,
+            offset_minutes: 0,
+        };
+        assert_eq!(tz_negative.offset_hours, -8);
+    }
+
+    #[test]
+    fn test_all_unit_categories() {
+        let v = Decimal::from_str("1").unwrap();
+
+        let _ = NumericUnit::Mass(v, MassUnit::Kilogram);
+        let _ = NumericUnit::Length(v, LengthUnit::Meter);
+        let _ = NumericUnit::Volume(v, VolumeUnit::Liter);
+        let _ = NumericUnit::Duration(v, DurationUnit::Second);
+        let _ = NumericUnit::Temperature(v, TemperatureUnit::Celsius);
+        let _ = NumericUnit::Power(v, PowerUnit::Watt);
+        let _ = NumericUnit::Force(v, ForceUnit::Newton);
+        let _ = NumericUnit::Pressure(v, PressureUnit::Pascal);
+        let _ = NumericUnit::Energy(v, EnergyUnit::Joule);
+        let _ = NumericUnit::Frequency(v, FrequencyUnit::Hertz);
+        let _ = NumericUnit::Data(v, DataUnit::Byte);
+    }
+
+    #[test]
+    fn test_negation_types() {
+        let _ = NegationType::Not;
+    }
+
+    #[test]
+    fn test_veto_expression() {
+        let veto_with_message = VetoExpression {
+            message: Some("Must be over 18".to_string()),
+        };
+        assert_eq!(
+            veto_with_message.message,
+            Some("Must be over 18".to_string())
+        );
+
+        let veto_without_message = VetoExpression { message: None };
+        assert!(veto_without_message.message.is_none());
+    }
+
+    #[test]
+    fn test_percentage_arithmetic() {
+        let code = r#"
+doc pricing
+fact discount = 25%
+rule net_multiplier = 1 - discount
+"#;
+
+        let mut engine = crate::Engine::new();
+        engine.add_lemma_code(code, "test.lemma").unwrap();
+
+        let response = engine.evaluate("pricing", vec![], std::collections::HashMap::new()).unwrap();
+        let result = response
+            .results
+            .get("net_multiplier")
+            .unwrap()
+            .result
+            .value()
+            .unwrap();
+
+        match result {
+            LiteralValue::Number(n) => {
+                assert_eq!(n, &rust_decimal::Decimal::from_str("0.75").unwrap())
+            }
+            _ => panic!("Expected Number, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_mass_operations() {
+        let code = r#"
+doc shipping
+fact weight = 10 kilograms
+rule double_weight = weight * 2
+rule is_heavy = weight > 5 kilograms
+"#;
+
+        let mut engine = crate::Engine::new();
+        engine.add_lemma_code(code, "test.lemma").unwrap();
+
+        let response = engine.evaluate("shipping", vec![], std::collections::HashMap::new()).unwrap();
+        let result = response
+            .results
+            .get("double_weight")
+            .unwrap()
+            .result
+            .value()
+            .unwrap();
+
+        match result {
+            LiteralValue::Unit(NumericUnit::Mass(amount, unit)) => {
+                assert_eq!(amount, &rust_decimal::Decimal::from_str("20").unwrap());
+                assert_eq!(*unit, MassUnit::Kilogram);
+            }
+            _ => panic!("Expected Mass, got {:?}", result),
+        }
+
+        let is_heavy = response.results.get("is_heavy").unwrap();
+        assert_eq!(
+            is_heavy.result,
+            crate::OperationResult::Value(crate::LiteralValue::Boolean(
+                crate::BooleanValue::True
+            ))
+        );
+    }
+
+    #[test]
+    fn test_consistent_number_types() {
+        let code = r#"
+doc test
+fact x = 10
+fact condition = true
+
+rule result = 5
+    unless condition then 10
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_consistent_text_types() {
+        let code = r#"
+doc test
+fact condition = true
+
+rule status = "pending"
+    unless condition then "approved"
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_consistent_boolean_types() {
+        let code = r#"
+doc test
+fact x = 10
+fact y = 20
+
+rule check = x > 5
+    unless y > 15 then y < 25
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mixed_number_and_text_rejected() {
+        let code = r#"
+doc test
+fact condition = true
+
+rule result = 100
+    unless condition then "text"
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("type")
+                || err.to_string().contains("incompatible")
+                || err.to_string().contains("Type mismatch")
+        );
+    }
+
+    #[test]
+    fn test_mixed_text_and_boolean_rejected() {
+        let code = r#"
+doc test
+fact condition = true
+
+rule result = "text"
+    unless condition then true
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("type")
+                || err.to_string().contains("incompatible")
+                || err.to_string().contains("Type mismatch")
+        );
+    }
+
+    #[test]
+    fn test_mixed_number_and_boolean_rejected() {
+        let code = r#"
+doc test
+fact condition = true
+
+rule result = 42
+    unless condition then false
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("type")
+                || err.to_string().contains("incompatible")
+                || err.to_string().contains("Type mismatch")
+        );
+    }
+
+    #[test]
+    fn test_multiple_unless_clauses_consistent() {
+        let code = r#"
+doc test
+fact a = true
+fact b = false
+
+rule result = 1
+    unless a then 2
+    unless b then 3
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_multiple_unless_clauses_inconsistent() {
+        let code = r#"
+doc test
+fact a = true
+fact b = false
+
+rule result = 1
+    unless a then 2
+    unless b then "three"
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("type")
+                || err.to_string().contains("incompatible")
+                || err.to_string().contains("Type mismatch")
+        );
+    }
+
+    #[test]
+    fn test_veto_with_consistent_types() {
+        let code = r#"
+doc test
+fact blocked = true
+fact condition = false
+
+rule result = 10
+    unless blocked then veto "blocked"
+    unless condition then 20
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_veto_with_mixed_types() {
+        let code = r#"
+doc test
+fact blocked = true
+fact condition = false
+
+rule result = 10
+    unless blocked then veto "blocked"
+    unless condition then "text"
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("type")
+                || err.to_string().contains("incompatible")
+                || err.to_string().contains("Type mismatch")
+        );
+    }
+
+    #[test]
+    fn test_all_veto_clauses_allowed() {
+        let code = r#"
+doc test
+fact a = true
+fact b = false
+
+rule result = 10
+    unless a then veto "a"
+    unless b then veto "b"
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_consistent_length_types() {
+        let code = r#"
+doc test
+fact condition = true
+
+rule distance = 100 meters
+    unless condition then 200 meters
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mixed_length_and_number_rejected() {
+        let code = r#"
+doc test
+fact condition = true
+
+rule distance = 100 meters
+    unless condition then 200
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("type")
+                || err.to_string().contains("incompatible")
+                || err.to_string().contains("Type mismatch")
+        );
+    }
+
+    #[test]
+    fn test_consistent_mass_types() {
+        let code = r#"
+doc test
+fact heavy = true
+
+rule weight = 10 kilograms
+    unless heavy then 20 kilograms
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mixed_mass_and_number_rejected() {
+        let code = r#"
+doc test
+fact heavy = true
+
+rule weight = 10 kilograms
+    unless heavy then 20
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("type")
+                || err.to_string().contains("incompatible")
+                || err.to_string().contains("Type mismatch")
+        );
+    }
+
+    #[test]
+    fn test_complex_expression_consistent_types() {
+        let code = r#"
+doc test
+fact x = 10
+fact y = 20
+fact condition = true
+
+rule result = x + y
+    unless condition then x * 2
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_comparison_expression_consistent_types() {
+        let code = r#"
+doc test
+fact x = 10
+fact condition = true
+
+rule check = x > 5
+    unless condition then x < 20
+"#;
+
+        let mut engine = crate::Engine::new();
+        let result = engine.add_lemma_code(code, "test.lemma");
+        assert!(result.is_ok());
     }
 }

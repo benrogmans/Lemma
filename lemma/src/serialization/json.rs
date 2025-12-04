@@ -438,16 +438,23 @@ mod tests {
                     fact: name.to_string(),
                 },
                 value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(lemma_type)),
-                source_location: None,
+                source: {
+                    use crate::parsing::ast::Span;
+                    crate::Source::new(
+                        "<test>",
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "test",
+                    )
+                },
             };
             fact_map.insert(fact_path, fact);
         }
-        ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: fact_map,
-            rules: vec![],
-            sources: HashMap::new(),
-        }
+        ExecutionPlan::new("test".to_string(), fact_map, vec![])
     }
 
     #[test]
