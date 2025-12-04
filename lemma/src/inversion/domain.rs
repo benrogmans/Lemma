@@ -1,24 +1,13 @@
-//! Domain collapsing: converts symbolic expressions to concrete value sets
+//! Domain types and operations for inversion
 //!
-//! This module provides:
+//! Provides:
 //! - `Domain` and `Bound` types for representing concrete value constraints
-//! - Domain operations: intersection, union, negation, normalization
-//! - `shape_to_domains()`: collapses symbolic Shape expressions → concrete Domain value sets
-//!
-//! ## Architecture
-//!
-//! - **Shape** = Symbolic algebraic function (piecewise function with symbolic expressions)
-//! - **Domain collapsing** = Concretization layer that:
-//!   - Collapses symbolic expressions → concrete value sets (ranges, enumerations)
-//!   - Detects numeric contradictions (empty domains) during collapse
-//!   - Filters unsatisfiable branches
-//!
-//! Shape may contain branches that are symbolically valid but numerically contradictory.
-//! Domain collapsing filters these out by detecting empty domains.
+//! - Domain operations: intersection, union, normalization
+//! - `extract_domains_from_constraint()`: extracts domains from constraints
 
-use crate::evaluation::operations::{comparison_operation, OperationResult};
+use crate::computation::{comparison_operation, OperationResult};
 use crate::{
-    BooleanValue, ComparisonComputation, Expression, ExpressionKind, FactPath, LemmaError,
+    BooleanValue, ComparisonComputation, FactPath, LemmaError,
     LemmaResult, LiteralValue,
 };
 use serde::ser::{Serialize, SerializeStruct, Serializer};
@@ -26,9 +15,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 
-use super::expansion;
-use super::shape::Shape;
-use super::solver;
+use super::constraint::Constraint;
 
 /// Domain specification for valid values
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +34,37 @@ pub enum Domain {
 
     /// Any value (no constraints)
     Unconstrained,
+
+    /// Empty domain (no valid values) - represents unsatisfiable constraints
+    Empty,
+}
+
+impl Domain {
+    /// Check if this domain is satisfiable (has at least one valid value)
+    ///
+    /// Returns false for Empty domains and empty Enumerations.
+    pub fn is_satisfiable(&self) -> bool {
+        match self {
+            Domain::Empty => false,
+            Domain::Enumeration(values) => !values.is_empty(),
+            Domain::Union(parts) => parts.iter().any(|p| p.is_satisfiable()),
+            Domain::Range { min, max } => !bounds_contradict(min, max),
+            Domain::Complement(inner) => {
+                !matches!(inner.as_ref(), Domain::Unconstrained)
+            }
+            Domain::Unconstrained => true,
+        }
+    }
+
+    /// Check if this domain is empty (unsatisfiable)
+    pub fn is_empty(&self) -> bool {
+        !self.is_satisfiable()
+    }
+
+    /// Intersect this domain with another, returning Empty if no overlap
+    pub fn intersect(&self, other: &Domain) -> Domain {
+        domain_intersection(self.clone(), other.clone()).unwrap_or(Domain::Empty)
+    }
 }
 
 /// Bound specification for ranges
@@ -65,6 +83,7 @@ pub enum Bound {
 impl fmt::Display for Domain {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Domain::Empty => write!(f, "empty"),
             Domain::Unconstrained => write!(f, "any"),
             Domain::Enumeration(vals) => {
                 write!(f, "{{")?;
@@ -129,6 +148,11 @@ impl Serialize for Domain {
         S: Serializer,
     {
         match self {
+            Domain::Empty => {
+                let mut st = serializer.serialize_struct("domain", 1)?;
+                st.serialize_field("type", "empty")?;
+                st.end()
+            }
             Domain::Unconstrained => {
                 let mut st = serializer.serialize_struct("domain", 1)?;
                 st.serialize_field("type", "unconstrained")?;
@@ -190,262 +214,112 @@ impl Serialize for Bound {
     }
 }
 
-fn find_all_variables_in_expression(expr: &Expression) -> Vec<FactPath> {
-    let mut variables = Vec::new();
-    collect_fact_paths(expr, &mut variables);
-    variables.sort_by(|a, b| {
-        let a_facts: Vec<&String> = a.segments.iter().map(|s| &s.fact).collect();
-        let b_facts: Vec<&String> = b.segments.iter().map(|s| &s.fact).collect();
-        a_facts.cmp(&b_facts).then(a.fact.cmp(&b.fact))
-    });
-    variables.dedup();
-    variables
-}
-
-fn collect_fact_paths(expr: &Expression, result: &mut Vec<FactPath>) {
-    match &expr.kind {
-        ExpressionKind::FactPath(fp) => {
-            result.push(fp.clone());
-        }
-        ExpressionKind::Arithmetic(l, _, r) => {
-            collect_fact_paths(l, result);
-            collect_fact_paths(r, result);
-        }
-        ExpressionKind::Comparison(l, _, r) => {
-            collect_fact_paths(l, result);
-            collect_fact_paths(r, result);
-        }
-        ExpressionKind::LogicalAnd(l, r) => {
-            collect_fact_paths(l, result);
-            collect_fact_paths(r, result);
-        }
-        ExpressionKind::LogicalOr(l, r) => {
-            collect_fact_paths(l, result);
-            collect_fact_paths(r, result);
-        }
-        ExpressionKind::LogicalNegation(inner, _) => {
-            collect_fact_paths(inner, result);
-        }
-        ExpressionKind::UnitConversion(inner, _) => {
-            collect_fact_paths(inner, result);
-        }
-        ExpressionKind::MathematicalComputation(_, inner) => {
-            collect_fact_paths(inner, result);
-        }
-        _ => {}
-    }
-}
-
-fn extract_domains_for_all_variables(
-    condition: &Expression,
+/// Extract domains for all facts mentioned in a constraint
+pub fn extract_domains_from_constraint(
+    constraint: &Constraint,
 ) -> LemmaResult<HashMap<FactPath, Domain>> {
-    let variables = find_all_variables_in_expression(condition);
+    let all_facts = constraint.collect_facts();
     let mut domains = HashMap::new();
 
-    for var in variables {
-        let domain = extract_domain_for_variable(condition, &var)?.unwrap_or(Domain::Unconstrained);
-        domains.insert(var, domain);
+    for fact_path in all_facts {
+        let domain = extract_domain_for_fact(constraint, &fact_path)?
+            .unwrap_or(Domain::Unconstrained);
+        domains.insert(fact_path, domain);
     }
 
     Ok(domains)
 }
 
-/// Collapse a Shape into concrete domains for each free variable
-///
-/// Converts symbolic expressions in Shape branches to concrete value sets (domains).
-/// Filters out branches with unsatisfiable conditions (detected as empty domains).
-pub fn shape_to_domains(shape: &Shape) -> LemmaResult<Vec<HashMap<FactPath, Domain>>> {
-    let mut result = Vec::new();
-
-    for branch in &shape.branches {
-        if let ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)) =
-            &branch.condition.kind
-        {
-            continue;
-        }
-
-        let domains = extract_domains_for_all_variables(&branch.condition)?;
-
-        if domains.values().any(is_empty_domain) {
-            continue;
-        }
-
-        result.push(domains);
-    }
-
-    if result.is_empty() {
-        return Err(LemmaError::Engine(format!(
-            "No valid solutions: all {} branch constraint(s) are unsatisfiable",
-            shape.branches.len()
-        )));
-    }
-
-    Ok(result)
-}
-
-fn extract_domain_for_variable(
-    condition: &Expression,
-    var: &FactPath,
+fn extract_domain_for_fact(
+    constraint: &Constraint,
+    fact_path: &FactPath,
 ) -> LemmaResult<Option<Domain>> {
-    match &condition.kind {
-        ExpressionKind::Literal(lit) => {
-            if let LiteralValue::Boolean(BooleanValue::True) = lit {
-                Ok(None)
+    let domain = match constraint {
+        Constraint::True => return Ok(None),
+        Constraint::False => Some(Domain::Enumeration(vec![])),
+
+        Constraint::Comparison { fact, op, value } => {
+            if fact == fact_path {
+                Some(comparison_to_domain(op, value)?)
             } else {
-                Ok(Some(Domain::Enumeration(vec![])))
+                None
             }
         }
 
-        ExpressionKind::Comparison(lhs, op, rhs) => {
-            extract_comparison_constraint(lhs, op, rhs, var)
+        Constraint::Fact(fp) => {
+            if fp == fact_path {
+                Some(Domain::Enumeration(vec![LiteralValue::Boolean(
+                    BooleanValue::True,
+                )]))
+            } else {
+                None
+            }
         }
 
-        ExpressionKind::LogicalAnd(lhs, rhs) => {
-            let left_domain = extract_domain_for_variable(lhs, var)?;
-            let right_domain = extract_domain_for_variable(rhs, var)?;
+        Constraint::And(left, right) => {
+            let left_domain = extract_domain_for_fact(left, fact_path)?;
+            let right_domain = extract_domain_for_fact(right, fact_path)?;
             match (left_domain, right_domain) {
-                (None, None) => Ok(None),
-                (Some(d), None) | (None, Some(d)) => Ok(Some(normalize_domain(d))),
+                (None, None) => None,
+                (Some(d), None) | (None, Some(d)) => Some(normalize_domain(d)),
                 (Some(a), Some(b)) => {
-                    let normalized_a = normalize_domain(a);
-                    let normalized_b = normalize_domain(b);
-                    match domain_intersection(normalized_a, normalized_b) {
-                        Some(domain) => Ok(Some(domain)),
-                        None => Ok(Some(Domain::Enumeration(vec![]))),
+                    match domain_intersection(a, b) {
+                        Some(domain) => Some(domain),
+                        None => Some(Domain::Enumeration(vec![])),
                     }
                 }
             }
         }
 
-        ExpressionKind::LogicalOr(lhs, rhs) => {
-            let left_domain = extract_domain_for_variable(lhs, var)?;
-            let right_domain = extract_domain_for_variable(rhs, var)?;
-            Ok(union_optional_domains(left_domain, right_domain))
+        Constraint::Or(left, right) => {
+            let left_domain = extract_domain_for_fact(left, fact_path)?;
+            let right_domain = extract_domain_for_fact(right, fact_path)?;
+            union_optional_domains(left_domain, right_domain)
         }
 
-        ExpressionKind::LogicalNegation(inner, _) => {
-            if let ExpressionKind::Comparison(lhs, ComparisonComputation::Equal, rhs) = &inner.kind
-            {
-                if matches!(&lhs.kind, ExpressionKind::FactPath(fp) if fp == var) {
-                    if let ExpressionKind::Literal(lit) = &rhs.kind {
-                        return Ok(Some(Domain::Complement(Box::new(Domain::Enumeration(
-                            vec![lit.clone()],
-                        )))));
-                    }
+        Constraint::Not(inner) => {
+            // Handle not (fact == value)
+            if let Constraint::Comparison { fact, op, value } = inner.as_ref() {
+                if fact == fact_path && op.is_equal() {
+                    return Ok(Some(normalize_domain(Domain::Complement(Box::new(
+                        Domain::Enumeration(vec![value.clone()])
+                    )))));
                 }
             }
 
-            if let Some(domain) = extract_domain_for_variable(inner, var)? {
-                Ok(Some(normalize_domain(Domain::Complement(Box::new(domain)))))
+            // Handle not (boolean_fact)
+            if let Constraint::Fact(fp) = inner.as_ref() {
+                if fp == fact_path {
+                    return Ok(Some(Domain::Enumeration(vec![LiteralValue::Boolean(
+                        BooleanValue::False,
+                    )])));
+                }
+            }
+
+            if let Some(domain) = extract_domain_for_fact(inner, fact_path)? {
+                Some(normalize_domain(Domain::Complement(Box::new(domain))))
             } else {
-                Ok(None)
+                None
             }
-        }
-
-        _ => Ok(None),
-    }
-}
-
-fn extract_comparison_constraint(
-    lhs: &Expression,
-    op: &ComparisonComputation,
-    rhs: &Expression,
-    var: &FactPath,
-) -> LemmaResult<Option<Domain>> {
-    let is_var_directly_on_left = matches!(&lhs.kind, ExpressionKind::FactPath(fp) if fp == var);
-    let is_var_directly_on_right = matches!(&rhs.kind, ExpressionKind::FactPath(fp) if fp == var);
-
-    if is_var_directly_on_left {
-        if let ExpressionKind::Literal(lit) = &rhs.kind {
-            return Ok(Some(comparison_to_domain(op, lit, false)?));
-        }
-    } else if is_var_directly_on_right {
-        if let ExpressionKind::Literal(lit) = &lhs.kind {
-            return Ok(Some(comparison_to_domain(op, lit, true)?));
-        }
-    }
-
-    let unknown = if var.is_local() {
-        (String::new(), var.fact.clone())
-    } else if var.segments.len() == 1 {
-        (var.segments[0].fact.clone(), var.fact.clone())
-    } else {
-        return Ok(None);
-    };
-
-    let fact_matcher = |fp: &FactPath, doc: &str, name: &str| -> bool {
-        if fp.is_local() {
-            fp.fact == name && doc.is_empty()
-        } else if fp.segments.len() == 1 {
-            fp.segments[0].fact == doc && fp.fact == name
-        } else {
-            false
         }
     };
 
-    if let ExpressionKind::Literal(target_lit) = &rhs.kind {
-        if solver::contains_unknown(lhs, &unknown, &fact_matcher)
-            && !is_var_directly_on_left
-            && solver::can_algebraically_solve(lhs, &unknown, &fact_matcher)
-        {
-            let target_expr = Expression::new(
-                ExpressionKind::Literal(target_lit.clone()),
-                None,
-                crate::parsing::ast::ExpressionId::new(0),
-            );
-            if let Ok(solved) = solver::algebraic_solve(lhs, &unknown, &target_expr, &fact_matcher)
-            {
-                let folded = expansion::try_constant_fold(&solved).unwrap_or(solved);
-                if let ExpressionKind::Literal(lit) = &folded.kind {
-                    return Ok(Some(comparison_to_domain(op, lit, false)?));
-                }
-            }
-        }
-    }
-
-    if let ExpressionKind::Literal(target_lit) = &lhs.kind {
-        if solver::contains_unknown(rhs, &unknown, &fact_matcher)
-            && !is_var_directly_on_right
-            && solver::can_algebraically_solve(rhs, &unknown, &fact_matcher)
-        {
-            let target_expr = Expression::new(
-                ExpressionKind::Literal(target_lit.clone()),
-                None,
-                crate::parsing::ast::ExpressionId::new(0),
-            );
-            if let Ok(solved) = solver::algebraic_solve(rhs, &unknown, &target_expr, &fact_matcher)
-            {
-                let folded = expansion::try_constant_fold(&solved).unwrap_or(solved);
-                if let ExpressionKind::Literal(lit) = &folded.kind {
-                    return Ok(Some(comparison_to_domain(op, lit, true)?));
-                }
-            }
-        }
-    }
-
-    Ok(None)
+    Ok(domain.map(normalize_domain))
 }
 
 fn comparison_to_domain(
     op: &ComparisonComputation,
     value: &LiteralValue,
-    flipped: bool,
 ) -> LemmaResult<Domain> {
-    let effective_op = if flipped {
-        flip_operator(op)
-    } else {
-        op.clone()
-    };
-
-    match effective_op {
-        ComparisonComputation::Equal | ComparisonComputation::Is => {
-            Ok(Domain::Enumeration(vec![value.clone()]))
-        }
-        ComparisonComputation::NotEqual => {
-            Ok(Domain::Complement(Box::new(Domain::Enumeration(vec![
-                value.clone(),
-            ]))))
-        }
+    if op.is_equal() {
+        return Ok(Domain::Enumeration(vec![value.clone()]));
+    }
+    if op.is_not_equal() {
+        return Ok(Domain::Complement(Box::new(Domain::Enumeration(vec![
+            value.clone(),
+        ]))));
+    }
+    match op {
         ComparisonComputation::LessThan => Ok(Domain::Range {
             min: Bound::Unbounded,
             max: Bound::Exclusive(value.clone()),
@@ -464,20 +338,8 @@ fn comparison_to_domain(
         }),
         _ => Err(LemmaError::Engine(format!(
             "Unsupported comparison operator for domain extraction: {:?}",
-            effective_op
+            op
         ))),
-    }
-}
-
-fn flip_operator(op: &ComparisonComputation) -> ComparisonComputation {
-    match op {
-        ComparisonComputation::Equal => ComparisonComputation::Equal,
-        ComparisonComputation::NotEqual => ComparisonComputation::NotEqual,
-        ComparisonComputation::LessThan => ComparisonComputation::GreaterThan,
-        ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThanOrEqual,
-        ComparisonComputation::GreaterThan => ComparisonComputation::LessThan,
-        ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThanOrEqual,
-        _ => op.clone(),
     }
 }
 
@@ -490,13 +352,14 @@ fn union_optional_domains(a: Option<Domain>, b: Option<Domain>) -> Option<Domain
 }
 
 fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
+    use crate::EqualityNotation;
     if let OperationResult::Value(LiteralValue::Boolean(BooleanValue::True)) =
         comparison_operation(a, &ComparisonComputation::LessThan, b)
     {
         return -1;
     }
     if let OperationResult::Value(LiteralValue::Boolean(BooleanValue::True)) =
-        comparison_operation(a, &ComparisonComputation::Equal, b)
+        comparison_operation(a, &ComparisonComputation::Equal(EqualityNotation::Symbol), b)
     {
         return 0;
     }
@@ -527,19 +390,82 @@ fn bounds_contradict(min: &Bound, max: &Bound) -> bool {
     }
 }
 
-fn is_empty_domain(domain: &Domain) -> bool {
-    match domain {
-        Domain::Enumeration(vals) => vals.is_empty(),
-        Domain::Range { min, max } => bounds_contradict(min, max),
-        Domain::Union(parts) => parts.is_empty() || parts.iter().all(is_empty_domain),
-        Domain::Complement(_) => false,
-        Domain::Unconstrained => false,
+fn compute_intersection_min(min1: Bound, min2: Bound) -> Bound {
+    match (min1, min2) {
+        (Bound::Unbounded, x) | (x, Bound::Unbounded) => x,
+        (Bound::Inclusive(v1), Bound::Inclusive(v2)) => {
+            if lit_cmp(&v1, &v2) >= 0 {
+                Bound::Inclusive(v1)
+            } else {
+                Bound::Inclusive(v2)
+            }
+        }
+        (Bound::Inclusive(v1), Bound::Exclusive(v2)) => {
+            if lit_cmp(&v1, &v2) > 0 {
+                Bound::Inclusive(v1)
+            } else {
+                Bound::Exclusive(v2)
+            }
+        }
+        (Bound::Exclusive(v1), Bound::Inclusive(v2)) => {
+            if lit_cmp(&v1, &v2) > 0 {
+                Bound::Exclusive(v1)
+            } else {
+                Bound::Inclusive(v2)
+            }
+        }
+        (Bound::Exclusive(v1), Bound::Exclusive(v2)) => {
+            if lit_cmp(&v1, &v2) >= 0 {
+                Bound::Exclusive(v1)
+            } else {
+                Bound::Exclusive(v2)
+            }
+        }
+    }
+}
+
+fn compute_intersection_max(max1: Bound, max2: Bound) -> Bound {
+    match (max1, max2) {
+        (Bound::Unbounded, x) | (x, Bound::Unbounded) => x,
+        (Bound::Inclusive(v1), Bound::Inclusive(v2)) => {
+            if lit_cmp(&v1, &v2) <= 0 {
+                Bound::Inclusive(v1)
+            } else {
+                Bound::Inclusive(v2)
+            }
+        }
+        (Bound::Inclusive(v1), Bound::Exclusive(v2)) => {
+            if lit_cmp(&v1, &v2) < 0 {
+                Bound::Inclusive(v1)
+            } else {
+                Bound::Exclusive(v2)
+            }
+        }
+        (Bound::Exclusive(v1), Bound::Inclusive(v2)) => {
+            if lit_cmp(&v1, &v2) < 0 {
+                Bound::Exclusive(v1)
+            } else {
+                Bound::Inclusive(v2)
+            }
+        }
+        (Bound::Exclusive(v1), Bound::Exclusive(v2)) => {
+            if lit_cmp(&v1, &v2) <= 0 {
+                Bound::Exclusive(v1)
+            } else {
+                Bound::Exclusive(v2)
+            }
+        }
     }
 }
 
 fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
+    let a = normalize_domain(a);
+    let b = normalize_domain(b);
+
     let result = match (a, b) {
         (Domain::Unconstrained, d) | (d, Domain::Unconstrained) => Some(d),
+        (Domain::Empty, _) | (_, Domain::Empty) => None,
+
         (
             Domain::Range {
                 min: min1,
@@ -550,68 +476,9 @@ fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
                 max: max2,
             },
         ) => {
-            let min = match (min1, min2) {
-                (Bound::Unbounded, x) | (x, Bound::Unbounded) => x,
-                (Bound::Inclusive(v1), Bound::Inclusive(v2)) => {
-                    if lit_cmp(&v1, &v2) >= 0 {
-                        Bound::Inclusive(v1)
-                    } else {
-                        Bound::Inclusive(v2)
-                    }
-                }
-                (Bound::Inclusive(v1), Bound::Exclusive(v2)) => {
-                    if lit_cmp(&v1, &v2) > 0 {
-                        Bound::Inclusive(v1)
-                    } else {
-                        Bound::Exclusive(v2)
-                    }
-                }
-                (Bound::Exclusive(v1), Bound::Inclusive(v2)) => {
-                    if lit_cmp(&v1, &v2) > 0 {
-                        Bound::Exclusive(v1)
-                    } else {
-                        Bound::Inclusive(v2)
-                    }
-                }
-                (Bound::Exclusive(v1), Bound::Exclusive(v2)) => {
-                    if lit_cmp(&v1, &v2) >= 0 {
-                        Bound::Exclusive(v1)
-                    } else {
-                        Bound::Exclusive(v2)
-                    }
-                }
-            };
-            let max = match (max1, max2) {
-                (Bound::Unbounded, x) | (x, Bound::Unbounded) => x,
-                (Bound::Inclusive(v1), Bound::Inclusive(v2)) => {
-                    if lit_cmp(&v1, &v2) <= 0 {
-                        Bound::Inclusive(v1)
-                    } else {
-                        Bound::Inclusive(v2)
-                    }
-                }
-                (Bound::Inclusive(v1), Bound::Exclusive(v2)) => {
-                    if lit_cmp(&v1, &v2) < 0 {
-                        Bound::Inclusive(v1)
-                    } else {
-                        Bound::Exclusive(v2)
-                    }
-                }
-                (Bound::Exclusive(v1), Bound::Inclusive(v2)) => {
-                    if lit_cmp(&v1, &v2) < 0 {
-                        Bound::Exclusive(v1)
-                    } else {
-                        Bound::Inclusive(v2)
-                    }
-                }
-                (Bound::Exclusive(v1), Bound::Exclusive(v2)) => {
-                    if lit_cmp(&v1, &v2) <= 0 {
-                        Bound::Exclusive(v1)
-                    } else {
-                        Bound::Exclusive(v2)
-                    }
-                }
-            };
+            let min = compute_intersection_min(min1, min2);
+            let max = compute_intersection_max(max1, max2);
+
             if bounds_contradict(&min, &max) {
                 None
             } else {
@@ -642,7 +509,6 @@ fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
         }
         (Domain::Enumeration(vs), Domain::Complement(inner))
         | (Domain::Complement(inner), Domain::Enumeration(vs)) => {
-            // Intersection: Enumeration ∩ Complement(Enumeration) = values in first but not in second
             match *inner.clone() {
                 Domain::Enumeration(excluded) => {
                     let mut kept = Vec::new();
@@ -657,11 +523,7 @@ fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
                         Some(Domain::Enumeration(kept))
                     }
                 }
-                _ => {
-                    // For other Complement types, we can't easily compute intersection
-                    // Return None to indicate we can't handle this case
-                    None
-                }
+                _ => None,
             }
         }
         (Domain::Union(v1), Domain::Union(v2)) => {
@@ -688,10 +550,17 @@ fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
             }
             if acc.is_empty() {
                 None
+            } else if acc.len() == 1 {
+                Some(acc.remove(0))
             } else {
                 Some(Domain::Union(acc))
             }
         }
+        (Domain::Complement(inner), other) | (other, Domain::Complement(inner)) => {
+            let normalized_complement = normalize_domain(*inner);
+            domain_intersection(other, normalized_complement)
+        }
+        #[allow(unreachable_patterns)]
         _ => None,
     };
     result.map(normalize_domain)
@@ -711,17 +580,58 @@ fn normalize_domain(d: Domain) -> Domain {
             let normalized_inner = normalize_domain(*inner);
             match normalized_inner {
                 Domain::Complement(double_inner) => *double_inner,
-                Domain::Range { min, max } => Domain::Range {
-                    min: invert_bound(max),
-                    max: invert_bound(min),
-                },
+                Domain::Range { min, max } => {
+                    match (&min, &max) {
+                        (Bound::Unbounded, Bound::Unbounded) => {
+                            Domain::Enumeration(vec![])
+                        }
+                        (Bound::Unbounded, max) => {
+                            Domain::Range {
+                                min: invert_bound(max.clone()),
+                                max: Bound::Unbounded,
+                            }
+                        }
+                        (min, Bound::Unbounded) => {
+                            Domain::Range {
+                                min: Bound::Unbounded,
+                                max: invert_bound(min.clone()),
+                            }
+                        }
+                        (min, max) => {
+                            Domain::Union(vec![
+                                Domain::Range {
+                                    min: Bound::Unbounded,
+                                    max: invert_bound(min.clone()),
+                                },
+                                Domain::Range {
+                                    min: invert_bound(max.clone()),
+                                    max: Bound::Unbounded,
+                                },
+                            ])
+                        }
+                    }
+                }
                 Domain::Enumeration(vals) => {
+                    if vals.len() == 1 {
+                        if let Some(LiteralValue::Boolean(BooleanValue::True)) = vals.first() {
+                            return Domain::Enumeration(vec![LiteralValue::Boolean(
+                                BooleanValue::False,
+                            )]);
+                        }
+                        if let Some(LiteralValue::Boolean(BooleanValue::False)) = vals.first() {
+                            return Domain::Enumeration(vec![LiteralValue::Boolean(
+                                BooleanValue::True,
+                            )]);
+                        }
+                    }
                     Domain::Complement(Box::new(Domain::Enumeration(vals)))
                 }
-                Domain::Unconstrained => Domain::Enumeration(vec![]),
+                Domain::Unconstrained => Domain::Empty,
+                Domain::Empty => Domain::Unconstrained,
                 Domain::Union(parts) => Domain::Complement(Box::new(Domain::Union(parts))),
             }
         }
+        Domain::Empty => Domain::Empty,
         Domain::Union(mut parts) => {
             let mut flat: Vec<Domain> = Vec::new();
             for p in parts.drain(..) {
@@ -916,8 +826,12 @@ mod tests {
         LiteralValue::Number(Decimal::from(n))
     }
 
+    fn fact(name: &str) -> FactPath {
+        FactPath::local(name.to_string())
+    }
+
     #[test]
-    fn normalize_double_complement() {
+    fn test_normalize_double_complement() {
         let inner = Domain::Enumeration(vec![num(5)]);
         let double = Domain::Complement(Box::new(Domain::Complement(Box::new(inner.clone()))));
         let normalized = normalize_domain(double);
@@ -925,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_union_absorbs_unconstrained() {
+    fn test_normalize_union_absorbs_unconstrained() {
         let union = Domain::Union(vec![
             Domain::Range {
                 min: Bound::Inclusive(num(0)),
@@ -938,143 +852,105 @@ mod tests {
     }
 
     #[test]
-    fn normalize_union_removes_empty_enumerations() {
-        let union = Domain::Union(vec![
-            Domain::Enumeration(vec![]),
-            Domain::Enumeration(vec![num(5)]),
-        ]);
-        let normalized = normalize_domain(union);
-        assert_eq!(normalized, Domain::Enumeration(vec![num(5)]));
+    fn test_domain_display() {
+        let range = Domain::Range {
+            min: Bound::Inclusive(num(10)),
+            max: Bound::Exclusive(num(20)),
+        };
+        assert_eq!(format!("{}", range), "[10, 20)");
+
+        let enumeration = Domain::Enumeration(vec![num(1), num(2), num(3)]);
+        assert_eq!(format!("{}", enumeration), "{1, 2, 3}");
     }
 
     #[test]
-    fn normalize_union_merges_enumerations() {
-        let union = Domain::Union(vec![
-            Domain::Enumeration(vec![num(1), num(3)]),
-            Domain::Enumeration(vec![num(2), num(3)]),
-        ]);
-        let normalized = normalize_domain(union);
+    fn test_extract_domain_from_comparison() {
+        let constraint = Constraint::Comparison {
+            fact: fact("age"),
+            op: ComparisonComputation::GreaterThan,
+            value: num(18),
+        };
+
+        let domains = extract_domains_from_constraint(&constraint).unwrap();
+        let age_domain = domains.get(&fact("age")).unwrap();
+
         assert_eq!(
-            normalized,
-            Domain::Enumeration(vec![num(1), num(2), num(3)])
+            *age_domain,
+            Domain::Range {
+                min: Bound::Exclusive(num(18)),
+                max: Bound::Unbounded,
+            }
         );
     }
 
     #[test]
-    fn normalize_union_absorbs_enum_values_in_ranges() {
-        let union = Domain::Union(vec![
+    fn test_extract_domain_from_and() {
+        let constraint = Constraint::And(
+            Box::new(Constraint::Comparison {
+                fact: fact("age"),
+                op: ComparisonComputation::GreaterThan,
+                value: num(18),
+            }),
+            Box::new(Constraint::Comparison {
+                fact: fact("age"),
+                op: ComparisonComputation::LessThan,
+                value: num(65),
+            }),
+        );
+
+        let domains = extract_domains_from_constraint(&constraint).unwrap();
+        let age_domain = domains.get(&fact("age")).unwrap();
+
+        assert_eq!(
+            *age_domain,
             Domain::Range {
-                min: Bound::Inclusive(num(0)),
-                max: Bound::Inclusive(num(10)),
-            },
-            Domain::Enumeration(vec![num(5), num(15)]),
-        ]);
-        let normalized = normalize_domain(union);
-        match normalized {
-            Domain::Union(parts) => {
-                assert_eq!(parts.len(), 2);
-                assert!(matches!(&parts[0], Domain::Range { .. }));
-                if let Domain::Enumeration(vals) = &parts[1] {
-                    assert_eq!(vals.len(), 1);
-                    assert_eq!(vals[0], num(15));
-                } else {
-                    panic!("Expected enumeration");
-                }
+                min: Bound::Exclusive(num(18)),
+                max: Bound::Exclusive(num(65)),
             }
-            _ => panic!("Expected union"),
-        }
+        );
     }
 
     #[test]
-    fn normalize_merges_adjacent_ranges() {
-        let union = Domain::Union(vec![
-            Domain::Range {
-                min: Bound::Inclusive(num(0)),
-                max: Bound::Inclusive(num(10)),
-            },
-            Domain::Range {
-                min: Bound::Inclusive(num(10)),
-                max: Bound::Inclusive(num(20)),
-            },
-        ]);
-        let normalized = normalize_domain(union);
-        match normalized {
-            Domain::Range { min, max } => {
-                assert_eq!(min, Bound::Inclusive(num(0)));
-                assert_eq!(max, Bound::Inclusive(num(20)));
-            }
-            _ => panic!("Expected single merged range, got {:?}", normalized),
-        }
+    fn test_extract_domain_from_equality() {
+        use crate::EqualityNotation;
+        let constraint = Constraint::Comparison {
+            fact: fact("status"),
+            op: ComparisonComputation::Equal(EqualityNotation::Symbol),
+            value: LiteralValue::Text("active".to_string()),
+        };
+
+        let domains = extract_domains_from_constraint(&constraint).unwrap();
+        let status_domain = domains.get(&fact("status")).unwrap();
+
+        assert_eq!(
+            *status_domain,
+            Domain::Enumeration(vec![LiteralValue::Text("active".to_string())])
+        );
     }
 
     #[test]
-    fn intersection_normalizes_result() {
-        let a = Domain::Union(vec![
-            Domain::Enumeration(vec![num(1)]),
-            Domain::Enumeration(vec![num(2)]),
-        ]);
-        let b = Domain::Unconstrained;
-        let result = domain_intersection(a, b);
-        match result {
-            Some(Domain::Enumeration(vals)) => {
-                assert_eq!(vals, vec![num(1), num(2)]);
-            }
-            other => panic!("Expected merged enumeration, got {:?}", other),
-        }
+    fn test_extract_domain_from_boolean_fact() {
+        let constraint = Constraint::Fact(fact("is_active"));
+
+        let domains = extract_domains_from_constraint(&constraint).unwrap();
+        let is_active_domain = domains.get(&fact("is_active")).unwrap();
+
+        assert_eq!(
+            *is_active_domain,
+            Domain::Enumeration(vec![LiteralValue::Boolean(BooleanValue::True)])
+        );
     }
 
     #[test]
-    fn normalize_complement_of_range() {
-        let complement = Domain::Complement(Box::new(Domain::Range {
-            min: Bound::Exclusive(num(100)),
-            max: Bound::Unbounded,
-        }));
-        let normalized = normalize_domain(complement);
-        match normalized {
-            Domain::Range { min, max } => {
-                assert_eq!(min, Bound::Unbounded);
-                assert_eq!(max, Bound::Inclusive(num(100)));
-            }
-            other => panic!("Expected Range(-inf, 100], got {:?}", other),
-        }
-    }
+    fn test_extract_domain_from_not_boolean_fact() {
+        let constraint = Constraint::Not(Box::new(Constraint::Fact(fact("is_active"))));
 
-    #[test]
-    fn normalize_complement_of_range_inclusive() {
-        let complement = Domain::Complement(Box::new(Domain::Range {
-            min: Bound::Inclusive(num(100)),
-            max: Bound::Inclusive(num(200)),
-        }));
-        let normalized = normalize_domain(complement);
-        match normalized {
-            Domain::Range { min, max } => {
-                assert_eq!(min, Bound::Exclusive(num(200)));
-                assert_eq!(max, Bound::Exclusive(num(100)));
-            }
-            other => panic!("Expected Range(200, 100), got {:?}", other),
-        }
-    }
+        let domains = extract_domains_from_constraint(&constraint).unwrap();
+        let is_active_domain = domains.get(&fact("is_active")).unwrap();
 
-    #[test]
-    fn normalize_complement_of_unconstrained() {
-        let complement = Domain::Complement(Box::new(Domain::Unconstrained));
-        let normalized = normalize_domain(complement);
-        assert_eq!(normalized, Domain::Enumeration(vec![]));
-    }
-
-    #[test]
-    fn normalize_complement_of_enumeration() {
-        let complement = Domain::Complement(Box::new(Domain::Enumeration(vec![num(5), num(10)])));
-        let normalized = normalize_domain(complement);
-        match normalized {
-            Domain::Complement(inner) => {
-                if let Domain::Enumeration(vals) = *inner {
-                    assert_eq!(vals, vec![num(5), num(10)]);
-                } else {
-                    panic!("Expected Complement(Enumeration), got {:?}", inner);
-                }
-            }
-            other => panic!("Expected Complement, got {:?}", other),
-        }
+        assert_eq!(
+            *is_active_domain,
+            Domain::Enumeration(vec![LiteralValue::Boolean(BooleanValue::False)])
+        );
     }
 }

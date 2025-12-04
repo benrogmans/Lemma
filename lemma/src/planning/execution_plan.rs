@@ -14,6 +14,7 @@ use crate::Source;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+
 /// A complete execution plan ready for the evaluator
 ///
 /// Contains the topologically sorted list of rules to execute, along with all facts.
@@ -31,8 +32,10 @@ pub struct ExecutionPlan {
     /// Rules to execute in topological order (sorted by dependencies)
     pub rules: Vec<ExecutableRule>,
 
-    /// Source code for error messages
-    pub sources: HashMap<String, String>,
+    /// The graph structure used to build this execution plan
+    /// Contains dependency information and rule structure needed for inversion
+    #[serde(skip, default = "Graph::empty")]
+    graph: Graph,
 }
 
 /// An executable rule with flattened branches
@@ -46,10 +49,11 @@ pub struct ExecutableRule {
     /// Rule name
     pub name: String,
 
-    /// Branches evaluated in order (last matching wins)
-    /// First branch has condition=None (default expression)
-    /// Subsequent branches have condition=Some(...) (unless clauses)
-    /// The evaluation is done in reverse order with the earliest matching branch returning (winning) the result.
+    /// Branches evaluated in reverse order (last matching wins)
+    /// All branches have explicit conditions (normalized during graph building).
+    /// Branch 0: condition is NOT(cond_1) AND NOT(cond_2) AND ... (excludes all later branches)
+    /// Branch 1+: condition is cond_i AND NOT(cond_{i+1}) AND ... (excludes later branches)
+    /// The evaluation is done in reverse order with the first matching branch returning the result.
     pub branches: Vec<Branch>,
 
     /// All facts this rule needs (direct + inherited from rule dependencies)
@@ -58,24 +62,27 @@ pub struct ExecutableRule {
     pub needs_facts: HashSet<FactPath>,
 
     /// Source location for error messages
-    pub source: Option<Source>,
+    pub source: Source,
 }
 
 /// A branch in an executable rule
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Branch {
-    /// Condition expression (None for default branch)
-    pub condition: Option<Expression>,
+    /// Condition expression (always present, explicit with last-wins semantics applied)
+    pub condition: Expression,
 
     /// Result expression
     pub result: Expression,
 
     /// Source location for error messages
-    pub source: Option<Source>,
+    pub source: Source,
 }
 
 /// Builds an execution plan from a Graph.
-/// Internal implementation detail - only called by plan()
+/// Build an execution plan from a graph
+///
+/// This function constructs an ExecutionPlan from a Graph, extracting facts and rules
+/// in topological order.
 pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> ExecutionPlan {
     let execution_order = graph.execution_order();
     let facts: HashMap<FactPath, LemmaFact> = graph
@@ -97,20 +104,15 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
             "bug: rule from topological sort not in graph - validation should have caught this",
         );
 
-        let mut executable_branches = Vec::new();
-        for (condition, result) in &rule_node.branches {
-            executable_branches.push(Branch {
-                condition: condition.clone(),
-                result: result.clone(),
-                source: Some(rule_node.source.clone()),
-            });
-        }
+        // Branches are already normalized during graph building (in add_rule)
+        // Just clone them - they're already in the correct format
+        let branches = rule_node.branches.clone();
 
         executable_rules.push(ExecutableRule {
             path: rule_path.clone(),
             name: rule_path.rule.clone(),
-            branches: executable_branches,
-            source: Some(rule_node.source.clone()),
+            branches,
+            source: rule_node.source.clone(),
             needs_facts: HashSet::new(),
         });
     }
@@ -121,7 +123,7 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
         doc_name: main_doc_name.to_string(),
         facts,
         rules: executable_rules,
-        sources: graph.sources().clone(),
+        graph: graph.clone(),
     }
 }
 
@@ -132,9 +134,7 @@ fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
         let mut facts = HashSet::new();
 
         for branch in &rule.branches {
-            if let Some(cond) = &branch.condition {
-                cond.collect_fact_paths(&mut facts);
-            }
+            branch.condition.collect_fact_paths(&mut facts);
             branch.result.collect_fact_paths(&mut facts);
         }
 
@@ -151,7 +151,37 @@ fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
     }
 }
 
+impl Default for ExecutionPlan {
+    fn default() -> Self {
+        Self::new(String::new(), HashMap::new(), Vec::new())
+    }
+}
+
 impl ExecutionPlan {
+    /// Create a new execution plan with the given fields
+    ///
+    /// The graph will be initialized as empty. Use `build_execution_plan` to create
+    /// an ExecutionPlan from a Graph with proper dependency information.
+    pub fn new(
+        doc_name: String,
+        facts: HashMap<FactPath, LemmaFact>,
+        rules: Vec<ExecutableRule>,
+    ) -> Self {
+        Self {
+            doc_name,
+            facts,
+            rules,
+            graph: Graph::empty(),
+        }
+    }
+
+    /// Get the graph structure used to build this execution plan
+    ///
+    /// The graph contains dependency information and rule structure needed for inversion.
+    pub fn graph(&self) -> &Graph {
+        &self.graph
+    }
+
     /// Look up a fact by its path string (e.g., "age" or "rules.base_price").
     pub fn get_fact_by_path_str(&self, name: &str) -> Option<(&FactPath, &LemmaFact)> {
         self.facts.iter().find(|(path, _)| path.to_string() == name)
@@ -297,26 +327,19 @@ mod tests {
             segments: vec![],
             fact: "age".to_string(),
         };
-        let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: {
-                let mut f = HashMap::new();
-                f.insert(
-                    fact_path.clone(),
-                    LemmaFact {
-                        reference: FactReference {
-                            segments: vec![],
-                            fact: "age".to_string(),
-                        },
-                        value: FactValue::Literal(LiteralValue::Number(25.into())),
-                        source_location: None,
-                    },
-                );
-                f
+        let mut facts = HashMap::new();
+        facts.insert(
+            fact_path.clone(),
+            LemmaFact {
+                reference: FactReference {
+                    segments: vec![],
+                    fact: "age".to_string(),
+                },
+                value: FactValue::Literal(LiteralValue::Number(25.into())),
+                source: create_test_source(),
             },
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+        );
+        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new());
 
         let mut values = HashMap::new();
         values.insert("age".to_string(), LiteralValue::Number(30.into()));
@@ -335,28 +358,19 @@ mod tests {
             segments: vec![],
             fact: "age".to_string(),
         };
-        let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: {
-                let mut f = HashMap::new();
-                f.insert(
-                    fact_path,
-                    LemmaFact {
-                        reference: FactReference {
-                            segments: vec![],
-                            fact: "age".to_string(),
-                        },
-                        value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(
-                            LemmaType::Number,
-                        )),
-                        source_location: None,
-                    },
-                );
-                f
+        let mut facts = HashMap::new();
+        facts.insert(
+            fact_path,
+            LemmaFact {
+                reference: FactReference {
+                    segments: vec![],
+                    fact: "age".to_string(),
+                },
+                value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(LemmaType::Number)),
+                source: create_test_source(),
             },
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+        );
+        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new());
 
         let mut values = HashMap::new();
         values.insert("age".to_string(), LiteralValue::Text("thirty".to_string()));
@@ -366,12 +380,11 @@ mod tests {
 
     #[test]
     fn test_with_typed_values_unknown_fact() {
-        let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+        let plan = ExecutionPlan::new(
+            "test".to_string(),
+            HashMap::new(),
+            Vec::new(),
+        );
 
         let mut values = HashMap::new();
         values.insert("unknown".to_string(), LiteralValue::Number(30.into()));
@@ -389,28 +402,19 @@ mod tests {
             }],
             fact: "base_price".to_string(),
         };
-        let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: {
-                let mut f = HashMap::new();
-                f.insert(
-                    fact_path.clone(),
-                    LemmaFact {
-                        reference: FactReference {
-                            segments: vec!["rules".to_string()],
-                            fact: "base_price".to_string(),
-                        },
-                        value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(
-                            LemmaType::Number,
-                        )),
-                        source_location: None,
-                    },
-                );
-                f
+        let mut facts = HashMap::new();
+        facts.insert(
+            fact_path.clone(),
+            LemmaFact {
+                reference: FactReference {
+                    segments: vec!["rules".to_string()],
+                    fact: "base_price".to_string(),
+                },
+                value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(LemmaType::Number)),
+                source: create_test_source(),
             },
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+        );
+        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new());
 
         let mut values = HashMap::new();
         values.insert(
@@ -427,9 +431,22 @@ mod tests {
     }
 
     fn create_literal_expr(value: LiteralValue) -> Expression {
-        use crate::parsing::ast::ExpressionId;
         use crate::semantic::ExpressionKind;
-        Expression::new(ExpressionKind::Literal(value), None, ExpressionId::new(0))
+        Expression::new(ExpressionKind::Literal(value), create_test_source())
+    }
+
+    fn create_test_source() -> Source {
+        use crate::parsing::ast::Span;
+        Source::new(
+            "test.lemma",
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "test",
+        )
     }
 
     #[test]
@@ -438,32 +455,19 @@ mod tests {
             segments: vec![],
             fact: "age".to_string(),
         };
-        let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: {
-                let mut f = HashMap::new();
-                f.insert(
-                    fact_path.clone(),
-                    LemmaFact {
-                        reference: FactReference {
-                            segments: vec![],
-                            fact: "age".to_string(),
-                        },
-                        value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(
-                            LemmaType::Number,
-                        )),
-                        source_location: None,
-                    },
-                );
-                f
+        let mut facts = HashMap::new();
+        facts.insert(
+            fact_path.clone(),
+            LemmaFact {
+                reference: FactReference {
+                    segments: vec![],
+                    fact: "age".to_string(),
+                },
+                value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(LemmaType::Number)),
+                source: create_test_source(),
             },
-            rules: Vec::new(),
-            sources: {
-                let mut s = HashMap::new();
-                s.insert("test.lemma".to_string(), "fact age: number".to_string());
-                s
-            },
-        };
+        );
+        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new());
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
@@ -471,20 +475,17 @@ mod tests {
         assert_eq!(deserialized.doc_name, plan.doc_name);
         assert_eq!(deserialized.facts.len(), plan.facts.len());
         assert_eq!(deserialized.rules.len(), plan.rules.len());
-        assert_eq!(deserialized.sources.len(), plan.sources.len());
     }
 
     #[test]
     fn test_serialize_deserialize_plan_with_rules() {
-        use crate::parsing::ast::ExpressionId;
         use crate::semantic::ExpressionKind;
 
-        let mut plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+        let mut plan = ExecutionPlan::new(
+            "test".to_string(),
+            HashMap::new(),
+            Vec::new(),
+        );
 
         let age_path = FactPath::local("age".to_string());
         plan.facts.insert(
@@ -495,7 +496,7 @@ mod tests {
                     fact: "age".to_string(),
                 },
                 value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(LemmaType::Number)),
-                source_location: None,
+                source: create_test_source(),
             },
         );
 
@@ -503,28 +504,28 @@ mod tests {
             path: RulePath::local("can_drive".to_string()),
             name: "can_drive".to_string(),
             branches: vec![Branch {
-                condition: Some(Expression::new(
+                condition: Expression::new(
                     ExpressionKind::Comparison(
                         Box::new(Expression::new(
                             ExpressionKind::FactPath(age_path.clone()),
-                            None,
-                            ExpressionId::new(1),
+                            create_test_source(),
                         )),
                         crate::ComparisonComputation::GreaterThanOrEqual,
                         Box::new(create_literal_expr(LiteralValue::Number(18.into()))),
                     ),
-                    None,
-                    ExpressionId::new(2),
+                    create_test_source(),
+                ),
+                result: create_literal_expr(LiteralValue::Boolean(
+                    crate::semantic::BooleanValue::True,
                 )),
-                result: create_literal_expr(LiteralValue::Boolean(crate::BooleanValue::True)),
-                source: None,
+                source: create_test_source(),
             }],
             needs_facts: {
                 let mut set = HashSet::new();
                 set.insert(age_path);
                 set
             },
-            source: None,
+            source: create_test_source(),
         };
 
         plan.rules.push(rule);
@@ -551,28 +552,19 @@ mod tests {
             fact: "salary".to_string(),
         };
 
-        let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: {
-                let mut f = HashMap::new();
-                f.insert(
-                    fact_path.clone(),
-                    LemmaFact {
-                        reference: FactReference {
-                            segments: vec!["employee".to_string()],
-                            fact: "salary".to_string(),
-                        },
-                        value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(
-                            LemmaType::Number,
-                        )),
-                        source_location: None,
-                    },
-                );
-                f
+        let mut facts = HashMap::new();
+        facts.insert(
+            fact_path.clone(),
+            LemmaFact {
+                reference: FactReference {
+                    segments: vec!["employee".to_string()],
+                    fact: "salary".to_string(),
+                },
+                value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(LemmaType::Number)),
+                source: create_test_source(),
             },
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+        );
+        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new());
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
@@ -586,12 +578,11 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_plan_with_multiple_fact_types() {
-        let mut plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+        let mut plan = ExecutionPlan::new(
+            "test".to_string(),
+            HashMap::new(),
+            Vec::new(),
+        );
 
         plan.facts.insert(
             FactPath::local("name".to_string()),
@@ -601,7 +592,7 @@ mod tests {
                     fact: "name".to_string(),
                 },
                 value: FactValue::Literal(LiteralValue::Text("Alice".to_string())),
-                source_location: None,
+                source: create_test_source(),
             },
         );
 
@@ -613,7 +604,7 @@ mod tests {
                     fact: "age".to_string(),
                 },
                 value: FactValue::Literal(LiteralValue::Number(30.into())),
-                source_location: None,
+                source: create_test_source(),
             },
         );
 
@@ -624,8 +615,10 @@ mod tests {
                     segments: vec![],
                     fact: "active".to_string(),
                 },
-                value: FactValue::Literal(LiteralValue::Boolean(crate::BooleanValue::True)),
-                source_location: None,
+                value: FactValue::Literal(LiteralValue::Boolean(
+                    crate::semantic::BooleanValue::True,
+                )),
+                source: create_test_source(),
             },
         );
 
@@ -658,7 +651,7 @@ mod tests {
             .unwrap();
         match &active_fact.value {
             FactValue::Literal(LiteralValue::Boolean(b)) => {
-                assert_eq!(*b, crate::BooleanValue::True)
+                assert_eq!(*b, crate::semantic::BooleanValue::True)
             }
             _ => panic!("Expected boolean literal"),
         }
@@ -666,15 +659,13 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_plan_with_multiple_branches() {
-        use crate::parsing::ast::ExpressionId;
         use crate::semantic::ExpressionKind;
 
-        let mut plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+        let mut plan = ExecutionPlan::new(
+            "test".to_string(),
+            HashMap::new(),
+            Vec::new(),
+        );
 
         let points_path = FactPath::local("points".to_string());
         plan.facts.insert(
@@ -685,7 +676,7 @@ mod tests {
                     fact: "points".to_string(),
                 },
                 value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(LemmaType::Number)),
-                source_location: None,
+                source: create_test_source(),
             },
         );
 
@@ -694,43 +685,44 @@ mod tests {
             name: "tier".to_string(),
             branches: vec![
                 Branch {
-                    condition: None,
+                    condition: Expression::new(
+                        ExpressionKind::Literal(LiteralValue::Boolean(
+                            crate::semantic::BooleanValue::True,
+                        )),
+                        create_test_source(),
+                    ),
                     result: create_literal_expr(LiteralValue::Text("bronze".to_string())),
-                    source: None,
+                    source: create_test_source(),
                 },
                 Branch {
-                    condition: Some(Expression::new(
+                    condition: Expression::new(
                         ExpressionKind::Comparison(
                             Box::new(Expression::new(
                                 ExpressionKind::FactPath(points_path.clone()),
-                                None,
-                                ExpressionId::new(1),
+                                create_test_source(),
                             )),
                             crate::ComparisonComputation::GreaterThanOrEqual,
                             Box::new(create_literal_expr(LiteralValue::Number(100.into()))),
                         ),
-                        None,
-                        ExpressionId::new(2),
-                    )),
+                        create_test_source(),
+                    ),
                     result: create_literal_expr(LiteralValue::Text("silver".to_string())),
-                    source: None,
+                    source: create_test_source(),
                 },
                 Branch {
-                    condition: Some(Expression::new(
+                    condition: Expression::new(
                         ExpressionKind::Comparison(
                             Box::new(Expression::new(
                                 ExpressionKind::FactPath(points_path.clone()),
-                                None,
-                                ExpressionId::new(3),
+                                create_test_source(),
                             )),
                             crate::ComparisonComputation::GreaterThanOrEqual,
                             Box::new(create_literal_expr(LiteralValue::Number(500.into()))),
                         ),
-                        None,
-                        ExpressionId::new(4),
-                    )),
+                        create_test_source(),
+                    ),
                     result: create_literal_expr(LiteralValue::Text("gold".to_string())),
-                    source: None,
+                    source: create_test_source(),
                 },
             ],
             needs_facts: {
@@ -738,7 +730,7 @@ mod tests {
                 set.insert(points_path);
                 set
             },
-            source: None,
+            source: create_test_source(),
         };
 
         plan.rules.push(rule);
@@ -748,19 +740,30 @@ mod tests {
 
         assert_eq!(deserialized.rules.len(), 1);
         assert_eq!(deserialized.rules[0].branches.len(), 3);
-        assert!(deserialized.rules[0].branches[0].condition.is_none());
-        assert!(deserialized.rules[0].branches[1].condition.is_some());
-        assert!(deserialized.rules[0].branches[2].condition.is_some());
+        // All branches now have explicit conditions (normalized)
+        assert!(matches!(
+            deserialized.rules[0].branches[0].condition.kind,
+            ExpressionKind::Literal(LiteralValue::Boolean(_))
+                | ExpressionKind::LogicalAnd(_, _)
+                | ExpressionKind::LogicalNegation(_, _)
+        ));
+        assert!(matches!(
+            deserialized.rules[0].branches[1].condition.kind,
+            ExpressionKind::Comparison(_, _, _) | ExpressionKind::LogicalAnd(_, _)
+        ));
+        assert!(matches!(
+            deserialized.rules[0].branches[2].condition.kind,
+            ExpressionKind::Comparison(_, _, _)
+        ));
     }
 
     #[test]
     fn test_serialize_deserialize_empty_plan() {
-        let plan = ExecutionPlan {
-            doc_name: "empty".to_string(),
-            facts: HashMap::new(),
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+        let plan = ExecutionPlan::new(
+            "empty".to_string(),
+            HashMap::new(),
+            Vec::new(),
+        );
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
@@ -768,20 +771,17 @@ mod tests {
         assert_eq!(deserialized.doc_name, "empty");
         assert_eq!(deserialized.facts.len(), 0);
         assert_eq!(deserialized.rules.len(), 0);
-        assert_eq!(deserialized.sources.len(), 0);
     }
 
     #[test]
     fn test_serialize_deserialize_plan_with_arithmetic_expressions() {
-        use crate::parsing::ast::ExpressionId;
         use crate::semantic::ExpressionKind;
 
-        let mut plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+        let mut plan = ExecutionPlan::new(
+            "test".to_string(),
+            HashMap::new(),
+            Vec::new(),
+        );
 
         let x_path = FactPath::local("x".to_string());
         plan.facts.insert(
@@ -792,7 +792,7 @@ mod tests {
                     fact: "x".to_string(),
                 },
                 value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(LemmaType::Number)),
-                source_location: None,
+                source: create_test_source(),
             },
         );
 
@@ -800,28 +800,31 @@ mod tests {
             path: RulePath::local("doubled".to_string()),
             name: "doubled".to_string(),
             branches: vec![Branch {
-                condition: None,
+                condition: Expression::new(
+                    ExpressionKind::Literal(LiteralValue::Boolean(
+                        crate::semantic::BooleanValue::True,
+                    )),
+                    create_test_source(),
+                ),
                 result: Expression::new(
                     ExpressionKind::Arithmetic(
                         Box::new(Expression::new(
                             ExpressionKind::FactPath(x_path.clone()),
-                            None,
-                            ExpressionId::new(1),
+                            create_test_source(),
                         )),
                         crate::ArithmeticComputation::Multiply,
                         Box::new(create_literal_expr(LiteralValue::Number(2.into()))),
                     ),
-                    None,
-                    ExpressionId::new(2),
+                    create_test_source(),
                 ),
-                source: None,
+                source: create_test_source(),
             }],
             needs_facts: {
                 let mut set = HashSet::new();
                 set.insert(x_path);
                 set
             },
-            source: None,
+            source: create_test_source(),
         };
 
         plan.rules.push(rule);
@@ -848,19 +851,9 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_round_trip_equality() {
-        use crate::parsing::ast::ExpressionId;
         use crate::semantic::ExpressionKind;
 
-        let mut plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            rules: Vec::new(),
-            sources: {
-                let mut s = HashMap::new();
-                s.insert("test.lemma".to_string(), "fact age: number".to_string());
-                s
-            },
-        };
+        let mut plan = ExecutionPlan::new("test".to_string(), HashMap::new(), Vec::new());
 
         let age_path = FactPath::local("age".to_string());
         plan.facts.insert(
@@ -871,7 +864,7 @@ mod tests {
                     fact: "age".to_string(),
                 },
                 value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(LemmaType::Number)),
-                source_location: None,
+                source: create_test_source(),
             },
         );
 
@@ -879,28 +872,28 @@ mod tests {
             path: RulePath::local("is_adult".to_string()),
             name: "is_adult".to_string(),
             branches: vec![Branch {
-                condition: Some(Expression::new(
+                condition: Expression::new(
                     ExpressionKind::Comparison(
                         Box::new(Expression::new(
                             ExpressionKind::FactPath(age_path.clone()),
-                            None,
-                            ExpressionId::new(1),
+                            create_test_source(),
                         )),
                         crate::ComparisonComputation::GreaterThanOrEqual,
                         Box::new(create_literal_expr(LiteralValue::Number(18.into()))),
                     ),
-                    None,
-                    ExpressionId::new(2),
+                    create_test_source(),
+                ),
+                result: create_literal_expr(LiteralValue::Boolean(
+                    crate::semantic::BooleanValue::True,
                 )),
-                result: create_literal_expr(LiteralValue::Boolean(crate::BooleanValue::True)),
-                source: None,
+                source: create_test_source(),
             }],
             needs_facts: {
                 let mut set = HashSet::new();
                 set.insert(age_path);
                 set
             },
-            source: None,
+            source: create_test_source(),
         };
 
         plan.rules.push(rule);
@@ -915,7 +908,6 @@ mod tests {
         assert_eq!(deserialized2.doc_name, plan.doc_name);
         assert_eq!(deserialized2.facts.len(), plan.facts.len());
         assert_eq!(deserialized2.rules.len(), plan.rules.len());
-        assert_eq!(deserialized2.sources.len(), plan.sources.len());
         assert_eq!(deserialized2.rules[0].name, plan.rules[0].name);
         assert_eq!(
             deserialized2.rules[0].branches.len(),

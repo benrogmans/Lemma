@@ -230,11 +230,8 @@ fn test_rules_sorted_by_source_order() {
 
     // Check they all have span information for ordering
     for result in response.results.values() {
-        assert!(
-            result.rule.source_location.is_some(),
-            "Rule {} missing source_location",
-            result.rule.name
-        );
+        // Source is now always present (not Option)
+        let _ = &result.rule.source;
     }
 
     // Verify source positions increase (z < y < x)
@@ -244,9 +241,7 @@ fn test_rules_sorted_by_source_order() {
         .find(|r| r.rule.name == "z")
         .unwrap()
         .rule
-        .source_location
-        .as_ref()
-        .unwrap()
+        .source
         .span
         .start;
     let y_pos = response
@@ -255,9 +250,7 @@ fn test_rules_sorted_by_source_order() {
         .find(|r| r.rule.name == "y")
         .unwrap()
         .rule
-        .source_location
-        .as_ref()
-        .unwrap()
+        .source
         .span
         .start;
     let x_pos = response
@@ -266,9 +259,7 @@ fn test_rules_sorted_by_source_order() {
         .find(|r| r.rule.name == "x")
         .unwrap()
         .rule
-        .source_location
-        .as_ref()
-        .unwrap()
+        .source
         .span
         .start;
 

@@ -1,17 +1,17 @@
 use crate::error::LemmaError;
-use crate::parsing::ast::ExpressionId;
 use crate::parsing::source::Source;
 use chrono::{Datelike, Timelike};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 /// A Lemma document containing facts, rules
 #[derive(Debug, Clone, PartialEq)]
 pub struct LemmaDoc {
     pub name: String,
-    pub source: Option<String>,
+    pub source_text: Option<String>,
     pub start_line: usize,
     pub commentary: Option<String>,
     pub facts: Vec<LemmaFact>,
@@ -22,7 +22,7 @@ pub struct LemmaDoc {
 pub struct LemmaFact {
     pub reference: FactReference,
     pub value: FactValue,
-    pub source_location: Option<Source>,
+    pub source: Source,
 }
 
 /// An unless clause that provides an alternative result
@@ -34,7 +34,7 @@ pub struct LemmaFact {
 pub struct UnlessClause {
     pub condition: Expression,
     pub result: Expression,
-    pub source_location: Option<Source>,
+    pub source: Source,
 }
 
 /// A rule with a single expression and optional unless clauses
@@ -43,40 +43,91 @@ pub struct LemmaRule {
     pub name: String,
     pub expression: Expression,
     pub unless_clauses: Vec<UnlessClause>,
-    pub source_location: Option<Source>,
+    pub source: Source,
 }
 
-/// An expression that can be evaluated, with source location and unique ID
+/// An expression that can be evaluated, with source location
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Expression {
     pub kind: ExpressionKind,
-    pub source_location: Option<Source>,
-    pub id: ExpressionId,
+    pub source: Source,
 }
 
 impl Expression {
-    /// Create a new expression with kind, source location, and ID
+    /// Create a new expression with kind and source location
     #[must_use]
-    pub fn new(kind: ExpressionKind, source_location: Option<Source>, id: ExpressionId) -> Self {
-        Self {
-            kind,
-            source_location,
-            id,
-        }
+    pub fn new(kind: ExpressionKind, source: Source) -> Self {
+        Self { kind, source }
     }
 
-    /// Get the source text for this expression from the given sources map
+    /// Compute a semantic hash of this expression
     ///
-    /// Returns `None` if the expression has no source location or the source is not found.
-    pub fn get_source_text(
-        &self,
-        sources: &std::collections::HashMap<String, String>,
-    ) -> Option<String> {
-        self.source_location.as_ref().and_then(|loc| {
-            sources
-                .get(&loc.source_id)
-                .and_then(|source| loc.extract_text(source))
-        })
+    /// Hashes only the semantic content (kind and recursive children), excluding source location.
+    /// Semantically equal expressions produce the same hash.
+    pub fn semantic_hash<H: Hasher>(&self, state: &mut H) {
+        match &self.kind {
+            ExpressionKind::Literal(lit) => {
+                0u8.hash(state);
+                lit.hash(state);
+            }
+            ExpressionKind::FactPath(path) => {
+                1u8.hash(state);
+                path.hash(state);
+            }
+            ExpressionKind::RulePath(path) => {
+                2u8.hash(state);
+                path.hash(state);
+            }
+            ExpressionKind::Arithmetic(left, op, right) => {
+                3u8.hash(state);
+                op.hash(state);
+                left.semantic_hash(state);
+                right.semantic_hash(state);
+            }
+            ExpressionKind::LogicalAnd(left, right) => {
+                4u8.hash(state);
+                left.semantic_hash(state);
+                right.semantic_hash(state);
+            }
+            ExpressionKind::LogicalOr(left, right) => {
+                5u8.hash(state);
+                left.semantic_hash(state);
+                right.semantic_hash(state);
+            }
+            ExpressionKind::Comparison(left, op, right) => {
+                6u8.hash(state);
+                op.hash(state);
+                left.semantic_hash(state);
+                right.semantic_hash(state);
+            }
+            ExpressionKind::LogicalNegation(inner, neg_type) => {
+                7u8.hash(state);
+                neg_type.hash(state);
+                inner.semantic_hash(state);
+            }
+            ExpressionKind::MathematicalComputation(op, inner) => {
+                8u8.hash(state);
+                op.hash(state);
+                inner.semantic_hash(state);
+            }
+            ExpressionKind::UnitConversion(inner, target) => {
+                9u8.hash(state);
+                target.hash(state);
+                inner.semantic_hash(state);
+            }
+            ExpressionKind::Veto(veto) => {
+                10u8.hash(state);
+                veto.message.hash(state);
+            }
+            ExpressionKind::FactReference(fref) => {
+                11u8.hash(state);
+                fref.hash(state);
+            }
+            ExpressionKind::RuleReference(rref) => {
+                12u8.hash(state);
+                rref.hash(state);
+            }
+        }
     }
 
     /// Collect all FactPath references from this expression tree.
@@ -104,7 +155,47 @@ impl Expression {
             | ExpressionKind::RulePath(_) => {}
         }
     }
+
+    /// Returns true if this expression is a boolean false literal
+    #[must_use]
+    pub fn is_boolean_false(&self) -> bool {
+        matches!(
+            self.kind,
+            ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False))
+        )
+    }
+
+    /// Returns true if this expression is a boolean true literal
+    #[must_use]
+    pub fn is_boolean_true(&self) -> bool {
+        matches!(
+            self.kind,
+            ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True))
+        )
+    }
+
+    /// Check if this expression is semantically equal to another expression
+    ///
+    /// Compares semantic hashes for equality.
+    #[must_use]
+    pub fn semantically_equal(&self, other: &Expression) -> bool {
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher1 = DefaultHasher::new();
+        let mut hasher2 = DefaultHasher::new();
+        self.semantic_hash(&mut hasher1);
+        other.semantic_hash(&mut hasher2);
+        hasher1.finish() == hasher2.finish()
+    }
+
 }
+
+impl Hash for Expression {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.semantic_hash(state);
+    }
+}
+
+impl Eq for Expression {}
 
 /// The kind/type of expression
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -325,6 +416,16 @@ impl ArithmeticComputation {
     }
 }
 
+/// Notation style for equality comparisons (for display purposes)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize, Default)]
+pub enum EqualityNotation {
+    /// Symbol notation: == or !=
+    #[default]
+    Symbol,
+    /// Word notation: is or is not
+    Word,
+}
+
 /// Comparison computations
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub enum ComparisonComputation {
@@ -332,10 +433,8 @@ pub enum ComparisonComputation {
     LessThan,
     GreaterThanOrEqual,
     LessThanOrEqual,
-    Equal,
-    NotEqual,
-    Is,
-    IsNot,
+    Equal(EqualityNotation),
+    NotEqual(EqualityNotation),
 }
 
 impl ComparisonComputation {
@@ -347,10 +446,10 @@ impl ComparisonComputation {
             ComparisonComputation::LessThan => "less than",
             ComparisonComputation::GreaterThanOrEqual => "greater than or equal",
             ComparisonComputation::LessThanOrEqual => "less than or equal",
-            ComparisonComputation::Equal => "equal",
-            ComparisonComputation::NotEqual => "not equal",
-            ComparisonComputation::Is => "is",
-            ComparisonComputation::IsNot => "is not",
+            ComparisonComputation::Equal(EqualityNotation::Symbol) => "equal",
+            ComparisonComputation::Equal(EqualityNotation::Word) => "is",
+            ComparisonComputation::NotEqual(EqualityNotation::Symbol) => "not equal",
+            ComparisonComputation::NotEqual(EqualityNotation::Word) => "is not",
         }
     }
 
@@ -362,11 +461,23 @@ impl ComparisonComputation {
             ComparisonComputation::LessThan => "<",
             ComparisonComputation::GreaterThanOrEqual => ">=",
             ComparisonComputation::LessThanOrEqual => "<=",
-            ComparisonComputation::Equal => "==",
-            ComparisonComputation::NotEqual => "!=",
-            ComparisonComputation::Is => "is",
-            ComparisonComputation::IsNot => "is not",
+            ComparisonComputation::Equal(EqualityNotation::Symbol) => "==",
+            ComparisonComputation::Equal(EqualityNotation::Word) => "is",
+            ComparisonComputation::NotEqual(EqualityNotation::Symbol) => "!=",
+            ComparisonComputation::NotEqual(EqualityNotation::Word) => "is not",
         }
+    }
+
+    /// Check if this is an equality comparison (== or is)
+    #[must_use]
+    pub fn is_equal(&self) -> bool {
+        matches!(self, ComparisonComputation::Equal(_))
+    }
+
+    /// Check if this is an inequality comparison (!= or is not)
+    #[must_use]
+    pub fn is_not_equal(&self) -> bool {
+        matches!(self, ComparisonComputation::NotEqual(_))
     }
 }
 
@@ -818,8 +929,118 @@ impl LiteralValue {
     }
 }
 
+impl Hash for LiteralValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            LiteralValue::Number(d) => {
+                0u8.hash(state);
+                d.to_string().hash(state);
+            }
+            LiteralValue::Text(s) => {
+                1u8.hash(state);
+                s.hash(state);
+            }
+            LiteralValue::Date(dt) => {
+                2u8.hash(state);
+                dt.year.hash(state);
+                dt.month.hash(state);
+                dt.day.hash(state);
+                dt.hour.hash(state);
+                dt.minute.hash(state);
+                dt.second.hash(state);
+                dt.timezone.hash(state);
+            }
+            LiteralValue::Time(t) => {
+                3u8.hash(state);
+                t.hour.hash(state);
+                t.minute.hash(state);
+                t.second.hash(state);
+                t.timezone.hash(state);
+            }
+            LiteralValue::Boolean(b) => {
+                4u8.hash(state);
+                format!("{:?}", b).hash(state);
+            }
+            LiteralValue::Percentage(d) => {
+                5u8.hash(state);
+                d.to_string().hash(state);
+            }
+            LiteralValue::Unit(u) => {
+                6u8.hash(state);
+                u.hash(state);
+            }
+            LiteralValue::Regex(s) => {
+                7u8.hash(state);
+                s.hash(state);
+            }
+        }
+    }
+}
+
+impl Hash for NumericUnit {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            NumericUnit::Mass(v, unit) => {
+                0u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Length(v, unit) => {
+                1u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Volume(v, unit) => {
+                2u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Duration(v, unit) => {
+                3u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Temperature(v, unit) => {
+                4u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Power(v, unit) => {
+                5u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Force(v, unit) => {
+                6u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Pressure(v, unit) => {
+                7u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Energy(v, unit) => {
+                8u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Frequency(v, unit) => {
+                9u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+            NumericUnit::Data(v, unit) => {
+                10u8.hash(state);
+                v.to_string().hash(state);
+                format!("{:?}", unit).hash(state);
+            }
+        }
+    }
+}
+
 /// A time value
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, serde::Deserialize)]
 pub struct TimeValue {
     pub hour: u8,
     pub minute: u8,
@@ -828,14 +1049,14 @@ pub struct TimeValue {
 }
 
 /// A timezone value
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub struct TimezoneValue {
     pub offset_hours: i8,
     pub offset_minutes: u8,
 }
 
 /// A datetime value that preserves timezone information
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub struct DateTimeValue {
     pub year: i32,
     pub month: u32,
@@ -1243,7 +1464,10 @@ impl FactReference {
                 fact: String::new(),
             }
         } else {
-            let fact = path.last().unwrap().clone();
+            let fact = path
+                .last()
+                .expect("bug: path was checked for empty but last() returned None")
+                .clone();
             let segments = path[..path.len() - 1].to_vec();
             Self { segments, fact }
         }
@@ -1270,13 +1494,22 @@ impl LemmaFact {
         Self {
             reference,
             value,
-            source_location: None,
+            source: Source::new(
+                "<unknown>",
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "unknown",
+            ),
         }
     }
 
     #[must_use]
-    pub fn with_source_location(mut self, source_location: Source) -> Self {
-        self.source_location = Some(source_location);
+    pub fn with_source(mut self, source: Source) -> Self {
+        self.source = source;
         self
     }
 
@@ -1292,7 +1525,7 @@ impl LemmaDoc {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            source: None,
+            source_text: None,
             start_line: 1,
             commentary: None,
             facts: Vec::new(),
@@ -1301,8 +1534,8 @@ impl LemmaDoc {
     }
 
     #[must_use]
-    pub fn with_source(mut self, source: String) -> Self {
-        self.source = Some(source);
+    pub fn with_source_text(mut self, source_text: String) -> Self {
+        self.source_text = Some(source_text);
         self
     }
 
@@ -1626,10 +1859,10 @@ impl fmt::Display for ComparisonComputation {
             ComparisonComputation::LessThan => write!(f, "<"),
             ComparisonComputation::GreaterThanOrEqual => write!(f, ">="),
             ComparisonComputation::LessThanOrEqual => write!(f, "<="),
-            ComparisonComputation::Equal => write!(f, "=="),
-            ComparisonComputation::NotEqual => write!(f, "!="),
-            ComparisonComputation::Is => write!(f, "is"),
-            ComparisonComputation::IsNot => write!(f, "is not"),
+            ComparisonComputation::Equal(EqualityNotation::Symbol) => write!(f, "=="),
+            ComparisonComputation::Equal(EqualityNotation::Word) => write!(f, "is"),
+            ComparisonComputation::NotEqual(EqualityNotation::Symbol) => write!(f, "!="),
+            ComparisonComputation::NotEqual(EqualityNotation::Word) => write!(f, "is not"),
         }
     }
 }

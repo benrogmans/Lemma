@@ -1,0 +1,19 @@
+doc  theme_park
+"""
+Theme Park Admission Pricing
+
+Shows how rules can make decisions based on conditions.
+Simple logic that's easy to understand.
+"""
+
+fact age = [number]
+fact number_of_people = [number]
+fact employee = [boolean]
+
+rule admission_price = 20
+    unless age < 12 then 10
+    unless age > 65 then 15
+    unless employee then 5
+    unless employee and age > 65 then 5
+  
+rule Total_Price = admission_price? * number_of_people

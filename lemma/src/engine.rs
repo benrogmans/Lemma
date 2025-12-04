@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 pub struct Engine {
     execution_plans: HashMap<String, crate::planning::ExecutionPlan>,
     documents: HashMap<String, LemmaDoc>,
-    sources: HashMap<String, String>,
+    sources: HashMap<String, (String, String)>,
     evaluator: Evaluator,
     limits: ResourceLimits,
 }
@@ -43,12 +43,20 @@ impl Engine {
         }
     }
 
-    pub fn add_lemma_code(&mut self, lemma_code: &str, source: &str) -> LemmaResult<()> {
-        let new_docs = parse(lemma_code, Some(source.to_owned()), &self.limits)?;
+    pub fn add_lemma_code(&mut self, lemma_code: &str, source_id: &str) -> LemmaResult<()> {
+        let new_docs = parse(lemma_code, Some(source_id.to_owned()), &self.limits)?;
 
         for doc in &new_docs {
-            let source_id = doc.source.clone().unwrap_or_else(|| doc.name.clone());
-            self.sources.insert(source_id, lemma_code.to_owned());
+            if self.documents.contains_key(&doc.name) {
+                return Err(LemmaError::Engine(format!(
+                    "Document '{}' already exists. Use remove_document() first to replace it.",
+                    doc.name
+                )));
+            }
+        }
+
+        for doc in &new_docs {
+            self.sources.insert(doc.name.clone(), (source_id.to_string(), lemma_code.to_string()));
             self.documents.insert(doc.name.clone(), doc.clone());
         }
 
@@ -83,6 +91,7 @@ impl Engine {
     pub fn remove_document(&mut self, doc_name: &str) {
         self.execution_plans.remove(doc_name);
         self.documents.remove(doc_name);
+        self.sources.remove(doc_name);
     }
 
     pub fn list_documents(&self) -> Vec<String> {
@@ -190,14 +199,14 @@ impl Engine {
 
     /// Invert a rule to find input domains that produce a desired outcome with JSON values.
     ///
-    /// This is a convenience method that accepts JSON directly and converts it
-    /// to typed values using the document's fact type declarations.
+    /// Uses world-based enumeration for accurate handling of correlated rule references.
+    /// Includes proof generation explaining why each solution is valid.
     ///
     /// Returns an InversionResponse containing:
-    /// - `solutions`: Concrete domain constraints for each free variable
-    /// - `shape`: The symbolic representation of the solution space
-    /// - `free_variables`: Facts that are not fully determined
-    /// - `is_fully_constrained`: Whether all facts have concrete values
+    /// - `solutions`: Solutions with conditions, outcomes, and proofs
+    /// - `domains`: Concrete domain constraints for each undetermined fact
+    /// - `undetermined_facts`: Facts that remain free variables
+    /// - `is_determined`: Whether all facts have concrete values
     ///
     /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
     /// They are automatically parsed to the expected type based on the document schema.
@@ -220,14 +229,14 @@ impl Engine {
 
     /// Invert a rule to find input domains that produce a desired outcome.
     ///
-    /// This is the user-friendly API that accepts raw string values and parses them
-    /// to the appropriate types based on the document's fact type declarations.
+    /// Uses world-based enumeration for accurate handling of correlated rule references.
+    /// Includes proof generation explaining why each solution is valid.
     ///
     /// Returns an InversionResponse containing:
-    /// - `solutions`: Concrete domain constraints for each free variable
-    /// - `shape`: The symbolic representation of the solution space
-    /// - `free_variables`: Facts that are not fully determined
-    /// - `is_fully_constrained`: Whether all facts have concrete values
+    /// - `solutions`: Solutions with conditions, outcomes, and proofs
+    /// - `domains`: Concrete domain constraints for each undetermined fact
+    /// - `undetermined_facts`: Facts that remain free variables
+    /// - `is_determined`: Whether all facts have concrete values
     ///
     /// Values are provided as name -> value string pairs (e.g., "quantity" -> "5").
     /// They are automatically parsed to the expected type based on the document schema.
@@ -243,7 +252,6 @@ impl Engine {
             .get(doc_name)
             .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
 
-        // Resolve value keys to FactPaths for inversion
         let provided_facts: HashSet<crate::FactPath> = values
             .keys()
             .filter_map(|k| base_plan.get_fact_by_path_str(k).map(|(fp, _)| fp.clone()))
@@ -256,15 +264,14 @@ impl Engine {
 
     /// Invert a rule to find input domains that produce a desired outcome.
     ///
-    /// This is the strict API that accepts pre-typed LiteralValue values.
-    /// Use this for programmatic APIs, protobuf, msgpack, FFI, and other
-    /// strongly-typed interfaces where values are already parsed.
+    /// Uses world-based enumeration for accurate handling of correlated rule references.
+    /// Includes proof generation explaining why each solution is valid.
     ///
     /// Returns an InversionResponse containing:
-    /// - `solutions`: Concrete domain constraints for each free variable
-    /// - `shape`: The symbolic representation of the solution space
-    /// - `free_variables`: Facts that are not fully determined
-    /// - `is_fully_constrained`: Whether all facts have concrete values
+    /// - `solutions`: Solutions with conditions, outcomes, and proofs
+    /// - `domains`: Concrete domain constraints for each undetermined fact
+    /// - `undetermined_facts`: Facts that remain free variables
+    /// - `is_determined`: Whether all facts have concrete values
     ///
     /// Values are provided as name -> LiteralValue pairs (e.g., "quantity" -> Number(5)).
     pub fn invert_strict(
@@ -279,7 +286,6 @@ impl Engine {
             .get(doc_name)
             .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
 
-        // Resolve value keys to FactPaths for inversion
         let provided_facts: HashSet<crate::FactPath> = values
             .keys()
             .filter_map(|k| base_plan.get_fact_by_path_str(k).map(|(fp, _)| fp.clone()))
@@ -311,8 +317,6 @@ impl Engine {
         target: crate::Target,
         provided_facts: HashSet<crate::FactPath>,
     ) -> LemmaResult<crate::InversionResponse> {
-        let shape = crate::inversion::invert(rule_name, target, &plan, &provided_facts)?;
-        let solutions = crate::inversion::shape_to_domains(&shape)?;
-        Ok(crate::InversionResponse::new(shape, solutions))
+        crate::inversion::invert(rule_name, target, &plan, &provided_facts)
     }
 }

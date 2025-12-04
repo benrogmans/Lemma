@@ -4,17 +4,29 @@ use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
+fn test_source() -> crate::Source {
+    use crate::parsing::ast::Span;
+    crate::Source::new(
+        "<test>",
+        Span {
+            start: 0,
+            end: 0,
+            line: 1,
+            col: 0,
+        },
+        "test",
+    )
+}
+
 fn dummy_rule(name: &str) -> LemmaRule {
-    use crate::ExpressionId;
     LemmaRule {
         name: name.to_string(),
         expression: Expression {
             kind: ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)),
-            source_location: None,
-            id: ExpressionId::new(0),
+            source: test_source(),
         },
         unless_clauses: vec![],
-        source_location: None,
+        source: test_source(),
     }
 }
 
@@ -97,7 +109,7 @@ fn test_rule_result_types() {
             value: crate::FactValue::TypeAnnotation(crate::TypeAnnotation::LemmaType(
                 crate::LemmaType::Number,
             )),
-            source_location: None,
+            source: test_source(),
         }],
         operations: vec![],
         proof: None,

@@ -1,27 +1,21 @@
-use super::ast::{ExpressionIdGenerator, Span};
+use super::ast::{ExpressionDepthTracker, Span};
 use super::Rule;
 use crate::error::LemmaError;
 use crate::semantic::*;
 use crate::Source;
 use pest::iterators::Pair;
 
-/// Create an Expression with source location and unique ID from a parser pair
+/// Create an Expression with source location from a parser pair
 fn create_expression_with_location(
     kind: ExpressionKind,
     pair: &Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
     source_id: &str,
     doc_name: &str,
 ) -> Expression {
     let span = Span::from_pest_span(pair.as_span());
     Expression::new(
         kind,
-        Some(Source::new(
-            source_id.to_string(),
-            span,
-            doc_name.to_string(),
-        )),
-        id_gen.next_id(),
+        Source::new(source_id.to_string(), span, doc_name.to_string()),
     )
 }
 
@@ -29,7 +23,6 @@ fn create_expression_with_location(
 /// Handles both wrapped literals (Rule::literal) and direct literal types.
 fn parse_literal_expression(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -46,7 +39,6 @@ fn parse_literal_expression(
     Ok(create_expression_with_location(
         ExpressionKind::Literal(literal_value),
         &literal_pair,
-        id_gen,
         source_id,
         doc_name,
     ))
@@ -54,7 +46,7 @@ fn parse_literal_expression(
 
 fn parse_primary(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -70,17 +62,16 @@ fn parse_primary(
             | Rule::date_time_literal
             | Rule::time_literal
             | Rule::unit_literal => {
-                return parse_literal_expression(inner, id_gen, source_id, doc_name);
+                return parse_literal_expression(inner, source_id, doc_name);
             }
             Rule::reference_expression => {
-                return parse_reference_expression(inner, id_gen, source_id, doc_name);
+                return parse_reference_expression(inner, source_id, doc_name);
             }
             Rule::rule_reference => {
                 let rule_ref = parse_rule_reference(inner.clone())?;
                 return Ok(create_expression_with_location(
                     ExpressionKind::RuleReference(rule_ref),
                     &inner,
-                    id_gen,
                     source_id,
                     doc_name,
                 ));
@@ -90,13 +81,12 @@ fn parse_primary(
                 return Ok(create_expression_with_location(
                     ExpressionKind::FactReference(fact_ref),
                     &inner,
-                    id_gen,
                     source_id,
                     doc_name,
                 ));
             }
             Rule::expression_group => {
-                return parse_or_expression(inner, id_gen, source_id, doc_name);
+                return parse_or_expression(inner, depth_tracker, source_id, doc_name);
             }
             _ => {}
         }
@@ -106,15 +96,15 @@ fn parse_primary(
 
 pub(crate) fn parse_expression(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
     // Check and increment depth
-    if let Err(msg) = id_gen.push_depth() {
+    if let Err(msg) = depth_tracker.push_depth() {
         return Err(LemmaError::ResourceLimitExceeded {
             limit_name: "max_expression_depth".to_string(),
-            limit_value: id_gen.max_depth().to_string(),
+            limit_value: depth_tracker.max_depth().to_string(),
             actual_value: msg
                 .split_whitespace()
                 .nth(2)
@@ -124,32 +114,32 @@ pub(crate) fn parse_expression(
         });
     }
 
-    let result = parse_expression_impl(pair, id_gen, source_id, doc_name);
-    id_gen.pop_depth();
+    let result = parse_expression_impl(pair, depth_tracker, source_id, doc_name);
+    depth_tracker.pop_depth();
     result
 }
 
 fn parse_expression_impl(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
     // Check the current rule first before descending to children
     match pair.as_rule() {
-        Rule::comparable_base => return parse_comparable_base(pair, id_gen, source_id, doc_name),
-        Rule::term => return parse_term(pair, id_gen, source_id, doc_name),
-        Rule::power => return parse_power(pair, id_gen, source_id, doc_name),
-        Rule::factor => return parse_factor(pair, id_gen, source_id, doc_name),
-        Rule::primary => return parse_primary(pair, id_gen, source_id, doc_name),
+        Rule::comparable_base => return parse_comparable_base(pair, depth_tracker, source_id, doc_name),
+        Rule::term => return parse_term(pair, depth_tracker, source_id, doc_name),
+        Rule::power => return parse_power(pair, depth_tracker, source_id, doc_name),
+        Rule::factor => return parse_factor(pair, depth_tracker, source_id, doc_name),
+        Rule::primary => return parse_primary(pair, depth_tracker, source_id, doc_name),
         Rule::arithmetic_expression => {
-            return parse_arithmetic_expression(pair, id_gen, source_id, doc_name)
+            return parse_arithmetic_expression(pair, depth_tracker, source_id, doc_name)
         }
         Rule::comparison_expression => {
-            return parse_comparison_expression(pair, id_gen, source_id, doc_name)
+            return parse_comparison_expression(pair, depth_tracker, source_id, doc_name)
         }
         Rule::boolean_expression => {
-            return parse_logical_expression(pair, id_gen, source_id, doc_name)
+            return parse_logical_expression(pair, depth_tracker, source_id, doc_name)
         }
         // Directly handle mathematical operator nodes here so they don't get flattened
         Rule::sqrt_expr
@@ -164,11 +154,11 @@ fn parse_expression_impl(
         | Rule::abs_expr
         | Rule::floor_expr
         | Rule::ceil_expr
-        | Rule::round_expr => return parse_logical_expression(pair, id_gen, source_id, doc_name),
-        Rule::and_expression => return parse_and_expression(pair, id_gen, source_id, doc_name),
-        Rule::or_expression => return parse_or_expression(pair, id_gen, source_id, doc_name),
-        Rule::and_operand => return parse_and_operand(pair, id_gen, source_id, doc_name),
-        Rule::expression_group => return parse_or_expression(pair, id_gen, source_id, doc_name),
+        | Rule::round_expr => return parse_logical_expression(pair, depth_tracker, source_id, doc_name),
+        Rule::and_expression => return parse_and_expression(pair, depth_tracker, source_id, doc_name),
+        Rule::or_expression => return parse_or_expression(pair, depth_tracker, source_id, doc_name),
+        Rule::and_operand => return parse_and_operand(pair, depth_tracker, source_id, doc_name),
+        Rule::expression_group => return parse_or_expression(pair, depth_tracker, source_id, doc_name),
         Rule::expression => {} // Continue to iterate children
         _ => {}
     }
@@ -185,12 +175,12 @@ fn parse_expression_impl(
             | Rule::date_time_literal
             | Rule::time_literal
             | Rule::unit_literal => {
-                return parse_literal_expression(inner_pair, id_gen, source_id, doc_name);
+                return parse_literal_expression(inner_pair, source_id, doc_name);
             }
 
             // References
             Rule::reference_expression => {
-                return parse_reference_expression(inner_pair, id_gen, source_id, doc_name)
+                return parse_reference_expression(inner_pair, source_id, doc_name)
             }
 
             Rule::rule_reference => {
@@ -198,7 +188,6 @@ fn parse_expression_impl(
                 return Ok(create_expression_with_location(
                     ExpressionKind::RuleReference(rule_ref),
                     &inner_pair,
-                    id_gen,
                     source_id,
                     doc_name,
                 ));
@@ -209,7 +198,6 @@ fn parse_expression_impl(
                 return Ok(create_expression_with_location(
                     ExpressionKind::FactReference(fact_ref),
                     &inner_pair,
-                    id_gen,
                     source_id,
                     doc_name,
                 ));
@@ -223,7 +211,7 @@ fn parse_expression_impl(
             | Rule::or_expression
             | Rule::and_operand
             | Rule::expression_group => {
-                return parse_expression(inner_pair, id_gen, source_id, doc_name);
+                return parse_expression(inner_pair, depth_tracker, source_id, doc_name);
             }
 
             // Logical and mathematical operations
@@ -241,11 +229,11 @@ fn parse_expression_impl(
             | Rule::floor_expr
             | Rule::ceil_expr
             | Rule::round_expr => {
-                return parse_logical_expression(inner_pair, id_gen, source_id, doc_name);
+                return parse_logical_expression(inner_pair, depth_tracker, source_id, doc_name);
             }
 
             Rule::comparable_base | Rule::term | Rule::power | Rule::factor | Rule::expression => {
-                return parse_expression(inner_pair, id_gen, source_id, doc_name);
+                return parse_expression(inner_pair, depth_tracker, source_id, doc_name);
             }
 
             _ => {}
@@ -261,7 +249,6 @@ fn parse_expression_impl(
 
 fn parse_reference_expression(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -271,7 +258,7 @@ fn parse_reference_expression(
                 let rule_ref = parse_rule_reference(inner_pair)?;
                 let kind = ExpressionKind::RuleReference(rule_ref);
                 return Ok(create_expression_with_location(
-                    kind, &pair, id_gen, source_id, doc_name,
+                    kind, &pair, source_id, doc_name,
                 ));
             }
             Rule::fact_name => {
@@ -279,14 +266,14 @@ fn parse_reference_expression(
                     inner_pair.as_str().to_string(),
                 ));
                 return Ok(create_expression_with_location(
-                    kind, &pair, id_gen, source_id, doc_name,
+                    kind, &pair, source_id, doc_name,
                 ));
             }
             Rule::fact_reference => {
                 let fact_ref = parse_fact_reference(inner_pair)?;
                 let kind = ExpressionKind::FactReference(fact_ref);
                 return Ok(create_expression_with_location(
-                    kind, &pair, id_gen, source_id, doc_name,
+                    kind, &pair, source_id, doc_name,
                 ));
             }
             _ => {}
@@ -319,7 +306,7 @@ fn parse_rule_reference(pair: Pair<Rule>) -> Result<RuleReference, LemmaError> {
 
 fn parse_and_operand(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -331,11 +318,11 @@ fn parse_and_operand(
 
     // Check if it's a boolean_expression
     if first.as_rule() == Rule::boolean_expression {
-        return parse_logical_expression(first, id_gen, source_id, doc_name);
+        return parse_logical_expression(first, depth_tracker, source_id, doc_name);
     }
 
     // Otherwise it's comparable_base with optional comparison
-    let left = parse_expression(first, id_gen, source_id, doc_name)?;
+    let left = parse_expression(first, depth_tracker, source_id, doc_name)?;
 
     // Check for comparison operator
     if let Some(op_pair) = pairs.next() {
@@ -351,10 +338,10 @@ fn parse_and_operand(
                 Rule::comp_lt => ComparisonComputation::LessThan,
                 Rule::comp_gte => ComparisonComputation::GreaterThanOrEqual,
                 Rule::comp_lte => ComparisonComputation::LessThanOrEqual,
-                Rule::comp_eq => ComparisonComputation::Equal,
-                Rule::comp_ne => ComparisonComputation::NotEqual,
-                Rule::comp_is => ComparisonComputation::Is,
-                Rule::comp_is_not => ComparisonComputation::IsNot,
+                Rule::comp_eq => ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Rule::comp_ne => ComparisonComputation::NotEqual(EqualityNotation::Symbol),
+                Rule::comp_is => ComparisonComputation::Equal(EqualityNotation::Word),
+                Rule::comp_is_not => ComparisonComputation::NotEqual(EqualityNotation::Word),
                 _ => {
                     return Err(LemmaError::Engine(format!(
                         "Invalid comparison operator: {:?}",
@@ -366,13 +353,13 @@ fn parse_and_operand(
                 pairs.next().ok_or_else(|| {
                     LemmaError::Engine("Missing right operand in comparison".to_string())
                 })?,
-                id_gen,
+                depth_tracker,
                 source_id,
                 doc_name,
             )?;
             let kind = ExpressionKind::Comparison(Box::new(left), operator, Box::new(right));
             return Ok(create_expression_with_location(
-                kind, &pair, id_gen, source_id, doc_name,
+                kind, &pair, source_id, doc_name,
             ));
         }
     }
@@ -383,7 +370,7 @@ fn parse_and_operand(
 
 fn parse_and_expression(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -394,7 +381,7 @@ fn parse_and_expression(
         pairs.next().ok_or_else(|| {
             LemmaError::Engine("Missing left operand in logical AND expression".to_string())
         })?,
-        id_gen,
+        depth_tracker,
         source_id,
         doc_name,
     )?;
@@ -404,10 +391,10 @@ fn parse_and_expression(
     // Use the original pair for source location to capture the full expression
     for right_pair in pairs {
         if right_pair.as_rule() == Rule::and_operand {
-            let right = parse_and_operand(right_pair.clone(), id_gen, source_id, doc_name)?;
+            let right = parse_and_operand(right_pair.clone(), depth_tracker, source_id, doc_name)?;
             let kind = ExpressionKind::LogicalAnd(Box::new(left), Box::new(right));
             left =
-                create_expression_with_location(kind, &original_pair, id_gen, source_id, doc_name);
+                create_expression_with_location(kind, &original_pair, source_id, doc_name);
         }
     }
 
@@ -416,7 +403,7 @@ fn parse_and_expression(
 
 pub(crate) fn parse_or_expression(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -436,7 +423,7 @@ pub(crate) fn parse_or_expression(
         pairs.next().ok_or_else(|| {
             LemmaError::Engine("Missing left operand in logical OR expression".to_string())
         })?,
-        id_gen,
+        depth_tracker,
         source_id,
         doc_name,
     )?;
@@ -446,12 +433,11 @@ pub(crate) fn parse_or_expression(
     // Use the original or_pair for source location to capture the full expression
     for right_pair in pairs {
         if right_pair.as_rule() == Rule::and_expression {
-            let right = parse_and_expression(right_pair.clone(), id_gen, source_id, doc_name)?;
+            let right = parse_and_expression(right_pair.clone(), depth_tracker, source_id, doc_name)?;
             let kind = ExpressionKind::LogicalOr(Box::new(left), Box::new(right));
             left = create_expression_with_location(
                 kind,
                 &original_or_pair,
-                id_gen,
                 source_id,
                 doc_name,
             );
@@ -463,7 +449,7 @@ pub(crate) fn parse_or_expression(
 
 fn parse_arithmetic_expression(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -472,7 +458,7 @@ fn parse_arithmetic_expression(
         pairs.next().ok_or_else(|| {
             LemmaError::Engine("Missing left term in arithmetic expression".to_string())
         })?,
-        id_gen,
+        depth_tracker,
         source_id,
         doc_name,
     )?;
@@ -493,13 +479,13 @@ fn parse_arithmetic_expression(
             pairs.next().ok_or_else(|| {
                 LemmaError::Engine("Missing right term in arithmetic expression".to_string())
             })?,
-            id_gen,
+            depth_tracker,
             source_id,
             doc_name,
         )?;
 
         let kind = ExpressionKind::Arithmetic(Box::new(left), operation, Box::new(right));
-        left = create_expression_with_location(kind, &pair, id_gen, source_id, doc_name);
+        left = create_expression_with_location(kind, &pair, source_id, doc_name);
     }
 
     Ok(left)
@@ -507,7 +493,7 @@ fn parse_arithmetic_expression(
 
 fn parse_term(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -516,7 +502,7 @@ fn parse_term(
         pairs
             .next()
             .ok_or_else(|| LemmaError::Engine("Missing left power in term".to_string()))?,
-        id_gen,
+        depth_tracker,
         source_id,
         doc_name,
     )?;
@@ -538,13 +524,13 @@ fn parse_term(
             pairs
                 .next()
                 .ok_or_else(|| LemmaError::Engine("Missing right power in term".to_string()))?,
-            id_gen,
+            depth_tracker,
             source_id,
             doc_name,
         )?;
 
         let kind = ExpressionKind::Arithmetic(Box::new(left), operation, Box::new(right));
-        left = create_expression_with_location(kind, &pair, id_gen, source_id, doc_name);
+        left = create_expression_with_location(kind, &pair, source_id, doc_name);
     }
 
     Ok(left)
@@ -552,7 +538,7 @@ fn parse_term(
 
 fn parse_power(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -561,7 +547,7 @@ fn parse_power(
         pairs
             .next()
             .ok_or_else(|| LemmaError::Engine("Missing factor in power".to_string()))?,
-        id_gen,
+        depth_tracker,
         source_id,
         doc_name,
     )?;
@@ -572,7 +558,7 @@ fn parse_power(
                 pairs.next().ok_or_else(|| {
                     LemmaError::Engine("Missing right power in power expression".to_string())
                 })?,
-                id_gen,
+                depth_tracker,
                 source_id,
                 doc_name,
             )?;
@@ -583,7 +569,7 @@ fn parse_power(
                 Box::new(right),
             );
             return Ok(create_expression_with_location(
-                kind, &pair, id_gen, source_id, doc_name,
+                kind, &pair, source_id, doc_name,
             ));
         }
     }
@@ -593,7 +579,7 @@ fn parse_power(
 
 fn parse_factor(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -610,7 +596,7 @@ fn parse_factor(
                 // Just ignore unary plus
             }
             _ => {
-                let expr = parse_expression(first_pair, id_gen, source_id, doc_name)?;
+                let expr = parse_expression(first_pair, depth_tracker, source_id, doc_name)?;
                 return Ok(expr);
             }
         }
@@ -618,7 +604,7 @@ fn parse_factor(
 
     // Parse the actual expression after unary operator
     let expr = if let Some(expr_pair) = pairs.next() {
-        parse_expression(expr_pair, id_gen, source_id, doc_name)?
+        parse_expression(expr_pair, depth_tracker, source_id, doc_name)?
     } else {
         return Err(LemmaError::Engine(
             "Missing expression after unary operator".to_string(),
@@ -630,7 +616,6 @@ fn parse_factor(
         let zero = create_expression_with_location(
             ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::ZERO)),
             &pair,
-            id_gen,
             source_id,
             doc_name,
         );
@@ -640,7 +625,7 @@ fn parse_factor(
             Box::new(expr),
         );
         Ok(create_expression_with_location(
-            kind, &pair, id_gen, source_id, doc_name,
+            kind, &pair, source_id, doc_name,
         ))
     } else {
         Ok(expr)
@@ -649,7 +634,7 @@ fn parse_factor(
 
 fn parse_comparison_expression(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -658,7 +643,7 @@ fn parse_comparison_expression(
         pairs.next().ok_or_else(|| {
             LemmaError::Engine("Missing left operand in comparison expression".to_string())
         })?,
-        id_gen,
+        depth_tracker,
         source_id,
         doc_name,
     )?;
@@ -676,10 +661,10 @@ fn parse_comparison_expression(
                     Rule::comp_lt => ComparisonComputation::LessThan,
                     Rule::comp_gte => ComparisonComputation::GreaterThanOrEqual,
                     Rule::comp_lte => ComparisonComputation::LessThanOrEqual,
-                    Rule::comp_eq => ComparisonComputation::Equal,
-                    Rule::comp_ne => ComparisonComputation::NotEqual,
-                    Rule::comp_is => ComparisonComputation::Is,
-                    Rule::comp_is_not => ComparisonComputation::IsNot,
+                    Rule::comp_eq => ComparisonComputation::Equal(EqualityNotation::Symbol),
+                    Rule::comp_ne => ComparisonComputation::NotEqual(EqualityNotation::Symbol),
+                    Rule::comp_is => ComparisonComputation::Equal(EqualityNotation::Word),
+                    Rule::comp_is_not => ComparisonComputation::NotEqual(EqualityNotation::Word),
                     _ => {
                         return Err(LemmaError::Engine(format!(
                             "Invalid comparison operator: {:?}",
@@ -692,10 +677,10 @@ fn parse_comparison_expression(
             Rule::comp_lt => ComparisonComputation::LessThan,
             Rule::comp_gte => ComparisonComputation::GreaterThanOrEqual,
             Rule::comp_lte => ComparisonComputation::LessThanOrEqual,
-            Rule::comp_eq => ComparisonComputation::Equal,
-            Rule::comp_ne => ComparisonComputation::NotEqual,
-            Rule::comp_is => ComparisonComputation::Is,
-            Rule::comp_is_not => ComparisonComputation::IsNot,
+            Rule::comp_eq => ComparisonComputation::Equal(EqualityNotation::Symbol),
+            Rule::comp_ne => ComparisonComputation::NotEqual(EqualityNotation::Symbol),
+            Rule::comp_is => ComparisonComputation::Equal(EqualityNotation::Word),
+            Rule::comp_is_not => ComparisonComputation::NotEqual(EqualityNotation::Word),
             _ => {
                 return Err(LemmaError::Engine(format!(
                     "Invalid comparison operator: {:?}",
@@ -708,14 +693,14 @@ fn parse_comparison_expression(
             pairs.next().ok_or_else(|| {
                 LemmaError::Engine("Missing right operand in comparison expression".to_string())
             })?,
-            id_gen,
+            depth_tracker,
             source_id,
             doc_name,
         )?;
 
         let kind = ExpressionKind::Comparison(Box::new(left), operator, Box::new(right));
         return Ok(create_expression_with_location(
-            kind, &pair, id_gen, source_id, doc_name,
+            kind, &pair, source_id, doc_name,
         ));
     }
 
@@ -724,7 +709,7 @@ fn parse_comparison_expression(
 
 fn parse_logical_expression(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -764,10 +749,10 @@ fn parse_logical_expression(
                 if inner.as_rule() == Rule::arithmetic_expression
                     || inner.as_rule() == Rule::primary
                 {
-                    let operand = parse_expression(inner, id_gen, source_id, doc_name)?;
+                    let operand = parse_expression(inner, depth_tracker, source_id, doc_name)?;
                     let kind = ExpressionKind::MathematicalComputation(operator, Box::new(operand));
                     return Ok(create_expression_with_location(
-                        kind, &pair, id_gen, source_id, doc_name,
+                        kind, &pair, source_id, doc_name,
                     ));
                 }
             }
@@ -780,39 +765,39 @@ fn parse_logical_expression(
     if let Some(node) = pair.into_inner().next() {
         match node.as_rule() {
             Rule::reference_expression => {
-                return parse_reference_expression(node, id_gen, source_id, doc_name)
+                return parse_reference_expression(node, source_id, doc_name)
             }
-            Rule::literal => return parse_expression(node, id_gen, source_id, doc_name),
-            Rule::primary => return parse_primary(node, id_gen, source_id, doc_name),
+            Rule::literal => return parse_expression(node, depth_tracker, source_id, doc_name),
+            Rule::primary => return parse_primary(node, depth_tracker, source_id, doc_name),
             Rule::not_expr => {
                 for inner in node.clone().into_inner() {
                     if inner.as_rule() == Rule::reference_expression {
                         let negated_expr =
-                            parse_reference_expression(inner, id_gen, source_id, doc_name)?;
+                            parse_reference_expression(inner, source_id, doc_name)?;
                         let kind = ExpressionKind::LogicalNegation(
                             Box::new(negated_expr),
                             NegationType::Not,
                         );
                         return Ok(create_expression_with_location(
-                            kind, &node, id_gen, source_id, doc_name,
+                            kind, &node, source_id, doc_name,
                         ));
                     } else if inner.as_rule() == Rule::primary {
-                        let negated_expr = parse_primary(inner, id_gen, source_id, doc_name)?;
+                        let negated_expr = parse_primary(inner, depth_tracker, source_id, doc_name)?;
                         let kind = ExpressionKind::LogicalNegation(
                             Box::new(negated_expr),
                             NegationType::Not,
                         );
                         return Ok(create_expression_with_location(
-                            kind, &node, id_gen, source_id, doc_name,
+                            kind, &node, source_id, doc_name,
                         ));
                     } else if inner.as_rule() == Rule::literal {
-                        let negated_expr = parse_expression(inner, id_gen, source_id, doc_name)?;
+                        let negated_expr = parse_expression(inner, depth_tracker, source_id, doc_name)?;
                         let kind = ExpressionKind::LogicalNegation(
                             Box::new(negated_expr),
                             NegationType::Not,
                         );
                         return Ok(create_expression_with_location(
-                            kind, &node, id_gen, source_id, doc_name,
+                            kind, &node, source_id, doc_name,
                         ));
                     }
                 }
@@ -856,11 +841,11 @@ fn parse_logical_expression(
                     if inner.as_rule() == Rule::arithmetic_expression
                         || inner.as_rule() == Rule::primary
                     {
-                        let operand = parse_expression(inner, id_gen, source_id, doc_name)?;
+                        let operand = parse_expression(inner, depth_tracker, source_id, doc_name)?;
                         let kind =
                             ExpressionKind::MathematicalComputation(operator, Box::new(operand));
                         return Ok(create_expression_with_location(
-                            kind, &node, id_gen, source_id, doc_name,
+                            kind, &node, source_id, doc_name,
                         ));
                     }
                 }
@@ -876,7 +861,7 @@ fn parse_logical_expression(
 
 fn parse_comparable_base(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -887,7 +872,7 @@ fn parse_comparable_base(
         pairs.next().ok_or_else(|| {
             LemmaError::Engine("No arithmetic expression in comparable_base".to_string())
         })?,
-        id_gen,
+        depth_tracker,
         source_id,
         doc_name,
     )?;
@@ -898,7 +883,7 @@ fn parse_comparable_base(
             let target_unit = super::units::resolve_conversion_target(unit_pair.as_str())?;
             let kind = ExpressionKind::UnitConversion(Box::new(arith_expr), target_unit);
             return Ok(create_expression_with_location(
-                kind, &pair, id_gen, source_id, doc_name,
+                kind, &pair, source_id, doc_name,
             ));
         }
     }

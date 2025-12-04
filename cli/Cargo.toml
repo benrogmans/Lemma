@@ -13,9 +13,9 @@ path = "src/main.rs"
 
 [dependencies]
 lemma = { package = "lemma-engine", version = "0.7.0", path = "../lemma" }
-clap.workspace = true
-anyhow.workspace = true
-ariadne.workspace = true
+clap = { version = "4.0", features = ["derive"] }
+anyhow = "1.0"
+ariadne = "0.4"
 chrono.workspace = true
 walkdir = "2.4"
 super-table = { version = "1.1.1", features = ["custom_styling"] }
@@ -24,10 +24,10 @@ rust_decimal = "1.36"
 strip-ansi-escapes = "0.2"
 
 # Server dependencies (optional)
-axum = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
-tower = { workspace = true, features = ["util"], optional = true }
-tower-http = { workspace = true, optional = true }
+axum = { version = "0.7.9", optional = true }
+tokio = { version = "1.39.2", features = ["full"], optional = true }
+tower = { version = "0.4", features = ["util"], optional = true }
+tower-http = { version = "0.5", features = ["cors"], optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tracing = { version = "0.1", optional = true }

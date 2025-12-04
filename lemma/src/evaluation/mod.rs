@@ -4,17 +4,14 @@
 //! The execution plan is self-contained with all rules flattened into branches.
 //! The evaluator executes rules linearly without recursion or tree traversal.
 
-pub mod datetime;
 pub mod expression;
 pub mod operations;
 pub mod proof;
 pub mod response;
-pub mod units;
 
 use crate::planning::ExecutionPlan;
 use crate::{
-    ExpressionId, FactPath, FactReference, FactValue, LemmaFact, LemmaResult, LiteralValue,
-    RulePath,
+    FactPath, FactReference, FactValue, LemmaError, LemmaFact, LemmaResult, LiteralValue, RulePath,
 };
 use indexmap::IndexMap;
 pub use operations::{ComputationKind, OperationKind, OperationRecord, OperationResult};
@@ -27,8 +24,8 @@ pub struct EvaluationContext {
     rule_results: HashMap<RulePath, OperationResult>,
     rule_proofs: HashMap<RulePath, crate::evaluation::proof::Proof>,
     operations: Vec<crate::OperationRecord>,
-    sources: HashMap<String, String>,
-    proof_nodes: HashMap<ExpressionId, crate::evaluation::proof::ProofNode>,
+    source_text: HashMap<String, (String, String)>,
+    proof_nodes: HashMap<crate::Expression, crate::evaluation::proof::ProofNode>,
 }
 
 impl EvaluationContext {
@@ -38,7 +35,7 @@ impl EvaluationContext {
             rule_results: HashMap::new(),
             rule_proofs: HashMap::new(),
             operations: Vec::new(),
-            sources: plan.sources.clone(),
+            source_text: plan.graph().sources().clone(),
             proof_nodes: HashMap::new(),
         }
     }
@@ -50,26 +47,23 @@ impl EvaluationContext {
         })
     }
 
-    fn push_operation(&mut self, kind: OperationKind, expression_id: crate::ExpressionId) {
-        self.operations.push(OperationRecord {
-            expression_id,
-            kind,
-        });
+    fn push_operation(&mut self, kind: OperationKind) {
+        self.operations.push(OperationRecord { kind });
     }
 
     fn set_proof_node(
         &mut self,
-        expression_id: crate::ExpressionId,
+        expr: &crate::Expression,
         node: crate::evaluation::proof::ProofNode,
     ) {
-        self.proof_nodes.insert(expression_id, node);
+        self.proof_nodes.insert(expr.clone(), node);
     }
 
     fn get_proof_node(
         &self,
-        expression_id: &crate::ExpressionId,
+        expr: &crate::Expression,
     ) -> Option<&crate::evaluation::proof::ProofNode> {
-        self.proof_nodes.get(expression_id)
+        self.proof_nodes.get(expr)
     }
 
     fn get_rule_proof(&self, rule_path: &RulePath) -> Option<&crate::evaluation::proof::Proof> {
@@ -86,10 +80,6 @@ impl EvaluationContext {
 pub struct Evaluator;
 
 impl Evaluator {
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Evaluate an execution plan
     ///
     /// Executes rules in pre-computed dependency order with all facts pre-loaded.
@@ -112,7 +102,7 @@ impl Evaluator {
             context.operations.clear();
             context.proof_nodes.clear();
 
-            let (result, proof) = expression::evaluate_rule(exec_rule, &mut context);
+            let (result, proof) = expression::evaluate_rule(exec_rule, &mut context)?;
 
             context
                 .rule_results
@@ -123,17 +113,31 @@ impl Evaluator {
 
             // Collect facts from operations as we go
             for op in &rule_operations {
-                if let OperationKind::FactUsed { fact_ref, value } = &op.kind {
+                if let OperationKind::FactUsed {
+                    fact_ref,
+                    value,
+                    expression: _,
+                } = &op.kind
+                {
                     if seen_facts.insert(fact_ref.clone()) {
                         let segments: Vec<String> =
                             fact_ref.segments.iter().map(|s| s.fact.clone()).collect();
+                        let fact = match plan.facts.get(fact_ref) {
+                            Some(f) => f,
+                            None => {
+                                return Err(LemmaError::Engine(format!(
+                                    "Fact '{}' used in evaluation but not found in execution plan",
+                                    fact_ref
+                                )));
+                            }
+                        };
                         fact_list.push(LemmaFact {
                             reference: FactReference {
                                 segments,
                                 fact: fact_ref.fact.clone(),
                             },
                             value: FactValue::Literal(value.clone()),
-                            source_location: None,
+                            source: fact.source.clone(),
                         });
                     }
                 }
@@ -145,15 +149,13 @@ impl Evaluator {
                     expression: exec_rule.branches[0].result.clone(),
                     unless_clauses: exec_rule.branches[1..]
                         .iter()
-                        .filter_map(|b| {
-                            b.condition.as_ref().map(|cond| crate::UnlessClause {
-                                condition: cond.clone(),
-                                result: b.result.clone(),
-                                source_location: b.source.clone(),
-                            })
+                        .map(|b| crate::UnlessClause {
+                            condition: b.condition.clone(),
+                            result: b.result.clone(),
+                            source: b.source.clone(),
                         })
                         .collect(),
-                    source_location: exec_rule.source.clone(),
+                    source: exec_rule.source.clone(),
                 },
                 result,
                 facts: vec![],

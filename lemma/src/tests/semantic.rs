@@ -24,10 +24,22 @@ fn test_comparison_operator_name() {
         ComparisonComputation::LessThanOrEqual.name(),
         "less than or equal"
     );
-    assert_eq!(ComparisonComputation::Equal.name(), "equal");
-    assert_eq!(ComparisonComputation::NotEqual.name(), "not equal");
-    assert_eq!(ComparisonComputation::Is.name(), "is");
-    assert_eq!(ComparisonComputation::IsNot.name(), "is not");
+    assert_eq!(
+        ComparisonComputation::Equal(EqualityNotation::Symbol).name(),
+        "equal"
+    );
+    assert_eq!(
+        ComparisonComputation::NotEqual(EqualityNotation::Symbol).name(),
+        "not equal"
+    );
+    assert_eq!(
+        ComparisonComputation::Equal(EqualityNotation::Word).name(),
+        "is"
+    );
+    assert_eq!(
+        ComparisonComputation::NotEqual(EqualityNotation::Word).name(),
+        "is not"
+    );
 }
 
 #[test]
@@ -172,10 +184,22 @@ fn test_comparison_operator_display() {
         ">="
     );
     assert_eq!(format!("{}", ComparisonComputation::LessThanOrEqual), "<=");
-    assert_eq!(format!("{}", ComparisonComputation::Equal), "==");
-    assert_eq!(format!("{}", ComparisonComputation::NotEqual), "!=");
-    assert_eq!(format!("{}", ComparisonComputation::Is), "is");
-    assert_eq!(format!("{}", ComparisonComputation::IsNot), "is not");
+    assert_eq!(
+        format!("{}", ComparisonComputation::Equal(EqualityNotation::Symbol)),
+        "=="
+    );
+    assert_eq!(
+        format!("{}", ComparisonComputation::NotEqual(EqualityNotation::Symbol)),
+        "!="
+    );
+    assert_eq!(
+        format!("{}", ComparisonComputation::Equal(EqualityNotation::Word)),
+        "is"
+    );
+    assert_eq!(
+        format!("{}", ComparisonComputation::NotEqual(EqualityNotation::Word)),
+        "is not"
+    );
 }
 
 #[test]
@@ -375,68 +399,4 @@ fn test_veto_expression() {
 
     let veto_without_message = VetoExpression { message: None };
     assert!(veto_without_message.message.is_none());
-}
-
-#[test]
-fn test_expression_get_source_text_with_location() {
-    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue, Source, Span};
-    use std::collections::HashMap;
-
-    let source = "fact value = 42";
-    let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), source.to_string());
-
-    let span = Span {
-        start: 13,
-        end: 15,
-        line: 1,
-        col: 13,
-    };
-    let source_location = Some(Source::new("test.lemma", span, "test"));
-    let expr = Expression::new(
-        ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
-        source_location,
-        ExpressionId::new(0),
-    );
-
-    assert_eq!(expr.get_source_text(&sources), Some("42".to_string()));
-}
-
-#[test]
-fn test_expression_get_source_text_no_location() {
-    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue};
-    use std::collections::HashMap;
-
-    let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), "fact value = 42".to_string());
-
-    let expr = Expression::new(
-        ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
-        None,
-        ExpressionId::new(0),
-    );
-
-    assert_eq!(expr.get_source_text(&sources), None);
-}
-
-#[test]
-fn test_expression_get_source_text_source_not_found() {
-    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue, Source, Span};
-    use std::collections::HashMap;
-
-    let sources = HashMap::new();
-    let span = Span {
-        start: 0,
-        end: 5,
-        line: 1,
-        col: 0,
-    };
-    let source_location = Some(Source::new("missing.lemma", span, "test"));
-    let expr = Expression::new(
-        ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
-        source_location,
-        ExpressionId::new(0),
-    );
-
-    assert_eq!(expr.get_source_text(&sources), None);
 }

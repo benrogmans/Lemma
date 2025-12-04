@@ -13,7 +13,7 @@ pub mod rules;
 pub mod source;
 pub mod units;
 
-pub use ast::{ExpressionId, ExpressionIdGenerator, Span};
+pub use ast::{ExpressionDepthTracker, Span};
 pub use source::Source;
 
 // Re-export semantic types for convenience (semantic is now at lib level)
@@ -46,7 +46,7 @@ pub fn parse(
         });
     }
 
-    let mut id_gen = ExpressionIdGenerator::with_max_depth(limits.max_expression_depth);
+    let mut depth_tracker = ExpressionDepthTracker::with_max_depth(limits.max_expression_depth);
     let filename_str = filename.as_deref().unwrap_or("");
 
     match LemmaParser::parse(Rule::lemma_file, content) {
@@ -56,7 +56,7 @@ pub fn parse(
                 if pair.as_rule() == Rule::lemma_file {
                     for inner_pair in pair.into_inner() {
                         if inner_pair.as_rule() == Rule::doc {
-                            docs.push(parse_doc(inner_pair, filename_str, content, &mut id_gen)?);
+                            docs.push(parse_doc(inner_pair, filename_str, content, &mut depth_tracker)?);
                         }
                     }
                 }
@@ -134,7 +134,7 @@ fn parse_doc(
     pair: Pair<Rule>,
     filename: &str,
     _source: &str,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut ExpressionDepthTracker,
 ) -> Result<LemmaDoc, LemmaError> {
     let doc_start_line = pair.as_span().start_pos().line_col().0;
 
@@ -181,7 +181,7 @@ fn parse_doc(
             }
             Rule::rule_definition => {
                 let rule = crate::parsing::rules::parse_rule_definition(
-                    inner_pair, id_gen, filename, &name,
+                    inner_pair, depth_tracker, filename, &name,
                 )?;
                 rules.push(rule);
             }
@@ -189,7 +189,7 @@ fn parse_doc(
         }
     }
     let mut doc = LemmaDoc::new(name)
-        .with_source(filename.to_string())
+        .with_source_text(filename.to_string())
         .with_start_line(doc_start_line);
 
     if let Some(commentary_text) = commentary {

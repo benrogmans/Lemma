@@ -121,8 +121,8 @@ fn test_parse_error_with_span() {
 
     match result {
         Err(LemmaError::Parse(details)) => {
-            assert_eq!(details.source_location.source_id, "test.lemma");
-            assert_eq!(details.source_location.doc_name, "<parse-error>");
+            assert_eq!(details.source.source_id, "test.lemma");
+            assert_eq!(details.source.doc_name, "<parse-error>");
         }
         Err(e) => panic!("Expected Parse error, got: {e:?}"),
         Ok(_) => panic!("Expected parse error for unclosed string"),

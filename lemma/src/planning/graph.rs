@@ -1,38 +1,50 @@
 use crate::parsing::source::Source;
+use crate::planning::execution_plan::Branch;
 use crate::semantic::{
-    ArithmeticComputation, ConversionTarget, Expression, ExpressionKind, FactPath, FactValue,
-    LemmaDoc, LemmaFact, LemmaRule, LemmaType, PathSegment, RulePath, TypeAnnotation,
+    ArithmeticComputation, BooleanValue, ConversionTarget, Expression, ExpressionKind, FactPath,
+    FactValue, LemmaDoc, LemmaFact, LemmaRule, LemmaType, LiteralValue, NegationType, PathSegment,
+    RulePath, TypeAnnotation,
 };
 use crate::LemmaError;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-#[derive(Debug)]
-pub(crate) struct Graph {
+#[derive(Debug, Clone)]
+pub struct Graph {
     facts: IndexMap<FactPath, LemmaFact>,
     rules: IndexMap<RulePath, RuleNode>,
-    sources: HashMap<String, String>,
+    sources: HashMap<String, (String, String)>,
     execution_order: Vec<RulePath>,
 }
 
 impl Graph {
-    pub(crate) fn facts(&self) -> &IndexMap<FactPath, LemmaFact> {
+    /// Create an empty graph (used for deserialization)
+    pub fn empty() -> Self {
+        Self {
+            facts: IndexMap::new(),
+            rules: IndexMap::new(),
+            sources: HashMap::new(),
+            execution_order: Vec::new(),
+        }
+    }
+
+    pub fn facts(&self) -> &IndexMap<FactPath, LemmaFact> {
         &self.facts
     }
 
-    pub(crate) fn rules(&self) -> &IndexMap<RulePath, RuleNode> {
+    pub fn rules(&self) -> &IndexMap<RulePath, RuleNode> {
         &self.rules
     }
 
-    pub(crate) fn rules_mut(&mut self) -> &mut IndexMap<RulePath, RuleNode> {
+    pub fn rules_mut(&mut self) -> &mut IndexMap<RulePath, RuleNode> {
         &mut self.rules
     }
 
-    pub(crate) fn sources(&self) -> &HashMap<String, String> {
+    pub fn sources(&self) -> &HashMap<String, (String, String)> {
         &self.sources
     }
 
-    pub(crate) fn execution_order(&self) -> &[RulePath] {
+    pub fn execution_order(&self) -> &[RulePath] {
         &self.execution_order
     }
 
@@ -102,11 +114,12 @@ impl Graph {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct RuleNode {
-    /// First branch has condition=None (default expression), subsequent branches are unless clauses.
+#[derive(Debug, Clone)]
+pub struct RuleNode {
+    /// Normalized branches with explicit conditions (last-wins semantics applied).
+    /// All branches have explicit conditions - no Option<Expression> needed.
     /// Expressions are already converted (FactReference -> FactPath, RuleReference -> RulePath).
-    pub branches: Vec<(Option<Expression>, Expression)>,
+    pub branches: Vec<Branch>,
     pub source: Source,
 
     pub depends_on_rules: HashSet<RulePath>,
@@ -118,16 +131,93 @@ pub(crate) struct RuleNode {
 struct GraphBuilder<'a> {
     facts: IndexMap<FactPath, LemmaFact>,
     rules: IndexMap<RulePath, RuleNode>,
-    sources: HashMap<String, String>,
+    sources: HashMap<String, (String, String)>,
     all_docs: HashMap<String, &'a LemmaDoc>,
     errors: Vec<LemmaError>,
 }
 
+/// Build suffix OR conditions for "last wins" semantics
+///
+/// For each branch i, returns the OR of all conditions from branches i+1 to end.
+/// This represents "any later branch could match", which we need to exclude.
+fn build_suffix_or_conditions(
+    branches: &[(Option<Expression>, Expression)],
+) -> Vec<Option<Expression>> {
+    let mut suffix_or: Vec<Option<Expression>> = vec![None; branches.len()];
+    let mut acc: Option<Expression> = None;
+
+    // Build from end to beginning
+    for i in (0..branches.len()).rev() {
+        suffix_or[i] = acc.clone();
+
+        // Add this branch's condition to the accumulator
+        if let Some((Some(cond), _)) = branches.get(i) {
+            acc = Some(match acc {
+                None => cond.clone(),
+                Some(prev) => Expression::new(
+                    ExpressionKind::LogicalOr(Box::new(cond.clone()), Box::new(prev)),
+                    cond.source.clone(),
+                ),
+            });
+        }
+    }
+
+    suffix_or
+}
+
+/// Normalize rule branches by applying last-wins semantics
+///
+/// Makes branch conditions explicit: each branch's condition excludes all later branches.
+/// Rule references (RulePath) remain as-is - they're not expanded here.
+fn normalize_rule_branches(
+    branches: &[(Option<Expression>, Expression)],
+    source: &Source,
+) -> Vec<Branch> {
+    let suffix_or = build_suffix_or_conditions(branches);
+    let mut normalized = Vec::new();
+
+    for (idx, (condition, result)) in branches.iter().enumerate() {
+        // Base condition: original condition or true for default branch
+        let base_condition = condition.clone().unwrap_or_else(|| {
+            Expression::new(
+                ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)),
+                source.clone(),
+            )
+        });
+
+        // Apply last-wins: base_condition AND NOT(suffix_or)
+        // For default branch: true AND NOT(cond_1 OR cond_2 OR ...) = NOT(cond_1) AND NOT(cond_2) AND ...
+        // For branch 1: cond_1 AND NOT(cond_2 OR cond_3 OR ...) = cond_1 AND NOT(cond_2) AND NOT(cond_3) AND ...
+        let normalized_condition = if let Some(later_or) = &suffix_or[idx] {
+            Expression::new(
+                ExpressionKind::LogicalAnd(
+                    Box::new(base_condition),
+                    Box::new(Expression::new(
+                        ExpressionKind::LogicalNegation(Box::new(later_or.clone()), NegationType::Not),
+                        source.clone(),
+                    )),
+                ),
+                source.clone(),
+            )
+        } else {
+            base_condition // Last branch - no later branches to exclude
+        };
+
+        normalized.push(Branch {
+            condition: normalized_condition,
+            result: result.clone(),
+            source: source.clone(),
+        });
+    }
+
+    normalized
+}
+
 impl Graph {
-    pub(crate) fn build(
+    pub fn build(
         main_doc: &LemmaDoc,
         all_docs: &[LemmaDoc],
-        sources: HashMap<String, String>,
+        sources: HashMap<String, (String, String)>,
     ) -> Result<Graph, Vec<LemmaError>> {
         let mut builder = GraphBuilder {
             facts: IndexMap::new(),
@@ -300,7 +390,7 @@ impl<'a> GraphBuilder<'a> {
                 let stored_fact = LemmaFact {
                     reference: fact.reference.clone(),
                     value: effective_value,
-                    source_location: fact.source_location.clone(),
+                    source: fact.source.clone(),
                 };
                 self.facts.insert(fact_path, stored_fact);
             }
@@ -341,7 +431,7 @@ impl<'a> GraphBuilder<'a> {
                 let stored_fact = LemmaFact {
                     reference: fact.reference.clone(),
                     value: FactValue::DocumentReference(effective_doc_name.clone()),
-                    source_location: fact.source_location.clone(),
+                    source: fact.source.clone(),
                 };
                 self.facts.insert(fact_path.clone(), stored_fact);
 
@@ -482,7 +572,7 @@ impl<'a> GraphBuilder<'a> {
             return;
         }
 
-        let mut branches = Vec::new();
+        let mut raw_branches = Vec::new();
         let mut depends_on_rules = HashSet::new();
 
         let converted_expression = match self.convert_expression_and_extract_dependencies(
@@ -496,7 +586,7 @@ impl<'a> GraphBuilder<'a> {
             Some(expr) => expr,
             None => return,
         };
-        branches.push((None, converted_expression));
+        raw_branches.push((None, converted_expression));
 
         for unless_clause in &rule.unless_clauses {
             let converted_condition = match self.convert_expression_and_extract_dependencies(
@@ -521,23 +611,17 @@ impl<'a> GraphBuilder<'a> {
                 Some(expr) => expr,
                 None => return,
             };
-            branches.push((Some(converted_condition), converted_result));
+            raw_branches.push((Some(converted_condition), converted_result));
         }
 
+        let source = rule.source.clone();
+
+        // Normalize branches (apply last-wins semantics)
+        let normalized_branches = normalize_rule_branches(&raw_branches, &source);
+
         let rule_node = RuleNode {
-            branches,
-            source: rule.source_location.clone().unwrap_or_else(|| {
-                Source::new(
-                    "",
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 0,
-                        col: 0,
-                    },
-                    "",
-                )
-            }),
+            branches: normalized_branches,
+            source,
             depends_on_rules,
             rule_type: None,
         };
@@ -619,9 +703,8 @@ impl<'a> GraphBuilder<'a> {
                 };
 
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::FactPath(fact_path),
-                    source_location: expr.source_location.clone(),
+                    source: expr.source.clone(),
                 })
             }
 
@@ -641,9 +724,8 @@ impl<'a> GraphBuilder<'a> {
                 depends_on_rules.insert(rule_path.clone());
 
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::RulePath(rule_path),
-                    source_location: expr.source_location.clone(),
+                    source: expr.source.clone(),
                 })
             }
 
@@ -658,9 +740,8 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::LogicalAnd(Box::new(l), Box::new(r)),
-                    source_location: expr.source_location.clone(),
+                    source: expr.source.clone(),
                 })
             }
 
@@ -675,9 +756,8 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::LogicalOr(Box::new(l), Box::new(r)),
-                    source_location: expr.source_location.clone(),
+                    source: expr.source.clone(),
                 })
             }
 
@@ -692,9 +772,8 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::Arithmetic(Box::new(l), op.clone(), Box::new(r)),
-                    source_location: expr.source_location.clone(),
+                    source: expr.source.clone(),
                 })
             }
 
@@ -709,9 +788,8 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::Comparison(Box::new(l), op.clone(), Box::new(r)),
-                    source_location: expr.source_location.clone(),
+                    source: expr.source.clone(),
                 })
             }
 
@@ -725,9 +803,8 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::UnitConversion(Box::new(converted_value), target.clone()),
-                    source_location: expr.source_location.clone(),
+                    source: expr.source.clone(),
                 })
             }
 
@@ -741,12 +818,11 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::LogicalNegation(
                         Box::new(converted_operand),
                         neg_type.clone(),
                     ),
-                    source_location: expr.source_location.clone(),
+                    source: expr.source.clone(),
                 })
             }
 
@@ -760,12 +836,11 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::MathematicalComputation(
                         op.clone(),
                         Box::new(converted_operand),
                     ),
-                    source_location: expr.source_location.clone(),
+                    source: expr.source.clone(),
                 })
             }
 
@@ -800,35 +875,42 @@ fn compute_all_rule_types(
             continue;
         }
 
-        let (_, default_result) = &branches[0];
+        // All branches have explicit conditions after normalization
+        // Branch 0's condition excludes all later branches (NOT(cond_1) AND NOT(cond_2) AND ...)
+        // Branch 1+'s conditions are cond_i AND NOT(cond_{i+1}) AND ...
+        let default_result = &branches[0].result;
         let default_type = compute_expression_type(default_result, graph, &computed_types, errors);
 
         let mut all_branch_types: Vec<Option<LemmaType>> = vec![default_type.clone()];
 
-        for (branch_index, (condition, result)) in branches.iter().enumerate().skip(1) {
-            if let Some(condition_expression) = condition {
-                let condition_type =
-                    compute_expression_type(condition_expression, graph, &computed_types, errors);
-                if let Some(cond_type) = condition_type {
-                    if cond_type != LemmaType::Boolean {
-                        errors.push(LemmaError::Engine(format!(
-                            "Unless clause condition in rule '{}' must be boolean, got {:?}",
-                            rule_path.rule, cond_type
-                        )));
-                    }
+        // Validate condition types and result types for all branches
+        for (branch_index, branch) in branches.iter().enumerate() {
+            // Validate condition type (all branches have explicit conditions)
+            let condition_type =
+                compute_expression_type(&branch.condition, graph, &computed_types, errors);
+            if let Some(cond_type) = condition_type {
+                if cond_type != LemmaType::Boolean {
+                    errors.push(LemmaError::Engine(format!(
+                        "Branch condition in rule '{}' must be boolean, got {:?}",
+                        rule_path.rule, cond_type
+                    )));
                 }
             }
 
-            let result_type = compute_expression_type(result, graph, &computed_types, errors);
-            all_branch_types.push(result_type.clone());
-
-            validate_branch_type_consistency(
-                rule_path,
-                branch_index,
-                &default_type,
-                &result_type,
-                errors,
-            );
+            // Validate result type
+            let result_type =
+                compute_expression_type(&branch.result, graph, &computed_types, errors);
+            if branch_index > 0 {
+                // For branches after the first, check consistency with the first branch's result type
+                all_branch_types.push(result_type.clone());
+                validate_branch_type_consistency(
+                    rule_path,
+                    branch_index,
+                    &default_type,
+                    &result_type,
+                    errors,
+                );
+            }
         }
 
         if let Some(rule_type) = default_type {
@@ -1250,11 +1332,24 @@ fn validate_document_interfaces(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parsing::ast::ExpressionId;
     use crate::semantic::{FactReference, LiteralValue, RuleReference};
 
     fn create_test_doc(name: &str) -> LemmaDoc {
         LemmaDoc::new(name.to_string())
+    }
+
+    fn create_test_source() -> Source {
+        use crate::parsing::ast::Span;
+        Source::new(
+            "<test>",
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "test",
+        )
     }
 
     fn create_literal_fact(name: &str, value: LiteralValue) -> LemmaFact {
@@ -1264,15 +1359,14 @@ mod tests {
                 fact: name.to_string(),
             },
             value: FactValue::Literal(value),
-            source_location: None,
+            source: create_test_source(),
         }
     }
 
     fn create_literal_expr(value: LiteralValue) -> Expression {
         Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::Literal(value),
-            source_location: None,
+            source: create_test_source(),
         }
     }
 
@@ -1299,19 +1393,18 @@ mod tests {
         doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(25.into())));
 
         let age_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::FactReference(FactReference {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source_location: None,
+            source: create_test_source(),
         };
 
         let rule = LemmaRule {
             name: "is_adult".to_string(),
             expression: age_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source: create_test_source(),
         };
         doc = doc.add_rule(rule);
 
@@ -1346,13 +1439,13 @@ mod tests {
             name: "test_rule".to_string(),
             expression: create_literal_expr(LiteralValue::Boolean(true.into())),
             unless_clauses: Vec::new(),
-            source_location: None,
+            source: create_test_source(),
         };
         let rule2 = LemmaRule {
             name: "test_rule".to_string(),
             expression: create_literal_expr(LiteralValue::Boolean(false.into())),
             unless_clauses: Vec::new(),
-            source_location: None,
+            source: create_test_source(),
         };
 
         doc = doc.add_rule(rule1);
@@ -1372,19 +1465,18 @@ mod tests {
         let mut doc = create_test_doc("test");
 
         let missing_fact_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::FactReference(FactReference {
                 segments: Vec::new(),
                 fact: "nonexistent".to_string(),
             }),
-            source_location: None,
+            source: create_test_source(),
         };
 
         let rule = LemmaRule {
             name: "test_rule".to_string(),
             expression: missing_fact_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source: create_test_source(),
         };
         doc = doc.add_rule(rule);
 
@@ -1407,7 +1499,7 @@ mod tests {
                 fact: "contract".to_string(),
             },
             value: FactValue::DocumentReference("nonexistent".to_string()),
-            source_location: None,
+            source: create_test_source(),
         };
         doc = doc.add_fact(fact);
 
@@ -1426,19 +1518,18 @@ mod tests {
         doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(25.into())));
 
         let age_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::FactReference(FactReference {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source_location: None,
+            source: create_test_source(),
         };
 
         let rule = LemmaRule {
             name: "test_rule".to_string(),
             expression: age_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source: create_test_source(),
         };
         doc = doc.add_rule(rule);
 
@@ -1449,7 +1540,7 @@ mod tests {
         let rule_node = graph.rules().values().next().unwrap();
 
         assert!(matches!(
-            rule_node.branches[0].1.kind,
+            rule_node.branches[0].result.kind,
             ExpressionKind::FactPath(_)
         ));
     }
@@ -1459,36 +1550,34 @@ mod tests {
         let mut doc = create_test_doc("test");
 
         let rule1_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::FactReference(FactReference {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source_location: None,
+            source: create_test_source(),
         };
 
         let rule1 = LemmaRule {
             name: "rule1".to_string(),
             expression: rule1_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source: create_test_source(),
         };
         doc = doc.add_rule(rule1);
 
         let rule2_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::RuleReference(RuleReference {
                 segments: Vec::new(),
                 rule: "rule1".to_string(),
             }),
-            source_location: None,
+            source: create_test_source(),
         };
 
         let rule2 = LemmaRule {
             name: "rule2".to_string(),
             expression: rule2_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source: create_test_source(),
         };
         doc = doc.add_rule(rule2);
 
@@ -1508,7 +1597,7 @@ mod tests {
 
         assert_eq!(rule2_node.depends_on_rules.len(), 1);
         assert!(matches!(
-            rule2_node.branches[0].1.kind,
+            rule2_node.branches[0].result.kind,
             ExpressionKind::RulePath(_)
         ));
     }
@@ -1520,19 +1609,18 @@ mod tests {
         doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(30.into())));
 
         let missing_fact_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::FactReference(FactReference {
                 segments: Vec::new(),
                 fact: "nonexistent".to_string(),
             }),
-            source_location: None,
+            source: create_test_source(),
         };
 
         let rule = LemmaRule {
             name: "test_rule".to_string(),
             expression: missing_fact_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source: create_test_source(),
         };
         doc = doc.add_rule(rule);
 

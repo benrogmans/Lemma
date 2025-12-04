@@ -45,10 +45,16 @@ rule doubled = base_value * 2
 
     // Verify proof tree structure exists
     match &proof.tree {
-        lemma::proof::ProofNode::Computation { .. } => {
-            // Expected: multiplication computation
+        lemma::proof::ProofNode::Branches { matched, .. } => {
+            // Expected: Branches node with Computation in the result
+            match &*matched.result {
+                lemma::proof::ProofNode::Computation { .. } => {
+                    // Expected: multiplication computation
+                }
+                other => panic!("Expected Computation node in matched branch result, got {:?}", other),
+            }
         }
-        other => panic!("Expected Computation node, got {:?}", other),
+        other => panic!("Expected Branches node, got {:?}", other),
     }
 }
 
@@ -90,32 +96,43 @@ rule quadruple = doubled? * 2
 
     // Verify proof tree contains rule reference
     match &proof.tree {
-        lemma::proof::ProofNode::Computation {
-            operands, result, ..
-        } => {
-            assert_eq!(*result, LiteralValue::number(200));
-
-            // First operand should be a rule reference to doubled
-            match &operands[0] {
-                lemma::proof::ProofNode::RuleReference {
-                    rule_path,
-                    expansion,
-                    ..
+        lemma::proof::ProofNode::Branches { matched, .. } => {
+            // Navigate to the Computation in the matched branch result
+            match &*matched.result {
+                lemma::proof::ProofNode::Computation {
+                    operands, result, ..
                 } => {
-                    assert_eq!(rule_path.rule, "doubled");
+                    assert_eq!(*result, LiteralValue::number(200));
 
-                    // Expansion should contain the proof for doubled
-                    match &**expansion {
-                        lemma::proof::ProofNode::Computation { result, .. } => {
-                            assert_eq!(*result, LiteralValue::number(100));
+                    // First operand should be a rule reference to doubled
+                    match &operands[0] {
+                        lemma::proof::ProofNode::RuleReference {
+                            rule_path,
+                            expansion,
+                            ..
+                        } => {
+                            assert_eq!(rule_path.rule, "doubled");
+
+                            // Expansion should contain the proof for doubled (which is also Branches)
+                            match &**expansion {
+                                lemma::proof::ProofNode::Branches { matched: doubled_matched, .. } => {
+                                    match &*doubled_matched.result {
+                                        lemma::proof::ProofNode::Computation { result, .. } => {
+                                            assert_eq!(*result, LiteralValue::number(100));
+                                        }
+                                        other => panic!("Expected Computation in doubled expansion, got {:?}", other),
+                                    }
+                                }
+                                other => panic!("Expected Branches in expansion, got {:?}", other),
+                            }
                         }
-                        other => panic!("Expected Computation in expansion, got {:?}", other),
+                        other => panic!("Expected RuleReference for doubled?, got {:?}", other),
                     }
                 }
-                other => panic!("Expected RuleReference for doubled?, got {:?}", other),
+                other => panic!("Expected Computation in matched branch result, got {:?}", other),
             }
         }
-        other => panic!("Expected Computation at root, got {:?}", other),
+        other => panic!("Expected Branches at root, got {:?}", other),
     }
 }
 
@@ -165,10 +182,12 @@ rule discount_percentage = 0%
             non_matched,
             ..
         } => {
-            // Matched branch should be the default (no condition)
-            assert!(
-                matched.condition.is_none(),
-                "Default branch should have no condition"
+            // Matched branch should be the default (clause_index is None)
+            // After normalization, all branches have explicit conditions
+            // The default branch's condition is NOT(cond_1) AND NOT(cond_2) AND ...
+            assert_eq!(
+                matched.clause_index, None,
+                "Default branch should have clause_index None"
             );
 
             // Should have 3 non-matched unless clauses
@@ -266,36 +285,41 @@ rule result = base_ref.doubled? + 50
 
     // Verify proof tree contains cross-document rule reference
     match &proof.tree {
-        lemma::proof::ProofNode::Computation { operands, .. } => {
-            // First operand should be a rule reference to base_ref.doubled
-            match &operands[0] {
-                lemma::proof::ProofNode::RuleReference {
-                    rule_path,
-                    expansion,
-                    ..
-                } => {
-                    assert_eq!(rule_path.rule, "doubled");
-                    assert_eq!(rule_path.segments.len(), 1);
-                    assert_eq!(rule_path.segments[0].fact, "base_ref");
+        lemma::proof::ProofNode::Branches { matched, .. } => {
+            match &*matched.result {
+                lemma::proof::ProofNode::Computation { operands, .. } => {
+                    // First operand should be a rule reference to base_ref.doubled
+                    match &operands[0] {
+                        lemma::proof::ProofNode::RuleReference {
+                            rule_path,
+                            expansion,
+                            ..
+                        } => {
+                            assert_eq!(rule_path.rule, "doubled");
+                            assert_eq!(rule_path.segments.len(), 1);
+                            assert_eq!(rule_path.segments[0].fact, "base_ref");
 
-                    // Expansion should exist
-                    match &**expansion {
-                        lemma::proof::ProofNode::Computation { .. } => {
-                            // Good - cross-document rule proof is included
+                            // Expansion should exist (Branches for the referenced rule)
+                            match &**expansion {
+                                lemma::proof::ProofNode::Branches { .. } => {
+                                    // Good - cross-document rule proof is included
+                                }
+                                other => panic!(
+                                    "Expected Branches in cross-doc expansion, got {:?}",
+                                    other
+                                ),
+                            }
                         }
                         other => panic!(
-                            "Expected Computation in cross-doc expansion, got {:?}",
+                            "Expected RuleReference for base_ref.doubled?, got {:?}",
                             other
                         ),
                     }
                 }
-                other => panic!(
-                    "Expected RuleReference for base_ref.doubled?, got {:?}",
-                    other
-                ),
+                other => panic!("Expected Computation in matched branch result, got {:?}", other),
             }
         }
-        other => panic!("Expected Computation at root, got {:?}", other),
+        other => panic!("Expected Branches at root, got {:?}", other),
     }
 }
 
@@ -340,26 +364,31 @@ rule use_cross_doc = base_ref.doubled? + 1
 
     // Now check the referenced rule's proof inside the tree
     match &proof.tree {
-        lemma::proof::ProofNode::Computation { operands, .. } => {
-            match &operands[0] {
-                lemma::proof::ProofNode::RuleReference {
-                    rule_path: ref_path,
-                    ..
-                } => {
-                    // CRITICAL: The rule_path in the RuleReference node should have segments
-                    assert_eq!(ref_path.rule, "doubled");
-                    assert_eq!(
-                        ref_path.segments.len(),
-                        1,
-                        "Cross-document rule reference MUST have segments showing the path"
-                    );
-                    assert_eq!(ref_path.segments[0].fact, "base_ref");
-                    assert_eq!(ref_path.segments[0].doc, "base");
+        lemma::proof::ProofNode::Branches { matched, .. } => {
+            match &*matched.result {
+                lemma::proof::ProofNode::Computation { operands, .. } => {
+                    match &operands[0] {
+                        lemma::proof::ProofNode::RuleReference {
+                            rule_path: ref_path,
+                            ..
+                        } => {
+                            // CRITICAL: The rule_path in the RuleReference node should have segments
+                            assert_eq!(ref_path.rule, "doubled");
+                            assert_eq!(
+                                ref_path.segments.len(),
+                                1,
+                                "Cross-document rule reference MUST have segments showing the path"
+                            );
+                            assert_eq!(ref_path.segments[0].fact, "base_ref");
+                            assert_eq!(ref_path.segments[0].doc, "base");
+                        }
+                        other => panic!("Expected RuleReference, got {:?}", other),
+                    }
                 }
-                other => panic!("Expected RuleReference, got {:?}", other),
+                other => panic!("Expected Computation in matched branch result, got {:?}", other),
             }
         }
-        other => panic!("Expected Computation, got {:?}", other),
+        other => panic!("Expected Branches, got {:?}", other),
     }
 }
 
@@ -413,10 +442,19 @@ rule use_doubled = base_ref.doubled? + 10
         .expect("use_doubled result not found");
     let proof_tree = &use_doubled_result["proof"]["tree"];
 
-    // The tree should be a Computation variant with operands
-    let computation = proof_tree["Computation"].as_object().unwrap_or_else(|| {
+    // The tree should be a Branches variant
+    let branches = proof_tree["Branches"].as_object().unwrap_or_else(|| {
         panic!(
-            "Expected Computation variant in proof tree. JSON:\n{}",
+            "Expected Branches variant in proof tree. JSON:\n{}",
+            json_str
+        )
+    });
+    
+    // Navigate to the matched branch's result
+    let matched = branches["matched"].as_object().unwrap();
+    let computation = matched["result"]["Computation"].as_object().unwrap_or_else(|| {
+        panic!(
+            "Expected Computation variant in matched branch result. JSON:\n{}",
             json_str
         )
     });
