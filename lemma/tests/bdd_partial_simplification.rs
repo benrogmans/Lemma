@@ -1,4 +1,4 @@
-use lemma::{Domain, Engine, FactPath, LiteralValue, Target};
+use lemma::{FactRuleConstraint, Engine, FactPath, LiteralValue, Target};
 use std::collections::HashMap;
 
 #[test]
@@ -59,7 +59,7 @@ fn bdd_partial_simplification_on_large_expression() {
             .expect("All solutions should have discount_code domain");
 
         match discount_domain {
-            Domain::Enumeration(values) => {
+            FactRuleConstraint::Enumeration(values) => {
                 assert!(
                     values.contains(&LiteralValue::Text("SAVE30".to_string())),
                     "Solution {}: discount_code should be constrained to 'SAVE30' after simplification (A&B)|(A&!B) => A, got {:?}",
@@ -67,7 +67,7 @@ fn bdd_partial_simplification_on_large_expression() {
                     values
                 );
             }
-            Domain::Unconstrained => {
+            FactRuleConstraint::Unconstrained => {
                 panic!(
                     "Solution {}: discount_code should be constrained after simplification, but is Unconstrained",
                     idx
@@ -84,10 +84,10 @@ fn bdd_partial_simplification_on_large_expression() {
         // Verify member_level is NOT constrained (simplification removed the member_level constraint)
         let member_domain = domains.get(&member_level_path);
         match member_domain {
-            Some(Domain::Unconstrained) => {
+            Some(FactRuleConstraint::Unconstrained) => {
                 // Good - member_level is not constrained, which is correct after simplification
             }
-            Some(Domain::Enumeration(_)) => {
+            Some(FactRuleConstraint::Enumeration(_)) => {
                 // This is acceptable - member_level might be constrained by other parts of the expression
                 // But it should NOT be required to be "platinum" for the simplification to work
             }
@@ -105,7 +105,7 @@ fn bdd_partial_simplification_on_large_expression() {
             let tag_path = FactPath::local(format!("tag{}", tag_idx));
             if let Some(tag_domain) = domains.get(&tag_path) {
                 match tag_domain {
-                    Domain::Enumeration(values) => {
+                    FactRuleConstraint::Enumeration(values) => {
                         if values.contains(&LiteralValue::Text("yes".to_string())) {
                             has_tag_yes = true;
                             break;

@@ -302,12 +302,12 @@ fn test_invert_veto_excluded_from_domain() {
         let domain_str = format!("{}", domain);
         assert!(
             domain_str.contains("[0") || domain_str.contains("(0"),
-            "Domain should have lower bound 0, got: {}",
+            "FactRuleConstraint should have lower bound 0, got: {}",
             domain_str
         );
         assert!(
             domain_str.contains("18]") || domain_str.contains("18)"),
-            "Domain should have upper bound 18, got: {}",
+            "FactRuleConstraint should have upper bound 18, got: {}",
             domain_str
         );
     }
@@ -335,7 +335,7 @@ fn test_invert_boolean_expression_result() {
     let response = result.unwrap();
     assert!(!response.is_empty(), "Should have at least one solution");
 
-    // Domain should be (0, +inf)
+    // FactRuleConstraint should be (0, +inf)
     assert!(
         !response.domains.is_empty(),
         "Should have domain information"
@@ -350,7 +350,7 @@ fn test_invert_boolean_expression_result() {
         let domain_str = format!("{}", domain);
         assert!(
             domain_str.contains("(0") && domain_str.contains("+inf"),
-            "Domain should be (0, +inf), got: {}",
+            "FactRuleConstraint should be (0, +inf), got: {}",
             domain_str
         );
     }
@@ -378,7 +378,7 @@ fn test_invert_boolean_expression_false() {
     let response = result.unwrap();
     assert!(!response.is_empty(), "Should have at least one solution");
 
-    // Domain should be (-inf, 0]
+    // FactRuleConstraint should be (-inf, 0]
     assert!(
         !response.domains.is_empty(),
         "Should have domain information"
@@ -393,7 +393,7 @@ fn test_invert_boolean_expression_false() {
         let domain_str = format!("{}", domain);
         assert!(
             domain_str.contains("-inf") && (domain_str.contains("0]") || domain_str.contains("0)")),
-            "Domain should be (-inf, 0], got: {}",
+            "FactRuleConstraint should be (-inf, 0], got: {}",
             domain_str
         );
     }

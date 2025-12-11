@@ -12,7 +12,7 @@
 //! For basic inversion API tests, see `inversion_world_basic.rs`.
 //! For comprehensive coverage including algebraic solving, see `inversion_comprehensive.rs`.
 
-use lemma::{Bound, Domain, Engine, FactPath, LiteralValue, OperationResult, Target};
+use lemma::{Bound, FactRuleConstraint, Engine, FactPath, LiteralValue, OperationResult, Target};
 use std::collections::HashMap;
 
 /// Test that inversion produces solutions for all branches of a rule with multiple unless clauses
@@ -254,7 +254,7 @@ fn condition_with_tautology_simplifies_correctly() {
     );
 
     match age_domain {
-        Domain::Range { min, max } => {
+        FactRuleConstraint::Range { min, max } => {
             assert!(
                 matches!(min, Bound::Exclusive(v) if matches!(v, LiteralValue::Number(n) if *n == rust_decimal::Decimal::from(65))),
                 "age min bound should be exclusive 65, got {:?}",
@@ -302,7 +302,7 @@ fn text_equality_with_veto_clause_simplifies_correctly() {
         "should have 2 solutions (latte and cappuccino)"
     );
 
-    let drink_domains: Vec<&Domain> = response
+    let drink_domains: Vec<&FactRuleConstraint> = response
         .domains
         .iter()
         .filter_map(|d| d.get(&FactPath::local("drink_type".to_string())))
@@ -313,7 +313,7 @@ fn text_equality_with_veto_clause_simplifies_correctly() {
     let domain_values: Vec<String> = drink_domains
         .iter()
         .filter_map(|d| {
-            if let Domain::Enumeration(vals) = d {
+            if let FactRuleConstraint::Enumeration(vals) = d {
                 vals.first().map(|v| v.to_string())
             } else {
                 None

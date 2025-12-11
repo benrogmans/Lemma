@@ -1,9 +1,9 @@
-//! Domain types and operations for inversion
+//! FactConstraint types and operations for inversion
 //!
 //! Provides:
-//! - `Domain` and `Bound` types for representing concrete value constraints
-//! - Domain operations: intersection, union, normalization
-//! - `extract_domains_from_constraint()`: extracts domains from constraints
+//! - `FactConstraint` and `Bound` types for representing concrete value constraints
+//! - FactConstraint operations: intersection, union, normalization
+//! - `extract_fact_constraints_from_rule_constraint()`: extracts fact constraints from rule constraints
 
 use crate::computation::{comparison_operation, OperationResult};
 use crate::{BooleanValue, ComparisonComputation, FactPath, LemmaError, LemmaResult, LiteralValue};
@@ -12,22 +12,22 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 
-use super::constraint::Constraint;
+use super::constraint::RuleConstraint;
 
-/// Domain specification for valid values
+/// Constraint on a fact's valid values
 #[derive(Debug, Clone, PartialEq)]
-pub enum Domain {
+pub enum FactConstraint {
     /// A single continuous range
     Range { min: Bound, max: Bound },
 
     /// Multiple disjoint ranges
-    Union(Vec<Domain>),
+    Union(Vec<FactConstraint>),
 
     /// Specific enumerated values only
     Enumeration(Vec<LiteralValue>),
 
     /// Everything except these constraints
-    Complement(Box<Domain>),
+    Complement(Box<FactConstraint>),
 
     /// Any value (no constraints)
     Unconstrained,
@@ -36,18 +36,18 @@ pub enum Domain {
     Empty,
 }
 
-impl Domain {
+impl FactConstraint {
     /// Check if this domain is satisfiable (has at least one valid value)
     ///
     /// Returns false for Empty domains and empty Enumerations.
     pub fn is_satisfiable(&self) -> bool {
         match self {
-            Domain::Empty => false,
-            Domain::Enumeration(values) => !values.is_empty(),
-            Domain::Union(parts) => parts.iter().any(|p| p.is_satisfiable()),
-            Domain::Range { min, max } => !bounds_contradict(min, max),
-            Domain::Complement(inner) => !matches!(inner.as_ref(), Domain::Unconstrained),
-            Domain::Unconstrained => true,
+            FactConstraint::Empty => false,
+            FactConstraint::Enumeration(values) => !values.is_empty(),
+            FactConstraint::Union(parts) => parts.iter().any(|p| p.is_satisfiable()),
+            FactConstraint::Range { min, max } => !bounds_contradict(min, max),
+            FactConstraint::Complement(inner) => !matches!(inner.as_ref(), FactConstraint::Unconstrained),
+            FactConstraint::Unconstrained => true,
         }
     }
 
@@ -57,8 +57,8 @@ impl Domain {
     }
 
     /// Intersect this domain with another, returning Empty if no overlap
-    pub fn intersect(&self, other: &Domain) -> Domain {
-        domain_intersection(self.clone(), other.clone()).unwrap_or(Domain::Empty)
+    pub fn intersect(&self, other: &FactConstraint) -> FactConstraint {
+        domain_intersection(self.clone(), other.clone()).unwrap_or(FactConstraint::Empty)
     }
 }
 
@@ -75,12 +75,12 @@ pub enum Bound {
     Unbounded,
 }
 
-impl fmt::Display for Domain {
+impl fmt::Display for FactConstraint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Domain::Empty => write!(f, "empty"),
-            Domain::Unconstrained => write!(f, "any"),
-            Domain::Enumeration(vals) => {
+            FactConstraint::Empty => write!(f, "empty"),
+            FactConstraint::Unconstrained => write!(f, "any"),
+            FactConstraint::Enumeration(vals) => {
                 write!(f, "{{")?;
                 for (i, v) in vals.iter().enumerate() {
                     if i > 0 {
@@ -90,7 +90,7 @@ impl fmt::Display for Domain {
                 }
                 write!(f, "}}")
             }
-            Domain::Range { min, max } => {
+            FactConstraint::Range { min, max } => {
                 let (l_bracket, r_bracket) = match (min, max) {
                     (Bound::Inclusive(_), Bound::Inclusive(_)) => ('[', ']'),
                     (Bound::Inclusive(_), Bound::Exclusive(_)) => ('[', ')'),
@@ -113,7 +113,7 @@ impl fmt::Display for Domain {
                 };
                 write!(f, "{}{}, {}{}", l_bracket, min_str, max_str, r_bracket)
             }
-            Domain::Union(parts) => {
+            FactConstraint::Union(parts) => {
                 for (i, p) in parts.iter().enumerate() {
                     if i > 0 {
                         write!(f, " | ")?;
@@ -122,7 +122,7 @@ impl fmt::Display for Domain {
                 }
                 Ok(())
             }
-            Domain::Complement(inner) => write!(f, "not ({})", inner),
+            FactConstraint::Complement(inner) => write!(f, "not ({})", inner),
         }
     }
 }
@@ -137,42 +137,42 @@ impl fmt::Display for Bound {
     }
 }
 
-impl Serialize for Domain {
+impl Serialize for FactConstraint {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         match self {
-            Domain::Empty => {
+            FactConstraint::Empty => {
                 let mut st = serializer.serialize_struct("domain", 1)?;
                 st.serialize_field("type", "empty")?;
                 st.end()
             }
-            Domain::Unconstrained => {
+            FactConstraint::Unconstrained => {
                 let mut st = serializer.serialize_struct("domain", 1)?;
                 st.serialize_field("type", "unconstrained")?;
                 st.end()
             }
-            Domain::Enumeration(vals) => {
+            FactConstraint::Enumeration(vals) => {
                 let mut st = serializer.serialize_struct("domain", 2)?;
                 st.serialize_field("type", "enumeration")?;
                 st.serialize_field("values", vals)?;
                 st.end()
             }
-            Domain::Range { min, max } => {
+            FactConstraint::Range { min, max } => {
                 let mut st = serializer.serialize_struct("domain", 3)?;
                 st.serialize_field("type", "range")?;
                 st.serialize_field("min", min)?;
                 st.serialize_field("max", max)?;
                 st.end()
             }
-            Domain::Union(parts) => {
+            FactConstraint::Union(parts) => {
                 let mut st = serializer.serialize_struct("domain", 2)?;
                 st.serialize_field("type", "union")?;
                 st.serialize_field("parts", parts)?;
                 st.end()
             }
-            Domain::Complement(inner) => {
+            FactConstraint::Complement(inner) => {
                 let mut st = serializer.serialize_struct("domain", 2)?;
                 st.serialize_field("type", "complement")?;
                 st.serialize_field("inner", inner)?;
@@ -210,15 +210,15 @@ impl Serialize for Bound {
 }
 
 /// Extract domains for all facts mentioned in a constraint
-pub fn extract_domains_from_constraint(
-    constraint: &Constraint,
-) -> LemmaResult<HashMap<FactPath, Domain>> {
+pub fn extract_fact_constraints_from_rule_constraint(
+    constraint: &RuleConstraint,
+) -> LemmaResult<HashMap<FactPath, FactConstraint>> {
     let all_facts = constraint.collect_facts();
     let mut domains = HashMap::new();
 
     for fact_path in all_facts {
         let domain =
-            extract_domain_for_fact(constraint, &fact_path)?.unwrap_or(Domain::Unconstrained);
+            extract_domain_for_fact(constraint, &fact_path)?.unwrap_or(FactConstraint::Unconstrained);
         domains.insert(fact_path, domain);
     }
 
@@ -226,14 +226,14 @@ pub fn extract_domains_from_constraint(
 }
 
 fn extract_domain_for_fact(
-    constraint: &Constraint,
+    constraint: &RuleConstraint,
     fact_path: &FactPath,
-) -> LemmaResult<Option<Domain>> {
+) -> LemmaResult<Option<FactConstraint>> {
     let domain = match constraint {
-        Constraint::True => return Ok(None),
-        Constraint::False => Some(Domain::Enumeration(vec![])),
+        RuleConstraint::True => return Ok(None),
+        RuleConstraint::False => Some(FactConstraint::Enumeration(vec![])),
 
-        Constraint::Comparison { fact, op, value } => {
+        RuleConstraint::Comparison { fact, op, value } => {
             if fact == fact_path {
                 Some(comparison_to_domain(op, value)?)
             } else {
@@ -241,9 +241,9 @@ fn extract_domain_for_fact(
             }
         }
 
-        Constraint::Fact(fp) => {
+        RuleConstraint::Fact(fp) => {
             if fp == fact_path {
-                Some(Domain::Enumeration(vec![LiteralValue::Boolean(
+                Some(FactConstraint::Enumeration(vec![LiteralValue::Boolean(
                     BooleanValue::True,
                 )]))
             } else {
@@ -251,7 +251,7 @@ fn extract_domain_for_fact(
             }
         }
 
-        Constraint::And(left, right) => {
+        RuleConstraint::And(left, right) => {
             let left_domain = extract_domain_for_fact(left, fact_path)?;
             let right_domain = extract_domain_for_fact(right, fact_path)?;
             match (left_domain, right_domain) {
@@ -259,67 +259,67 @@ fn extract_domain_for_fact(
                 (Some(d), None) | (None, Some(d)) => Some(normalize_domain(d)),
                 (Some(a), Some(b)) => match domain_intersection(a, b) {
                     Some(domain) => Some(domain),
-                    None => Some(Domain::Enumeration(vec![])),
+                    None => Some(FactConstraint::Enumeration(vec![])),
                 },
             }
         }
 
-        Constraint::Or(left, right) => {
+        RuleConstraint::Or(left, right) => {
             let left_domain = extract_domain_for_fact(left, fact_path)?;
             let right_domain = extract_domain_for_fact(right, fact_path)?;
             union_optional_domains(left_domain, right_domain)
         }
 
-        Constraint::Not(inner) => {
+        RuleConstraint::Not(inner) => {
             // Handle not (fact == value)
-            if let Constraint::Comparison { fact, op, value } = inner.as_ref() {
+            if let RuleConstraint::Comparison { fact, op, value } = inner.as_ref() {
                 if fact == fact_path && op.is_equal() {
-                    return Ok(Some(normalize_domain(Domain::Complement(Box::new(
-                        Domain::Enumeration(vec![value.clone()]),
+                    return Ok(Some(normalize_domain(FactConstraint::Complement(Box::new(
+                        FactConstraint::Enumeration(vec![value.clone()]),
                     )))));
                 }
             }
 
             // Handle not (boolean_fact)
-            if let Constraint::Fact(fp) = inner.as_ref() {
+            if let RuleConstraint::Fact(fp) = inner.as_ref() {
                 if fp == fact_path {
-                    return Ok(Some(Domain::Enumeration(vec![LiteralValue::Boolean(
+                    return Ok(Some(FactConstraint::Enumeration(vec![LiteralValue::Boolean(
                         BooleanValue::False,
                     )])));
                 }
             }
 
             extract_domain_for_fact(inner, fact_path)?
-                .map(|domain| normalize_domain(Domain::Complement(Box::new(domain))))
+                .map(|domain| normalize_domain(FactConstraint::Complement(Box::new(domain))))
         }
     };
 
     Ok(domain.map(normalize_domain))
 }
 
-fn comparison_to_domain(op: &ComparisonComputation, value: &LiteralValue) -> LemmaResult<Domain> {
+fn comparison_to_domain(op: &ComparisonComputation, value: &LiteralValue) -> LemmaResult<FactConstraint> {
     if op.is_equal() {
-        return Ok(Domain::Enumeration(vec![value.clone()]));
+        return Ok(FactConstraint::Enumeration(vec![value.clone()]));
     }
     if op.is_not_equal() {
-        return Ok(Domain::Complement(Box::new(Domain::Enumeration(vec![
+        return Ok(FactConstraint::Complement(Box::new(FactConstraint::Enumeration(vec![
             value.clone(),
         ]))));
     }
     match op {
-        ComparisonComputation::LessThan => Ok(Domain::Range {
+        ComparisonComputation::LessThan => Ok(FactConstraint::Range {
             min: Bound::Unbounded,
             max: Bound::Exclusive(value.clone()),
         }),
-        ComparisonComputation::LessThanOrEqual => Ok(Domain::Range {
+        ComparisonComputation::LessThanOrEqual => Ok(FactConstraint::Range {
             min: Bound::Unbounded,
             max: Bound::Inclusive(value.clone()),
         }),
-        ComparisonComputation::GreaterThan => Ok(Domain::Range {
+        ComparisonComputation::GreaterThan => Ok(FactConstraint::Range {
             min: Bound::Exclusive(value.clone()),
             max: Bound::Unbounded,
         }),
-        ComparisonComputation::GreaterThanOrEqual => Ok(Domain::Range {
+        ComparisonComputation::GreaterThanOrEqual => Ok(FactConstraint::Range {
             min: Bound::Inclusive(value.clone()),
             max: Bound::Unbounded,
         }),
@@ -330,11 +330,11 @@ fn comparison_to_domain(op: &ComparisonComputation, value: &LiteralValue) -> Lem
     }
 }
 
-fn union_optional_domains(a: Option<Domain>, b: Option<Domain>) -> Option<Domain> {
+fn union_optional_domains(a: Option<FactConstraint>, b: Option<FactConstraint>) -> Option<FactConstraint> {
     match (a, b) {
         (None, None) => None,
         (Some(d), None) | (None, Some(d)) => Some(d),
-        (Some(a), Some(b)) => Some(normalize_domain(Domain::Union(vec![a, b]))),
+        (Some(a), Some(b)) => Some(normalize_domain(FactConstraint::Union(vec![a, b]))),
     }
 }
 
@@ -447,20 +447,20 @@ fn compute_intersection_max(max1: Bound, max2: Bound) -> Bound {
     }
 }
 
-fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
+fn domain_intersection(a: FactConstraint, b: FactConstraint) -> Option<FactConstraint> {
     let a = normalize_domain(a);
     let b = normalize_domain(b);
 
     let result = match (a, b) {
-        (Domain::Unconstrained, d) | (d, Domain::Unconstrained) => Some(d),
-        (Domain::Empty, _) | (_, Domain::Empty) => None,
+        (FactConstraint::Unconstrained, d) | (d, FactConstraint::Unconstrained) => Some(d),
+        (FactConstraint::Empty, _) | (_, FactConstraint::Empty) => None,
 
         (
-            Domain::Range {
+            FactConstraint::Range {
                 min: min1,
                 max: max1,
             },
-            Domain::Range {
+            FactConstraint::Range {
                 min: min2,
                 max: max2,
             },
@@ -471,19 +471,19 @@ fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
             if bounds_contradict(&min, &max) {
                 None
             } else {
-                Some(Domain::Range { min, max })
+                Some(FactConstraint::Range { min, max })
             }
         }
-        (Domain::Enumeration(mut v1), Domain::Enumeration(v2)) => {
+        (FactConstraint::Enumeration(mut v1), FactConstraint::Enumeration(v2)) => {
             v1.retain(|x| v2.contains(x));
             if v1.is_empty() {
                 None
             } else {
-                Some(Domain::Enumeration(v1))
+                Some(FactConstraint::Enumeration(v1))
             }
         }
-        (Domain::Enumeration(vs), Domain::Range { min, max })
-        | (Domain::Range { min, max }, Domain::Enumeration(vs)) => {
+        (FactConstraint::Enumeration(vs), FactConstraint::Range { min, max })
+        | (FactConstraint::Range { min, max }, FactConstraint::Enumeration(vs)) => {
             let mut kept = Vec::new();
             for v in vs {
                 if value_within(&v, &min, &max) {
@@ -493,12 +493,12 @@ fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
             if kept.is_empty() {
                 None
             } else {
-                Some(Domain::Enumeration(kept))
+                Some(FactConstraint::Enumeration(kept))
             }
         }
-        (Domain::Enumeration(vs), Domain::Complement(inner))
-        | (Domain::Complement(inner), Domain::Enumeration(vs)) => match *inner.clone() {
-            Domain::Enumeration(excluded) => {
+        (FactConstraint::Enumeration(vs), FactConstraint::Complement(inner))
+        | (FactConstraint::Complement(inner), FactConstraint::Enumeration(vs)) => match *inner.clone() {
+            FactConstraint::Enumeration(excluded) => {
                 let mut kept = Vec::new();
                 for v in vs {
                     if !excluded.contains(&v) {
@@ -508,13 +508,13 @@ fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
                 if kept.is_empty() {
                     None
                 } else {
-                    Some(Domain::Enumeration(kept))
+                    Some(FactConstraint::Enumeration(kept))
                 }
             }
             _ => None,
         },
-        (Domain::Union(v1), Domain::Union(v2)) => {
-            let mut acc: Vec<Domain> = Vec::new();
+        (FactConstraint::Union(v1), FactConstraint::Union(v2)) => {
+            let mut acc: Vec<FactConstraint> = Vec::new();
             for a in v1.into_iter() {
                 for b in v2.iter() {
                     if let Some(ix) = domain_intersection(a.clone(), b.clone()) {
@@ -525,11 +525,11 @@ fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
             if acc.is_empty() {
                 None
             } else {
-                Some(Domain::Union(acc))
+                Some(FactConstraint::Union(acc))
             }
         }
-        (Domain::Union(vs), d) | (d, Domain::Union(vs)) => {
-            let mut acc: Vec<Domain> = Vec::new();
+        (FactConstraint::Union(vs), d) | (d, FactConstraint::Union(vs)) => {
+            let mut acc: Vec<FactConstraint> = Vec::new();
             for a in vs.into_iter() {
                 if let Some(ix) = domain_intersection(a, d.clone()) {
                     acc.push(ix);
@@ -540,10 +540,10 @@ fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
             } else if acc.len() == 1 {
                 Some(acc.remove(0))
             } else {
-                Some(Domain::Union(acc))
+                Some(FactConstraint::Union(acc))
             }
         }
-        (Domain::Complement(inner), other) | (other, Domain::Complement(inner)) => {
+        (FactConstraint::Complement(inner), other) | (other, FactConstraint::Complement(inner)) => {
             let normalized_complement = normalize_domain(*inner);
             domain_intersection(other, normalized_complement)
         }
@@ -561,74 +561,74 @@ fn invert_bound(bound: Bound) -> Bound {
     }
 }
 
-fn normalize_domain(d: Domain) -> Domain {
+fn normalize_domain(d: FactConstraint) -> FactConstraint {
     match d {
-        Domain::Complement(inner) => {
+        FactConstraint::Complement(inner) => {
             let normalized_inner = normalize_domain(*inner);
             match normalized_inner {
-                Domain::Complement(double_inner) => *double_inner,
-                Domain::Range { min, max } => match (&min, &max) {
-                    (Bound::Unbounded, Bound::Unbounded) => Domain::Enumeration(vec![]),
-                    (Bound::Unbounded, max) => Domain::Range {
+                FactConstraint::Complement(double_inner) => *double_inner,
+                FactConstraint::Range { min, max } => match (&min, &max) {
+                    (Bound::Unbounded, Bound::Unbounded) => FactConstraint::Enumeration(vec![]),
+                    (Bound::Unbounded, max) => FactConstraint::Range {
                         min: invert_bound(max.clone()),
                         max: Bound::Unbounded,
                     },
-                    (min, Bound::Unbounded) => Domain::Range {
+                    (min, Bound::Unbounded) => FactConstraint::Range {
                         min: Bound::Unbounded,
                         max: invert_bound(min.clone()),
                     },
-                    (min, max) => Domain::Union(vec![
-                        Domain::Range {
+                    (min, max) => FactConstraint::Union(vec![
+                        FactConstraint::Range {
                             min: Bound::Unbounded,
                             max: invert_bound(min.clone()),
                         },
-                        Domain::Range {
+                        FactConstraint::Range {
                             min: invert_bound(max.clone()),
                             max: Bound::Unbounded,
                         },
                     ]),
                 },
-                Domain::Enumeration(vals) => {
+                FactConstraint::Enumeration(vals) => {
                     if vals.len() == 1 {
                         if let Some(LiteralValue::Boolean(BooleanValue::True)) = vals.first() {
-                            return Domain::Enumeration(vec![LiteralValue::Boolean(
+                            return FactConstraint::Enumeration(vec![LiteralValue::Boolean(
                                 BooleanValue::False,
                             )]);
                         }
                         if let Some(LiteralValue::Boolean(BooleanValue::False)) = vals.first() {
-                            return Domain::Enumeration(vec![LiteralValue::Boolean(
+                            return FactConstraint::Enumeration(vec![LiteralValue::Boolean(
                                 BooleanValue::True,
                             )]);
                         }
                     }
-                    Domain::Complement(Box::new(Domain::Enumeration(vals)))
+                    FactConstraint::Complement(Box::new(FactConstraint::Enumeration(vals)))
                 }
-                Domain::Unconstrained => Domain::Empty,
-                Domain::Empty => Domain::Unconstrained,
-                Domain::Union(parts) => Domain::Complement(Box::new(Domain::Union(parts))),
+                FactConstraint::Unconstrained => FactConstraint::Empty,
+                FactConstraint::Empty => FactConstraint::Unconstrained,
+                FactConstraint::Union(parts) => FactConstraint::Complement(Box::new(FactConstraint::Union(parts))),
             }
         }
-        Domain::Empty => Domain::Empty,
-        Domain::Union(mut parts) => {
-            let mut flat: Vec<Domain> = Vec::new();
+        FactConstraint::Empty => FactConstraint::Empty,
+        FactConstraint::Union(mut parts) => {
+            let mut flat: Vec<FactConstraint> = Vec::new();
             for p in parts.drain(..) {
                 let normalized = normalize_domain(p);
                 match normalized {
-                    Domain::Union(inner) => flat.extend(inner),
-                    Domain::Unconstrained => return Domain::Unconstrained,
-                    Domain::Enumeration(vals) if vals.is_empty() => {}
+                    FactConstraint::Union(inner) => flat.extend(inner),
+                    FactConstraint::Unconstrained => return FactConstraint::Unconstrained,
+                    FactConstraint::Enumeration(vals) if vals.is_empty() => {}
                     other => flat.push(other),
                 }
             }
 
             let mut all_enum_values: Vec<LiteralValue> = Vec::new();
-            let mut ranges: Vec<Domain> = Vec::new();
-            let mut others: Vec<Domain> = Vec::new();
+            let mut ranges: Vec<FactConstraint> = Vec::new();
+            let mut others: Vec<FactConstraint> = Vec::new();
 
             for domain in flat {
                 match domain {
-                    Domain::Enumeration(vals) => all_enum_values.extend(vals),
-                    Domain::Range { .. } => ranges.push(domain),
+                    FactConstraint::Enumeration(vals) => all_enum_values.extend(vals),
+                    FactConstraint::Range { .. } => ranges.push(domain),
                     other => others.push(other),
                 }
             }
@@ -642,7 +642,7 @@ fn normalize_domain(d: Domain) -> Domain {
 
             all_enum_values.retain(|v| {
                 !ranges.iter().any(|r| {
-                    if let Domain::Range { min, max } = r {
+                    if let FactConstraint::Range { min, max } = r {
                         value_within(v, min, max)
                     } else {
                         false
@@ -650,54 +650,54 @@ fn normalize_domain(d: Domain) -> Domain {
                 })
             });
 
-            let mut result: Vec<Domain> = Vec::new();
+            let mut result: Vec<FactConstraint> = Vec::new();
             result.extend(ranges);
             result = merge_ranges(result);
 
             if !all_enum_values.is_empty() {
-                result.push(Domain::Enumeration(all_enum_values));
+                result.push(FactConstraint::Enumeration(all_enum_values));
             }
             result.extend(others);
 
             result.sort_by(|a, b| match (a, b) {
-                (Domain::Range { .. }, Domain::Range { .. }) => Ordering::Equal,
-                (Domain::Range { .. }, _) => Ordering::Less,
-                (_, Domain::Range { .. }) => Ordering::Greater,
-                (Domain::Enumeration(_), Domain::Enumeration(_)) => Ordering::Equal,
-                (Domain::Enumeration(_), _) => Ordering::Less,
-                (_, Domain::Enumeration(_)) => Ordering::Greater,
+                (FactConstraint::Range { .. }, FactConstraint::Range { .. }) => Ordering::Equal,
+                (FactConstraint::Range { .. }, _) => Ordering::Less,
+                (_, FactConstraint::Range { .. }) => Ordering::Greater,
+                (FactConstraint::Enumeration(_), FactConstraint::Enumeration(_)) => Ordering::Equal,
+                (FactConstraint::Enumeration(_), _) => Ordering::Less,
+                (_, FactConstraint::Enumeration(_)) => Ordering::Greater,
                 _ => Ordering::Equal,
             });
 
             if result.is_empty() {
-                Domain::Enumeration(vec![])
+                FactConstraint::Enumeration(vec![])
             } else if result.len() == 1 {
                 result.remove(0)
             } else {
-                Domain::Union(result)
+                FactConstraint::Union(result)
             }
         }
-        Domain::Enumeration(mut values) => {
+        FactConstraint::Enumeration(mut values) => {
             values.sort_by(|a, b| match lit_cmp(a, b) {
                 -1 => Ordering::Less,
                 0 => Ordering::Equal,
                 _ => Ordering::Greater,
             });
             values.dedup();
-            Domain::Enumeration(values)
+            FactConstraint::Enumeration(values)
         }
         other => other,
     }
 }
 
-fn merge_ranges(domains: Vec<Domain>) -> Vec<Domain> {
+fn merge_ranges(domains: Vec<FactConstraint>) -> Vec<FactConstraint> {
     let mut result = Vec::new();
     let mut ranges: Vec<(Bound, Bound)> = Vec::new();
     let mut others = Vec::new();
 
     for d in domains {
         match d {
-            Domain::Range { min, max } => ranges.push((min, max)),
+            FactConstraint::Range { min, max } => ranges.push((min, max)),
             other => others.push(other),
         }
     }
@@ -725,7 +725,7 @@ fn merge_ranges(domains: Vec<Domain>) -> Vec<Domain> {
     merged.push(current);
 
     for (min, max) in merged {
-        result.push(Domain::Range { min, max });
+        result.push(FactConstraint::Range { min, max });
     }
     result.extend(others);
 
@@ -809,51 +809,51 @@ mod tests {
 
     #[test]
     fn test_normalize_double_complement() {
-        let inner = Domain::Enumeration(vec![num(5)]);
-        let double = Domain::Complement(Box::new(Domain::Complement(Box::new(inner.clone()))));
+        let inner = FactConstraint::Enumeration(vec![num(5)]);
+        let double = FactConstraint::Complement(Box::new(FactConstraint::Complement(Box::new(inner.clone()))));
         let normalized = normalize_domain(double);
         assert_eq!(normalized, inner);
     }
 
     #[test]
     fn test_normalize_union_absorbs_unconstrained() {
-        let union = Domain::Union(vec![
-            Domain::Range {
+        let union = FactConstraint::Union(vec![
+            FactConstraint::Range {
                 min: Bound::Inclusive(num(0)),
                 max: Bound::Inclusive(num(10)),
             },
-            Domain::Unconstrained,
+            FactConstraint::Unconstrained,
         ]);
         let normalized = normalize_domain(union);
-        assert_eq!(normalized, Domain::Unconstrained);
+        assert_eq!(normalized, FactConstraint::Unconstrained);
     }
 
     #[test]
     fn test_domain_display() {
-        let range = Domain::Range {
+        let range = FactConstraint::Range {
             min: Bound::Inclusive(num(10)),
             max: Bound::Exclusive(num(20)),
         };
         assert_eq!(format!("{}", range), "[10, 20)");
 
-        let enumeration = Domain::Enumeration(vec![num(1), num(2), num(3)]);
+        let enumeration = FactConstraint::Enumeration(vec![num(1), num(2), num(3)]);
         assert_eq!(format!("{}", enumeration), "{1, 2, 3}");
     }
 
     #[test]
     fn test_extract_domain_from_comparison() {
-        let constraint = Constraint::Comparison {
+        let constraint = RuleConstraint::Comparison {
             fact: fact("age"),
             op: ComparisonComputation::GreaterThan,
             value: num(18),
         };
 
-        let domains = extract_domains_from_constraint(&constraint).unwrap();
+        let domains = extract_fact_constraints_from_rule_constraint(&constraint).unwrap();
         let age_domain = domains.get(&fact("age")).unwrap();
 
         assert_eq!(
             *age_domain,
-            Domain::Range {
+            FactConstraint::Range {
                 min: Bound::Exclusive(num(18)),
                 max: Bound::Unbounded,
             }
@@ -862,25 +862,25 @@ mod tests {
 
     #[test]
     fn test_extract_domain_from_and() {
-        let constraint = Constraint::And(
-            Box::new(Constraint::Comparison {
+        let constraint = RuleConstraint::And(
+            Box::new(RuleConstraint::Comparison {
                 fact: fact("age"),
                 op: ComparisonComputation::GreaterThan,
                 value: num(18),
             }),
-            Box::new(Constraint::Comparison {
+            Box::new(RuleConstraint::Comparison {
                 fact: fact("age"),
                 op: ComparisonComputation::LessThan,
                 value: num(65),
             }),
         );
 
-        let domains = extract_domains_from_constraint(&constraint).unwrap();
+        let domains = extract_fact_constraints_from_rule_constraint(&constraint).unwrap();
         let age_domain = domains.get(&fact("age")).unwrap();
 
         assert_eq!(
             *age_domain,
-            Domain::Range {
+            FactConstraint::Range {
                 min: Bound::Exclusive(num(18)),
                 max: Bound::Exclusive(num(65)),
             }
@@ -890,44 +890,44 @@ mod tests {
     #[test]
     fn test_extract_domain_from_equality() {
         use crate::EqualityNotation;
-        let constraint = Constraint::Comparison {
+        let constraint = RuleConstraint::Comparison {
             fact: fact("status"),
             op: ComparisonComputation::Equal(EqualityNotation::Symbol),
             value: LiteralValue::Text("active".to_string()),
         };
 
-        let domains = extract_domains_from_constraint(&constraint).unwrap();
+        let domains = extract_fact_constraints_from_rule_constraint(&constraint).unwrap();
         let status_domain = domains.get(&fact("status")).unwrap();
 
         assert_eq!(
             *status_domain,
-            Domain::Enumeration(vec![LiteralValue::Text("active".to_string())])
+            FactConstraint::Enumeration(vec![LiteralValue::Text("active".to_string())])
         );
     }
 
     #[test]
     fn test_extract_domain_from_boolean_fact() {
-        let constraint = Constraint::Fact(fact("is_active"));
+        let constraint = RuleConstraint::Fact(fact("is_active"));
 
-        let domains = extract_domains_from_constraint(&constraint).unwrap();
+        let domains = extract_fact_constraints_from_rule_constraint(&constraint).unwrap();
         let is_active_domain = domains.get(&fact("is_active")).unwrap();
 
         assert_eq!(
             *is_active_domain,
-            Domain::Enumeration(vec![LiteralValue::Boolean(BooleanValue::True)])
+            FactConstraint::Enumeration(vec![LiteralValue::Boolean(BooleanValue::True)])
         );
     }
 
     #[test]
     fn test_extract_domain_from_not_boolean_fact() {
-        let constraint = Constraint::Not(Box::new(Constraint::Fact(fact("is_active"))));
+        let constraint = RuleConstraint::Not(Box::new(RuleConstraint::Fact(fact("is_active"))));
 
-        let domains = extract_domains_from_constraint(&constraint).unwrap();
+        let domains = extract_fact_constraints_from_rule_constraint(&constraint).unwrap();
         let is_active_domain = domains.get(&fact("is_active")).unwrap();
 
         assert_eq!(
             *is_active_domain,
-            Domain::Enumeration(vec![LiteralValue::Boolean(BooleanValue::False)])
+            FactConstraint::Enumeration(vec![LiteralValue::Boolean(BooleanValue::False)])
         );
     }
 }

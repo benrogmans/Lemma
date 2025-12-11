@@ -12,7 +12,7 @@
 //! For basic inversion API tests, see `inversion_world_basic.rs`.
 //! For detailed branch handling scenarios, see `inversion_branch_handling.rs`.
 
-use lemma::{BooleanValue, Bound, Domain, Engine, FactPath, LiteralValue, OperationResult, Target};
+use lemma::{BooleanValue, Bound, FactRuleConstraint, Engine, FactPath, LiteralValue, OperationResult, Target};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -159,7 +159,7 @@ fn text_enumeration_with_veto() {
 
     assert_eq!(
         status_domain,
-        Some(&Domain::Enumeration(vec![LiteralValue::Text(
+        Some(&FactRuleConstraint::Enumeration(vec![LiteralValue::Text(
             "approved".to_string()
         )])),
         "status should be exactly 'approved'"
@@ -256,7 +256,7 @@ fn veto_boundary_produces_range() {
     let weight_domain = weight_domain.unwrap();
 
     match weight_domain {
-        Domain::Range { min, max } => {
+        FactRuleConstraint::Range { min, max } => {
             assert!(matches!(min, Bound::Unbounded), "min should be unbounded");
             match max {
                 Bound::Inclusive(v) => {
@@ -270,8 +270,8 @@ fn veto_boundary_produces_range() {
                 _ => panic!("max should be Inclusive(100)"),
             }
         }
-        Domain::Complement(inner) => match inner.as_ref() {
-            Domain::Range { min, .. } => match min {
+        FactRuleConstraint::Complement(inner) => match inner.as_ref() {
+            FactRuleConstraint::Range { min, .. } => match min {
                 Bound::Exclusive(v) => {
                     let is_100 = match v {
                         LiteralValue::Number(n) => *n == Decimal::from(100),
@@ -341,7 +341,7 @@ fn rule_references_expand_correctly() {
     assert!(points_domain.is_some(), "should have points domain");
 
     match points_domain.unwrap() {
-        Domain::Range { min, max } => {
+        FactRuleConstraint::Range { min, max } => {
             match min {
                 Bound::Inclusive(v) => {
                     assert_eq!(*v, LiteralValue::number(500), "min should be 500");
@@ -603,7 +603,7 @@ fn algebraic_solve_simple_multiplication() {
     assert!(price_domain.is_some(), "should have price domain");
 
     match price_domain.unwrap() {
-        Domain::Enumeration(values) => {
+        FactRuleConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(values[0], LiteralValue::number(10), "price should be 10");
         }
@@ -646,7 +646,7 @@ fn algebraic_solve_simple_addition() {
     assert!(x_domain.is_some(), "should have x domain");
 
     match x_domain.unwrap() {
-        Domain::Enumeration(values) => {
+        FactRuleConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(values[0], LiteralValue::number(15), "x should be 15");
         }
@@ -695,7 +695,7 @@ fn algebraic_solve_chained_operations() {
     assert!(hours_domain.is_some(), "should have hours domain");
 
     match hours_domain.unwrap() {
-        Domain::Enumeration(values) => {
+        FactRuleConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(values[0], LiteralValue::number(40), "hours should be 40");
         }
@@ -742,7 +742,7 @@ fn algebraic_solve_division() {
     assert!(total_domain.is_some(), "should have total_servings domain");
 
     match total_domain.unwrap() {
-        Domain::Enumeration(values) => {
+        FactRuleConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(
                 values[0],
@@ -799,7 +799,7 @@ fn algebraic_solve_subtraction_from_left() {
     );
 
     match original_domain.unwrap() {
-        Domain::Enumeration(values) => {
+        FactRuleConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(
                 values[0],
@@ -853,7 +853,7 @@ fn algebraic_solve_subtraction_from_right() {
     assert!(payment_domain.is_some(), "should have payment domain");
 
     match payment_domain.unwrap() {
-        Domain::Enumeration(values) => {
+        FactRuleConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(values[0], LiteralValue::number(70), "payment should be 70");
         }

@@ -1,4 +1,4 @@
-use lemma::{Domain, Engine, FactPath, LiteralValue, Target};
+use lemma::{FactRuleConstraint, Engine, FactPath, LiteralValue, Target};
 use std::collections::HashMap;
 
 #[test]
@@ -62,8 +62,8 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
             matches!(
                 (discount_domain, member_domain),
                 (
-                    Some(Domain::Enumeration(discount_vals)),
-                    Some(Domain::Enumeration(member_vals))
+                    Some(FactRuleConstraint::Enumeration(discount_vals)),
+                    Some(FactRuleConstraint::Enumeration(member_vals))
                 ) if discount_vals.contains(&LiteralValue::Text("SAVE30".to_string()))
                     && member_vals.contains(&LiteralValue::Text("platinum".to_string()))
             )
@@ -80,7 +80,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
         .expect("Solution 1 should have member_level domain");
 
     match solution1_discount {
-        Domain::Enumeration(values) => {
+        FactRuleConstraint::Enumeration(values) => {
             assert!(
                 values.contains(&LiteralValue::Text("SAVE30".to_string())),
                 "Solution 1: discount_code should be 'SAVE30', got {:?}",
@@ -94,7 +94,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
     }
 
     match solution1_member {
-        Domain::Enumeration(values) => {
+        FactRuleConstraint::Enumeration(values) => {
             assert!(
                 values.contains(&LiteralValue::Text("platinum".to_string())),
                 "Solution 1: member_level should be 'platinum', got {:?}",
@@ -122,7 +122,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
             // Must have solution == "EU"
             let has_solution_eu = matches!(
                 solution_domain,
-                Some(Domain::Enumeration(solution_vals)) if solution_vals.contains(&LiteralValue::Text("EU".to_string()))
+                Some(FactRuleConstraint::Enumeration(solution_vals)) if solution_vals.contains(&LiteralValue::Text("EU".to_string()))
             );
             
             if !has_solution_eu {
@@ -132,17 +132,17 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
             // Must have discount_code != "SAVE30"
             // This can be: Complement(Enumeration(["SAVE30"])), Unconstrained, or Enumeration without "SAVE30"
             let discount_not_save30 = match discount_domain {
-                Some(Domain::Enumeration(discount_vals)) => {
+                Some(FactRuleConstraint::Enumeration(discount_vals)) => {
                     !discount_vals.contains(&LiteralValue::Text("SAVE30".to_string()))
                 }
-                Some(Domain::Complement(inner)) => {
+                Some(FactRuleConstraint::Complement(inner)) => {
                     // Complement(Enumeration(["SAVE30"])) means != "SAVE30"
                     match inner.as_ref() {
-                        Domain::Enumeration(vals) => vals.contains(&LiteralValue::Text("SAVE30".to_string())),
+                        FactRuleConstraint::Enumeration(vals) => vals.contains(&LiteralValue::Text("SAVE30".to_string())),
                         _ => true,
                     }
                 }
-                Some(Domain::Unconstrained) => true,
+                Some(FactRuleConstraint::Unconstrained) => true,
                 _ => false,
             };
             
@@ -153,7 +153,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
             // Exclude solution 1: (A & B) which has discount_code == "SAVE30"
             let is_not_solution1 = !matches!(
                 discount_domain,
-                Some(Domain::Enumeration(discount_vals)) if discount_vals.contains(&LiteralValue::Text("SAVE30".to_string()))
+                Some(FactRuleConstraint::Enumeration(discount_vals)) if discount_vals.contains(&LiteralValue::Text("SAVE30".to_string()))
             );
             
             is_not_solution1
@@ -171,17 +171,17 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
         .expect("Solution 2 should have solution domain");
 
     match solution2_discount {
-        Domain::Enumeration(values) => {
+        FactRuleConstraint::Enumeration(values) => {
             assert!(
                 !values.contains(&LiteralValue::Text("SAVE30".to_string())),
                 "Solution 2: discount_code should NOT be 'SAVE30', got {:?}",
                 values
             );
         }
-        Domain::Complement(inner) => {
+        FactRuleConstraint::Complement(inner) => {
             // Complement means NOT the inner domain - verify it excludes "SAVE30"
             match inner.as_ref() {
-                Domain::Enumeration(vals) => {
+                FactRuleConstraint::Enumeration(vals) => {
                     // If the complement is Enumeration(["SAVE30"]), that means discount_code != "SAVE30" ✓
                     // If it contains other values, we need to check
                     if vals.contains(&LiteralValue::Text("SAVE30".to_string())) {
@@ -195,7 +195,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
                 }
             }
         }
-        Domain::Unconstrained => {
+        FactRuleConstraint::Unconstrained => {
             // Unconstrained is acceptable - it means any value, which includes values != "SAVE30"
         }
         other => panic!(
@@ -205,7 +205,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
     }
 
     match solution2_solution {
-        Domain::Enumeration(values) => {
+        FactRuleConstraint::Enumeration(values) => {
             assert!(
                 values.contains(&LiteralValue::Text("EU".to_string())),
                 "Solution 2: solution should be 'EU', got {:?}",
@@ -239,24 +239,24 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
             // Must NOT be solution 2 (has discount_code != "SAVE30" explicitly)
             let has_member_platinum = matches!(
                 member_domain,
-                Some(Domain::Enumeration(member_vals)) if member_vals.contains(&LiteralValue::Text("platinum".to_string()))
+                Some(FactRuleConstraint::Enumeration(member_vals)) if member_vals.contains(&LiteralValue::Text("platinum".to_string()))
             );
             
             let has_solution_eu = matches!(
                 solution_domain,
-                Some(Domain::Enumeration(solution_vals)) if solution_vals.contains(&LiteralValue::Text("EU".to_string()))
+                Some(FactRuleConstraint::Enumeration(solution_vals)) if solution_vals.contains(&LiteralValue::Text("EU".to_string()))
             );
             
             // Exclude solution 1: has discount_code="SAVE30"
             let is_not_solution1 = !matches!(
                 discount_domain,
-                Some(Domain::Enumeration(discount_vals)) if discount_vals.contains(&LiteralValue::Text("SAVE30".to_string()))
+                Some(FactRuleConstraint::Enumeration(discount_vals)) if discount_vals.contains(&LiteralValue::Text("SAVE30".to_string()))
             );
             
             // Exclude solution 2: has discount_code != "SAVE30" (Complement or explicit Enumeration without "SAVE30")
             let is_not_solution2 = match discount_domain {
-                Some(Domain::Complement(_)) => false, // Complement means != "SAVE30", so this is solution 2
-                Some(Domain::Enumeration(discount_vals)) => {
+                Some(FactRuleConstraint::Complement(_)) => false, // Complement means != "SAVE30", so this is solution 2
+                Some(FactRuleConstraint::Enumeration(discount_vals)) => {
                     discount_vals.contains(&LiteralValue::Text("SAVE30".to_string())) // If contains "SAVE30", it's solution 1, not solution 2
                 }
                 _ => true, // Unconstrained or other - not solution 2
@@ -278,7 +278,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
         let branch3_discount = branch3_domains.get(&discount_code_path);
 
         match branch3_member {
-            Domain::Enumeration(values) => {
+            FactRuleConstraint::Enumeration(values) => {
                 assert!(
                     values.contains(&LiteralValue::Text("platinum".to_string())),
                     "Branch 3: member_level should be 'platinum', got {:?}",
@@ -289,7 +289,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
         }
 
         match branch3_solution_domain {
-            Domain::Enumeration(values) => {
+            FactRuleConstraint::Enumeration(values) => {
                 assert!(
                     values.contains(&LiteralValue::Text("EU".to_string())),
                     "Branch 3: solution should be 'EU', got {:?}",
@@ -300,13 +300,13 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
         }
 
         match branch3_discount {
-            Some(Domain::Enumeration(values)) => {
+            Some(FactRuleConstraint::Enumeration(values)) => {
                 // discount_code can be anything for branch 3, but shouldn't be "SAVE30" (that would be solution 1)
                 if values.contains(&LiteralValue::Text("SAVE30".to_string())) {
                     panic!("Branch 3: discount_code should NOT be 'SAVE30' (that would be solution 1), got {:?}", values);
                 }
             }
-            Some(Domain::Unconstrained) | None => {
+            Some(FactRuleConstraint::Unconstrained) | None => {
                 // Unconstrained (or not in domains) is acceptable for branch 3
                 // This means discount_code can be any value
             }
@@ -317,7 +317,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
 
         // Branch 3 should NOT exist - if it does, simplification failed
         panic!(
-            "BDD consensus simplification failed: Branch 3 (member_level='platinum' AND solution='EU') exists as a separate solution at index {}. This redundant branch should have been eliminated by simplification. Domains: {:?}",
+            "BDD consensus simplification failed: Branch 3 (member_level='platinum' AND solution='EU') exists as a separate solution at index {}. This redundant branch should have been eliminated by simplification. FactRuleConstraints: {:?}",
             idx, branch3_domains
         );
     }
