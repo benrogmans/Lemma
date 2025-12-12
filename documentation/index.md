@@ -351,7 +351,8 @@ use rust_decimal::Decimal;
 let response = engine.invert(
     "pricing",
     "discount",
-    Target::value(LiteralValue::Percentage(Decimal::from(25))),
+    "=",
+    Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(25)))),
     HashMap::new()
 )?;
 

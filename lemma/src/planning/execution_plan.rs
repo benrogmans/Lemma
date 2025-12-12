@@ -4,9 +4,11 @@
 //! The plan contains all facts, rules flattened into executable branches,
 //! and execution order - no document structure needed during evaluation.
 
+use crate::planning::equation;
 use crate::planning::graph::Graph;
 use crate::semantic::{
-    Expression, FactPath, FactValue, LemmaFact, LemmaType, LiteralValue, RulePath, TypeAnnotation,
+    BooleanValue, Expression, ExpressionKind, FactPath, FactValue, LemmaFact, LemmaType,
+    LiteralValue, RulePath, TypeAnnotation,
 };
 use crate::LemmaError;
 use crate::ResourceLimits;
@@ -55,13 +57,17 @@ pub struct ExecutableRule {
     /// The evaluation is done in reverse order with the first matching branch returning the result.
     pub branches: Vec<Branch>,
 
-    /// All facts this rule needs (direct + inherited from rule dependencies)
+    /// All facts this rule needs (direct + from rule dependencies' branches)
     #[serde(serialize_with = "crate::serialization::serialize_fact_path_set")]
     #[serde(deserialize_with = "crate::serialization::deserialize_fact_path_set")]
     pub needs_facts: HashSet<FactPath>,
 
+    /// Symbolic equation for inversion: (cond_0 ∧ result_0) ∨ (cond_1 ∧ result_1) ∨ ...
+    /// Rule references are substituted with their equations (computed in topo order).
+    pub equation: Expression,
+
     /// Source location for error messages
-    pub source: Source,
+    pub source: Option<Source>,
 }
 
 /// A branch in an executable rule
@@ -74,7 +80,7 @@ pub struct Branch {
     pub result: Expression,
 
     /// Source location for error messages
-    pub source: Source,
+    pub source: Option<Source>,
 }
 
 /// Builds an execution plan from a Graph.
@@ -113,22 +119,26 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
             branches,
             source: rule_node.source.clone(),
             needs_facts: HashSet::new(),
+            equation: Expression::new(
+                ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)),
+                None,
+            ),
         });
     }
 
-    populate_needs_facts(&mut executable_rules, graph);
+    collect_facts_for_rules(&mut executable_rules, graph);
+    build_equations_for_rules(&mut executable_rules);
 
-    ExecutionPlan {
-        doc_name: main_doc_name.to_string(),
+    ExecutionPlan::new(
+        main_doc_name.to_string(),
         facts,
-        rules: executable_rules,
-        graph: graph.clone(),
-    }
+        executable_rules,
+        graph.clone(),
+    )
 }
 
-fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
-    let mut rule_facts: HashMap<RulePath, HashSet<FactPath>> = HashMap::new();
-
+/// Collect facts needed by each rule (from its branches and dependencies' branches)
+fn collect_facts_for_rules(rules: &mut [ExecutableRule], graph: &Graph) {
     for rule in rules.iter_mut() {
         let mut facts = HashSet::new();
 
@@ -139,20 +149,31 @@ fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
 
         if let Some(rule_node) = graph.rules().get(&rule.path) {
             for dep_rule in &rule_node.depends_on_rules {
-                if let Some(dep_facts) = rule_facts.get(dep_rule) {
-                    facts.extend(dep_facts.iter().cloned());
+                if let Some(dep_rule_node) = graph.rules().get(dep_rule) {
+                    for branch in &dep_rule_node.branches {
+                        branch.condition.collect_fact_paths(&mut facts);
+                        branch.result.collect_fact_paths(&mut facts);
+                    }
                 }
             }
         }
 
-        rule.needs_facts = facts.clone();
-        rule_facts.insert(rule.path.clone(), facts);
+        rule.needs_facts = facts;
+    }
+}
+
+/// Build equations for all rules (linear pass in topological order)
+fn build_equations_for_rules(rules: &mut [ExecutableRule]) {
+    let mut cache: HashMap<RulePath, Expression> = HashMap::new();
+
+    for rule in rules.iter_mut() {
+        rule.equation = equation::build_equation(&rule.branches, &rule.path, &mut cache);
     }
 }
 
 impl Default for ExecutionPlan {
     fn default() -> Self {
-        Self::new(String::new(), HashMap::new(), Vec::new())
+        Self::new(String::new(), HashMap::new(), Vec::new(), Graph::empty())
     }
 }
 
@@ -165,12 +186,13 @@ impl ExecutionPlan {
         doc_name: String,
         facts: HashMap<FactPath, LemmaFact>,
         rules: Vec<ExecutableRule>,
+        graph: Graph,
     ) -> Self {
         Self {
             doc_name,
             facts,
             rules,
-            graph: Graph::empty(),
+            graph,
         }
     }
 
@@ -338,7 +360,7 @@ mod tests {
                 source: create_test_source(),
             },
         );
-        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new());
+        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new(), Graph::empty());
 
         let mut values = HashMap::new();
         values.insert("age".to_string(), LiteralValue::Number(30.into()));
@@ -369,7 +391,7 @@ mod tests {
                 source: create_test_source(),
             },
         );
-        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new());
+        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new(), Graph::empty());
 
         let mut values = HashMap::new();
         values.insert("age".to_string(), LiteralValue::Text("thirty".to_string()));
@@ -379,7 +401,12 @@ mod tests {
 
     #[test]
     fn test_with_typed_values_unknown_fact() {
-        let plan = ExecutionPlan::new("test".to_string(), HashMap::new(), Vec::new());
+        let plan = ExecutionPlan::new(
+            "test".to_string(),
+            HashMap::new(),
+            Vec::new(),
+            Graph::empty(),
+        );
 
         let mut values = HashMap::new();
         values.insert("unknown".to_string(), LiteralValue::Number(30.into()));
@@ -409,7 +436,7 @@ mod tests {
                 source: create_test_source(),
             },
         );
-        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new());
+        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new(), Graph::empty());
 
         let mut values = HashMap::new();
         values.insert(
@@ -430,9 +457,9 @@ mod tests {
         Expression::new(ExpressionKind::Literal(value), create_test_source())
     }
 
-    fn create_test_source() -> Source {
+    fn create_test_source() -> Option<Source> {
         use crate::parsing::ast::Span;
-        Source::new(
+        Some(Source::new(
             "test.lemma",
             Span {
                 start: 0,
@@ -441,7 +468,7 @@ mod tests {
                 col: 0,
             },
             "test",
-        )
+        ))
     }
 
     #[test]
@@ -462,7 +489,7 @@ mod tests {
                 source: create_test_source(),
             },
         );
-        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new());
+        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new(), Graph::empty());
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
@@ -476,7 +503,12 @@ mod tests {
     fn test_serialize_deserialize_plan_with_rules() {
         use crate::semantic::ExpressionKind;
 
-        let mut plan = ExecutionPlan::new("test".to_string(), HashMap::new(), Vec::new());
+        let mut plan = ExecutionPlan::new(
+            "test".to_string(),
+            HashMap::new(),
+            Vec::new(),
+            Graph::empty(),
+        );
 
         let age_path = FactPath::local("age".to_string());
         plan.facts.insert(
@@ -516,6 +548,7 @@ mod tests {
                 set.insert(age_path);
                 set
             },
+            equation: create_literal_expr(LiteralValue::Boolean(BooleanValue::False)),
             source: create_test_source(),
         };
 
@@ -555,7 +588,7 @@ mod tests {
                 source: create_test_source(),
             },
         );
-        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new());
+        let plan = ExecutionPlan::new("test".to_string(), facts, Vec::new(), Graph::empty());
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
@@ -569,7 +602,12 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_plan_with_multiple_fact_types() {
-        let mut plan = ExecutionPlan::new("test".to_string(), HashMap::new(), Vec::new());
+        let mut plan = ExecutionPlan::new(
+            "test".to_string(),
+            HashMap::new(),
+            Vec::new(),
+            Graph::empty(),
+        );
 
         plan.facts.insert(
             FactPath::local("name".to_string()),
@@ -648,7 +686,12 @@ mod tests {
     fn test_serialize_deserialize_plan_with_multiple_branches() {
         use crate::semantic::ExpressionKind;
 
-        let mut plan = ExecutionPlan::new("test".to_string(), HashMap::new(), Vec::new());
+        let mut plan = ExecutionPlan::new(
+            "test".to_string(),
+            HashMap::new(),
+            Vec::new(),
+            Graph::empty(),
+        );
 
         let points_path = FactPath::local("points".to_string());
         plan.facts.insert(
@@ -713,6 +756,7 @@ mod tests {
                 set.insert(points_path);
                 set
             },
+            equation: create_literal_expr(LiteralValue::Boolean(BooleanValue::False)),
             source: create_test_source(),
         };
 
@@ -742,7 +786,12 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_empty_plan() {
-        let plan = ExecutionPlan::new("empty".to_string(), HashMap::new(), Vec::new());
+        let plan = ExecutionPlan::new(
+            "empty".to_string(),
+            HashMap::new(),
+            Vec::new(),
+            Graph::empty(),
+        );
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
@@ -756,7 +805,12 @@ mod tests {
     fn test_serialize_deserialize_plan_with_arithmetic_expressions() {
         use crate::semantic::ExpressionKind;
 
-        let mut plan = ExecutionPlan::new("test".to_string(), HashMap::new(), Vec::new());
+        let mut plan = ExecutionPlan::new(
+            "test".to_string(),
+            HashMap::new(),
+            Vec::new(),
+            Graph::empty(),
+        );
 
         let x_path = FactPath::local("x".to_string());
         plan.facts.insert(
@@ -799,6 +853,7 @@ mod tests {
                 set.insert(x_path);
                 set
             },
+            equation: create_literal_expr(LiteralValue::Boolean(BooleanValue::False)),
             source: create_test_source(),
         };
 
@@ -828,7 +883,12 @@ mod tests {
     fn test_serialize_deserialize_round_trip_equality() {
         use crate::semantic::ExpressionKind;
 
-        let mut plan = ExecutionPlan::new("test".to_string(), HashMap::new(), Vec::new());
+        let mut plan = ExecutionPlan::new(
+            "test".to_string(),
+            HashMap::new(),
+            Vec::new(),
+            Graph::empty(),
+        );
 
         let age_path = FactPath::local("age".to_string());
         plan.facts.insert(
@@ -868,6 +928,7 @@ mod tests {
                 set.insert(age_path);
                 set
             },
+            equation: create_literal_expr(LiteralValue::Boolean(BooleanValue::False)),
             source: create_test_source(),
         };
 

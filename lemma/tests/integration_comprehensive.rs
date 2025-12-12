@@ -485,7 +485,7 @@ rule end_date = start + duration
 
     assert!(end_date.result.value().is_some());
     let result_value = end_date.result.value().unwrap();
-    
+
     // Verify exact date: 2024-01-15 + 30 days = 2024-02-14
     match result_value {
         LiteralValue::Date(dt) => {
@@ -519,7 +519,7 @@ rule start_date = end - duration
 
     assert!(start_date.result.value().is_some());
     let result_value = start_date.result.value().unwrap();
-    
+
     // Verify exact date: 2024-02-14 - 30 days = 2024-01-15
     match result_value {
         LiteralValue::Date(dt) => {
@@ -553,11 +553,15 @@ rule duration = end - start
 
     assert!(duration.result.value().is_some());
     let result_value = duration.result.value().unwrap();
-    
+
     // Date - Date returns duration in seconds (30 days = 2,592,000 seconds)
     match result_value {
         LiteralValue::Unit(lemma::NumericUnit::Duration(value, unit)) => {
-            assert_eq!(*unit, lemma::DurationUnit::Second, "duration unit should be seconds");
+            assert_eq!(
+                *unit,
+                lemma::DurationUnit::Second,
+                "duration unit should be seconds"
+            );
             // 30 days = 30 * 24 * 60 * 60 = 2,592,000 seconds
             let expected = Decimal::from_str("2592000").unwrap();
             let diff = (value - expected).abs();
@@ -567,7 +571,10 @@ rule duration = end - start
                 value
             );
         }
-        other => panic!("duration should be a Duration unit with seconds, got: {:?}", other),
+        other => panic!(
+            "duration should be a Duration unit with seconds, got: {:?}",
+            other
+        ),
     }
 }
 
@@ -828,7 +835,7 @@ rule probation_end = base_contract.project_start + base_contract.probation_perio
 
     assert!(probation_end.result.value().is_some());
     let result_value = probation_end.result.value().unwrap();
-    
+
     // Verify exact date: 2024-01-15 + 90 days = 2024-04-14
     match result_value {
         lemma::LiteralValue::Date(dt) => {

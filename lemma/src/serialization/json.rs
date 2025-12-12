@@ -420,6 +420,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::Graph;
     use crate::semantic::{
         FactPath, FactReference, FactValue, LemmaFact, LemmaType, LiteralValue, TypeAnnotation,
     };
@@ -440,7 +441,7 @@ mod tests {
                 value: FactValue::TypeAnnotation(TypeAnnotation::LemmaType(lemma_type)),
                 source: {
                     use crate::parsing::ast::Span;
-                    crate::Source::new(
+                    Some(crate::Source::new(
                         "<test>",
                         Span {
                             start: 0,
@@ -449,12 +450,12 @@ mod tests {
                             col: 0,
                         },
                         "test",
-                    )
+                    ))
                 },
             };
             fact_map.insert(fact_path, fact);
         }
-        ExecutionPlan::new("test".to_string(), fact_map, vec![])
+        ExecutionPlan::new("test".to_string(), fact_map, vec![], Graph::empty())
     }
 
     #[test]

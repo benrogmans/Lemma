@@ -86,7 +86,7 @@ Inversion allows you to find what input values produce a desired output. This is
 #### Basic example
 
 ```rust
-use lemma::{Engine, Target, LiteralValue};
+use lemma::{Engine, LiteralValue, OperationResult};
 use std::collections::HashMap;
 use rust_decimal::Decimal;
 
@@ -104,11 +104,11 @@ engine.add_lemma_code(r#"
 "#, "pricing.lemma")?;
 
 // Find what quantity gives a 30% discount
-use rust_decimal::Decimal;
 let response = engine.invert(
     "pricing",
     "discount",
-    Target::value(LiteralValue::Percentage(Decimal::from(30))),
+    "=",  // operator
+    Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(30)))),
     HashMap::new()
 )?;
 
@@ -128,7 +128,8 @@ values.insert("is_vip".to_string(), "true".to_string());
 let response = engine.invert(
     "pricing",
     "discount",
-    Target::value(LiteralValue::Percentage(Decimal::from(25))),
+    "=",
+    Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(25)))),
     values
 )?;
 ```
@@ -146,7 +147,8 @@ values.insert("is_vip".to_string(), LiteralValue::Boolean(lemma::BooleanValue::T
 let response = engine.invert_strict(
     "pricing",
     "discount",
-    Target::value(LiteralValue::Percentage(Decimal::from(25))),
+    "=",
+    Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(25)))),
     values
 )?;
 ```
@@ -161,37 +163,34 @@ let json = br#"{"is_vip": true}"#;
 let response = engine.invert_json(
     "pricing",
     "discount",
-    Target::value(LiteralValue::Percentage(Decimal::from(25))),
+    "=",
+    Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(25)))),
     json
 )?;
 ```
 
 #### Target specification
 
-Use `Target` to specify the desired outcome:
+Use operator strings and `Option<OperationResult>` to specify the desired outcome:
 
 ```rust
-use lemma::{Target, TargetOp, OperationResult};
+use lemma::{OperationResult, LiteralValue};
 
 // Exact value (equality)
-Target::value(LiteralValue::Percentage(Decimal::from(30)))
+("=", Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(30)))))
 
 // Comparison operators
-Target::with_op(
-    TargetOp::Gt,
-    OperationResult::Value(LiteralValue::number(100))
-)  // > 100
+(">", Some(OperationResult::Value(LiteralValue::number(100))))   // > 100
+("<=", Some(OperationResult::Value(LiteralValue::number(50))))   // <= 50
 
-Target::with_op(
-    TargetOp::Lte,
-    OperationResult::Value(LiteralValue::number(50))
-)  // <= 50
+// Find any value (all possible outcomes)
+("=", None)
 
-// Find any veto
-Target::any_veto()
+// Find any veto (regardless of message)
+("=", Some(OperationResult::Veto(None)))
 
-// Find specific veto message
-Target::veto(Some("Invalid input".to_string()))
+// Find veto with specific message
+("=", Some(OperationResult::Veto(Some("Invalid input".to_string()))))
 ```
 
 #### Response structure
@@ -204,7 +203,7 @@ Target::veto(Some("Invalid input".to_string()))
 - **`is_fully_constrained`**: Whether all facts have concrete values
 
 ```rust
-let response = engine.invert(...)?;
+let response = engine.invert("doc", "rule", "=", None, HashMap::new())?;
 
 if response.is_fully_constrained {
     println!("All variables are determined");

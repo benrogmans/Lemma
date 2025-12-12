@@ -135,20 +135,23 @@ impl Formatter {
 
     pub fn format_inversion_response(&self, response: &InversionResponse) -> String {
         let mut output = String::new();
-        if response.is_empty() {
+        if !response.has_solutions() {
             output.push_str("No solutions found.\n");
         } else {
-            output.push_str(&format!("Found {} solution(s):\n\n", response.len()));
+            output.push_str(&format!(
+                "Found {} solution(s):\n\n",
+                response.solutions_count()
+            ));
             for (i, solution) in response.solutions.iter().enumerate() {
                 output.push_str(&format!("Solution {}:\n", i + 1));
                 output.push_str(&format!("  Outcome: {}\n", solution.outcome));
 
-                if i < response.domains.len() {
-                    let domain_map = &response.domains[i];
-                    if !domain_map.is_empty() {
-                        output.push_str("  Domains:\n");
-                        for (fact_ref, domain) in domain_map {
-                            output.push_str(&format!("    {}: {}\n", fact_ref, domain));
+                if i < response.solutions_count() {
+                    let solution = &response.solutions[i];
+                    if !solution.fact_constraints.is_empty() {
+                        output.push_str("  Fact constraints:\n");
+                        for (fact_path, fact_constraint) in solution.fact_constraints.iter() {
+                            output.push_str(&format!("    {}: {}\n", fact_path, fact_constraint));
                         }
                     }
                 }
@@ -337,8 +340,7 @@ impl Formatter {
             ]);
         }
 
-        if true {
-            let source = &result.rule.source;
+        if let Some(source) = &result.rule.source {
             let location = format!(
                 "Source: {}:{}:{}",
                 source.source_id, source.span.line, source.span.col

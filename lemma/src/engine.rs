@@ -1,7 +1,7 @@
 use crate::evaluation::Evaluator;
 use crate::planning::plan;
 use crate::{parse, LemmaDoc, LemmaError, LemmaResult, ResourceLimits, Response};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Engine for evaluating Lemma rules
 ///
@@ -121,32 +121,6 @@ impl Engine {
         }
     }
 
-    /// Evaluate rules in a document with JSON values for facts.
-    ///
-    /// This is a convenience method that accepts JSON directly and converts it
-    /// to typed values using the document's fact type declarations.
-    ///
-    /// If `rule_names` is empty, evaluates all rules.
-    /// Otherwise, only returns results for the specified rules (dependencies still computed).
-    ///
-    /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
-    /// They are automatically parsed to the expected type based on the document schema.
-    pub fn evaluate_json(
-        &self,
-        doc_name: &str,
-        rule_names: Vec<String>,
-        json: &[u8],
-    ) -> LemmaResult<Response> {
-        let base_plan = self
-            .execution_plans
-            .get(doc_name)
-            .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
-
-        let values = crate::serialization::from_json(json, base_plan)?;
-
-        self.evaluate_strict(doc_name, rule_names, values)
-    }
-
     /// Evaluate rules in a document with string values for facts.
     ///
     /// This is the user-friendly API that accepts raw string values and parses them
@@ -200,26 +174,22 @@ impl Engine {
         self.evaluate_plan(plan, rule_names)
     }
 
-    /// Invert a rule to find input domains that produce a desired outcome with JSON values.
+    /// Evaluate rules in a document with JSON values for facts.
     ///
-    /// Uses world-based enumeration for accurate handling of correlated rule references.
-    /// Includes proof generation explaining why each solution is valid.
+    /// This is a convenience method that accepts JSON directly and converts it
+    /// to typed values using the document's fact type declarations.
     ///
-    /// Returns an InversionResponse containing:
-    /// - `solutions`: Solutions with conditions, outcomes, and proofs
-    /// - `domains`: Concrete domain constraints for each undetermined fact
-    /// - `undetermined_facts`: Facts that remain free variables
-    /// - `is_determined`: Whether all facts have concrete values
+    /// If `rule_names` is empty, evaluates all rules.
+    /// Otherwise, only returns results for the specified rules (dependencies still computed).
     ///
     /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
     /// They are automatically parsed to the expected type based on the document schema.
-    pub fn invert_json(
+    pub fn evaluate_json(
         &self,
         doc_name: &str,
-        rule_name: &str,
-        target: crate::Target,
+        rule_names: Vec<String>,
         json: &[u8],
-    ) -> LemmaResult<crate::InversionResponse> {
+    ) -> LemmaResult<Response> {
         let base_plan = self
             .execution_plans
             .get(doc_name)
@@ -227,19 +197,17 @@ impl Engine {
 
         let values = crate::serialization::from_json(json, base_plan)?;
 
-        self.invert_strict(doc_name, rule_name, target, values)
+        self.evaluate_strict(doc_name, rule_names, values)
     }
 
     /// Invert a rule to find input domains that produce a desired outcome.
     ///
-    /// Uses world-based enumeration for accurate handling of correlated rule references.
-    /// Includes proof generation explaining why each solution is valid.
-    ///
     /// Returns an InversionResponse containing:
     /// - `solutions`: Solutions with conditions, outcomes, and proofs
-    /// - `domains`: Concrete domain constraints for each undetermined fact
-    /// - `undetermined_facts`: Facts that remain free variables
-    /// - `is_determined`: Whether all facts have concrete values
+    /// # Arguments
+    ///
+    /// * `operator` - Comparison operator: "=", "!=", "<", "<=", ">", ">="
+    /// * `outcome` - Desired result, or None for any_value (returns all possible outcomes)
     ///
     /// Values are provided as name -> value string pairs (e.g., "quantity" -> "5").
     /// They are automatically parsed to the expected type based on the document schema.
@@ -247,56 +215,80 @@ impl Engine {
         &self,
         doc_name: &str,
         rule_name: &str,
-        target: crate::Target,
+        operator: &str,
+        outcome: Option<crate::computation::OperationResult>,
         values: HashMap<String, String>,
     ) -> LemmaResult<crate::InversionResponse> {
-        let base_plan = self
+        let plan = self
             .execution_plans
             .get(doc_name)
-            .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
+            .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?
+            .clone()
+            .with_values(values, &self.limits)?;
 
-        let provided_facts: HashSet<crate::FactPath> = values
-            .keys()
-            .filter_map(|k| base_plan.get_fact_by_path_str(k).map(|(fp, _)| fp.clone()))
-            .collect();
-
-        let plan = base_plan.clone().with_values(values, &self.limits)?;
-
-        self.invert_plan(plan, rule_name, target, provided_facts)
+        crate::inversion::invert(&plan, rule_name, operator, outcome)
     }
 
     /// Invert a rule to find input domains that produce a desired outcome.
     ///
-    /// Uses world-based enumeration for accurate handling of correlated rule references.
-    /// Includes proof generation explaining why each solution is valid.
-    ///
     /// Returns an InversionResponse containing:
     /// - `solutions`: Solutions with conditions, outcomes, and proofs
-    /// - `domains`: Concrete domain constraints for each undetermined fact
-    /// - `undetermined_facts`: Facts that remain free variables
-    /// - `is_determined`: Whether all facts have concrete values
+    ///
+    /// # Arguments
+    ///
+    /// * `operator` - Comparison operator: "=", "!=", "<", "<=", ">", ">="
+    /// * `outcome` - Desired result, or None for any_value (returns all possible outcomes)
     ///
     /// Values are provided as name -> LiteralValue pairs (e.g., "quantity" -> Number(5)).
     pub fn invert_strict(
         &self,
         doc_name: &str,
         rule_name: &str,
-        target: crate::Target,
+        operator: &str,
+        outcome: Option<crate::computation::OperationResult>,
         values: HashMap<String, crate::LiteralValue>,
     ) -> LemmaResult<crate::InversionResponse> {
+        let plan = self
+            .execution_plans
+            .get(doc_name)
+            .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?
+            .clone()
+            .with_typed_values(values, &self.limits)?;
+
+        crate::inversion::invert(&plan, rule_name, operator, outcome)
+    }
+
+    /// Invert a rule to find input domains that produce a desired outcome with JSON values.
+    ///
+    /// Returns an InversionResponse containing:
+    /// - `solutions`: Solutions with conditions, outcomes, and proofs
+    ///
+    /// # Arguments
+    ///
+    /// * `operator` - Comparison operator: "=", "!=", "<", "<=", ">", ">="
+    /// * `outcome` - Desired result, or None for any_value (returns all possible outcomes)
+    ///
+    /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
+    /// They are automatically parsed to the expected type based on the document schema.
+    pub fn invert_json(
+        &self,
+        doc_name: &str,
+        rule_name: &str,
+        operator: &str,
+        outcome: Option<crate::computation::OperationResult>,
+        json: &[u8],
+    ) -> LemmaResult<crate::InversionResponse> {
+        
         let base_plan = self
             .execution_plans
             .get(doc_name)
-            .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
+            .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?
+            .clone();
 
-        let provided_facts: HashSet<crate::FactPath> = values
-            .keys()
-            .filter_map(|k| base_plan.get_fact_by_path_str(k).map(|(fp, _)| fp.clone()))
-            .collect();
+        let values = crate::serialization::from_json(json, &base_plan)?;
+        let plan = base_plan.with_typed_values(values, &self.limits)?;
 
-        let plan = base_plan.clone().with_typed_values(values, &self.limits)?;
-
-        self.invert_plan(plan, rule_name, target, provided_facts)
+        crate::inversion::invert(&plan, rule_name, operator, outcome)
     }
 
     fn evaluate_plan(
@@ -311,16 +303,6 @@ impl Engine {
         }
 
         Ok(response)
-    }
-
-    fn invert_plan(
-        &self,
-        plan: crate::planning::ExecutionPlan,
-        rule_name: &str,
-        target: crate::Target,
-        provided_facts: HashSet<crate::FactPath>,
-    ) -> LemmaResult<crate::InversionResponse> {
-        crate::inversion::invert(rule_name, target, &plan, &provided_facts)
     }
 }
 
@@ -412,10 +394,13 @@ rule total = price * quantity
 
         let result = engine.evaluate("test", vec![], facts);
         assert!(result.is_ok(), "Should succeed with all valid fact types");
-        
+
         // Verify the calculation is correct
         let response = result.unwrap();
-        let total_rule = response.results.get("total").expect("Should have total rule");
+        let total_rule = response
+            .results
+            .get("total")
+            .expect("Should have total rule");
         match &total_rule.result {
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
                 // total = price * quantity = 100 * 5 = 500
@@ -451,11 +436,17 @@ rule total = base_price * 1.2
         facts.insert("base_price".to_string(), "60".to_string());
 
         let result = engine.evaluate("test", vec![], facts);
-        assert!(result.is_ok(), "Should succeed with valid literal fact type");
-        
+        assert!(
+            result.is_ok(),
+            "Should succeed with valid literal fact type"
+        );
+
         // Verify the calculation is correct
         let response = result.unwrap();
-        let total_rule = response.results.get("total").expect("Should have total rule");
+        let total_rule = response
+            .results
+            .get("total")
+            .expect("Should have total rule");
         match &total_rule.result {
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
                 // total = base_price * 1.2 = 60 * 1.2 = 72 (override value, not literal 50)

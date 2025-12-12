@@ -7,7 +7,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct ErrorDetails {
     pub message: String,
-    pub source: Source,
+    pub source: Option<Source>,
     pub source_text: Arc<str>,
     pub doc_start_line: usize,
     pub suggestion: Option<String>,
@@ -58,7 +58,7 @@ impl LemmaError {
     ) -> Self {
         Self::Parse(Box::new(ErrorDetails {
             message: message.into(),
-            source: Source::new(source_id, span, doc_name),
+            source: Some(Source::new(source_id, span, doc_name)),
             source_text,
             doc_start_line,
             suggestion: None,
@@ -77,7 +77,7 @@ impl LemmaError {
     ) -> Self {
         Self::Parse(Box::new(ErrorDetails {
             message: message.into(),
-            source: Source::new(source_id, span, doc_name),
+            source: Some(Source::new(source_id, span, doc_name)),
             source_text,
             doc_start_line,
             suggestion: Some(suggestion.into()),
@@ -95,7 +95,7 @@ impl LemmaError {
     ) -> Self {
         Self::Semantic(Box::new(ErrorDetails {
             message: message.into(),
-            source: Source::new(source_id, span, doc_name),
+            source: Some(Source::new(source_id, span, doc_name)),
             source_text,
             doc_start_line,
             suggestion: None,
@@ -114,7 +114,7 @@ impl LemmaError {
     ) -> Self {
         Self::Semantic(Box::new(ErrorDetails {
             message: message.into(),
-            source: Source::new(source_id, span, doc_name),
+            source: Some(Source::new(source_id, span, doc_name)),
             source_text,
             doc_start_line,
             suggestion: Some(suggestion.into()),
@@ -130,33 +130,42 @@ impl fmt::Display for LemmaError {
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    details.source.source_id, details.source.span.line, details.source.span.col
-                )
+                if let Some(source) = &details.source {
+                    write!(
+                        f,
+                        " at {}:{}:{}",
+                        source.source_id, source.span.line, source.span.col
+                    )?;
+                }
+                Ok(())
             }
             LemmaError::Semantic(details) => {
                 write!(f, "Semantic error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    details.source.source_id, details.source.span.line, details.source.span.col
-                )
+                if let Some(source) = &details.source {
+                    write!(
+                        f,
+                        " at {}:{}:{}",
+                        source.source_id, source.span.line, source.span.col
+                    )?;
+                }
+                Ok(())
             }
             LemmaError::Runtime(details) => {
                 write!(f, "Runtime error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    details.source.source_id, details.source.span.line, details.source.span.col
-                )
+                if let Some(source) = &details.source {
+                    write!(
+                        f,
+                        " at {}:{}:{}",
+                        source.source_id, source.span.line, source.span.col
+                    )?;
+                }
+                Ok(())
             }
             LemmaError::Engine(msg) => write!(f, "Engine error: {msg}"),
             LemmaError::MissingFact(fact_ref) => write!(f, "Missing fact: {fact_ref}"),
@@ -395,8 +404,9 @@ mod tests {
 
         match result {
             Err(LemmaError::Parse(details)) => {
-                assert_eq!(details.source.source_id, "test.lemma");
-                assert_eq!(details.source.doc_name, "<parse-error>");
+                let source = details.source.as_ref().expect("should have source");
+                assert_eq!(source.source_id, "test.lemma");
+                assert_eq!(source.doc_name, "<parse-error>");
             }
             Err(e) => panic!("Expected Parse error, got: {e:?}"),
             Ok(_) => panic!("Expected parse error for unclosed string"),

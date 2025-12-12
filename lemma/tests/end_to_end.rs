@@ -252,7 +252,7 @@ rule final_price = 100 - discount?
 
     // Evaluate without providing quantity - discount should fail, causing final_price to fail
     let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
-    
+
     let discount_result = response
         .results
         .values()
@@ -264,7 +264,10 @@ rule final_price = 100 - discount?
         lemma::OperationResult::Veto(_) => {
             // Expected - missing fact causes veto
         }
-        other => panic!("Expected veto for discount due to missing quantity, got {:?}", other),
+        other => panic!(
+            "Expected veto for discount due to missing quantity, got {:?}",
+            other
+        ),
     }
 
     let final_price_result = response
@@ -278,7 +281,10 @@ rule final_price = 100 - discount?
         lemma::OperationResult::Veto(_) => {
             // Expected - rule reference to failed rule causes veto
         }
-        other => panic!("Expected veto for final_price due to missing discount dependency, got {:?}", other),
+        other => panic!(
+            "Expected veto for final_price due to missing discount dependency, got {:?}",
+            other
+        ),
     }
 }
 
@@ -337,7 +343,8 @@ rule result = numerator / denominator
         lemma::OperationResult::Veto(msg) => {
             assert!(
                 msg.as_ref()
-                    .map(|m| m.to_lowercase().contains("division") || m.to_lowercase().contains("zero"))
+                    .map(|m| m.to_lowercase().contains("division")
+                        || m.to_lowercase().contains("zero"))
                     .unwrap_or(false),
                 "Veto message should mention division by zero, got: {:?}",
                 msg

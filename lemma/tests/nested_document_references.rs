@@ -84,13 +84,6 @@ rule top_calc = middle_ref.middle_calc?
     println!("Response results:");
     for r in response.results.values() {
         println!("  Rule: {} = {:?}", r.rule.name, r.result);
-        let missing: Vec<String> = r
-            .facts
-            .iter()
-            .filter(|f| matches!(f.value, lemma::FactValue::TypeAnnotation(_)))
-            .map(|f| f.reference.to_string())
-            .collect();
-        println!("       missing: {:?}", missing);
     }
 
     let top_calc = response

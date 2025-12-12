@@ -49,7 +49,7 @@ fn test_01_simple_facts() {
     assert_eq!(response.doc_name, "simple_facts");
     // No rules in this document, just facts
     assert_eq!(response.results.len(), 0);
-    
+
     // Verify facts are loaded and exposed in the response
     // This is important for API consumers who need to see fact values
     assert!(
@@ -171,7 +171,10 @@ fn test_03_document_references() {
         OperationResult::Value(LiteralValue::Boolean(b)) => {
             assert!(!bool::from(b), "is_eligible_for_bonus should be false");
         }
-        other => panic!("is_eligible_for_bonus should be boolean false, got: {:?}", other),
+        other => panic!(
+            "is_eligible_for_bonus should be boolean false, got: {:?}",
+            other
+        ),
     }
 
     // Test examples/specific_employee document (references base_employee)
@@ -228,10 +231,17 @@ fn test_03_document_references() {
 
     match &total_payment_result.result {
         OperationResult::Value(LiteralValue::Unit(lemma::NumericUnit::Duration(value, unit))) => {
-            assert_eq!(*unit, lemma::DurationUnit::Hour, "total_payment unit should be hours");
+            assert_eq!(
+                *unit,
+                lemma::DurationUnit::Hour,
+                "total_payment unit should be hours"
+            );
             assert_eq!(*value, Decimal::from_str("10200").unwrap());
         }
-        other => panic!("total_payment should be 10200 hours (Duration unit), got: {:?}", other),
+        other => panic!(
+            "total_payment should be 10200 hours (Duration unit), got: {:?}",
+            other
+        ),
     }
 
     // Verify benefits_eligible = true (annual_hours = 120 * 12 = 1440 > 1000)
@@ -329,7 +339,10 @@ fn test_04_unit_conversions() {
 
     match &is_overweight_result.result {
         OperationResult::Value(LiteralValue::Boolean(b)) => {
-            assert!(bool::from(b), "is_overweight should be true (25 kg > 50 lbs limit)");
+            assert!(
+                bool::from(b),
+                "is_overweight should be true (25 kg > 50 lbs limit)"
+            );
         }
         other => panic!("is_overweight should be boolean true, got: {:?}", other),
     }
@@ -431,10 +444,16 @@ fn test_06_tax_calculation() {
 
     match &total_federal_tax_result.result {
         OperationResult::Value(LiteralValue::Number(n)) => {
-            assert!(*n > Decimal::from_str("0").unwrap(), "total_federal_tax should be positive");
+            assert!(
+                *n > Decimal::from_str("0").unwrap(),
+                "total_federal_tax should be positive"
+            );
             // For taxable_income = 73000, federal tax should be in bracket 3
             // Rough calculation: should be several thousand dollars
-            assert!(*n > Decimal::from_str("1000").unwrap(), "total_federal_tax should be substantial");
+            assert!(
+                *n > Decimal::from_str("1000").unwrap(),
+                "total_federal_tax should be substantial"
+            );
         }
         other => panic!("total_federal_tax should be a number, got: {:?}", other),
     }
@@ -448,7 +467,10 @@ fn test_06_tax_calculation() {
 
     match &total_tax_result.result {
         OperationResult::Value(LiteralValue::Number(n)) => {
-            assert!(*n > Decimal::from_str("0").unwrap(), "total_tax should be positive");
+            assert!(
+                *n > Decimal::from_str("0").unwrap(),
+                "total_tax should be positive"
+            );
         }
         other => panic!("total_tax should be a number, got: {:?}", other),
     }
@@ -464,7 +486,10 @@ fn test_06_tax_calculation() {
         OperationResult::Value(LiteralValue::Number(n)) => {
             let income = Decimal::from_str("85000").unwrap();
             assert!(*n < income, "after_tax_income should be less than income");
-            assert!(*n > Decimal::from_str("60000").unwrap(), "after_tax_income should be reasonable");
+            assert!(
+                *n > Decimal::from_str("60000").unwrap(),
+                "after_tax_income should be reasonable"
+            );
         }
         other => panic!("after_tax_income should be a number, got: {:?}", other),
     }
@@ -526,7 +551,11 @@ fn test_07_shipping_policy() {
     match &estimated_delivery_result.result {
         OperationResult::Value(LiteralValue::Unit(lemma::NumericUnit::Duration(value, unit))) => {
             // Should be 5 days for US
-            assert_eq!(*unit, lemma::DurationUnit::Day, "estimated_delivery_days unit should be days");
+            assert_eq!(
+                *unit,
+                lemma::DurationUnit::Day,
+                "estimated_delivery_days unit should be days"
+            );
             let expected = Decimal::from_str("5").unwrap();
             let diff = (*value - expected).abs();
             assert!(
@@ -535,7 +564,10 @@ fn test_07_shipping_policy() {
                 value
             );
         }
-        other => panic!("estimated_delivery_days should be a Duration unit, got: {:?}", other),
+        other => panic!(
+            "estimated_delivery_days should be a Duration unit, got: {:?}",
+            other
+        ),
     }
 
     // Verify total_with_shipping = order_total + final_shipping = 75.00 + 16.392 = 91.392
@@ -628,8 +660,12 @@ fn test_09_stress_test_config() {
 
     assert_eq!(response.doc_name, "stress_test_config");
     // Config doc only has facts, no rules to check
-    assert_eq!(response.results.len(), 0, "Config document should have no rules");
-    
+    assert_eq!(
+        response.results.len(),
+        0,
+        "Config document should have no rules"
+    );
+
     // Verify facts are loaded and exposed in the response
     assert!(
         !response.facts.is_empty(),
@@ -806,7 +842,10 @@ fn test_11_document_composition() {
 
     match &price_range_result.result {
         OperationResult::Value(LiteralValue::Number(n)) => {
-            assert!(*n > Decimal::from_str("0").unwrap(), "price_range should be positive");
+            assert!(
+                *n > Decimal::from_str("0").unwrap(),
+                "price_range should be positive"
+            );
         }
         other => panic!("price_range should be a number, got: {:?}", other),
     }

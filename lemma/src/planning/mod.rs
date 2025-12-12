@@ -4,6 +4,7 @@
 //! - Builds Graph with facts and rules (validated, with types computed)
 //! - Builds ExecutionPlan from Graph (topologically sorted, ready for evaluation)
 
+pub mod equation;
 pub mod execution_plan;
 pub mod graph;
 

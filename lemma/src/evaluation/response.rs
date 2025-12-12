@@ -30,7 +30,6 @@ pub struct RuleResult {
     pub rule: crate::LemmaRule,
     #[serde(serialize_with = "serialize_operation_result")]
     pub result: OperationResult,
-    pub facts: Vec<crate::LemmaFact>,
     #[serde(skip_serializing)]
     pub operations: Vec<OperationRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,10 +73,10 @@ mod tests {
             name: name.to_string(),
             expression: Expression {
                 kind: ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)),
-                source: test_source(),
+                source: Some(test_source()),
             },
             unless_clauses: vec![],
-            source: test_source(),
+            source: Some(test_source()),
         }
     }
 
@@ -91,7 +90,6 @@ mod tests {
                 result: OperationResult::Value(LiteralValue::number(
                     Decimal::from_str("42").unwrap(),
                 )),
-                facts: vec![],
                 operations: vec![],
                 proof: None,
             },
@@ -116,7 +114,6 @@ mod tests {
             RuleResult {
                 rule: dummy_rule("rule1"),
                 result: OperationResult::Value(LiteralValue::Boolean(crate::BooleanValue::True)),
-                facts: vec![],
                 operations: vec![],
                 proof: None,
             },
@@ -126,7 +123,6 @@ mod tests {
             RuleResult {
                 rule: dummy_rule("rule2"),
                 result: OperationResult::Value(LiteralValue::Boolean(crate::BooleanValue::False)),
-                facts: vec![],
                 operations: vec![],
                 proof: None,
             },
@@ -148,43 +144,17 @@ mod tests {
         let success = RuleResult {
             rule: dummy_rule("rule1"),
             result: OperationResult::Value(LiteralValue::Boolean(crate::BooleanValue::True)),
-            facts: vec![],
             operations: vec![],
             proof: None,
         };
         assert!(matches!(success.result, OperationResult::Value(_)));
 
-        let missing = RuleResult {
-            rule: dummy_rule("rule3"),
-            result: OperationResult::Veto(Some("Missing fact: fact1".to_string())),
-            facts: vec![crate::LemmaFact {
-                reference: crate::FactReference::from_path(vec!["fact1".to_string()]),
-                value: crate::FactValue::TypeAnnotation(crate::TypeAnnotation::LemmaType(
-                    crate::LemmaType::Number,
-                )),
-                source: test_source(),
-            }],
-            operations: vec![],
-            proof: None,
-        };
-        assert_eq!(missing.facts.len(), 1);
-        assert_eq!(missing.facts[0].reference.to_string(), "fact1");
-        assert!(matches!(
-            missing.facts[0].value,
-            crate::FactValue::TypeAnnotation(_)
-        ));
-        assert!(matches!(missing.result, OperationResult::Veto(_)));
-
         let veto = RuleResult {
-            rule: dummy_rule("rule4"),
+            rule: dummy_rule("rule2"),
             result: OperationResult::Veto(Some("Vetoed".to_string())),
-            facts: vec![],
             operations: vec![],
             proof: None,
         };
-        assert_eq!(
-            veto.result,
-            OperationResult::Veto(Some("Vetoed".to_string()))
-        );
+        assert!(matches!(veto.result, OperationResult::Veto(_)));
     }
 }

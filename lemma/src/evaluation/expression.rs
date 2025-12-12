@@ -55,7 +55,10 @@ fn get_source_text(
     context: &crate::evaluation::EvaluationContext,
     expr: &Expression,
 ) -> crate::LemmaResult<String> {
-    expr.source.get_text(&context.source_text)
+    match &expr.source {
+        Some(source) => source.get_text(&context.source_text),
+        None => Ok("<no source>".to_string()),
+    }
 }
 
 /// Propagate a veto result by copying the proof node from the vetoed operand

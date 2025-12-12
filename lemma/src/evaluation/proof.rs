@@ -6,7 +6,7 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 pub struct Proof {
     pub rule_path: RulePath,
-    pub source: Source,
+    pub source: Option<Source>,
     pub result: OperationResult,
     pub tree: ProofNode,
 }
@@ -16,12 +16,12 @@ pub enum ProofNode {
     Value {
         value: LiteralValue,
         origin: ValueOrigin,
-        source: Source,
+        source: Option<Source>,
     },
     RuleReference {
         rule_path: RulePath,
         result: OperationResult,
-        source: Source,
+        source: Option<Source>,
         expansion: Box<ProofNode>,
     },
     Computation {
@@ -29,24 +29,24 @@ pub enum ProofNode {
         original_expression: String,
         expression: String,
         result: LiteralValue,
-        source: Source,
+        source: Option<Source>,
         operands: Vec<ProofNode>,
     },
     Branches {
         matched: Box<Branch>,
         non_matched: Vec<NonMatchedBranch>,
-        source: Source,
+        source: Option<Source>,
     },
     Condition {
         original_expression: String,
         expression: String,
         result: bool,
-        source: Source,
+        source: Option<Source>,
         operands: Vec<ProofNode>,
     },
     Veto {
         message: Option<String>,
-        source: Source,
+        source: Option<Source>,
     },
 }
 
@@ -62,7 +62,7 @@ pub struct Branch {
     pub condition: Box<ProofNode>,
     pub result: Box<ProofNode>,
     pub clause_index: Option<usize>,
-    pub source: Source,
+    pub source: Option<Source>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,5 +70,5 @@ pub struct NonMatchedBranch {
     pub condition: Box<ProofNode>,
     pub result: Option<Box<ProofNode>>,
     pub clause_index: Option<usize>,
-    pub source: Source,
+    pub source: Option<Source>,
 }

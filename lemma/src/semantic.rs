@@ -22,7 +22,7 @@ pub struct LemmaDoc {
 pub struct LemmaFact {
     pub reference: FactReference,
     pub value: FactValue,
-    pub source: Source,
+    pub source: Option<Source>,
 }
 
 /// An unless clause that provides an alternative result
@@ -34,7 +34,7 @@ pub struct LemmaFact {
 pub struct UnlessClause {
     pub condition: Expression,
     pub result: Expression,
-    pub source: Source,
+    pub source: Option<Source>,
 }
 
 /// A rule with a single expression and optional unless clauses
@@ -43,20 +43,20 @@ pub struct LemmaRule {
     pub name: String,
     pub expression: Expression,
     pub unless_clauses: Vec<UnlessClause>,
-    pub source: Source,
+    pub source: Option<Source>,
 }
 
 /// An expression that can be evaluated, with source location
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Expression {
     pub kind: ExpressionKind,
-    pub source: Source,
+    pub source: Option<Source>,
 }
 
 impl Expression {
     /// Create a new expression with kind and source location
     #[must_use]
-    pub fn new(kind: ExpressionKind, source: Source) -> Self {
+    pub fn new(kind: ExpressionKind, source: Option<Source>) -> Self {
         Self { kind, source }
     }
 
@@ -244,7 +244,9 @@ pub struct RuleReference {
 ///
 /// Used in both FactPath and RulePath to represent document traversal.
 /// Each segment contains a fact name that points to a document.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct PathSegment {
     /// Fact name at this segment
     pub fact: String,
@@ -325,7 +327,9 @@ impl FactPath {
 ///
 /// Used after planning to represent fully resolved rule references.
 /// Public because used in ExecutionPlan and evaluation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct RulePath {
     /// Path segments: each segment is a fact name that points to a document
     pub segments: Vec<PathSegment>,
@@ -1493,21 +1497,12 @@ impl LemmaFact {
         Self {
             reference,
             value,
-            source: Source::new(
-                "<unknown>",
-                crate::parsing::ast::Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "unknown",
-            ),
+            source: None,
         }
     }
 
     #[must_use]
-    pub fn with_source(mut self, source: Source) -> Self {
+    pub fn with_source(mut self, source: Option<Source>) -> Self {
         self.source = source;
         self
     }
@@ -2359,7 +2354,9 @@ rule net_multiplier = 1 - discount
         let mut engine = crate::Engine::new();
         engine.add_lemma_code(code, "test.lemma").unwrap();
 
-        let response = engine.evaluate("pricing", vec![], std::collections::HashMap::new()).unwrap();
+        let response = engine
+            .evaluate("pricing", vec![], std::collections::HashMap::new())
+            .unwrap();
         let result = response
             .results
             .get("net_multiplier")
@@ -2388,7 +2385,9 @@ rule is_heavy = weight > 5 kilograms
         let mut engine = crate::Engine::new();
         engine.add_lemma_code(code, "test.lemma").unwrap();
 
-        let response = engine.evaluate("shipping", vec![], std::collections::HashMap::new()).unwrap();
+        let response = engine
+            .evaluate("shipping", vec![], std::collections::HashMap::new())
+            .unwrap();
         let result = response
             .results
             .get("double_weight")
@@ -2408,9 +2407,7 @@ rule is_heavy = weight > 5 kilograms
         let is_heavy = response.results.get("is_heavy").unwrap();
         assert_eq!(
             is_heavy.result,
-            crate::OperationResult::Value(crate::LiteralValue::Boolean(
-                crate::BooleanValue::True
-            ))
+            crate::OperationResult::Value(crate::LiteralValue::Boolean(crate::BooleanValue::True))
         );
     }
 

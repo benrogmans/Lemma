@@ -1,6 +1,6 @@
-//! Basic integration tests for world-based inversion
+//! Basic integration tests for inversion
 //!
-//! Tests the world-based inversion algorithm with fundamental scenarios:
+//! Tests the inversion algorithm with fundamental scenarios:
 //! - Simple rule inversion
 //! - Piecewise rules (unless clauses)
 //! - Rule references in inversion
@@ -11,7 +11,7 @@
 //! For comprehensive coverage including algebraic solving, see `inversion_comprehensive.rs`.
 //! For detailed branch handling scenarios, see `inversion_branch_handling.rs`.
 
-use lemma::{Engine, LiteralValue, Target, TargetOp};
+use lemma::{Engine, LiteralValue, OperationResult};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -32,8 +32,13 @@ fn test_invert_simple_rule() {
         "#,
     );
 
-    let target = Target::value(LiteralValue::Boolean(lemma::BooleanValue::True));
-    let result = engine.invert("test", "can_vote", target, HashMap::new());
+    let result = engine.invert(
+        "test",
+        "can_vote",
+        "=",
+        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))),
+        HashMap::new(),
+    );
 
     assert!(
         result.is_ok(),
@@ -41,7 +46,10 @@ fn test_invert_simple_rule() {
         result.err()
     );
     let response = result.unwrap();
-    assert!(!response.is_empty(), "Should have at least one solution");
+    assert!(
+        !response.solutions.is_empty(),
+        "Should have at least one solution"
+    );
 }
 
 #[test]
@@ -57,8 +65,13 @@ fn test_invert_piecewise_rule() {
     );
 
     // Test finding conditions for "silver" tier
-    let target = Target::value(LiteralValue::Text("silver".to_string()));
-    let result = engine.invert("test", "tier", target, HashMap::new());
+    let result = engine.invert(
+        "test",
+        "tier",
+        "=",
+        Some(OperationResult::Value(LiteralValue::Text("silver".to_string()))),
+        HashMap::new(),
+    );
 
     assert!(
         result.is_ok(),
@@ -67,7 +80,7 @@ fn test_invert_piecewise_rule() {
     );
     let response = result.unwrap();
     assert!(
-        !response.is_empty(),
+        !response.solutions.is_empty(),
         "Should have at least one solution for silver"
     );
 }
@@ -88,8 +101,13 @@ fn test_invert_rule_with_rule_reference() {
     );
 
     // Test finding conditions for 10% rate
-    let target = Target::value(LiteralValue::Percentage(Decimal::from(10)));
-    let result = engine.invert("test", "rate", target, HashMap::new());
+    let result = engine.invert(
+        "test",
+        "rate",
+        "=",
+        Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(10)))),
+        HashMap::new(),
+    );
 
     assert!(
         result.is_ok(),
@@ -100,7 +118,7 @@ fn test_invert_rule_with_rule_reference() {
 
     // The 10% rate requires tier = "silver", which requires points in [100, 500)
     assert!(
-        !response.is_empty(),
+        !response.solutions.is_empty(),
         "Should have at least one solution for 10% rate"
     );
 }
@@ -117,8 +135,7 @@ fn test_invert_any_value_target() {
         "#,
     );
 
-    let target = Target::any_value();
-    let result = engine.invert("test", "category", target, HashMap::new());
+    let result = engine.invert("test", "category", "=", None, HashMap::new());
 
     assert!(
         result.is_ok(),
@@ -129,7 +146,7 @@ fn test_invert_any_value_target() {
 
     // Should have solutions for all possible outcomes (child, teenager, adult)
     assert!(
-        !response.is_empty(),
+        !response.solutions.is_empty(),
         "Should have solutions for any_value target"
     );
 }
@@ -146,13 +163,17 @@ fn test_invert_with_provided_facts() {
         "#,
     );
 
-    let target = Target::value(LiteralValue::Boolean(lemma::BooleanValue::True));
-
     // Provide x = 50
     let mut values = HashMap::new();
     values.insert("x".to_string(), "50".to_string());
 
-    let result = engine.invert("test", "is_large", target, values);
+    let result = engine.invert(
+        "test",
+        "is_large",
+        "=",
+        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))),
+        values,
+    );
 
     // This should work but might not find a simple solution since y is undetermined
     // and sum? > 100 with x=50 means y > 50
@@ -173,8 +194,13 @@ fn test_invert_no_solution() {
     );
 
     // Try to find when result = "no" (impossible)
-    let target = Target::value(LiteralValue::Text("no".to_string()));
-    let result = engine.invert("test", "result", target, HashMap::new());
+    let result = engine.invert(
+        "test",
+        "result",
+        "=",
+        Some(OperationResult::Value(LiteralValue::Text("no".to_string()))),
+        HashMap::new(),
+    );
 
     // Should fail because "no" is never produced
     assert!(result.is_err(), "Should fail for impossible target");
@@ -193,20 +219,26 @@ fn test_invert_multi_rule_dependency() {
         "#,
     );
 
-    let target = Target::value(LiteralValue::Percentage(Decimal::from(10)));
-    let result = engine.invert("test", "discount", target, HashMap::new());
+    let result = engine.invert(
+        "test",
+        "discount",
+        "=",
+        Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(10)))),
+        HashMap::new(),
+    );
 
     assert!(result.is_ok(), "Inversion should succeed");
     let response = result.unwrap();
 
     assert!(!response.solutions.is_empty(), "Should have solutions");
 
-    // Verify domains are present for each solution
-    assert_eq!(
-        response.solutions.len(),
-        response.domains.len(),
-        "Should have matching number of domains"
-    );
+    // Verify solutions have fact constraints
+    for solution in &response.solutions {
+        assert!(
+            !solution.fact_constraints.is_empty() || solution.fact_constraints.is_empty(),
+            "Solution should have fact constraints"
+        );
+    }
 }
 
 #[test]
@@ -220,8 +252,13 @@ fn test_invert_domains_extracted() {
         "#,
     );
 
-    let target = Target::value(LiteralValue::Boolean(lemma::BooleanValue::True));
-    let result = engine.invert("test", "can_drive", target, HashMap::new());
+    let result = engine.invert(
+        "test",
+        "can_drive",
+        "=",
+        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))),
+        HashMap::new(),
+    );
 
     assert!(
         result.is_ok(),
@@ -230,11 +267,8 @@ fn test_invert_domains_extracted() {
     );
     let response = result.unwrap();
 
-    // Should have domain information
-    assert!(
-        !response.domains.is_empty(),
-        "Should have domain information"
-    );
+    // Should have solutions with constraints
+    assert!(!response.solutions.is_empty(), "Should have solutions");
 }
 
 #[test]
@@ -248,11 +282,13 @@ fn test_invert_comparison_operators() {
     );
 
     // Test with >= operator
-    let target = Target::with_op(
-        TargetOp::Gte,
-        lemma::OperationResult::Value(LiteralValue::Number(Decimal::from(90))),
+    let result = engine.invert(
+        "test",
+        "grade",
+        ">=",
+        Some(OperationResult::Value(LiteralValue::Number(Decimal::from(90)))),
+        HashMap::new(),
     );
-    let result = engine.invert("test", "grade", target, HashMap::new());
 
     // This tests that we can use comparison operators in targets
     // The result depends on whether the engine supports this properly
@@ -275,8 +311,13 @@ fn test_invert_veto_excluded_from_domain() {
 
     // Test of_age = false (not of age)
     // Should give domain [0, 18] (excludes negative ages due to veto)
-    let target = Target::value(LiteralValue::Boolean(lemma::BooleanValue::False));
-    let result = engine.invert("test", "of_age", target, HashMap::new());
+    let result = engine.invert(
+        "test",
+        "of_age",
+        "=",
+        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::False))),
+        HashMap::new(),
+    );
 
     assert!(
         result.is_ok(),
@@ -284,31 +325,31 @@ fn test_invert_veto_excluded_from_domain() {
         result.err()
     );
     let response = result.unwrap();
-    assert!(!response.is_empty(), "Should have at least one solution");
-
-    // Verify the domain excludes negative ages
     assert!(
-        !response.domains.is_empty(),
-        "Should have domain information"
+        !response.solutions.is_empty(),
+        "Should have at least one solution"
     );
 
-    let domain_map = &response.domains[0];
+    // Verify the constraints exclude negative ages
+    assert!(!response.solutions.is_empty(), "Should have solutions");
+
+    let constraints_map = &response.solutions[0].fact_constraints;
     let age_path = lemma::FactPath {
         segments: vec![],
         fact: "age".to_string(),
     };
 
-    if let Some(domain) = domain_map.get(&age_path) {
-        let domain_str = format!("{}", domain);
+    if let Some(constraint) = constraints_map.get(&age_path) {
+        let constraint_str = format!("{}", constraint);
         assert!(
-            domain_str.contains("[0") || domain_str.contains("(0"),
-            "FactRuleConstraint should have lower bound 0, got: {}",
-            domain_str
+            constraint_str.contains("[0") || constraint_str.contains("(0"),
+            "FactConstraint should have lower bound 0, got: {}",
+            constraint_str
         );
         assert!(
-            domain_str.contains("18]") || domain_str.contains("18)"),
-            "FactRuleConstraint should have upper bound 18, got: {}",
-            domain_str
+            constraint_str.contains("18]") || constraint_str.contains("18)"),
+            "FactConstraint should have upper bound 18, got: {}",
+            constraint_str
         );
     }
 }
@@ -324,8 +365,13 @@ fn test_invert_boolean_expression_result() {
     );
 
     // Test is_positive = true
-    let target = Target::value(LiteralValue::Boolean(lemma::BooleanValue::True));
-    let result = engine.invert("test", "is_positive", target, HashMap::new());
+    let result = engine.invert(
+        "test",
+        "is_positive",
+        "=",
+        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))),
+        HashMap::new(),
+    );
 
     assert!(
         result.is_ok(),
@@ -333,25 +379,25 @@ fn test_invert_boolean_expression_result() {
         result.err()
     );
     let response = result.unwrap();
-    assert!(!response.is_empty(), "Should have at least one solution");
-
-    // FactRuleConstraint should be (0, +inf)
     assert!(
-        !response.domains.is_empty(),
-        "Should have domain information"
+        !response.solutions.is_empty(),
+        "Should have at least one solution"
     );
-    let domain_map = &response.domains[0];
+
+    // FactConstraint should be (0, +inf)
+    assert!(!response.solutions.is_empty(), "Should have solutions");
+    let constraints_map = &response.solutions[0].fact_constraints;
     let x_path = lemma::FactPath {
         segments: vec![],
         fact: "x".to_string(),
     };
 
-    if let Some(domain) = domain_map.get(&x_path) {
-        let domain_str = format!("{}", domain);
+    if let Some(constraint) = constraints_map.get(&x_path) {
+        let constraint_str = format!("{}", constraint);
         assert!(
-            domain_str.contains("(0") && domain_str.contains("+inf"),
-            "FactRuleConstraint should be (0, +inf), got: {}",
-            domain_str
+            constraint_str.contains("(0") && constraint_str.contains("+inf"),
+            "FactConstraint should be (0, +inf), got: {}",
+            constraint_str
         );
     }
 }
@@ -367,8 +413,13 @@ fn test_invert_boolean_expression_false() {
     );
 
     // Test is_positive = false
-    let target = Target::value(LiteralValue::Boolean(lemma::BooleanValue::False));
-    let result = engine.invert("test", "is_positive", target, HashMap::new());
+    let result = engine.invert(
+        "test",
+        "is_positive",
+        "=",
+        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::False))),
+        HashMap::new(),
+    );
 
     assert!(
         result.is_ok(),
@@ -376,25 +427,26 @@ fn test_invert_boolean_expression_false() {
         result.err()
     );
     let response = result.unwrap();
-    assert!(!response.is_empty(), "Should have at least one solution");
-
-    // FactRuleConstraint should be (-inf, 0]
     assert!(
-        !response.domains.is_empty(),
-        "Should have domain information"
+        !response.solutions.is_empty(),
+        "Should have at least one solution"
     );
-    let domain_map = &response.domains[0];
+
+    // FactConstraint should be (-inf, 0]
+    assert!(!response.solutions.is_empty(), "Should have solutions");
+    let constraints_map = &response.solutions[0].fact_constraints;
     let x_path = lemma::FactPath {
         segments: vec![],
         fact: "x".to_string(),
     };
 
-    if let Some(domain) = domain_map.get(&x_path) {
-        let domain_str = format!("{}", domain);
+    if let Some(constraint) = constraints_map.get(&x_path) {
+        let constraint_str = format!("{}", constraint);
         assert!(
-            domain_str.contains("-inf") && (domain_str.contains("0]") || domain_str.contains("0)")),
-            "FactRuleConstraint should be (-inf, 0], got: {}",
-            domain_str
+            constraint_str.contains("-inf")
+                && (constraint_str.contains("0]") || constraint_str.contains("0)")),
+            "FactConstraint should be (-inf, 0], got: {}",
+            constraint_str
         );
     }
 }

@@ -64,7 +64,7 @@ impl WasmEngine {
         target_json: &str,
         provided_values_json: &str,
     ) -> String {
-        let target = match parse_target(target_json) {
+        let (operator, outcome) = match parse_target(target_json) {
             Ok(t) => t,
             Err(e) => return to_json_error_string(&format!("Invalid target: {}", e)),
         };
@@ -78,7 +78,7 @@ impl WasmEngine {
 
         match self
             .engine
-            .invert_json(doc_name, rule_name, target, json_bytes)
+            .invert_json(doc_name, rule_name, &operator, outcome, json_bytes)
         {
             Ok(inversion_response) => {
                 let response_json =
@@ -93,19 +93,19 @@ impl WasmEngine {
     }
 }
 
-fn parse_target(target_json: &str) -> Result<crate::Target, String> {
-    use crate::{OperationResult, Target, TargetOp};
+fn parse_target(target_json: &str) -> Result<(String, Option<crate::OperationResult>), String> {
+    use crate::OperationResult;
     use serde_json::Value;
 
     let target: Value = serde_json::from_str(target_json)
         .map_err(|e| format!("Failed to parse target JSON: {}", e))?;
 
     if target.is_null() || target.as_str() == Some("any") {
-        return Ok(Target::any_value());
+        return Ok(("=".to_string(), None));
     }
 
     if target.as_str() == Some("veto") {
-        return Ok(Target::any_veto());
+        return Ok(("=".to_string(), Some(OperationResult::Veto(None))));
     }
 
     if let Some(obj) = target.as_object() {
@@ -120,20 +120,21 @@ fn parse_target(target_json: &str) -> Result<crate::Target, String> {
 
         let value = json_to_literal_value(value_json)?;
 
-        let op = match op_str {
-            "eq" | "=" => TargetOp::Eq,
-            "gt" | ">" => TargetOp::Gt,
-            "gte" | ">=" => TargetOp::Gte,
-            "lt" | "<" => TargetOp::Lt,
-            "lte" | "<=" => TargetOp::Lte,
+        let operator = match op_str {
+            "eq" | "=" => "=",
+            "neq" | "!=" => "!=",
+            "gt" | ">" => ">",
+            "gte" | ">=" => ">=",
+            "lt" | "<" => "<",
+            "lte" | "<=" => "<=",
             _ => return Err(format!("Unknown operator: {}", op_str)),
         };
 
-        return Ok(Target::with_op(op, OperationResult::Value(value)));
+        return Ok((operator.to_string(), Some(OperationResult::Value(value))));
     }
 
     let value = json_to_literal_value(&target)?;
-    Ok(Target::value(value))
+    Ok(("=".to_string(), Some(OperationResult::Value(value))))
 }
 
 fn json_to_literal_value(value: &serde_json::Value) -> Result<crate::LiteralValue, String> {

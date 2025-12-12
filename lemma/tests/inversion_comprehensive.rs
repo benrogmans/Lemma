@@ -1,4 +1,4 @@
-//! Comprehensive tests for the world-based inversion module
+//! Comprehensive tests for the inversion module
 //!
 //! This is the main test suite for inversion functionality. Tests cover:
 //! - Boolean fact combinations
@@ -9,10 +9,10 @@
 //! - Proof generation
 //! - Algebraic solving (solving equations like `price * 5 = 50` for price)
 //!
-//! For basic inversion API tests, see `inversion_world_basic.rs`.
+//! For basic inversion API tests, see `inversion_integration.rs`.
 //! For detailed branch handling scenarios, see `inversion_branch_handling.rs`.
 
-use lemma::{BooleanValue, Bound, FactRuleConstraint, Engine, FactPath, LiteralValue, OperationResult, Target};
+use lemma::{BooleanValue, Bound, Engine, FactConstraint, FactPath, LiteralValue, OperationResult};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -41,7 +41,8 @@ fn boolean_multiple_unless_clauses_specific_target() {
         .invert_strict(
             "shop",
             "discount",
-            Target::value(LiteralValue::Percentage(Decimal::from(10))),
+            "=",
+            Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(10)))),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -59,11 +60,12 @@ fn boolean_multiple_unless_clauses_specific_target() {
         "outcome should be 10%"
     );
 
-    // Verify the domain contains is_member constraint
-    let domains = &response.domains[0];
+    // Verify the solution contains is_member constraint
     assert!(
-        domains.contains_key(&FactPath::local("is_member".to_string())),
-        "domains should contain is_member"
+        solution
+            .fact_constraints
+            .contains_key(&FactPath::local("is_member".to_string())),
+        "solution should contain is_member constraint"
     );
 }
 
@@ -85,7 +87,7 @@ fn boolean_multiple_unless_clauses_any_value() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let response = engine
-        .invert_strict("shop", "discount", Target::any_value(), HashMap::new())
+        .invert_strict("shop", "discount", "=", None, HashMap::new())
         .expect("invert should succeed");
 
     assert_eq!(
@@ -141,7 +143,8 @@ fn text_enumeration_with_veto() {
         .invert_strict(
             "workflow",
             "can_proceed",
-            Target::value(LiteralValue::Boolean(BooleanValue::True)),
+            "=",
+            Some(OperationResult::Value(LiteralValue::Boolean(BooleanValue::True))),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -152,14 +155,14 @@ fn text_enumeration_with_veto() {
         "should have exactly 1 solution"
     );
 
-    let status_domain = response
-        .domains
-        .first()
-        .and_then(|d| d.get(&FactPath::local("status".to_string())));
+    let status_constraint = response.solutions.first().and_then(|s| {
+        s.fact_constraints
+            .get(&FactPath::local("status".to_string()))
+    });
 
     assert_eq!(
-        status_domain,
-        Some(&FactRuleConstraint::Enumeration(vec![LiteralValue::Text(
+        status_constraint,
+        Some(&FactConstraint::Enumeration(vec![LiteralValue::Text(
             "approved".to_string()
         )])),
         "status should be exactly 'approved'"
@@ -182,12 +185,7 @@ fn any_value_includes_veto_outcomes() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let response = engine
-        .invert_strict(
-            "workflow",
-            "can_proceed",
-            Target::any_value(),
-            HashMap::new(),
-        )
+        .invert_strict("workflow", "can_proceed", "=", None, HashMap::new())
         .expect("invert should succeed");
 
     assert_eq!(
@@ -221,7 +219,7 @@ fn veto_boundary_produces_range() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let response = engine
-        .invert_strict("shipping", "can_ship", Target::any_value(), HashMap::new())
+        .invert_strict("shipping", "can_ship", "=", None, HashMap::new())
         .expect("invert should succeed");
 
     assert_eq!(
@@ -244,24 +242,24 @@ fn veto_boundary_produces_range() {
         })
         .unwrap();
 
-    let weight_domain = response
-        .domains
-        .get(true_idx)
-        .and_then(|d| d.get(&FactPath::local("weight".to_string())));
+    let weight_constraint = response.solutions.get(true_idx).and_then(|s| {
+        s.fact_constraints
+            .get(&FactPath::local("weight".to_string()))
+    });
 
     assert!(
-        weight_domain.is_some(),
-        "should have weight domain for true solution"
+        weight_constraint.is_some(),
+        "should have weight constraint for true solution"
     );
-    let weight_domain = weight_domain.unwrap();
+    let weight_constraint = weight_constraint.unwrap();
 
-    match weight_domain {
-        FactRuleConstraint::Range { min, max } => {
+    match weight_constraint {
+        FactConstraint::Range { min, max } => {
             assert!(matches!(min, Bound::Unbounded), "min should be unbounded");
             match max {
                 Bound::Inclusive(v) => {
                     let is_100 = match v {
-                        LiteralValue::Number(n) => *n == Decimal::from(100),
+                        LiteralValue::Number(n) => n == &Decimal::from(100),
                         LiteralValue::Unit(u) => u.value() == Decimal::from(100),
                         _ => false,
                     };
@@ -270,11 +268,11 @@ fn veto_boundary_produces_range() {
                 _ => panic!("max should be Inclusive(100)"),
             }
         }
-        FactRuleConstraint::Complement(inner) => match inner.as_ref() {
-            FactRuleConstraint::Range { min, .. } => match min {
+        FactConstraint::Complement(inner) => match inner.as_ref() {
+            FactConstraint::Range { min, .. } => match min {
                 Bound::Exclusive(v) => {
                     let is_100 = match v {
-                        LiteralValue::Number(n) => *n == Decimal::from(100),
+                        LiteralValue::Number(n) => n == &Decimal::from(100),
                         LiteralValue::Unit(u) => u.value() == Decimal::from(100),
                         _ => false,
                     };
@@ -286,7 +284,7 @@ fn veto_boundary_produces_range() {
         },
         _ => panic!(
             "weight should be Range or Complement, got {:?}",
-            weight_domain
+            weight_constraint
         ),
     }
 }
@@ -322,7 +320,8 @@ fn rule_references_expand_correctly() {
         .invert_strict(
             "rewards",
             "rate",
-            Target::value(LiteralValue::Percentage(Decimal::from(15))),
+            "=",
+            Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(15)))),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -333,15 +332,15 @@ fn rule_references_expand_correctly() {
         "should have exactly 1 solution for 15%"
     );
 
-    let points_domain = response
-        .domains
-        .first()
-        .and_then(|d| d.get(&FactPath::local("points".to_string())));
+    let points_domain = response.solutions.first().and_then(|s| {
+        s.fact_constraints
+            .get(&FactPath::local("points".to_string()))
+    });
 
     assert!(points_domain.is_some(), "should have points domain");
 
     match points_domain.unwrap() {
-        FactRuleConstraint::Range { min, max } => {
+        FactConstraint::Range { min, max } => {
             match min {
                 Bound::Inclusive(v) => {
                     assert_eq!(*v, LiteralValue::number(500), "min should be 500");
@@ -389,7 +388,8 @@ fn complex_pricing_with_member_coupon_combo() {
         .invert_strict(
             "pricing",
             "discount",
-            Target::value(LiteralValue::Percentage(Decimal::from(20))),
+            "=",
+            Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(20)))),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -400,15 +400,15 @@ fn complex_pricing_with_member_coupon_combo() {
         "should have exactly 1 solution for 20%"
     );
 
-    // Verify domains contain both is_member and has_coupon constraints
-    let domains = &response.domains[0];
+    // Verify solution contains both is_member and has_coupon constraints
+    let constraints = &response.solutions[0].fact_constraints;
     assert!(
-        domains.contains_key(&FactPath::local("is_member".to_string())),
-        "domains should contain is_member"
+        constraints.contains_key(&FactPath::local("is_member".to_string())),
+        "solution should contain is_member"
     );
     assert!(
-        domains.contains_key(&FactPath::local("has_coupon".to_string())),
-        "domains should contain has_coupon"
+        constraints.contains_key(&FactPath::local("has_coupon".to_string())),
+        "solution should contain has_coupon"
     );
 }
 
@@ -444,7 +444,7 @@ fn complex_event_booking() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let response = engine
-        .invert_strict("booking", "can_book", Target::any_value(), HashMap::new())
+        .invert_strict("booking", "can_book", "=", None, HashMap::new())
         .expect("invert should succeed");
 
     assert!(
@@ -474,12 +474,7 @@ fn multi_branch_trade_in_values() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let response = engine
-        .invert(
-            "order",
-            "trade_in_value",
-            Target::any_value(),
-            HashMap::new(),
-        )
+        .invert("order", "trade_in_value", "=", None, HashMap::new())
         .expect("invert should succeed");
 
     assert_eq!(
@@ -531,7 +526,8 @@ fn multi_branch_specific_target_filtering() {
             .invert(
                 "order",
                 "trade_in_value",
-                Target::value(LiteralValue::number(target_value)),
+                "=",
+                Some(OperationResult::Value(LiteralValue::number(target_value))),
                 HashMap::new(),
             )
             .unwrap_or_else(|_| panic!("invert should succeed for value {}", target_value));
@@ -543,19 +539,19 @@ fn multi_branch_specific_target_filtering() {
             target_value
         );
 
-        // Check the domain contains the expected trade_in_condition value
-        let domains = &response.domains[0];
-        let trade_in_condition_domain = domains
+        // Check the solution contains the expected trade_in_condition value
+        let constraints = &response.solutions[0].fact_constraints;
+        let trade_in_condition_constraint = constraints
             .get(&FactPath::local("trade_in_condition".to_string()))
-            .expect("domains should contain trade_in_condition");
+            .expect("solution should contain trade_in_condition");
 
-        let domain_str = trade_in_condition_domain.to_string();
+        let constraint_str = trade_in_condition_constraint.to_string();
         assert!(
-            domain_str.contains(expected_condition_value),
-            "domain for target {} should contain '{}', got: {}",
+            constraint_str.contains(expected_condition_value),
+            "constraint for target {} should contain '{}', got: {}",
             target_value,
             expected_condition_value,
-            domain_str
+            constraint_str
         );
     }
 }
@@ -584,7 +580,8 @@ fn algebraic_solve_simple_multiplication() {
         .invert_strict(
             "shop",
             "total",
-            Target::value(LiteralValue::number(50)),
+            "=",
+            Some(OperationResult::Value(LiteralValue::number(50))),
             provided_values,
         )
         .expect("invert should succeed");
@@ -595,15 +592,15 @@ fn algebraic_solve_simple_multiplication() {
         "should have exactly 1 solution"
     );
 
-    let price_domain = response
-        .domains
-        .first()
-        .and_then(|d| d.get(&FactPath::local("price".to_string())));
+    let price_domain = response.solutions.first().and_then(|s| {
+        s.fact_constraints
+            .get(&FactPath::local("price".to_string()))
+    });
 
     assert!(price_domain.is_some(), "should have price domain");
 
     match price_domain.unwrap() {
-        FactRuleConstraint::Enumeration(values) => {
+        FactConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(values[0], LiteralValue::number(10), "price should be 10");
         }
@@ -627,7 +624,8 @@ fn algebraic_solve_simple_addition() {
         .invert_strict(
             "math",
             "result",
-            Target::value(LiteralValue::number(25)),
+            "=",
+            Some(OperationResult::Value(LiteralValue::number(25))),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -639,14 +637,14 @@ fn algebraic_solve_simple_addition() {
     );
 
     let x_domain = response
-        .domains
+        .solutions
         .first()
-        .and_then(|d| d.get(&FactPath::local("x".to_string())));
+        .and_then(|s| s.fact_constraints.get(&FactPath::local("x".to_string())));
 
     assert!(x_domain.is_some(), "should have x domain");
 
     match x_domain.unwrap() {
-        FactRuleConstraint::Enumeration(values) => {
+        FactConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(values[0], LiteralValue::number(15), "x should be 15");
         }
@@ -676,7 +674,8 @@ fn algebraic_solve_chained_operations() {
         .invert_strict(
             "payroll",
             "gross_pay",
-            Target::value(LiteralValue::number(1100)),
+            "=",
+            Some(OperationResult::Value(LiteralValue::number(1100))),
             provided_values,
         )
         .expect("invert should succeed");
@@ -687,15 +686,15 @@ fn algebraic_solve_chained_operations() {
         "should have exactly 1 solution"
     );
 
-    let hours_domain = response
-        .domains
-        .first()
-        .and_then(|d| d.get(&FactPath::local("hours".to_string())));
+    let hours_domain = response.solutions.first().and_then(|s| {
+        s.fact_constraints
+            .get(&FactPath::local("hours".to_string()))
+    });
 
     assert!(hours_domain.is_some(), "should have hours domain");
 
     match hours_domain.unwrap() {
-        FactRuleConstraint::Enumeration(values) => {
+        FactConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(values[0], LiteralValue::number(40), "hours should be 40");
         }
@@ -723,7 +722,8 @@ fn algebraic_solve_division() {
         .invert_strict(
             "recipe",
             "batches_needed",
-            Target::value(LiteralValue::number(5)),
+            "=",
+            Some(OperationResult::Value(LiteralValue::number(5))),
             provided_values,
         )
         .expect("invert should succeed");
@@ -734,15 +734,15 @@ fn algebraic_solve_division() {
         "should have exactly 1 solution"
     );
 
-    let total_domain = response
-        .domains
-        .first()
-        .and_then(|d| d.get(&FactPath::local("total_servings".to_string())));
+    let total_domain = response.solutions.first().and_then(|s| {
+        s.fact_constraints
+            .get(&FactPath::local("total_servings".to_string()))
+    });
 
     assert!(total_domain.is_some(), "should have total_servings domain");
 
     match total_domain.unwrap() {
-        FactRuleConstraint::Enumeration(values) => {
+        FactConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(
                 values[0],
@@ -777,7 +777,8 @@ fn algebraic_solve_subtraction_from_left() {
         .invert_strict(
             "finance",
             "final_price",
-            Target::value(LiteralValue::number(80)),
+            "=",
+            Some(OperationResult::Value(LiteralValue::number(80))),
             provided_values,
         )
         .expect("invert should succeed");
@@ -788,10 +789,10 @@ fn algebraic_solve_subtraction_from_left() {
         "should have exactly 1 solution"
     );
 
-    let original_domain = response
-        .domains
-        .first()
-        .and_then(|d| d.get(&FactPath::local("original_price".to_string())));
+    let original_domain = response.solutions.first().and_then(|s| {
+        s.fact_constraints
+            .get(&FactPath::local("original_price".to_string()))
+    });
 
     assert!(
         original_domain.is_some(),
@@ -799,7 +800,7 @@ fn algebraic_solve_subtraction_from_left() {
     );
 
     match original_domain.unwrap() {
-        FactRuleConstraint::Enumeration(values) => {
+        FactConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(
                 values[0],
@@ -834,7 +835,8 @@ fn algebraic_solve_subtraction_from_right() {
         .invert_strict(
             "finance",
             "remaining",
-            Target::value(LiteralValue::number(30)),
+            "=",
+            Some(OperationResult::Value(LiteralValue::number(30))),
             provided_values,
         )
         .expect("invert should succeed");
@@ -845,15 +847,15 @@ fn algebraic_solve_subtraction_from_right() {
         "should have exactly 1 solution"
     );
 
-    let payment_domain = response
-        .domains
-        .first()
-        .and_then(|d| d.get(&FactPath::local("payment".to_string())));
+    let payment_domain = response.solutions.first().and_then(|s| {
+        s.fact_constraints
+            .get(&FactPath::local("payment".to_string()))
+    });
 
     assert!(payment_domain.is_some(), "should have payment domain");
 
     match payment_domain.unwrap() {
-        FactRuleConstraint::Enumeration(values) => {
+        FactConstraint::Enumeration(values) => {
             assert_eq!(values.len(), 1, "should have exactly 1 value");
             assert_eq!(values[0], LiteralValue::number(70), "payment should be 70");
         }

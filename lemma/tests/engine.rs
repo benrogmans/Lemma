@@ -228,9 +228,18 @@ fn test_rules_sorted_by_source_order() {
     assert_eq!(response.results.len(), 3);
 
     // Verify all three rules are present
-    assert!(response.results.contains_key("z"), "Results should contain rule z");
-    assert!(response.results.contains_key("y"), "Results should contain rule y");
-    assert!(response.results.contains_key("x"), "Results should contain rule x");
+    assert!(
+        response.results.contains_key("z"),
+        "Results should contain rule z"
+    );
+    assert!(
+        response.results.contains_key("y"),
+        "Results should contain rule y"
+    );
+    assert!(
+        response.results.contains_key("x"),
+        "Results should contain rule x"
+    );
 
     // Verify source positions match source order (z, y, x in source)
     // Note: Results may be in dependency order, not source order, so we verify source positions directly
@@ -240,6 +249,8 @@ fn test_rules_sorted_by_source_order() {
         .unwrap()
         .rule
         .source
+        .as_ref()
+        .unwrap()
         .span
         .start;
     let y_pos = response
@@ -248,6 +259,8 @@ fn test_rules_sorted_by_source_order() {
         .unwrap()
         .rule
         .source
+        .as_ref()
+        .unwrap()
         .span
         .start;
     let x_pos = response
@@ -256,6 +269,8 @@ fn test_rules_sorted_by_source_order() {
         .unwrap()
         .rule
         .source
+        .as_ref()
+        .unwrap()
         .span
         .start;
 
@@ -327,7 +342,10 @@ fn test_evaluate_with_invalid_fact_override_type() {
                 lemma::OperationResult::Veto(_) => {
                     // Expected - type mismatch should cause veto
                 }
-                other => panic!("Expected veto for invalid fact override type, got: {:?}", other),
+                other => panic!(
+                    "Expected veto for invalid fact override type, got: {:?}",
+                    other
+                ),
             }
         }
         Err(_) => {
@@ -367,7 +385,9 @@ fn test_evaluate_with_missing_required_fact() {
         lemma::OperationResult::Veto(msg) => {
             let msg_str = msg.as_ref().map(|m| m.to_lowercase()).unwrap_or_default();
             assert!(
-                msg_str.contains("missing") || msg_str.contains("fact") || msg_str.contains("quantity"),
+                msg_str.contains("missing")
+                    || msg_str.contains("fact")
+                    || msg_str.contains("quantity"),
                 "Veto message should mention missing fact, got: {:?}",
                 msg
             );
@@ -379,7 +399,7 @@ fn test_evaluate_with_missing_required_fact() {
 #[test]
 fn test_evaluate_with_circular_rule_dependency() {
     let mut engine = Engine::new();
-    
+
     // This should fail at planning stage due to circular dependency
     let result = engine.add_lemma_code(
         r#"
@@ -395,7 +415,7 @@ fn test_evaluate_with_circular_rule_dependency() {
         result.is_err(),
         "Should fail to add document with circular rule dependency"
     );
-    
+
     let error_msg = result.unwrap_err().to_string().to_lowercase();
     assert!(
         error_msg.contains("circular") || error_msg.contains("dependency"),
@@ -478,7 +498,7 @@ fn test_evaluate_with_veto_result() {
 #[test]
 fn test_evaluate_with_cross_document_reference_error() {
     let mut engine = Engine::new();
-    
+
     // Add base document
     engine
         .add_lemma_code(
@@ -506,10 +526,12 @@ fn test_evaluate_with_cross_document_reference_error() {
         result.is_err(),
         "Should fail to add document with reference to nonexistent document"
     );
-    
+
     let error_msg = result.unwrap_err().to_string().to_lowercase();
     assert!(
-        error_msg.contains("not found") || error_msg.contains("nonexistent") || error_msg.contains("document"),
+        error_msg.contains("not found")
+            || error_msg.contains("nonexistent")
+            || error_msg.contains("document"),
         "Error message should mention document not found, got: {}",
         error_msg
     );

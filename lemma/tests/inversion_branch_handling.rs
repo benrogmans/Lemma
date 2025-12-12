@@ -1,4 +1,4 @@
-//! Tests for branch handling in the world-based inversion module
+//! Tests for branch handling in the inversion module
 //!
 //! Verifies that inversion correctly handles rules with multiple unless clauses,
 //! producing the right solutions for each branch. Focuses on:
@@ -9,10 +9,10 @@
 //! - Condition simplification with tautologies
 //! - Text enumeration with veto clauses
 //!
-//! For basic inversion API tests, see `inversion_world_basic.rs`.
+//! For basic inversion API tests, see `inversion_integration.rs`.
 //! For comprehensive coverage including algebraic solving, see `inversion_comprehensive.rs`.
 
-use lemma::{Bound, FactRuleConstraint, Engine, FactPath, LiteralValue, OperationResult, Target};
+use lemma::{Bound, Engine, FactConstraint, FactPath, LiteralValue, OperationResult};
 use std::collections::HashMap;
 
 /// Test that inversion produces solutions for all branches of a rule with multiple unless clauses
@@ -33,12 +33,7 @@ fn inversion_produces_all_branch_solutions() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let response = engine
-        .invert(
-            "order",
-            "trade_in_value",
-            Target::any_value(),
-            HashMap::new(),
-        )
+        .invert("order", "trade_in_value", "=", None, HashMap::new())
         .expect("invert should succeed");
 
     assert_eq!(
@@ -91,7 +86,8 @@ fn inversion_filters_to_specific_target() {
             .invert(
                 "order",
                 "trade_in_value",
-                Target::value(LiteralValue::number(target_value)),
+                "=",
+                Some(OperationResult::Value(LiteralValue::number(target_value))),
                 HashMap::new(),
             )
             .unwrap_or_else(|_| panic!("invert should succeed for value {}", target_value));
@@ -103,19 +99,19 @@ fn inversion_filters_to_specific_target() {
             target_value
         );
 
-        // Check the domain contains the expected trade_in_condition value
-        let domains = &response.domains[0];
-        let trade_in_condition_domain = domains
+        // Check the solution contains the expected trade_in_condition value
+        let constraints = &response.solutions[0].fact_constraints;
+        let trade_in_condition_constraint = constraints
             .get(&FactPath::local("trade_in_condition".to_string()))
-            .expect("domains should contain trade_in_condition");
+            .expect("solution should contain trade_in_condition");
 
-        let domain_str = trade_in_condition_domain.to_string();
+        let constraint_str = trade_in_condition_constraint.to_string();
         assert!(
-            domain_str.contains(expected_condition_value),
-            "domain for target {} should contain '{}', got: {}",
+            constraint_str.contains(expected_condition_value),
+            "constraint for target {} should contain '{}', got: {}",
             target_value,
             expected_condition_value,
-            domain_str
+            constraint_str
         );
 
         assert_eq!(
@@ -148,7 +144,8 @@ fn inversion_finds_default_value() {
         .invert(
             "order",
             "trade_in_value",
-            Target::value(LiteralValue::number(0)),
+            "=",
+            Some(OperationResult::Value(LiteralValue::number(0))),
             HashMap::new(),
         )
         .expect("invert should succeed for value 0");
@@ -159,17 +156,17 @@ fn inversion_finds_default_value() {
         "should have exactly 1 solution for default value 0"
     );
 
-    // Check the domain indicates has_trade_in should be false
-    let domains = &response.domains[0];
-    let has_trade_in_domain = domains
+    // Check the solution indicates has_trade_in should be false
+    let constraints = &response.solutions[0].fact_constraints;
+    let has_trade_in_constraint = constraints
         .get(&FactPath::local("has_trade_in".to_string()))
-        .expect("domains should contain has_trade_in");
+        .expect("solution should contain has_trade_in");
 
-    let domain_str = has_trade_in_domain.to_string();
+    let constraint_str = has_trade_in_constraint.to_string();
     assert!(
-        domain_str.contains("false"),
-        "domain for default should indicate has_trade_in is false, got: {}",
-        domain_str
+        constraint_str.contains("false"),
+        "constraint for default should indicate has_trade_in is false, got: {}",
+        constraint_str
     );
 }
 
@@ -191,23 +188,13 @@ fn inversion_generates_proofs() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let response = engine
-        .invert(
-            "order",
-            "trade_in_value",
-            Target::any_value(),
-            HashMap::new(),
-        )
+        .invert("order", "trade_in_value", "=", None, HashMap::new())
         .expect("invert should succeed");
 
-    // Verify we have solutions with domains
+    // Verify we have solutions
     assert!(
         !response.solutions.is_empty(),
         "Should have at least one solution"
-    );
-    assert_eq!(
-        response.solutions.len(),
-        response.domains.len(),
-        "Should have matching number of domains"
     );
 }
 
@@ -232,7 +219,8 @@ fn condition_with_tautology_simplifies_correctly() {
         .invert(
             "pricing",
             "ticket_price",
-            Target::value(LiteralValue::number(15)),
+            "=",
+            Some(OperationResult::Value(LiteralValue::number(15))),
             HashMap::new(),
         )
         .expect("invert should succeed for senior ticket price 15");
@@ -243,20 +231,21 @@ fn condition_with_tautology_simplifies_correctly() {
         "should have exactly 1 solution for senior price"
     );
 
-    let age_domain = response.domains[0]
+    let age_constraint = response.solutions[0]
+        .fact_constraints
         .get(&FactPath::local("age".to_string()))
-        .expect("should have domain for age");
+        .expect("should have constraint for age");
 
     assert!(
-        age_domain.is_satisfiable(),
-        "age domain must be satisfiable (not empty), got {:?}",
-        age_domain
+        age_constraint.is_satisfiable(),
+        "age constraint must be satisfiable (not empty), got {:?}",
+        age_constraint
     );
 
-    match age_domain {
-        FactRuleConstraint::Range { min, max } => {
+    match age_constraint {
+        FactConstraint::Range { min, max } => {
             assert!(
-                matches!(min, Bound::Exclusive(v) if matches!(v, LiteralValue::Number(n) if *n == rust_decimal::Decimal::from(65))),
+                matches!(min, Bound::Exclusive(v) if matches!(v, LiteralValue::Number(n) if n == &rust_decimal::Decimal::from(65))),
                 "age min bound should be exclusive 65, got {:?}",
                 min
             );
@@ -266,7 +255,7 @@ fn condition_with_tautology_simplifies_correctly() {
                 max
             );
         }
-        other => panic!("age domain should be Range (65, +inf), got {:?}", other),
+        other => panic!("age constraint should be Range (65, +inf), got {:?}", other),
     }
 }
 
@@ -291,7 +280,10 @@ fn text_equality_with_veto_clause_simplifies_correctly() {
         .invert(
             "menu",
             "price",
-            Target::value(LiteralValue::Number(rust_decimal::Decimal::new(350, 2))),
+            "=",
+            Some(OperationResult::Value(LiteralValue::Number(
+                rust_decimal::Decimal::new(350, 2),
+            ))),
             HashMap::new(),
         )
         .expect("invert should succeed for price 3.50");
@@ -302,18 +294,25 @@ fn text_equality_with_veto_clause_simplifies_correctly() {
         "should have 2 solutions (latte and cappuccino)"
     );
 
-    let drink_domains: Vec<&FactRuleConstraint> = response
-        .domains
+    let drink_constraints: Vec<&FactConstraint> = response
+        .solutions
         .iter()
-        .filter_map(|d| d.get(&FactPath::local("drink_type".to_string())))
+        .filter_map(|s| {
+            s.fact_constraints
+                .get(&FactPath::local("drink_type".to_string()))
+        })
         .collect();
 
-    assert_eq!(drink_domains.len(), 2, "should have 2 drink_type domains");
+    assert_eq!(
+        drink_constraints.len(),
+        2,
+        "should have 2 drink_type constraints"
+    );
 
-    let domain_values: Vec<String> = drink_domains
+    let constraint_values: Vec<String> = drink_constraints
         .iter()
-        .filter_map(|d| {
-            if let FactRuleConstraint::Enumeration(vals) = d {
+        .filter_map(|c| {
+            if let FactConstraint::Enumeration(vals) = c {
                 vals.first().map(|v| v.to_string())
             } else {
                 None
@@ -322,11 +321,11 @@ fn text_equality_with_veto_clause_simplifies_correctly() {
         .collect();
 
     assert!(
-        domain_values.contains(&"\"latte\"".to_string()),
-        "should have latte domain"
+        constraint_values.contains(&"\"latte\"".to_string()),
+        "should have latte constraint"
     );
     assert!(
-        domain_values.contains(&"\"cappuccino\"".to_string()),
-        "should have cappuccino domain"
+        constraint_values.contains(&"\"cappuccino\"".to_string()),
+        "should have cappuccino constraint"
     );
 }

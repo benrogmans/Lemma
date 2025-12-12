@@ -66,7 +66,7 @@ pub use error::LemmaError;
 pub use evaluation::operations::{ComputationKind, OperationKind, OperationRecord};
 pub use evaluation::proof;
 pub use evaluation::response::{Facts, Response, RuleResult};
-pub use inversion::{Bound, FactConstraint, InversionResponse, Solution, Target, TargetOp};
+pub use inversion::{invert, Bound, FactConstraint, InversionResponse, Solution};
 pub use limits::ResourceLimits;
 pub use parsing::parse;
 pub use parsing::{ExpressionDepthTracker, Source, Span};

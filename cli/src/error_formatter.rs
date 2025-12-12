@@ -7,6 +7,10 @@ pub fn format_error(error: &LemmaError) -> String {
         LemmaError::Parse(details)
         | LemmaError::Semantic(details)
         | LemmaError::Runtime(details) => {
+            let Some(source) = &details.source else {
+                return format!("{error}");
+            };
+
             let mut output = Vec::new();
 
             let error_type = match error {
@@ -16,35 +20,24 @@ pub fn format_error(error: &LemmaError) -> String {
                 _ => unreachable!(),
             };
 
-            let doc_line = if details.source.span.line >= details.doc_start_line {
-                details.source.span.line - details.doc_start_line + 1
+            let doc_line = if source.span.line >= details.doc_start_line {
+                source.span.line - details.doc_start_line + 1
             } else {
-                details.source.span.line
+                source.span.line
             };
 
             let enhanced_message = format!(
                 "{error_type}: {} (in doc '{}' at line {}, file {}:{})",
-                details.message,
-                details.source.doc_name,
-                doc_line,
-                details.source.source_id,
-                details.source.span.line
+                details.message, source.doc_name, doc_line, source.source_id, source.span.line
             );
 
-            let mut report = Report::build(
-                ReportKind::Error,
-                &details.source.source_id,
-                details.source.span.start,
-            )
-            .with_message(enhanced_message)
-            .with_label(
-                Label::new((
-                    &details.source.source_id,
-                    details.source.span.start..details.source.span.end,
-                ))
-                .with_message("")
-                .with_color(Color::Red),
-            );
+            let mut report = Report::build(ReportKind::Error, &source.source_id, source.span.start)
+                .with_message(enhanced_message)
+                .with_label(
+                    Label::new((&source.source_id, source.span.start..source.span.end))
+                        .with_message("")
+                        .with_color(Color::Red),
+                );
 
             if let Some(suggestion) = &details.suggestion {
                 report = report.with_help(suggestion);
@@ -52,7 +45,7 @@ pub fn format_error(error: &LemmaError) -> String {
 
             match report.finish().write(
                 (
-                    &details.source.source_id,
+                    &source.source_id,
                     Source::from(details.source_text.as_ref()),
                 ),
                 &mut output,

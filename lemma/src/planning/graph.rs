@@ -120,7 +120,7 @@ pub struct RuleNode {
     /// All branches have explicit conditions - no Option<Expression> needed.
     /// Expressions are already converted (FactReference -> FactPath, RuleReference -> RulePath).
     pub branches: Vec<Branch>,
-    pub source: Source,
+    pub source: Option<Source>,
 
     pub depends_on_rules: HashSet<RulePath>,
 
@@ -171,7 +171,7 @@ fn build_suffix_or_conditions(
 /// Rule references (RulePath) remain as-is - they're not expanded here.
 fn normalize_rule_branches(
     branches: &[(Option<Expression>, Expression)],
-    source: &Source,
+    source: &Option<Source>,
 ) -> Vec<Branch> {
     let suffix_or = build_suffix_or_conditions(branches);
     let mut normalized = Vec::new();
@@ -244,12 +244,12 @@ impl Graph {
         };
 
         // Validate and compute execution order
-        graph.validate(all_docs)?;
+        graph.validate_and_sort(all_docs)?;
 
         Ok(graph)
     }
 
-    fn validate(&mut self, all_docs: &[LemmaDoc]) -> Result<(), Vec<LemmaError>> {
+    fn validate_and_sort(&mut self, all_docs: &[LemmaDoc]) -> Result<(), Vec<LemmaError>> {
         let mut errors = Vec::new();
 
         validate_document_interfaces(self, all_docs, &mut errors);
@@ -1364,14 +1364,14 @@ mod tests {
                 fact: name.to_string(),
             },
             value: FactValue::Literal(value),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         }
     }
 
     fn create_literal_expr(value: LiteralValue) -> Expression {
         Expression {
             kind: ExpressionKind::Literal(value),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         }
     }
 
@@ -1402,14 +1402,14 @@ mod tests {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
 
         let rule = LemmaRule {
             name: "is_adult".to_string(),
             expression: age_expr,
             unless_clauses: Vec::new(),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
         doc = doc.add_rule(rule);
 
@@ -1450,13 +1450,13 @@ mod tests {
             name: "test_rule".to_string(),
             expression: create_literal_expr(LiteralValue::Boolean(true.into())),
             unless_clauses: Vec::new(),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
         let rule2 = LemmaRule {
             name: "test_rule".to_string(),
             expression: create_literal_expr(LiteralValue::Boolean(false.into())),
             unless_clauses: Vec::new(),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
 
         doc = doc.add_rule(rule1);
@@ -1486,14 +1486,14 @@ mod tests {
                 segments: Vec::new(),
                 fact: "nonexistent".to_string(),
             }),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
 
         let rule = LemmaRule {
             name: "test_rule".to_string(),
             expression: missing_fact_expr,
             unless_clauses: Vec::new(),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
         doc = doc.add_rule(rule);
 
@@ -1502,9 +1502,10 @@ mod tests {
 
         let errors = result.unwrap_err();
         let error_strings: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
-        let has_missing_fact = error_strings
-            .iter()
-            .any(|e| e.contains("Fact 'nonexistent' not found") || (e.contains("not found") && e.contains("nonexistent")));
+        let has_missing_fact = error_strings.iter().any(|e| {
+            e.contains("Fact 'nonexistent' not found")
+                || (e.contains("not found") && e.contains("nonexistent"))
+        });
         assert!(
             has_missing_fact,
             "Should have error mentioning missing fact 'nonexistent'. Got errors: {:?}",
@@ -1522,7 +1523,7 @@ mod tests {
                 fact: "contract".to_string(),
             },
             value: FactValue::DocumentReference("nonexistent".to_string()),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
         doc = doc.add_fact(fact);
 
@@ -1545,14 +1546,14 @@ mod tests {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
 
         let rule = LemmaRule {
             name: "test_rule".to_string(),
             expression: age_expr,
             unless_clauses: Vec::new(),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
         doc = doc.add_rule(rule);
 
@@ -1577,14 +1578,14 @@ mod tests {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
 
         let rule1 = LemmaRule {
             name: "rule1".to_string(),
             expression: rule1_expr,
             unless_clauses: Vec::new(),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
         doc = doc.add_rule(rule1);
 
@@ -1593,14 +1594,14 @@ mod tests {
                 segments: Vec::new(),
                 rule: "rule1".to_string(),
             }),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
 
         let rule2 = LemmaRule {
             name: "rule2".to_string(),
             expression: rule2_expr,
             unless_clauses: Vec::new(),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
         doc = doc.add_rule(rule2);
 
@@ -1636,14 +1637,14 @@ mod tests {
                 segments: Vec::new(),
                 fact: "nonexistent".to_string(),
             }),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
 
         let rule = LemmaRule {
             name: "test_rule".to_string(),
             expression: missing_fact_expr,
             unless_clauses: Vec::new(),
-            source: create_test_source(),
+            source: Some(create_test_source()),
         };
         doc = doc.add_rule(rule);
 
@@ -1659,7 +1660,7 @@ mod tests {
             errors.len(),
             errors
         );
-        
+
         // Verify both specific errors are present
         let has_duplicate = errors
             .iter()
@@ -1667,7 +1668,7 @@ mod tests {
         let has_missing = errors
             .iter()
             .any(|e| e.to_string().contains("Fact 'nonexistent' not found"));
-        
+
         assert!(
             has_duplicate,
             "Should have duplicate fact error for 'age'. Errors: {:?}",
@@ -1739,9 +1740,11 @@ rule buggy_usage = base? * multiplier?
         // The error might be about rule reference instead of fact reference
         // Check if it mentions the fact names OR if it's a different error type
         let mentions_fact = err_msg.contains("base") || err_msg.contains("multiplier");
-        let indicates_fact_issue = err_msg.contains("fact") || err_msg.contains("?") || err_msg.contains("should not");
-        let is_rule_reference_error = err_msg.contains("rule") && (err_msg.contains("base") || err_msg.contains("multiplier"));
-        
+        let indicates_fact_issue =
+            err_msg.contains("fact") || err_msg.contains("?") || err_msg.contains("should not");
+        let is_rule_reference_error = err_msg.contains("rule")
+            && (err_msg.contains("base") || err_msg.contains("multiplier"));
+
         // Error should either mention fact reference issue OR be a rule reference error
         assert!(
             (mentions_fact && indicates_fact_issue) || is_rule_reference_error,
@@ -1771,10 +1774,14 @@ rule correct_usage = calculated? + 50
             "Should succeed when using ? for rule reference: {:?}",
             result
         );
-        
+
         // Verify the rule actually works by evaluating it
         let response = engine
-            .evaluate("test_validation", vec!["correct_usage".to_string()], HashMap::new())
+            .evaluate(
+                "test_validation",
+                vec!["correct_usage".to_string()],
+                HashMap::new(),
+            )
             .expect("Should evaluate successfully");
         let rule_result = response
             .results
@@ -1810,10 +1817,14 @@ rule correct_usage = base * multiplier
             "Should succeed when not using ? for fact reference: {:?}",
             result
         );
-        
+
         // Verify the rule actually works by evaluating it
         let response = engine
-            .evaluate("test_validation", vec!["correct_usage".to_string()], HashMap::new())
+            .evaluate(
+                "test_validation",
+                vec!["correct_usage".to_string()],
+                HashMap::new(),
+            )
             .expect("Should evaluate successfully");
         let rule_result = response
             .results
@@ -1923,8 +1934,11 @@ rule buggy = employee.salary? * 2
         // Error must mention the fact name
         // The error might be about rule reference instead, so check for either
         let mentions_fact = err_msg.contains("salary") || err_msg.contains("employee.salary");
-        let indicates_issue = err_msg.contains("fact") || err_msg.contains("?") || err_msg.contains("should not") || err_msg.contains("rule");
-        
+        let indicates_issue = err_msg.contains("fact")
+            || err_msg.contains("?")
+            || err_msg.contains("should not")
+            || err_msg.contains("rule");
+
         assert!(
             mentions_fact,
             "Error should mention fact name 'salary'. Got: {}",
@@ -2302,28 +2316,41 @@ rule rate_percentage = (tax / income) in percentage
             result.is_ok(),
             "Should allow separate rules with different types"
         );
-        
+
         // Verify both rules can be evaluated correctly
         let response = engine
-            .evaluate("test", vec!["rate_decimal".to_string(), "rate_percentage".to_string()], HashMap::new())
+            .evaluate(
+                "test",
+                vec!["rate_decimal".to_string(), "rate_percentage".to_string()],
+                HashMap::new(),
+            )
             .expect("Should evaluate successfully");
-        
+
         // rate_decimal = 20000 / 100000 = 0.2 (number)
-        let rate_decimal = response.results.get("rate_decimal").expect("Should have rate_decimal");
+        let rate_decimal = response
+            .results
+            .get("rate_decimal")
+            .expect("Should have rate_decimal");
         match &rate_decimal.result {
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
                 assert_eq!(*n, Decimal::from_str("0.2").unwrap());
             }
             other => panic!("rate_decimal should be 0.2 (number), got: {:?}", other),
         }
-        
+
         // rate_percentage = (20000 / 100000) in percentage = 20% (percentage)
-        let rate_percentage = response.results.get("rate_percentage").expect("Should have rate_percentage");
+        let rate_percentage = response
+            .results
+            .get("rate_percentage")
+            .expect("Should have rate_percentage");
         match &rate_percentage.result {
             crate::OperationResult::Value(crate::LiteralValue::Percentage(n)) => {
                 assert_eq!(*n, Decimal::from_str("20").unwrap());
             }
-            other => panic!("rate_percentage should be 20% (percentage), got: {:?}", other),
+            other => panic!(
+                "rate_percentage should be 20% (percentage), got: {:?}",
+                other
+            ),
         }
     }
 
@@ -2347,20 +2374,29 @@ rule adjusted_weight = weight
             result.is_ok(),
             "Should allow same category units (mass vs mass)"
         );
-        
+
         // Verify the rule evaluates correctly with unit conversion
         let response = engine
             .evaluate("test", vec!["adjusted_weight".to_string()], HashMap::new())
             .expect("Should evaluate successfully");
-        
-        let adjusted_weight = response.results.get("adjusted_weight").expect("Should have adjusted_weight");
+
+        let adjusted_weight = response
+            .results
+            .get("adjusted_weight")
+            .expect("Should have adjusted_weight");
         match &adjusted_weight.result {
-            crate::OperationResult::Value(crate::LiteralValue::Unit(crate::NumericUnit::Mass(value, unit))) => {
+            crate::OperationResult::Value(crate::LiteralValue::Unit(crate::NumericUnit::Mass(
+                value,
+                unit,
+            ))) => {
                 // weight = 50 kg, which is > 100 kg is false, so should return 50 kg
                 assert_eq!(*unit, crate::MassUnit::Kilogram);
                 assert_eq!(*value, Decimal::from_str("50").unwrap());
             }
-            other => panic!("adjusted_weight should be 50 kilograms (mass unit), got: {:?}", other),
+            other => panic!(
+                "adjusted_weight should be 50 kilograms (mass unit), got: {:?}",
+                other
+            ),
         }
     }
 
@@ -2380,13 +2416,16 @@ rule result = 5
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
         assert!(result.is_ok(), "Should allow consistent number types");
-        
+
         // Verify the rule evaluates correctly
         let response = engine
             .evaluate("test", vec!["result".to_string()], HashMap::new())
             .expect("Should evaluate successfully");
-        
-        let result_rule = response.results.get("result").expect("Should have result rule");
+
+        let result_rule = response
+            .results
+            .get("result")
+            .expect("Should have result rule");
         match &result_rule.result {
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
                 // condition = true, so "unless condition then 10" matches (last matching wins)
@@ -2412,13 +2451,16 @@ rule status = "pending"
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
         assert!(result.is_ok(), "Should allow consistent text types");
-        
+
         // Verify the rule evaluates correctly
         let response = engine
             .evaluate("test", vec!["status".to_string()], HashMap::new())
             .expect("Should evaluate successfully");
-        
-        let status_rule = response.results.get("status").expect("Should have status rule");
+
+        let status_rule = response
+            .results
+            .get("status")
+            .expect("Should have status rule");
         match &status_rule.result {
             crate::OperationResult::Value(crate::LiteralValue::Text(text)) => {
                 // condition = true, so "unless condition then 'approved'" matches (last matching wins)
@@ -2445,13 +2487,16 @@ rule check = x > 5
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
         assert!(result.is_ok(), "Should allow consistent boolean types");
-        
+
         // Verify the rule evaluates correctly
         let response = engine
             .evaluate("test", vec!["check".to_string()], HashMap::new())
             .expect("Should evaluate successfully");
-        
-        let check_rule = response.results.get("check").expect("Should have check rule");
+
+        let check_rule = response
+            .results
+            .get("check")
+            .expect("Should have check rule");
         match &check_rule.result {
             crate::OperationResult::Value(crate::LiteralValue::Boolean(b)) => {
                 // x = 10 > 5 is true, so unless y > 15 then y < 25 doesn't match (y=20 > 15), check = true
@@ -2476,11 +2521,15 @@ rule result = 100
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
 
-        assert!(result.is_err(), "Should reject mixing number and text types");
+        assert!(
+            result.is_err(),
+            "Should reject mixing number and text types"
+        );
         let err = result.unwrap_err().to_string().to_lowercase();
         // Error must mention both types involved
         assert!(
-            (err.contains("number") || err.contains("text")) && (err.contains("number") || err.contains("text")),
+            (err.contains("number") || err.contains("text"))
+                && (err.contains("number") || err.contains("text")),
             "Error should mention both 'number' and 'text' types. Got: {}",
             err
         );
@@ -2506,11 +2555,15 @@ rule result = "text"
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
 
-        assert!(result.is_err(), "Should reject mixing number and text types");
+        assert!(
+            result.is_err(),
+            "Should reject mixing number and text types"
+        );
         let err = result.unwrap_err().to_string().to_lowercase();
         // Error must mention both types involved
         assert!(
-            (err.contains("number") || err.contains("text")) && (err.contains("number") || err.contains("text")),
+            (err.contains("number") || err.contains("text"))
+                && (err.contains("number") || err.contains("text")),
             "Error should mention both 'number' and 'text' types. Got: {}",
             err
         );
@@ -2536,11 +2589,15 @@ rule result = 42
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
 
-        assert!(result.is_err(), "Should reject mixing number and text types");
+        assert!(
+            result.is_err(),
+            "Should reject mixing number and text types"
+        );
         let err = result.unwrap_err().to_string().to_lowercase();
         // Error must mention both types involved
         assert!(
-            (err.contains("number") || err.contains("text")) && (err.contains("number") || err.contains("text")),
+            (err.contains("number") || err.contains("text"))
+                && (err.contains("number") || err.contains("text")),
             "Error should mention both 'number' and 'text' types. Got: {}",
             err
         );
@@ -2567,8 +2624,11 @@ rule result = 1
 
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
-        assert!(result.is_ok(), "Should allow multiple unless clauses with consistent types");
-        
+        assert!(
+            result.is_ok(),
+            "Should allow multiple unless clauses with consistent types"
+        );
+
         // Verify the rule evaluates correctly
         // a = true, b = false
         // result = 1 (default)
@@ -2578,8 +2638,11 @@ rule result = 1
         let response = engine
             .evaluate("test", vec!["result".to_string()], HashMap::new())
             .expect("Should evaluate successfully");
-        
-        let result_rule = response.results.get("result").expect("Should have result rule");
+
+        let result_rule = response
+            .results
+            .get("result")
+            .expect("Should have result rule");
         match &result_rule.result {
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
                 assert_eq!(*n, Decimal::from_str("2").unwrap());
@@ -2605,11 +2668,15 @@ rule result = 1
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
 
-        assert!(result.is_err(), "Should reject mixing number and text types");
+        assert!(
+            result.is_err(),
+            "Should reject mixing number and text types"
+        );
         let err = result.unwrap_err().to_string().to_lowercase();
         // Error must mention both types involved
         assert!(
-            (err.contains("number") || err.contains("text")) && (err.contains("number") || err.contains("text")),
+            (err.contains("number") || err.contains("text"))
+                && (err.contains("number") || err.contains("text")),
             "Error should mention both 'number' and 'text' types. Got: {}",
             err
         );
@@ -2656,11 +2723,15 @@ rule result = 10
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
 
-        assert!(result.is_err(), "Should reject mixing number and text types");
+        assert!(
+            result.is_err(),
+            "Should reject mixing number and text types"
+        );
         let err = result.unwrap_err().to_string().to_lowercase();
         // Error must mention both types involved
         assert!(
-            (err.contains("number") || err.contains("text")) && (err.contains("number") || err.contains("text")),
+            (err.contains("number") || err.contains("text"))
+                && (err.contains("number") || err.contains("text")),
             "Error should mention both 'number' and 'text' types. Got: {}",
             err
         );
@@ -2722,11 +2793,15 @@ rule distance = 100 meters
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
 
-        assert!(result.is_err(), "Should reject mixing number and text types");
+        assert!(
+            result.is_err(),
+            "Should reject mixing number and text types"
+        );
         let err = result.unwrap_err().to_string().to_lowercase();
         // Error must mention both types involved
         assert!(
-            (err.contains("number") || err.contains("text")) && (err.contains("number") || err.contains("text")),
+            (err.contains("number") || err.contains("text"))
+                && (err.contains("number") || err.contains("text")),
             "Error should mention both 'number' and 'text' types. Got: {}",
             err
         );
@@ -2769,11 +2844,15 @@ rule weight = 10 kilograms
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
 
-        assert!(result.is_err(), "Should reject mixing number and text types");
+        assert!(
+            result.is_err(),
+            "Should reject mixing number and text types"
+        );
         let err = result.unwrap_err().to_string().to_lowercase();
         // Error must mention both types involved
         assert!(
-            (err.contains("number") || err.contains("text")) && (err.contains("number") || err.contains("text")),
+            (err.contains("number") || err.contains("text"))
+                && (err.contains("number") || err.contains("text")),
             "Error should mention both 'number' and 'text' types. Got: {}",
             err
         );

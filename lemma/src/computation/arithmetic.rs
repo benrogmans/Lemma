@@ -359,9 +359,7 @@ rule is_odd = (value % 2) == 1
         let is_even = response.results.get("is_even").unwrap();
         assert_eq!(
             is_even.result,
-            crate::OperationResult::Value(crate::LiteralValue::Boolean(
-                crate::BooleanValue::False
-            ))
+            crate::OperationResult::Value(crate::LiteralValue::Boolean(crate::BooleanValue::False))
         );
 
         let is_odd = response.results.get("is_odd").unwrap();
@@ -684,10 +682,7 @@ rule calculation = (x % y) + (2 ^ 3)
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
                 assert_eq!(*n, dec("108.5"), "price_with_tax should be exactly 108.5");
             }
-            other => panic!(
-                "Expected number for price_with_tax, got: {:?}",
-                other
-            ),
+            other => panic!("Expected number for price_with_tax, got: {:?}", other),
         }
 
         Ok(())
@@ -724,10 +719,7 @@ rule calculation = (x % y) + (2 ^ 3)
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
                 assert_eq!(*n, dec("60"), "50 + 20% should be exactly 60");
             }
-            other => panic!(
-                "Expected number for increased, got: {:?}",
-                other
-            ),
+            other => panic!("Expected number for increased, got: {:?}", other),
         }
 
         let decreased_result = response
@@ -740,10 +732,7 @@ rule calculation = (x % y) + (2 ^ 3)
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
                 assert_eq!(*n, dec("42.50"), "50 - 15% should be exactly 42.50");
             }
-            other => panic!(
-                "Expected number for decreased, got: {:?}",
-                other
-            ),
+            other => panic!("Expected number for decreased, got: {:?}", other),
         }
 
         let scaled_result = response
@@ -792,10 +781,7 @@ rule calculation = (x % y) + (2 ^ 3)
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
                 assert_eq!(*n, dec("850"), "1000 - 15% should be exactly 850");
             }
-            other => panic!(
-                "Expected number for after_bulk, got: {:?}",
-                other
-            ),
+            other => panic!("Expected number for after_bulk, got: {:?}", other),
         }
 
         let final_price_result = response
@@ -808,10 +794,7 @@ rule calculation = (x % y) + (2 ^ 3)
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
                 assert_eq!(*n, dec("807.50"), "850 - 5% should be exactly 807.50");
             }
-            other => panic!(
-                "Expected number for final_price, got: {:?}",
-                other
-            ),
+            other => panic!("Expected number for final_price, got: {:?}", other),
         }
 
         Ok(())
@@ -866,10 +849,7 @@ rule calculation = (x % y) + (2 ^ 3)
             crate::OperationResult::Value(crate::LiteralValue::Percentage(p)) => {
                 assert_eq!(*p, dec("10"), "15% - 5% should be exactly 10%");
             }
-            other => panic!(
-                "Expected percentage for net_rate, got: {:?}",
-                other
-            ),
+            other => panic!("Expected percentage for net_rate, got: {:?}", other),
         }
 
         let compound_result = response
@@ -882,10 +862,7 @@ rule calculation = (x % y) + (2 ^ 3)
             crate::OperationResult::Value(crate::LiteralValue::Percentage(p)) => {
                 assert_eq!(*p, dec("4"), "20% * 20% should be exactly 4%");
             }
-            other => panic!(
-                "Expected percentage for compound, got: {:?}",
-                other
-            ),
+            other => panic!("Expected percentage for compound, got: {:?}", other),
         }
 
         let ratio_result = response
@@ -947,10 +924,7 @@ rule calculation = (x % y) + (2 ^ 3)
             crate::OperationResult::Value(crate::LiteralValue::Percentage(p)) => {
                 assert_eq!(*p, dec("15"), "45% / 3 should be exactly 15%");
             }
-            other => panic!(
-                "Expected percentage for average, got: {:?}",
-                other
-            ),
+            other => panic!("Expected percentage for average, got: {:?}", other),
         }
 
         Ok(())
@@ -1134,7 +1108,11 @@ rule test_passes = after_second? == expected?
         let after_first = response.results.get("after_first").unwrap();
         match &after_first.result {
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
-                assert_eq!(*n, dec("80"), "after_first should be exactly 80 (100 - 20%)");
+                assert_eq!(
+                    *n,
+                    dec("80"),
+                    "after_first should be exactly 80 (100 - 20%)"
+                );
             }
             other => panic!("after_first should be 80 (number), got: {:?}", other),
         }
@@ -1142,7 +1120,11 @@ rule test_passes = after_second? == expected?
         let after_second = response.results.get("after_second").unwrap();
         match &after_second.result {
             crate::OperationResult::Value(crate::LiteralValue::Number(n)) => {
-                assert_eq!(*n, dec("72"), "after_second should be exactly 72 (80 - 10%)");
+                assert_eq!(
+                    *n,
+                    dec("72"),
+                    "after_second should be exactly 72 (80 - 10%)"
+                );
             }
             other => panic!("after_second should be 72 (number), got: {:?}", other),
         }
@@ -1342,7 +1324,10 @@ rule value = "default"
 
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
-        assert!(result.is_err(), "Should reject mixing text and number types");
+        assert!(
+            result.is_err(),
+            "Should reject mixing text and number types"
+        );
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
@@ -1362,7 +1347,10 @@ rule value = 2024-01-01
 
         let mut engine = Engine::new();
         let result = engine.add_lemma_code(code, "test.lemma");
-        assert!(result.is_err(), "Should reject mixing date and number types");
+        assert!(
+            result.is_err(),
+            "Should reject mixing date and number types"
+        );
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),

@@ -15,7 +15,11 @@ fn create_expression_with_location(
     let span = Span::from_pest_span(pair.as_span());
     Expression::new(
         kind,
-        Source::new(source_id.to_string(), span, doc_name.to_string()),
+        Some(Source::new(
+            source_id.to_string(),
+            span,
+            doc_name.to_string(),
+        )),
     )
 }
 
@@ -1222,7 +1226,7 @@ rule nested_ref = employee.salary"#;
     }
 
     #[test]
-    fn test_parenthesized_expression_edge_cases() {
+    fn test_parenthesized_expression_variants() {
         let test_cases = vec![
             ("(32 / 7) + 67", "division then addition"),
             ("(2 + 3) * (4 - 1)", "multiple paren groups"),

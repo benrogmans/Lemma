@@ -41,7 +41,11 @@ pub(crate) fn parse_rule_definition(
         name,
         expression,
         unless_clauses,
-        source: Source::new(source_id.to_string(), span, doc_name.to_string()),
+        source: Some(Source::new(
+            source_id.to_string(),
+            span,
+            doc_name.to_string(),
+        )),
     })
 }
 
@@ -77,7 +81,11 @@ fn parse_rule_expression(
                 let kind = ExpressionKind::Veto(VetoExpression { message });
                 expression = Some(Expression::new(
                     kind,
-                    Source::new(source_id.to_string(), veto_span, doc_name.to_string()),
+                    Some(Source::new(
+                        source_id.to_string(),
+                        veto_span,
+                        doc_name.to_string(),
+                    )),
                 ));
             }
             Rule::unless_statement => {
@@ -139,7 +147,11 @@ fn parse_unless_statement(
                 let kind = ExpressionKind::Veto(VetoExpression { message });
                 result = Some(Expression::new(
                     kind,
-                    Source::new(source_id.to_string(), veto_span, doc_name.to_string()),
+                    Some(Source::new(
+                        source_id.to_string(),
+                        veto_span,
+                        doc_name.to_string(),
+                    )),
                 ));
             }
             _ => {}
@@ -156,6 +168,10 @@ fn parse_unless_statement(
     Ok(UnlessClause {
         condition: cond,
         result: res,
-        source: Source::new(source_id.to_string(), span, doc_name.to_string()),
+        source: Some(Source::new(
+            source_id.to_string(),
+            span,
+            doc_name.to_string(),
+        )),
     })
 }

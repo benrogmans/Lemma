@@ -158,7 +158,6 @@ impl Evaluator {
                     source: exec_rule.source.clone(),
                 },
                 result,
-                facts: vec![],
                 operations: rule_operations,
                 proof: Some(proof),
             });

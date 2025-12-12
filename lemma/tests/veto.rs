@@ -451,7 +451,7 @@ rule double_value = value * 2
 #[test]
 fn test_veto_with_empty_string_message() {
     let code = r#"
-doc edge_case
+doc empty_message
 fact value = 0
 rule is_valid = value > 0
     unless value == 0 then veto ""
@@ -461,7 +461,7 @@ rule is_valid = value > 0
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
     let response = engine
-        .evaluate("edge_case", vec![], HashMap::new())
+        .evaluate("empty_message", vec![], HashMap::new())
         .unwrap();
     let rule_result = response
         .results
@@ -503,7 +503,7 @@ rule valid = age >= 18
 
 #[test]
 fn test_veto_with_very_long_message() {
-    let message = "This is a very long veto message that contains a lot of text to test how the system handles lengthy error messages. It includes multiple sentences and should be properly stored and returned. The system should handle this without any issues regardless of the message length. Testing edge cases is important for robust software.";
+    let message = "This is a very long veto message that contains a lot of text to test how the system handles lengthy error messages. It includes multiple sentences and should be properly stored and returned. The system should handle this without any issues regardless of the message length. Testing various inputs is important for robust software.";
 
     let code = format!(
         r#"

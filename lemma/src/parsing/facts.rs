@@ -31,11 +31,11 @@ pub(crate) fn parse_fact_definition(
 
     let mut fact = LemmaFact::new(FactReference::local(name), value);
     if let (Some(source_id), Some(doc_name)) = (source_id, doc_name) {
-        fact = fact.with_source(Source::new(
+        fact = fact.with_source(Some(Source::new(
             source_id.to_string(),
             span,
             doc_name.to_string(),
-        ));
+        )));
     }
     Ok(fact)
 }
@@ -69,11 +69,11 @@ pub(crate) fn parse_fact_override(
     let override_ref = FactReference::from_path(override_ref_path);
     let mut fact = LemmaFact::new(override_ref, value);
     if let (Some(source_id), Some(doc_name)) = (source_id, doc_name) {
-        fact = fact.with_source(Source::new(
+        fact = fact.with_source(Some(Source::new(
             source_id.to_string(),
             span,
             doc_name.to_string(),
-        ));
+        )));
     }
     Ok(fact)
 }

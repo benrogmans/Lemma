@@ -336,7 +336,7 @@ fn invert_command(
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
-    let target = parse_target(target_str)?;
+    let (operator, outcome) = parse_target(target_str)?;
 
     let given: HashMap<String, String> = facts
         .iter()
@@ -350,7 +350,7 @@ fn invert_command(
         })
         .collect();
 
-    let response = engine.invert(doc_name, rule_name, target, given)?;
+    let response = engine.invert(doc_name, rule_name, &operator, outcome, given)?;
 
     let formatter = Formatter;
     print!("{}", formatter.format_inversion_response(&response));
@@ -358,41 +358,35 @@ fn invert_command(
     Ok(())
 }
 
-fn parse_target(target_str: &str) -> Result<lemma::Target> {
-    use lemma::{OperationResult, Target, TargetOp};
+fn parse_target(target_str: &str) -> Result<(String, Option<lemma::OperationResult>)> {
+    use lemma::OperationResult;
 
     match target_str {
-        "any" => Ok(Target::any_value()),
-        "veto" => Ok(Target::any_veto()),
+        "any" => Ok(("=".to_string(), None)),
+        "veto" => Ok(("=".to_string(), Some(OperationResult::Veto(None)))),
         s if s.starts_with(">=") => {
             let value_str = &s[2..];
             let value = parse_literal_value(value_str)?;
-            Ok(Target::with_op(
-                TargetOp::Gte,
-                OperationResult::Value(value),
-            ))
+            Ok((">=".to_string(), Some(OperationResult::Value(value))))
         }
         s if s.starts_with("<=") => {
             let value_str = &s[2..];
             let value = parse_literal_value(value_str)?;
-            Ok(Target::with_op(
-                TargetOp::Lte,
-                OperationResult::Value(value),
-            ))
+            Ok(("<=".to_string(), Some(OperationResult::Value(value))))
         }
         s if s.starts_with(">") => {
             let value_str = &s[1..];
             let value = parse_literal_value(value_str)?;
-            Ok(Target::with_op(TargetOp::Gt, OperationResult::Value(value)))
+            Ok((">".to_string(), Some(OperationResult::Value(value))))
         }
         s if s.starts_with("<") => {
             let value_str = &s[1..];
             let value = parse_literal_value(value_str)?;
-            Ok(Target::with_op(TargetOp::Lt, OperationResult::Value(value)))
+            Ok(("<".to_string(), Some(OperationResult::Value(value))))
         }
         _ => {
             let value = parse_literal_value(target_str)?;
-            Ok(Target::value(value))
+            Ok(("=".to_string(), Some(OperationResult::Value(value))))
         }
     }
 }

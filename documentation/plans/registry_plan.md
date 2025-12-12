@@ -87,7 +87,7 @@ Add to `lemma/src/semantic.rs`:
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoteDoc {
     pub name: String,  // Full name including @ (e.g., "@org/workspace/pricing")
-    pub source: Source,
+    pub source: Option<Source>,
 }
 
 /// Fact value for remote document references
