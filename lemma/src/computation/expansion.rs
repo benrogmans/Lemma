@@ -1,419 +1,476 @@
-//! BDD-style expression reduction
+//! Pure algebraic expression expansion via distribution
 //!
-//! Algebraic reduction of expressions:
-//! - Boolean identity: `true AND x → x`, `false OR x → x`
-//! - Constant folding: `5 + 3 → 8`, `true AND false → false`
-//! - Double negation: `NOT(NOT(x)) → x`
+//! Transforms expressions into Disjunctive Normal Form (DNF) through:
+//! - **OR distribution**: `(A ∨ B) op C → (A op C) ∨ (B op C)`
+//! - **Operator pushing**: `(cond ∧ result) op value → cond ∧ (result op value)`
 //!
-//! Used during planning (compile-time) and inversion (query-time).
+//! No simplification or constant folding happens here - expansion only applies
+//! algebraic distribution rules. Simplification is handled separately.
+//!
+//! Uses fixed-point iteration to handle nested cases correctly.
 
-use super::{
-    arithmetic_operation, check_function_range_violation, comparison_operation, OperationResult,
-};
+use crate::parsing::source::Source;
 use crate::semantic::{
-    BooleanValue, ComparisonComputation, Expression, ExpressionKind, LiteralValue,
+    ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind,
 };
+use std::sync::Arc;
 
-/// Reduce an expression algebraically
-///
-/// Performs:
-/// - Boolean identity reduction
-/// - Constant folding for arithmetic and comparisons
-/// - Double negation elimination
-pub fn expand(expression: Expression) -> Expression {
-    match expression.kind {
-        ExpressionKind::LogicalAnd(left, right) => {
-            let left_expanded = expand(*left);
-            let right_expanded = expand(*right);
+/// Check if expression has OR at top level
+fn has_or_at_top(expr: &Expression) -> bool {
+    matches!(expr.kind, ExpressionKind::LogicalOr(_, _))
+}
 
-            // X ∧ false → false
-            if left_expanded.is_boolean_false() || right_expanded.is_boolean_false() {
-                return Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)),
-                    None,
-                );
-            }
+/// Check if expression has AND at top level
+fn has_and_at_top(expr: &Expression) -> bool {
+    matches!(expr.kind, ExpressionKind::LogicalAnd(_, _))
+}
 
-            // X ∧ true → X
-            if left_expanded.is_boolean_true() {
-                return right_expanded;
-            }
-            if right_expanded.is_boolean_true() {
-                return left_expanded;
-            }
+/// Pure constructor for arithmetic - no folding or simplification
+fn make_arithmetic(
+    left: Expression,
+    op: ArithmeticComputation,
+    right: Expression,
+    source: Option<Source>,
+) -> Expression {
+    Expression::new(
+        ExpressionKind::Arithmetic(Arc::new(left), op, Arc::new(right)),
+        source,
+    )
+}
 
-            // DNF: distribute AND over OR
-            // (A ∨ B) ∧ C → (A ∧ C) ∨ (B ∧ C)
-            if let ExpressionKind::LogicalOr(or_left, or_right) = left_expanded.kind {
-                let left_and = Expression::new(
-                    ExpressionKind::LogicalAnd(or_left, Box::new(right_expanded.clone())),
-                    None,
-                );
-                let right_and = Expression::new(
-                    ExpressionKind::LogicalAnd(or_right, Box::new(right_expanded)),
-                    None,
-                );
-                return expand(Expression::new(
-                    ExpressionKind::LogicalOr(Box::new(left_and), Box::new(right_and)),
-                    expression.source,
-                ));
-            }
+/// Pure constructor for comparison
+fn make_comparison(
+    left: Expression,
+    op: ComparisonComputation,
+    right: Expression,
+    source: Option<Source>,
+) -> Expression {
+    Expression::new(
+        ExpressionKind::Comparison(Arc::new(left), op, Arc::new(right)),
+        source,
+    )
+}
 
-            // C ∧ (A ∨ B) → (C ∧ A) ∨ (C ∧ B)
-            if let ExpressionKind::LogicalOr(or_left, or_right) = right_expanded.kind {
-                let left_and = Expression::new(
-                    ExpressionKind::LogicalAnd(Box::new(left_expanded.clone()), or_left),
-                    None,
-                );
-                let right_and = Expression::new(
-                    ExpressionKind::LogicalAnd(Box::new(left_expanded), or_right),
-                    None,
-                );
-                return expand(Expression::new(
-                    ExpressionKind::LogicalOr(Box::new(left_and), Box::new(right_and)),
-                    expression.source,
-                ));
-            }
+/// Pure constructor for OR
+fn make_or(
+    left: Expression,
+    right: Expression,
+    source: Option<Source>,
+) -> Expression {
+    Expression::new(
+        ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
+        source,
+    )
+}
 
-            Expression::new(
-                ExpressionKind::LogicalAnd(Box::new(left_expanded), Box::new(right_expanded)),
-                expression.source,
-            )
-        }
+/// Pure constructor for AND
+fn make_and(
+    left: Expression,
+    right: Expression,
+    source: Option<Source>,
+) -> Expression {
+    Expression::new(
+        ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right)),
+        source,
+    )
+}
 
+/// Flatten OR tree into a flat list of branches
+/// 
+/// Converts nested OR expressions like ((A ∨ B) ∨ C) into [A, B, C]
+fn flatten_or(expr: Expression) -> Vec<Expression> {
+    match expr.kind {
         ExpressionKind::LogicalOr(left, right) => {
-            let left_reduced = expand(*left);
-            let right_reduced = expand(*right);
-
-            // X ∨ true → true
-            if left_reduced.is_boolean_true() || right_reduced.is_boolean_true() {
-                return Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)),
-                    None,
-                );
-            }
-
-            // X ∨ false → X
-            if left_reduced.is_boolean_false() {
-                return right_reduced;
-            }
-            if right_reduced.is_boolean_false() {
-                return left_reduced;
-            }
-
-            Expression::new(
-                ExpressionKind::LogicalOr(Box::new(left_reduced), Box::new(right_reduced)),
-                expression.source,
-            )
+            let mut result = flatten_or(Arc::unwrap_or_clone(left));
+            result.extend(flatten_or(Arc::unwrap_or_clone(right)));
+            result
         }
+        _ => vec![expr],
+    }
+}
 
-        ExpressionKind::LogicalNegation(inner, negation_type) => {
-            // Apply De Morgan BEFORE expanding inner (to push negation down first)
-            match inner.kind {
-                // De Morgan: NOT(A ∨ B) → NOT(A) ∧ NOT(B)
-                ExpressionKind::LogicalOr(left, right) => {
-                    let not_left = Expression::new(
-                        ExpressionKind::LogicalNegation(left, negation_type.clone()),
-                        None,
-                    );
-                    let not_right = Expression::new(
-                        ExpressionKind::LogicalNegation(right, negation_type),
-                        None,
-                    );
-                    return expand(Expression::new(
-                        ExpressionKind::LogicalAnd(Box::new(not_left), Box::new(not_right)),
-                        expression.source,
-                    ));
-                }
-                // De Morgan: NOT(A ∧ B) → NOT(A) ∨ NOT(B)
-                ExpressionKind::LogicalAnd(left, right) => {
-                    let not_left = Expression::new(
-                        ExpressionKind::LogicalNegation(left, negation_type.clone()),
-                        None,
-                    );
-                    let not_right = Expression::new(
-                        ExpressionKind::LogicalNegation(right, negation_type),
-                        None,
-                    );
-                    return expand(Expression::new(
-                        ExpressionKind::LogicalOr(Box::new(not_left), Box::new(not_right)),
-                        expression.source,
-                    ));
-                }
-                // NOT(NOT(X)) → X
-                ExpressionKind::LogicalNegation(double_inner, _) => {
-                    return expand(*double_inner);
-                }
-                _ => {}
+/// Combine multiple expressions with OR
+///
+/// Takes a list of expressions and combines them with OR operators.
+/// Returns false literal if the list is empty.
+fn combine_with_or(expressions: Vec<Expression>) -> Expression {
+    if expressions.is_empty() {
+        return Expression::new(
+            ExpressionKind::Literal(crate::semantic::LiteralValue::Boolean(
+                crate::semantic::BooleanValue::False,
+            )),
+            None,
+        );
+    }
+
+    let mut iter = expressions.into_iter();
+    let first = iter.next().expect("checked non-empty above");
+
+    iter.fold(first, |acc, expr| {
+        Expression::new(
+            ExpressionKind::LogicalOr(Arc::new(acc), Arc::new(expr)),
+            None,
+        )
+    })
+}
+
+/// Cross-multiply two lists of expressions with an arithmetic operator
+///
+/// Creates all combinations: [A, B] × [C, D] with op → [A op C, A op D, B op C, B op D]
+/// Each product is recursively expanded.
+fn cross_multiply_arithmetic(
+    left_branches: Vec<Expression>,
+    op: ArithmeticComputation,
+    right_branches: Vec<Expression>,
+    source: Option<Source>,
+) -> Vec<Expression> {
+    let mut results = Vec::new();
+    for left in left_branches {
+        for right in &right_branches {
+            let product = make_arithmetic(left.clone(), op.clone(), right.clone(), source.clone());
+            results.push(expand(product));
+        }
+    }
+    results
+}
+
+/// Cross-multiply two lists of expressions with a comparison operator
+///
+/// Creates all combinations: [A, B] × [C, D] with op → [A op C, A op D, B op C, B op D]
+/// Each product is recursively expanded.
+fn cross_multiply_comparison(
+    left_branches: Vec<Expression>,
+    op: ComparisonComputation,
+    right_branches: Vec<Expression>,
+    source: Option<Source>,
+) -> Vec<Expression> {
+    let mut results = Vec::new();
+    for left in left_branches {
+        for right in &right_branches {
+            let product = make_comparison(left.clone(), op.clone(), right.clone(), source.clone());
+            results.push(expand(product));
+        }
+    }
+    results
+}
+
+/// Distribute OR through arithmetic: (A ∨ B) op C → (A op C) ∨ (B op C)
+///
+/// Uses flatten-then-cross-multiply to avoid redundant expansion of shared subexpressions
+fn distribute_or_through_arithmetic(
+    or_expr: Expression,
+    op: ArithmeticComputation,
+    right: Expression,
+    source: Option<Source>,
+) -> Expression {
+    let left_branches = flatten_or(or_expr);
+    let right_branches = if has_or_at_top(&right) {
+        flatten_or(right)
+    } else {
+        vec![right]
+    };
+    
+    let products = cross_multiply_arithmetic(left_branches, op, right_branches, source);
+    combine_with_or(products)
+}
+
+/// Distribute OR through arithmetic (right side): C op (A ∨ B) → (C op A) ∨ (C op B)
+///
+/// Uses flatten-then-cross-multiply to avoid redundant expansion of shared subexpressions
+fn distribute_or_through_arithmetic_right(
+    left: Expression,
+    op: ArithmeticComputation,
+    or_expr: Expression,
+    source: Option<Source>,
+) -> Expression {
+    let left_branches = if has_or_at_top(&left) {
+        flatten_or(left)
+    } else {
+        vec![left]
+    };
+    let right_branches = flatten_or(or_expr);
+    
+    let products = cross_multiply_arithmetic(left_branches, op, right_branches, source);
+    combine_with_or(products)
+}
+
+/// Distribute OR through comparison: (A ∨ B) op C → (A op C) ∨ (B op C)
+///
+/// Uses flatten-then-cross-multiply to avoid redundant expansion of shared subexpressions
+fn distribute_or_through_comparison(
+    or_expr: Expression,
+    op: ComparisonComputation,
+    right: Expression,
+    source: Option<Source>,
+) -> Expression {
+    let left_branches = flatten_or(or_expr);
+    let right_branches = if has_or_at_top(&right) {
+        flatten_or(right)
+    } else {
+        vec![right]
+    };
+    
+    let products = cross_multiply_comparison(left_branches, op, right_branches, source);
+    combine_with_or(products)
+}
+
+/// Distribute OR through comparison (right side): C op (A ∨ B) → (C op A) ∨ (C op B)
+///
+/// Uses flatten-then-cross-multiply to avoid redundant expansion of shared subexpressions
+fn distribute_or_through_comparison_right(
+    left: Expression,
+    op: ComparisonComputation,
+    or_expr: Expression,
+    source: Option<Source>,
+) -> Expression {
+    let left_branches = if has_or_at_top(&left) {
+        flatten_or(left)
+    } else {
+        vec![left]
+    };
+    let right_branches = flatten_or(or_expr);
+    
+    let products = cross_multiply_comparison(left_branches, op, right_branches, source);
+    combine_with_or(products)
+}
+
+/// Push operator into AND: (C ∧ R) op V → C ∧ (R op V)
+fn push_arithmetic_into_and(
+    and_expr: Expression,
+    op: ArithmeticComputation,
+    value: Expression,
+    source: Option<Source>,
+) -> Expression {
+    if let ExpressionKind::LogicalAnd(cond, result) = and_expr.kind {
+        let inner_op = make_arithmetic(Arc::unwrap_or_clone(result), op, value, source.clone());
+        make_and(Arc::unwrap_or_clone(cond), inner_op, source)
+    } else {
+        unreachable!("push_arithmetic_into_and requires AND expression")
+    }
+}
+
+/// Push operator into AND (right side): V op (C ∧ R) → C ∧ (V op R)
+fn push_arithmetic_into_and_right(
+    value: Expression,
+    op: ArithmeticComputation,
+    and_expr: Expression,
+    source: Option<Source>,
+) -> Expression {
+    if let ExpressionKind::LogicalAnd(cond, result) = and_expr.kind {
+        let inner_op = make_arithmetic(value, op, Arc::unwrap_or_clone(result), source.clone());
+        make_and(Arc::unwrap_or_clone(cond), inner_op, source)
+    } else {
+        unreachable!("push_arithmetic_into_and_right requires AND expression")
+    }
+}
+
+/// Push operator into AND: (C ∧ R) op V → C ∧ (R op V)
+fn push_comparison_into_and(
+    and_expr: Expression,
+    op: ComparisonComputation,
+    value: Expression,
+    source: Option<Source>,
+) -> Expression {
+    if let ExpressionKind::LogicalAnd(cond, result) = and_expr.kind {
+        let inner_op = make_comparison(Arc::unwrap_or_clone(result), op, value, source.clone());
+        make_and(Arc::unwrap_or_clone(cond), inner_op, source)
+    } else {
+        unreachable!("push_comparison_into_and requires AND expression")
+    }
+}
+
+/// Push operator into AND (right side): V op (C ∧ R) → C ∧ (V op R)
+fn push_comparison_into_and_right(
+    value: Expression,
+    op: ComparisonComputation,
+    and_expr: Expression,
+    source: Option<Source>,
+) -> Expression {
+    if let ExpressionKind::LogicalAnd(cond, result) = and_expr.kind {
+        let inner_op = make_comparison(value, op, Arc::unwrap_or_clone(result), source.clone());
+        make_and(Arc::unwrap_or_clone(cond), inner_op, source)
+    } else {
+        unreachable!("push_comparison_into_and_right requires AND expression")
+    }
+}
+
+/// Expand expression to DNF via single-pass recursion
+///
+/// Applies distribution rules recursively, checking for newly exposed ORs
+/// after each recursion step. Uses flatten-then-cross-multiply to avoid
+/// redundant expansion of shared subexpressions.
+pub fn expand(expr: Expression) -> Expression {
+    let source = expr.source.clone();
+
+    match expr.kind {
+        ExpressionKind::Arithmetic(left, op, right) => {
+            // Priority 1: OR distribution (must happen before recursion)
+            if has_or_at_top(&left) {
+                return distribute_or_through_arithmetic(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+            }
+            if has_or_at_top(&right) {
+                return distribute_or_through_arithmetic_right(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
             }
 
-            let inner_expanded = expand(*inner);
-
-            // NOT(true) → false
-            if inner_expanded.is_boolean_true() {
-                return Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)),
-                    None,
-                );
+            // Priority 2: Push into AND (equation branch structure)
+            if has_and_at_top(&left) {
+                return push_arithmetic_into_and(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+            }
+            if has_and_at_top(&right) {
+                return push_arithmetic_into_and_right(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
             }
 
-            // NOT(false) → true
-            if inner_expanded.is_boolean_false() {
-                return Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)),
-                    None,
-                );
+            // Priority 3: Recurse into children
+            let left_expanded = expand(Arc::unwrap_or_clone(left));
+            let right_expanded = expand(Arc::unwrap_or_clone(right));
+            
+            // Priority 4: Check if recursion exposed ORs at the top level
+            // This handles nested cases like (X + (A ∨ B)) where the OR becomes
+            // visible only after expanding the child expression
+            if has_or_at_top(&left_expanded) {
+                return distribute_or_through_arithmetic(left_expanded, op, right_expanded, source);
             }
-
-            Expression::new(
-                ExpressionKind::LogicalNegation(Box::new(inner_expanded), negation_type),
-                expression.source,
-            )
+            if has_or_at_top(&right_expanded) {
+                return distribute_or_through_arithmetic_right(left_expanded, op, right_expanded, source);
+            }
+            
+            make_arithmetic(left_expanded, op, right_expanded, source)
         }
 
         ExpressionKind::Comparison(left, op, right) => {
-            let left_reduced = expand(*left);
-            let right_reduced = expand(*right);
-
-            // (A ∨ B) op C → (A op C) ∨ (B op C)
-            if let ExpressionKind::LogicalOr(or_left, or_right) = left_reduced.kind {
-                let left_comparison = Expression::new(
-                    ExpressionKind::Comparison(or_left, op.clone(), Box::new(right_reduced.clone())),
-                    None,
-                );
-                let right_comparison = Expression::new(
-                    ExpressionKind::Comparison(or_right, op, Box::new(right_reduced)),
-                    None,
-                );
-                return expand(Expression::new(
-                    ExpressionKind::LogicalOr(Box::new(left_comparison), Box::new(right_comparison)),
-                    expression.source,
-                ));
+            // Priority 1: OR distribution
+            if has_or_at_top(&left) {
+                return distribute_or_through_comparison(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+            }
+            if has_or_at_top(&right) {
+                return distribute_or_through_comparison_right(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
             }
 
-            // C op (A ∨ B) → (C op A) ∨ (C op B)
-            // C op (A ∨ B) → (C op A) ∨ (C op B)
-            if let ExpressionKind::LogicalOr(or_left, or_right) = right_reduced.kind {
-                let left_comparison = Expression::new(
-                    ExpressionKind::Comparison(Box::new(left_reduced.clone()), op.clone(), or_left),
-                    None,
-                );
-                let right_comparison = Expression::new(
-                    ExpressionKind::Comparison(Box::new(left_reduced), op, or_right),
-                    None,
-                );
-                return expand(Expression::new(
-                    ExpressionKind::LogicalOr(Box::new(left_comparison), Box::new(right_comparison)),
-                    expression.source,
-                ));
+            // Priority 2: Push into AND
+            if has_and_at_top(&left) {
+                return push_comparison_into_and(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+            }
+            if has_and_at_top(&right) {
+                return push_comparison_into_and_right(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
             }
 
-            // Distribute comparison into AND (equation branch structure)
-            // (cond ∧ result) op value → cond ∧ (result op value)
-            if let ExpressionKind::LogicalAnd(and_left, and_right) = left_reduced.kind {
-                let inner_comparison = Expression::new(
-                    ExpressionKind::Comparison(and_right, op, Box::new(right_reduced)),
-                    None,
-                );
-                return expand(Expression::new(
-                    ExpressionKind::LogicalAnd(and_left, Box::new(inner_comparison)),
-                    expression.source,
-                ));
+            // Priority 3: Recurse into children
+            let left_expanded = expand(Arc::unwrap_or_clone(left));
+            let right_expanded = expand(Arc::unwrap_or_clone(right));
+            
+            // Priority 4: Check if recursion exposed ORs or ANDs at the top level
+            // This handles nested cases where structure becomes visible after expansion
+            if has_or_at_top(&left_expanded) {
+                return distribute_or_through_comparison(left_expanded, op, right_expanded, source);
             }
-
-            // Symmetric: value op (cond ∧ result) → cond ∧ (value op result)
-            if let ExpressionKind::LogicalAnd(and_left, and_right) = right_reduced.kind {
-                let inner_comparison = Expression::new(
-                    ExpressionKind::Comparison(Box::new(left_reduced), op, and_right),
-                    None,
-                );
-                return expand(Expression::new(
-                    ExpressionKind::LogicalAnd(and_left, Box::new(inner_comparison)),
-                    expression.source,
-                ));
+            if has_or_at_top(&right_expanded) {
+                return distribute_or_through_comparison_right(left_expanded, op, right_expanded, source);
             }
-
-            // Veto comparisons: veto can never equal a literal value
-            if matches!(&left_reduced.kind, ExpressionKind::Veto(_)) {
-                if matches!(&right_reduced.kind, ExpressionKind::Literal(_)) {
-                    return Expression::new(
-                        ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)),
-                        None,
-                    );
-                }
-                if matches!(&right_reduced.kind, ExpressionKind::Veto(_)) {
-                    return Expression::new(
-                        ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)),
-                        None,
-                    );
-                }
+            
+            // Also check for AND after recursion
+            if has_and_at_top(&left_expanded) {
+                return push_comparison_into_and(left_expanded, op, right_expanded, source);
             }
-            if matches!(&right_reduced.kind, ExpressionKind::Veto(_))
-                && matches!(&left_reduced.kind, ExpressionKind::Literal(_))
-            {
-                return Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)),
-                    None,
-                );
+            if has_and_at_top(&right_expanded) {
+                return push_comparison_into_and_right(left_expanded, op, right_expanded, source);
             }
-
-            // If both sides are literals, evaluate the comparison
-            if let (ExpressionKind::Literal(left_literal), ExpressionKind::Literal(right_literal)) =
-                (&left_reduced.kind, &right_reduced.kind)
-            {
-                let result = comparison_operation(left_literal, &op, right_literal);
-                if let OperationResult::Value(LiteralValue::Boolean(boolean_value)) = result {
-                    return Expression::new(
-                        ExpressionKind::Literal(LiteralValue::Boolean(boolean_value)),
-                        None,
-                    );
-                }
-            }
-
-            // Check function range violations (e.g., sin(x) > 2 is always false)
-            if check_range_violation(&left_reduced, &op, &right_reduced) {
-                return Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)),
-                    None,
-                );
-            }
-
-            Expression::new(
-                ExpressionKind::Comparison(
-                    Box::new(left_reduced),
-                    op,
-                    Box::new(right_reduced),
-                ),
-                expression.source,
-            )
+            
+            make_comparison(left_expanded, op, right_expanded, source)
         }
 
-        ExpressionKind::Arithmetic(left, op, right) => {
-            let left_reduced = expand(*left);
-            let right_reduced = expand(*right);
-
-            // (A ∨ B) op C → (A op C) ∨ (B op C)
-            // (A ∨ B) op C → (A op C) ∨ (B op C)
-            if let ExpressionKind::LogicalOr(or_left, or_right) = left_reduced.kind {
-                let left_arithmetic = Expression::new(
-                    ExpressionKind::Arithmetic(or_left, op.clone(), Box::new(right_reduced.clone())),
-                    None,
-                );
-                let right_arithmetic = Expression::new(
-                    ExpressionKind::Arithmetic(or_right, op, Box::new(right_reduced)),
-                    None,
-                );
-                return expand(Expression::new(
-                    ExpressionKind::LogicalOr(Box::new(left_arithmetic), Box::new(right_arithmetic)),
-                    expression.source,
-                ));
-            }
-
-            // C op (A ∨ B) → (C op A) ∨ (C op B)
-            // C op (A ∨ B) → (C op A) ∨ (C op B)
-            if let ExpressionKind::LogicalOr(or_left, or_right) = right_reduced.kind {
-                let left_arithmetic = Expression::new(
-                    ExpressionKind::Arithmetic(Box::new(left_reduced.clone()), op.clone(), or_left),
-                    None,
-                );
-                let right_arithmetic = Expression::new(
-                    ExpressionKind::Arithmetic(Box::new(left_reduced), op, or_right),
-                    None,
-                );
-                return expand(Expression::new(
-                    ExpressionKind::LogicalOr(Box::new(left_arithmetic), Box::new(right_arithmetic)),
-                    expression.source,
-                ));
-            }
-
-            // Distribute arithmetic into AND (equation branch structure)
-            // (cond ∧ result) op value → cond ∧ (result op value)
-            if let ExpressionKind::LogicalAnd(and_left, and_right) = left_reduced.kind {
-                let inner_arithmetic = Expression::new(
-                    ExpressionKind::Arithmetic(and_right, op, Box::new(right_reduced)),
-                    None,
-                );
-                return expand(Expression::new(
-                    ExpressionKind::LogicalAnd(and_left, Box::new(inner_arithmetic)),
-                    expression.source,
-                ));
-            }
-
-            // Symmetric: value op (cond ∧ result) → cond ∧ (value op result)
-            if let ExpressionKind::LogicalAnd(and_left, and_right) = right_reduced.kind {
-                let inner_arithmetic = Expression::new(
-                    ExpressionKind::Arithmetic(Box::new(left_reduced), op, and_right),
-                    None,
-                );
-                return expand(Expression::new(
-                    ExpressionKind::LogicalAnd(and_left, Box::new(inner_arithmetic)),
-                    expression.source,
-                ));
-            }
-
-            // If both sides are literals, evaluate the arithmetic
-            if let (ExpressionKind::Literal(left_literal), ExpressionKind::Literal(right_literal)) =
-                (&left_reduced.kind, &right_reduced.kind)
-            {
-                let result = arithmetic_operation(left_literal, &op, right_literal);
-                if let OperationResult::Value(value) = result {
-                    return Expression::new(ExpressionKind::Literal(value), None);
+        ExpressionKind::LogicalAnd(left, right) => {
+            let left_expanded = expand(Arc::unwrap_or_clone(left));
+            let right_expanded = expand(Arc::unwrap_or_clone(right));
+            
+            // Distribute OR through AND for DNF: (A ∨ B) ∧ C → (A ∧ C) ∨ (B ∧ C)
+            if has_or_at_top(&left_expanded) || has_or_at_top(&right_expanded) {
+                let left_branches = if has_or_at_top(&left_expanded) {
+                    flatten_or(left_expanded)
+                } else {
+                    vec![left_expanded]
+                };
+                let right_branches = if has_or_at_top(&right_expanded) {
+                    flatten_or(right_expanded)
+                } else {
+                    vec![right_expanded]
+                };
+                
+                // Cross product: combine each left with each right
+                let mut products = Vec::new();
+                for l in left_branches {
+                    for r in &right_branches {
+                        products.push(make_and(l.clone(), r.clone(), source.clone()));
+                    }
                 }
+                return combine_with_or(products);
             }
+            
+            make_and(left_expanded, right_expanded, source)
+        }
 
-            Expression::new(
-                ExpressionKind::Arithmetic(
-                    Box::new(left_reduced),
-                    op,
-                    Box::new(right_reduced),
+        ExpressionKind::LogicalOr(left, right) => {
+            let left_expanded = expand(Arc::unwrap_or_clone(left));
+            let right_expanded = expand(Arc::unwrap_or_clone(right));
+            make_or(left_expanded, right_expanded, source)
+        }
+
+        ExpressionKind::LogicalNegation(inner, negation_type) => {
+            let inner_expanded = expand(Arc::unwrap_or_clone(inner));
+            
+            // Apply De Morgan's law for DNF conversion
+            match &inner_expanded.kind {
+                ExpressionKind::LogicalAnd(left, right) => {
+                    // NOT(A AND B) → (NOT A) OR (NOT B)
+                    let not_left = Expression::new(
+                        ExpressionKind::LogicalNegation(left.clone(), negation_type.clone()),
+                        source.clone(),
+                    );
+                    let not_right = Expression::new(
+                        ExpressionKind::LogicalNegation(right.clone(), negation_type),
+                        source.clone(),
+                    );
+                    expand(make_or(not_left, not_right, source))
+                }
+                ExpressionKind::LogicalOr(left, right) => {
+                    // NOT(A OR B) → (NOT A) AND (NOT B)
+                    let not_left = Expression::new(
+                        ExpressionKind::LogicalNegation(left.clone(), negation_type.clone()),
+                        source.clone(),
+                    );
+                    let not_right = Expression::new(
+                        ExpressionKind::LogicalNegation(right.clone(), negation_type),
+                        source.clone(),
+                    );
+                    expand(make_and(not_left, not_right, source))
+                }
+                _ => Expression::new(
+                    ExpressionKind::LogicalNegation(Arc::new(inner_expanded), negation_type),
+                source,
                 ),
-                expression.source,
-            )
+            }
         }
 
         ExpressionKind::UnitConversion(inner, target) => {
-            let inner_reduced = expand(*inner);
+            let inner_expanded = expand(Arc::unwrap_or_clone(inner));
             Expression::new(
-                ExpressionKind::UnitConversion(Box::new(inner_reduced), target),
-                expression.source,
+                ExpressionKind::UnitConversion(Arc::new(inner_expanded), target),
+                source,
             )
         }
 
         ExpressionKind::MathematicalComputation(op, inner) => {
-            let inner_reduced = expand(*inner);
+            let inner_expanded = expand(Arc::unwrap_or_clone(inner));
             Expression::new(
-                ExpressionKind::MathematicalComputation(op, Box::new(inner_reduced)),
-                expression.source,
+                ExpressionKind::MathematicalComputation(op, Arc::new(inner_expanded)),
+                source,
             )
         }
 
-        // Leaf nodes - no reduction
-        _ => expression,
+        // Leaf nodes - no expansion needed
+        _ => expr,
     }
 }
 
-fn check_range_violation(
-    left: &Expression,
-    op: &ComparisonComputation,
-    right: &Expression,
-) -> bool {
-    // Check left is math function, right is literal
-    if let ExpressionKind::MathematicalComputation(math_op, _) = &left.kind {
-        if let ExpressionKind::Literal(value) = &right.kind {
-            return check_function_range_violation(math_op, op, value).is_some();
-        }
-    }
-
-    // Check right is math function, left is literal
-    if let ExpressionKind::MathematicalComputation(math_op, _) = &right.kind {
-        if let ExpressionKind::Literal(value) = &left.kind {
-            let reversed = reverse_comparison(op);
-            return check_function_range_violation(math_op, &reversed, value).is_some();
-        }
-    }
-
-    false
-}
 
 pub fn reverse_comparison(op: &ComparisonComputation) -> ComparisonComputation {
     match op {
@@ -429,19 +486,8 @@ pub fn reverse_comparison(op: &ComparisonComputation) -> ComparisonComputation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::semantic::ArithmeticComputation;
+    use crate::semantic::{EqualityNotation, FactPath, LiteralValue};
     use rust_decimal::Decimal;
-
-    fn literal_bool(value: bool) -> Expression {
-        Expression::new(
-            ExpressionKind::Literal(LiteralValue::Boolean(if value {
-                BooleanValue::True
-            } else {
-                BooleanValue::False
-            })),
-            None,
-        )
-    }
 
     fn literal_num(n: i64) -> Expression {
         Expression::new(
@@ -450,115 +496,13 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_reduce_and_with_true() {
-        // true AND x → x
-        let expr = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(true)), Box::new(literal_num(42))),
+    fn fact(name: &str) -> Expression {
+        Expression::new(
+            ExpressionKind::FactPath(FactPath::local(name.to_string())),
             None,
-        );
-        let simplified = expand(expr);
-        assert!(matches!(
-            simplified.kind,
-            ExpressionKind::Literal(LiteralValue::Number(_))
-        ));
+        )
     }
 
-    #[test]
-    fn test_reduce_and_with_false() {
-        // false AND x → false
-        let expr = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(false)), Box::new(literal_num(42))),
-            None,
-        );
-        let simplified = expand(expr);
-        assert!(simplified.is_boolean_false());
-    }
-
-    #[test]
-    fn test_reduce_or_with_true() {
-        // true OR x → true
-        let expr = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(literal_bool(true)), Box::new(literal_num(42))),
-            None,
-        );
-        let simplified = expand(expr);
-        assert!(simplified.is_boolean_true());
-    }
-
-    #[test]
-    fn test_reduce_or_with_false() {
-        // false OR x → x
-        let expr = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(literal_bool(false)), Box::new(literal_num(42))),
-            None,
-        );
-        let simplified = expand(expr);
-        assert!(matches!(
-            simplified.kind,
-            ExpressionKind::Literal(LiteralValue::Number(_))
-        ));
-    }
-
-    #[test]
-    fn test_reduce_arithmetic() {
-        // 5 + 3 → 8
-        let expr = Expression::new(
-            ExpressionKind::Arithmetic(
-                Box::new(literal_num(5)),
-                ArithmeticComputation::Add,
-                Box::new(literal_num(3)),
-            ),
-            None,
-        );
-        let simplified = expand(expr);
-        match simplified.kind {
-            ExpressionKind::Literal(LiteralValue::Number(n)) => {
-                assert_eq!(n, Decimal::from(8));
-            }
-            _ => panic!("Expected number literal"),
-        }
-    }
-
-    #[test]
-    fn test_reduce_comparison_literals() {
-        use crate::semantic::{ComparisonComputation, EqualityNotation};
-
-        // 5 == 5 → true
-        let expr = Expression::new(
-            ExpressionKind::Comparison(
-                Box::new(literal_num(5)),
-                ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(literal_num(5)),
-            ),
-            None,
-        );
-        let simplified = expand(expr);
-        assert!(simplified.is_boolean_true());
-
-        // 5 == 3 → false
-        let expr = Expression::new(
-            ExpressionKind::Comparison(
-                Box::new(literal_num(5)),
-                ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(literal_num(3)),
-            ),
-            None,
-        );
-        let simplified = expand(expr);
-        assert!(simplified.is_boolean_false());
-    }
-
-    // ========================================================================
-    // Distribution Tests
-    // ========================================================================
-
-    /// Helper: check if expression is a LogicalOr
-    fn is_or(expr: &Expression) -> bool {
-        matches!(expr.kind, ExpressionKind::LogicalOr(_, _))
-    }
-
-    /// Helper: count OR branches in a DNF expression
     fn count_or_branches(expr: &Expression) -> usize {
         match &expr.kind {
             ExpressionKind::LogicalOr(left, right) => {
@@ -568,413 +512,186 @@ mod tests {
         }
     }
 
-    /// `((c₀ ∧ 10) ∨ (c₁ ∧ 20)) == 15` → false after reduction
-    ///
-    /// Both branches produce values (10 and 20) that don't equal 15.
-    #[test]
-    fn test_or_in_comparison_reduces_to_false() {
-        use crate::semantic::{ComparisonComputation, EqualityNotation, FactPath};
-
-        let c0 = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("c0".to_string())),
-            None,
-        );
-        let c1 = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("c1".to_string())),
-            None,
-        );
-
-        // (c₀ ∧ 10)
-        let branch0 = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(c0), Box::new(literal_num(10))),
-            None,
-        );
-
-        // (c₁ ∧ 20)
-        let branch1 = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(c1), Box::new(literal_num(20))),
-            None,
-        );
-
-        // ((c₀ ∧ 10) ∨ (c₁ ∧ 20))
-        let or_expr = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(branch0), Box::new(branch1)),
-            None,
-        );
-
-        // ((c₀ ∧ 10) ∨ (c₁ ∧ 20)) == 15
-        let comparison = Expression::new(
-            ExpressionKind::Comparison(
-                Box::new(or_expr),
-                ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(literal_num(15)),
-            ),
-            None,
-        );
-
-        let reduced = expand(comparison);
-
-        // Should reduce to false because:
-        // (c₀ ∧ 10 == 15) → (c₀ ∧ false) → false
-        // (c₁ ∧ 20 == 15) → (c₁ ∧ false) → false
-        // false ∨ false → false
-        assert!(
-            reduced.is_boolean_false(),
-            "((c₀ ∧ 10) ∨ (c₁ ∧ 20)) == 15 should reduce to false, got {:?}",
-            reduced.kind
-        );
+    fn is_or(expr: &Expression) -> bool {
+        matches!(expr.kind, ExpressionKind::LogicalOr(_, _))
     }
 
-    /// `((c₀ ∧ 10) ∨ (c₁ ∧ 20)) * x == 100` distributes into 2 branches
     #[test]
-    fn test_or_in_arithmetic_distributes() {
-        use crate::semantic::{ComparisonComputation, EqualityNotation, FactPath};
+    fn test_no_expansion_needed_for_simple_arithmetic() {
+        let expr = make_arithmetic(
+            literal_num(5),
+            ArithmeticComputation::Add,
+            literal_num(3),
+            None,
+        );
+        let expanded = expand(expr.clone());
+        assert!(expr.semantically_equal(&expanded));
+    }
 
-        let c0 = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("c0".to_string())),
-            None,
-        );
-        let c1 = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("c1".to_string())),
-            None,
-        );
-        let x = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("x".to_string())),
-            None,
-        );
+    #[test]
+    fn test_distribute_or_through_arithmetic_left() {
+        // (a ∨ b) + 1 → (a + 1) ∨ (b + 1)
+        let a = fact("a");
+        let b = fact("b");
+        let a_or_b = make_or(a, b, None);
+        let expr = make_arithmetic(a_or_b, ArithmeticComputation::Add, literal_num(1), None);
 
-        // (c₀ ∧ 10)
-        let branch0 = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(c0), Box::new(literal_num(10))),
-            None,
-        );
+        let expanded = expand(expr);
+        assert!(is_or(&expanded), "should produce OR expression");
+        assert_eq!(count_or_branches(&expanded), 2, "should have 2 branches");
+    }
 
-        // (c₁ ∧ 20)
-        let branch1 = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(c1), Box::new(literal_num(20))),
-            None,
-        );
+    #[test]
+    fn test_distribute_or_through_arithmetic_right() {
+        // 1 + (a ∨ b) → (1 + a) ∨ (1 + b)
+        let a = fact("a");
+        let b = fact("b");
+        let a_or_b = make_or(a, b, None);
+        let expr = make_arithmetic(literal_num(1), ArithmeticComputation::Add, a_or_b, None);
 
-        // ((c₀ ∧ 10) ∨ (c₁ ∧ 20))
-        let or_expr = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(branch0), Box::new(branch1)),
-            None,
-        );
+        let expanded = expand(expr);
+        assert!(is_or(&expanded), "should produce OR expression");
+        assert_eq!(count_or_branches(&expanded), 2, "should have 2 branches");
+    }
 
-        // ((c₀ ∧ 10) ∨ (c₁ ∧ 20)) * x
-        let multiplication = Expression::new(
-            ExpressionKind::Arithmetic(
-                Box::new(or_expr),
-                ArithmeticComputation::Multiply,
-                Box::new(x),
-            ),
-            None,
-        );
-
-        // ((c₀ ∧ 10) ∨ (c₁ ∧ 20)) * x == 100
-        let comparison = Expression::new(
-            ExpressionKind::Comparison(
-                Box::new(multiplication),
-                ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(literal_num(100)),
-            ),
+    #[test]
+    fn test_distribute_or_through_comparison() {
+        // (a ∨ b) == 5 → (a == 5) ∨ (b == 5)
+        let a = fact("a");
+        let b = fact("b");
+        let a_or_b = make_or(a, b, None);
+        let expr = make_comparison(
+            a_or_b,
+            ComparisonComputation::Equal(EqualityNotation::Symbol),
+            literal_num(5),
             None,
         );
 
-        let reduced = expand(comparison);
+        let expanded = expand(expr);
+        assert!(is_or(&expanded), "should produce OR expression");
+        assert_eq!(count_or_branches(&expanded), 2, "should have 2 branches");
+    }
 
-        // Should distribute to OR of two branches
-        assert!(
-            is_or(&reduced),
-            "should produce OR expression, got {:?}",
-            reduced.kind
-        );
+    #[test]
+    fn test_nested_or_expands_via_iteration() {
+        // ((a ∨ b) + 1) * 2
+        // First iteration: (a + 1) ∨ (b + 1)
+        // Second iteration: ((a + 1) * 2) ∨ ((b + 1) * 2)
+        let a = fact("a");
+        let b = fact("b");
+        let a_or_b = make_or(a, b, None);
+        let add = make_arithmetic(a_or_b, ArithmeticComputation::Add, literal_num(1), None);
+        let mul = make_arithmetic(add, ArithmeticComputation::Multiply, literal_num(2), None);
 
+        let expanded = expand(mul);
+        assert!(is_or(&expanded), "should produce OR expression");
         assert_eq!(
-            count_or_branches(&reduced),
+            count_or_branches(&expanded),
             2,
-            "should have 2 OR branches"
+            "should have 2 branches after full expansion"
         );
     }
 
-    /// `x + ((a ∧ 5) ∨ (b ∧ 10)) == 20` distributes
     #[test]
-    fn test_or_in_right_operand_distributes() {
-        use crate::semantic::{ComparisonComputation, EqualityNotation, FactPath};
+    fn test_double_or_produces_four_branches() {
+        // (a ∨ b) + (c ∨ d) should produce 4 branches
+        let a = fact("a");
+        let b = fact("b");
+        let c = fact("c");
+        let d = fact("d");
 
-        let a = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("a".to_string())),
-            None,
-        );
-        let b = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("b".to_string())),
-            None,
-        );
-        let x = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("x".to_string())),
-            None,
-        );
+        let a_or_b = make_or(a, b, None);
+        let c_or_d = make_or(c, d, None);
+        let expr = make_arithmetic(a_or_b, ArithmeticComputation::Add, c_or_d, None);
 
-        // (a ∧ 5)
-        let branch_a = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(a), Box::new(literal_num(5))),
-            None,
-        );
-
-        // (b ∧ 10)
-        let branch_b = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(b), Box::new(literal_num(10))),
-            None,
-        );
-
-        // ((a ∧ 5) ∨ (b ∧ 10))
-        let or_expr = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(branch_a), Box::new(branch_b)),
-            None,
-        );
-
-        // x + ((a ∧ 5) ∨ (b ∧ 10))
-        let addition = Expression::new(
-            ExpressionKind::Arithmetic(
-                Box::new(x),
-                ArithmeticComputation::Add,
-                Box::new(or_expr),
-            ),
-            None,
-        );
-
-        // x + ((a ∧ 5) ∨ (b ∧ 10)) == 20
-        let comparison = Expression::new(
-            ExpressionKind::Comparison(
-                Box::new(addition),
-                ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(literal_num(20)),
-            ),
-            None,
-        );
-
-        let reduced = expand(comparison);
-
-        // Should distribute to OR of two branches
-        assert!(
-            is_or(&reduced),
-            "should produce OR expression, got {:?}",
-            reduced.kind
-        );
-
+        let expanded = expand(expr);
+        assert!(is_or(&expanded), "should produce OR expression");
         assert_eq!(
-            count_or_branches(&reduced),
-            2,
-            "should have 2 OR branches"
-        );
-    }
-
-    /// `((A ∨ B) + (C ∨ D)) == 10` → 4 branches after full distribution
-    #[test]
-    fn test_nested_or_produces_four_branches() {
-        use crate::semantic::{ComparisonComputation, EqualityNotation, FactPath};
-
-        let a = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("a".to_string())),
-            None,
-        );
-        let b = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("b".to_string())),
-            None,
-        );
-        let c = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("c".to_string())),
-            None,
-        );
-        let d = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("d".to_string())),
-            None,
-        );
-
-        // (A ∨ B)
-        let a_or_b = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(a), Box::new(b)),
-            None,
-        );
-
-        // (C ∨ D)
-        let c_or_d = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(c), Box::new(d)),
-            None,
-        );
-
-        // (A ∨ B) + (C ∨ D)
-        let addition = Expression::new(
-            ExpressionKind::Arithmetic(
-                Box::new(a_or_b),
-                ArithmeticComputation::Add,
-                Box::new(c_or_d),
-            ),
-            None,
-        );
-
-        // ((A ∨ B) + (C ∨ D)) == 10
-        let comparison = Expression::new(
-            ExpressionKind::Comparison(
-                Box::new(addition),
-                ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(literal_num(10)),
-            ),
-            None,
-        );
-
-        let reduced = expand(comparison);
-
-        // Should produce 4 branches: (A+C), (A+D), (B+C), (B+D)
-        assert!(
-            is_or(&reduced),
-            "should produce OR expression, got {:?}",
-            reduced.kind
-        );
-
-        assert_eq!(
-            count_or_branches(&reduced),
+            count_or_branches(&expanded),
             4,
-            "should have 4 OR branches after full distribution"
+            "should have 4 branches: (a+c), (a+d), (b+c), (b+d)"
         );
     }
 
-    /// `((a ∧ 3) ∨ (b ∧ 5)) * 5 == 25`
-    ///
-    /// After distribution and reduction:
-    /// - (a ∧ 3*5 == 25) → (a ∧ 15 == 25) → (a ∧ false) → false
-    /// - (b ∧ 5*5 == 25) → (b ∧ 25 == 25) → (b ∧ true) → b
-    /// Result: false ∨ b → b
     #[test]
-    fn test_constant_folding_with_distribution() {
-        use crate::semantic::{ComparisonComputation, EqualityNotation, FactPath};
+    fn test_push_operator_into_and() {
+        // (cond ∧ 10) + 5 → cond ∧ (10 + 5)
+        let cond = fact("cond");
+        let and_expr = make_and(cond, literal_num(10), None);
+        let expr = make_arithmetic(and_expr, ArithmeticComputation::Add, literal_num(5), None);
 
-        let a = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("a".to_string())),
-            None,
-        );
-        let b = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("b".to_string())),
-            None,
-        );
-
-        // (a ∧ 3)
-        let branch_a = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(a), Box::new(literal_num(3))),
-            None,
-        );
-
-        // (b ∧ 5)
-        let branch_b = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(b.clone()), Box::new(literal_num(5))),
-            None,
-        );
-
-        // ((a ∧ 3) ∨ (b ∧ 5))
-        let or_expr = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(branch_a), Box::new(branch_b)),
-            None,
-        );
-
-        // ((a ∧ 3) ∨ (b ∧ 5)) * 5
-        let multiplication = Expression::new(
-            ExpressionKind::Arithmetic(
-                Box::new(or_expr),
-                ArithmeticComputation::Multiply,
-                Box::new(literal_num(5)),
-            ),
-            None,
-        );
-
-        // ((a ∧ 3) ∨ (b ∧ 5)) * 5 == 25
-        let comparison = Expression::new(
-            ExpressionKind::Comparison(
-                Box::new(multiplication),
-                ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(literal_num(25)),
-            ),
-            None,
-        );
-
-        let reduced = expand(comparison);
-
-        // After distribution and constant folding:
-        // - (a ∧ 3) * 5 == 25 → (a ∧ 15) == 25 → distributes → (a == 25 ∧ 15 == 25)
-        // Actually the AND is inside, so: (a ∧ (3 * 5 == 25)) → (a ∧ false) → false
-        // - (b ∧ 5) * 5 == 25 → (b ∧ (5 * 5 == 25)) → (b ∧ true) → b
-        // Result: false ∨ b → b
-
-        // The result should be just `b` (a FactPath)
+        let expanded = expand(expr);
+        
+        // Should be AND at top level
         assert!(
-            matches!(reduced.kind, ExpressionKind::FactPath(_)),
-            "should reduce to just fact 'b', got {:?}",
-            reduced.kind
+            matches!(expanded.kind, ExpressionKind::LogicalAnd(_, _)),
+            "should have AND at top level"
         );
     }
 
-    /// Test that distribution is applied recursively
     #[test]
-    fn test_distribution_recursive() {
-        use crate::semantic::{ComparisonComputation, EqualityNotation, FactPath};
-
-        let a = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("a".to_string())),
-            None,
-        );
-        let b = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("b".to_string())),
-            None,
-        );
-
-        // (a ∨ b)
-        let a_or_b = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(a), Box::new(b)),
+    fn test_push_comparison_into_and() {
+        // (cond ∧ 10) == 5 → cond ∧ (10 == 5)
+        let cond = fact("cond");
+        let and_expr = make_and(cond, literal_num(10), None);
+        let expr = make_comparison(
+            and_expr,
+            ComparisonComputation::Equal(EqualityNotation::Symbol),
+            literal_num(5),
             None,
         );
 
-        // ((a ∨ b) + 1) - first level
-        let add_1 = Expression::new(
-            ExpressionKind::Arithmetic(
-                Box::new(a_or_b),
-                ArithmeticComputation::Add,
-                Box::new(literal_num(1)),
-            ),
-            None,
-        );
-
-        // (((a ∨ b) + 1) * 2) - nested arithmetic with OR inside
-        let mul_2 = Expression::new(
-            ExpressionKind::Arithmetic(
-                Box::new(add_1),
-                ArithmeticComputation::Multiply,
-                Box::new(literal_num(2)),
-            ),
-            None,
-        );
-
-        // ((((a ∨ b) + 1) * 2) == 10
-        let comparison = Expression::new(
-            ExpressionKind::Comparison(
-                Box::new(mul_2),
-                ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(literal_num(10)),
-            ),
-            None,
-        );
-
-        let reduced = expand(comparison);
-
-        // Should produce 2 branches after all distributions
+        let expanded = expand(expr);
+        
+        // Should be AND at top level
         assert!(
-            is_or(&reduced),
-            "should produce OR expression after recursive distribution"
+            matches!(expanded.kind, ExpressionKind::LogicalAnd(_, _)),
+            "should have AND at top level"
+        );
+    }
+
+    #[test]
+    fn test_complex_nested_expansion() {
+        // ((a ∨ b) * (c ∨ d)) == 100
+        // Should produce 4 branches with comparison pushed into each
+        let a = fact("a");
+        let b = fact("b");
+        let c = fact("c");
+        let d = fact("d");
+
+        let a_or_b = make_or(a, b, None);
+        let c_or_d = make_or(c, d, None);
+        let mul = make_arithmetic(a_or_b, ArithmeticComputation::Multiply, c_or_d, None);
+        let expr = make_comparison(
+            mul,
+            ComparisonComputation::Equal(EqualityNotation::Symbol),
+            literal_num(100),
+            None,
         );
 
+        let expanded = expand(expr);
+        assert!(is_or(&expanded), "should produce OR at top level");
         assert_eq!(
-            count_or_branches(&reduced),
-            2,
-            "should have 2 OR branches after recursive distribution"
+            count_or_branches(&expanded),
+            4,
+            "should have 4 branches after full expansion"
         );
+    }
+
+    #[test]
+    fn test_or_with_and_branches() {
+        // (c0 ∧ 10) ∨ (c1 ∧ 20) should stay as is (already in DNF)
+        let c0 = fact("c0");
+        let c1 = fact("c1");
+        
+        let branch0 = make_and(c0, literal_num(10), None);
+        let branch1 = make_and(c1, literal_num(20), None);
+        let expr = make_or(branch0, branch1, None);
+
+        let expanded = expand(expr.clone());
+        
+        // Should be unchanged (already in DNF form)
+        assert!(expr.semantically_equal(&expanded));
     }
 }
 

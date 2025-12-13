@@ -4,6 +4,7 @@ use crate::error::LemmaError;
 use crate::semantic::*;
 use crate::Source;
 use pest::iterators::Pair;
+use std::sync::Arc;
 
 /// Create an Expression with source location from a parser pair
 fn create_expression_with_location(
@@ -371,7 +372,7 @@ fn parse_and_operand(
                 source_id,
                 doc_name,
             )?;
-            let kind = ExpressionKind::Comparison(Box::new(left), operator, Box::new(right));
+            let kind = ExpressionKind::Comparison(Arc::new(left), operator, Arc::new(right));
             return Ok(create_expression_with_location(
                 kind, &pair, source_id, doc_name,
             ));
@@ -406,7 +407,7 @@ fn parse_and_expression(
     for right_pair in pairs {
         if right_pair.as_rule() == Rule::and_operand {
             let right = parse_and_operand(right_pair.clone(), depth_tracker, source_id, doc_name)?;
-            let kind = ExpressionKind::LogicalAnd(Box::new(left), Box::new(right));
+            let kind = ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right));
             left = create_expression_with_location(kind, &original_pair, source_id, doc_name);
         }
     }
@@ -448,7 +449,7 @@ pub(crate) fn parse_or_expression(
         if right_pair.as_rule() == Rule::and_expression {
             let right =
                 parse_and_expression(right_pair.clone(), depth_tracker, source_id, doc_name)?;
-            let kind = ExpressionKind::LogicalOr(Box::new(left), Box::new(right));
+            let kind = ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right));
             left = create_expression_with_location(kind, &original_or_pair, source_id, doc_name);
         }
     }
@@ -493,7 +494,7 @@ fn parse_arithmetic_expression(
             doc_name,
         )?;
 
-        let kind = ExpressionKind::Arithmetic(Box::new(left), operation, Box::new(right));
+        let kind = ExpressionKind::Arithmetic(Arc::new(left), operation, Arc::new(right));
         left = create_expression_with_location(kind, &pair, source_id, doc_name);
     }
 
@@ -538,7 +539,7 @@ fn parse_term(
             doc_name,
         )?;
 
-        let kind = ExpressionKind::Arithmetic(Box::new(left), operation, Box::new(right));
+        let kind = ExpressionKind::Arithmetic(Arc::new(left), operation, Arc::new(right));
         left = create_expression_with_location(kind, &pair, source_id, doc_name);
     }
 
@@ -573,9 +574,9 @@ fn parse_power(
             )?;
 
             let kind = ExpressionKind::Arithmetic(
-                Box::new(left),
+                Arc::new(left),
                 ArithmeticComputation::Power,
-                Box::new(right),
+                Arc::new(right),
             );
             return Ok(create_expression_with_location(
                 kind, &pair, source_id, doc_name,
@@ -629,9 +630,9 @@ fn parse_factor(
             doc_name,
         );
         let kind = ExpressionKind::Arithmetic(
-            Box::new(zero),
+            Arc::new(zero),
             ArithmeticComputation::Subtract,
-            Box::new(expr),
+            Arc::new(expr),
         );
         Ok(create_expression_with_location(
             kind, &pair, source_id, doc_name,
@@ -707,7 +708,7 @@ fn parse_comparison_expression(
             doc_name,
         )?;
 
-        let kind = ExpressionKind::Comparison(Box::new(left), operator, Box::new(right));
+        let kind = ExpressionKind::Comparison(Arc::new(left), operator, Arc::new(right));
         return Ok(create_expression_with_location(
             kind, &pair, source_id, doc_name,
         ));
@@ -759,7 +760,7 @@ fn parse_logical_expression(
                     || inner.as_rule() == Rule::primary
                 {
                     let operand = parse_expression(inner, depth_tracker, source_id, doc_name)?;
-                    let kind = ExpressionKind::MathematicalComputation(operator, Box::new(operand));
+                    let kind = ExpressionKind::MathematicalComputation(operator, Arc::new(operand));
                     return Ok(create_expression_with_location(
                         kind, &pair, source_id, doc_name,
                     ));
@@ -783,7 +784,7 @@ fn parse_logical_expression(
                     if inner.as_rule() == Rule::reference_expression {
                         let negated_expr = parse_reference_expression(inner, source_id, doc_name)?;
                         let kind = ExpressionKind::LogicalNegation(
-                            Box::new(negated_expr),
+                            Arc::new(negated_expr),
                             NegationType::Not,
                         );
                         return Ok(create_expression_with_location(
@@ -793,7 +794,7 @@ fn parse_logical_expression(
                         let negated_expr =
                             parse_primary(inner, depth_tracker, source_id, doc_name)?;
                         let kind = ExpressionKind::LogicalNegation(
-                            Box::new(negated_expr),
+                            Arc::new(negated_expr),
                             NegationType::Not,
                         );
                         return Ok(create_expression_with_location(
@@ -803,7 +804,7 @@ fn parse_logical_expression(
                         let negated_expr =
                             parse_expression(inner, depth_tracker, source_id, doc_name)?;
                         let kind = ExpressionKind::LogicalNegation(
-                            Box::new(negated_expr),
+                            Arc::new(negated_expr),
                             NegationType::Not,
                         );
                         return Ok(create_expression_with_location(
@@ -853,7 +854,7 @@ fn parse_logical_expression(
                     {
                         let operand = parse_expression(inner, depth_tracker, source_id, doc_name)?;
                         let kind =
-                            ExpressionKind::MathematicalComputation(operator, Box::new(operand));
+                            ExpressionKind::MathematicalComputation(operator, Arc::new(operand));
                         return Ok(create_expression_with_location(
                             kind, &node, source_id, doc_name,
                         ));
@@ -891,7 +892,7 @@ fn parse_comparable_base(
     if let Some(unit_pair) = pairs.next() {
         if unit_pair.as_rule() == Rule::unit_word {
             let target_unit = super::units::resolve_conversion_target(unit_pair.as_str())?;
-            let kind = ExpressionKind::UnitConversion(Box::new(arith_expr), target_unit);
+            let kind = ExpressionKind::UnitConversion(Arc::new(arith_expr), target_unit);
             return Ok(create_expression_with_location(
                 kind, &pair, source_id, doc_name,
             ));

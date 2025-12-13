@@ -23,10 +23,101 @@ pub use solver::SolveResult;
 
 use crate::computation::OperationResult;
 use crate::planning::ExecutionPlan;
-use crate::semantic::{ComparisonComputation, EqualityNotation};
+use crate::semantic::{Expression, ExpressionKind, FactValue};
 use crate::{LemmaError, LemmaResult};
+use std::sync::Arc;
 
-use solver::solve;
+use solver::solve_with_target;
+
+/// Substitute provided fact values into an equation
+fn substitute_fact_values(expression: Expression, plan: &ExecutionPlan) -> Expression {
+    let source = expression.source.clone();
+    
+    match &expression.kind {
+        ExpressionKind::FactPath(fact_path) => {
+            // Check if this fact has a literal value in the plan
+            if let Some(fact) = plan.facts.get(fact_path) {
+                if let FactValue::Literal(lit_val) = &fact.value {
+                    // Replace with literal value
+                    return Expression::new(
+                        ExpressionKind::Literal(lit_val.clone()),
+                        source,
+                    );
+                }
+            }
+            // No substitution, return as-is
+            expression
+        }
+        
+        // Recursively substitute in compound expressions
+        ExpressionKind::LogicalAnd(left, right) => {
+            let left_sub = substitute_fact_values(Arc::unwrap_or_clone(left.clone()), plan);
+            let right_sub = substitute_fact_values(Arc::unwrap_or_clone(right.clone()), plan);
+            Expression::new(
+                ExpressionKind::LogicalAnd(Arc::new(left_sub), Arc::new(right_sub)),
+                source,
+            )
+        }
+        
+        ExpressionKind::LogicalOr(left, right) => {
+            let left_sub = substitute_fact_values(Arc::unwrap_or_clone(left.clone()), plan);
+            let right_sub = substitute_fact_values(Arc::unwrap_or_clone(right.clone()), plan);
+            Expression::new(
+                ExpressionKind::LogicalOr(Arc::new(left_sub), Arc::new(right_sub)),
+                source,
+            )
+        }
+        
+        ExpressionKind::LogicalNegation(inner, negation_type) => {
+            let inner_sub = substitute_fact_values(Arc::unwrap_or_clone(inner.clone()), plan);
+            Expression::new(
+                ExpressionKind::LogicalNegation(Arc::new(inner_sub), negation_type.clone()),
+                source,
+            )
+        }
+        
+        ExpressionKind::Arithmetic(left, op, right) => {
+            let left_sub = substitute_fact_values(Arc::unwrap_or_clone(left.clone()), plan);
+            let right_sub = substitute_fact_values(Arc::unwrap_or_clone(right.clone()), plan);
+            Expression::new(
+                ExpressionKind::Arithmetic(Arc::new(left_sub), op.clone(), Arc::new(right_sub)),
+                source,
+            )
+        }
+        
+        ExpressionKind::Comparison(left, op, right) => {
+            let left_sub = substitute_fact_values(Arc::unwrap_or_clone(left.clone()), plan);
+            let right_sub = substitute_fact_values(Arc::unwrap_or_clone(right.clone()), plan);
+            Expression::new(
+                ExpressionKind::Comparison(Arc::new(left_sub), op.clone(), Arc::new(right_sub)),
+                source,
+            )
+        }
+        
+        ExpressionKind::UnitConversion(inner, target) => {
+            let inner_sub = substitute_fact_values(Arc::unwrap_or_clone(inner.clone()), plan);
+            Expression::new(
+                ExpressionKind::UnitConversion(Arc::new(inner_sub), target.clone()),
+                source,
+            )
+        }
+        
+        ExpressionKind::MathematicalComputation(op, inner) => {
+            let inner_sub = substitute_fact_values(Arc::unwrap_or_clone(inner.clone()), plan);
+            Expression::new(
+                ExpressionKind::MathematicalComputation(op.clone(), Arc::new(inner_sub)),
+                source,
+            )
+        }
+        
+        // These don't contain facts to substitute
+        ExpressionKind::Literal(_) 
+        | ExpressionKind::Veto(_)
+        | ExpressionKind::RulePath(_)
+        | ExpressionKind::FactReference(_)
+        | ExpressionKind::RuleReference(_) => expression,
+    }
+}
 
 /// Target specification for an inversion query
 ///
@@ -117,17 +208,6 @@ impl TargetOp {
         }
     }
 
-    /// Convert to ComparisonComputation
-    pub(crate) fn to_comparison(&self) -> ComparisonComputation {
-        match self {
-            TargetOp::Eq => ComparisonComputation::Equal(EqualityNotation::Symbol),
-            TargetOp::Neq => ComparisonComputation::NotEqual(EqualityNotation::Symbol),
-            TargetOp::Lt => ComparisonComputation::LessThan,
-            TargetOp::Lte => ComparisonComputation::LessThanOrEqual,
-            TargetOp::Gt => ComparisonComputation::GreaterThan,
-            TargetOp::Gte => ComparisonComputation::GreaterThanOrEqual,
-        }
-    }
 }
 
 /// Invert a rule to find input fact values that produce a desired outcome.
@@ -180,35 +260,35 @@ pub fn invert(
         LemmaError::Engine(format!("Rule not found: {}.{}", plan.doc_name, rule_name))
     })?;
 
+    // Substitute provided fact values into the equation
+    let equation = substitute_fact_values(target_rule.equation.clone(), plan);
+
+    if rule_name == "rate" {
+        eprintln!("\n=== Inverting rate rule ===");
+        eprintln!("Equation: {:#?}", equation);
+    }
+
     // Solve the equation with the target constraint
     // Returns multiple solutions when equation contains OR branches
-    let solve_results = solve(target_rule.equation.clone(), &target);
+    // solve_with_target preserves outcome information from each branch
+    let solve_results = solve_with_target(equation, &target);
 
     // Convert each solve result to a solution
     let mut solutions: Vec<Solution> = Vec::new();
 
     for solve_result in solve_results {
         match solve_result {
-            SolveResult::Solved { fact_constraints } => {
-                let solution = Solution::new(
-                    target.outcome.clone().unwrap_or(OperationResult::Value(
-                        crate::LiteralValue::Boolean(crate::BooleanValue::True),
-                    )),
-                    fact_constraints,
-                );
+            SolveResult::Solved { outcome, fact_constraints } => {
+                let solution = Solution::new(outcome, fact_constraints);
                 solutions.push(solution);
             }
             SolveResult::Partial {
+                outcome,
                 fact_constraints,
                 remaining_constraints: _,
                 domain_restrictions: _,
             } => {
-                let solution = Solution::new(
-                    target.outcome.clone().unwrap_or(OperationResult::Value(
-                        crate::LiteralValue::Boolean(crate::BooleanValue::True),
-                    )),
-                    fact_constraints,
-                );
+                let solution = Solution::new(outcome, fact_constraints);
                 solutions.push(solution);
             }
             SolveResult::Unsatisfiable { .. } => {
@@ -235,6 +315,7 @@ mod tests {
     use crate::planning::{Branch, ExecutableRule};
     use crate::semantic::{BooleanValue, Expression, ExpressionKind, LiteralValue, RulePath};
     use rust_decimal::Decimal;
+    use std::sync::Arc;
     use std::collections::{HashMap, HashSet};
 
     fn literal_bool(value: bool) -> Expression {
@@ -277,8 +358,8 @@ mod tests {
         // Equation: true AND 42
         let equation = Expression::new(
             ExpressionKind::LogicalAnd(
-                Box::new(literal_bool(true)),
-                Box::new(literal_num(42)),
+                Arc::new(literal_bool(true)),
+                Arc::new(literal_num(42)),
             ),
             None,
         );
@@ -342,8 +423,8 @@ mod tests {
     fn test_invert_invalid_operator() {
         let equation = Expression::new(
             ExpressionKind::LogicalAnd(
-                Box::new(literal_bool(true)),
-                Box::new(literal_num(42)),
+                Arc::new(literal_bool(true)),
+                Arc::new(literal_num(42)),
             ),
             None,
         );

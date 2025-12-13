@@ -5,6 +5,11 @@ title: Testing and Enhancement
 
 # Lemma Testing and Enhancement Plan
 
+## Phase 0: Fix AI generated slob
+- Identify all silent fallthrough match cases and else clauses
+
+
+
 ## Phase 1: Reliability and Robustness
 
 ### Error Recovery Testing

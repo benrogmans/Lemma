@@ -6,6 +6,7 @@ use serde::Serialize;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
+use std::sync::Arc;
 
 /// A Lemma document containing facts, rules
 #[derive(Debug, Clone, PartialEq)]
@@ -202,13 +203,13 @@ pub enum ExpressionKind {
     Literal(LiteralValue),
     FactReference(FactReference),
     RuleReference(RuleReference),
-    LogicalAnd(Box<Expression>, Box<Expression>),
-    LogicalOr(Box<Expression>, Box<Expression>),
-    Arithmetic(Box<Expression>, ArithmeticComputation, Box<Expression>),
-    Comparison(Box<Expression>, ComparisonComputation, Box<Expression>),
-    UnitConversion(Box<Expression>, ConversionTarget),
-    LogicalNegation(Box<Expression>, NegationType),
-    MathematicalComputation(MathematicalComputation, Box<Expression>),
+    LogicalAnd(Arc<Expression>, Arc<Expression>),
+    LogicalOr(Arc<Expression>, Arc<Expression>),
+    Arithmetic(Arc<Expression>, ArithmeticComputation, Arc<Expression>),
+    Comparison(Arc<Expression>, ComparisonComputation, Arc<Expression>),
+    UnitConversion(Arc<Expression>, ConversionTarget),
+    LogicalNegation(Arc<Expression>, NegationType),
+    MathematicalComputation(MathematicalComputation, Arc<Expression>),
     Veto(VetoExpression),
     /// Resolved fact path (used after planning, converted from FactReference)
     FactPath(FactPath),
@@ -1643,22 +1644,22 @@ impl fmt::Display for Expression {
             ExpressionKind::RuleReference(rule_ref) => write!(f, "{}", rule_ref),
             ExpressionKind::RulePath(rule_path) => write!(f, "{}", rule_path),
             ExpressionKind::Arithmetic(left, op, right) => {
-                write!(f, "{} {} {}", left, op, right)
+                write!(f, "({} {} {})", left, op, right)
             }
             ExpressionKind::Comparison(left, op, right) => {
-                write!(f, "{} {} {}", left, op, right)
+                write!(f, "({} {} {})", left, op, right)
             }
             ExpressionKind::UnitConversion(value, target) => {
-                write!(f, "{} in {}", value, target)
+                write!(f, "({} in {})", value, target)
             }
             ExpressionKind::LogicalNegation(expr, _) => {
-                write!(f, "not {}", expr)
+                write!(f, "(not {})", expr)
             }
             ExpressionKind::LogicalAnd(left, right) => {
-                write!(f, "{} and {}", left, right)
+                write!(f, "({} and {})", left, right)
             }
             ExpressionKind::LogicalOr(left, right) => {
-                write!(f, "{} or {}", left, right)
+                write!(f, "({} or {})", left, right)
             }
             ExpressionKind::MathematicalComputation(op, operand) => {
                 let op_name = match op {
@@ -1676,7 +1677,7 @@ impl fmt::Display for Expression {
                     MathematicalComputation::Ceil => "ceil",
                     MathematicalComputation::Round => "round",
                 };
-                write!(f, "{} {}", op_name, operand)
+                write!(f, "{}({})", op_name, operand)
             }
             ExpressionKind::Veto(veto) => match &veto.message {
                 Some(msg) => write!(f, "veto \"{}\"", msg),

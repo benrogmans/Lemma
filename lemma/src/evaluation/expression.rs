@@ -758,14 +758,10 @@ fn evaluate_single_expression(
         }
 
         ExpressionKind::FactReference(_) | ExpressionKind::RuleReference(_) => {
-            let proof_node = ProofNode::Veto {
-                    message: Some("FactReference and RuleReference should be resolved to FactPath/RulePath during planning".to_string()),
-                    source: current.source.clone(),
-                };
-            context.set_proof_node(current, proof_node);
-            Ok(OperationResult::Veto(Some(
-                    "FactReference and RuleReference should be resolved to FactPath/RulePath during planning".to_string(),
-                )))
+            unreachable!(
+                "bug: FactReference/RuleReference in evaluation - \
+                 should have been converted to FactPath/RulePath during graph building"
+            )
         }
     };
     result

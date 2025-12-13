@@ -71,4 +71,3 @@ rule Summary
   = "Standard shipping"
   unless free_shipping_eligible? then "Free shipping (order over $100)"
   unless is_expedited            then "Expedited shipping"
-

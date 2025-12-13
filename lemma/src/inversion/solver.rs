@@ -4,15 +4,16 @@
 //! Uses the computation module for constraint types and operations.
 
 use crate::computation::{
-    collect_domain_restrictions, expand, reduce, reverse_comparison, ConstraintSet,
+    collect_domain_restrictions, reverse_comparison, ConstraintSet,
     DomainRestriction, FactConstraint, OperationResult, UnsatReason,
 };
 use crate::semantic::{
     ArithmeticComputation, BooleanValue, ComparisonComputation, EqualityNotation, Expression,
-    ExpressionKind, FactPath, LiteralValue,
+    ExpressionKind, FactPath, LiteralValue, NegationType,
 };
 use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use super::Target;
 
@@ -21,11 +22,13 @@ use super::Target;
 pub enum SolveResult {
     /// Fully solved to concrete domains
     Solved {
+        outcome: OperationResult,
         fact_constraints: HashMap<FactPath, FactConstraint>,
     },
 
     /// Partially solved — some constraints remain symbolic
     Partial {
+        outcome: OperationResult,
         fact_constraints: HashMap<FactPath, FactConstraint>,
         remaining_constraints: Vec<Expression>,
         domain_restrictions: Vec<DomainRestriction>,
@@ -36,126 +39,8 @@ pub enum SolveResult {
 }
 
 // ============================================================================
-// Target application
+// Helper functions
 // ============================================================================
-
-/// Apply target constraint to an equation expression
-///
-/// The equation has structure: (cond_0 ∧ result_0) ∨ (cond_1 ∧ result_1) ∨ ...
-/// This transforms each (cond ∧ result) into (cond ∧ (result matches target))
-///
-/// Special case: if the equation is boolean false, it means no valid branches
-/// exist (equation is unsatisfiable). This is preserved as-is.
-pub fn apply_target(equation: &Expression, target: &Target) -> Expression {
-    // Boolean false means "no solution exists" - preserve it
-    if equation.is_boolean_false() {
-        return equation.clone();
-    }
-
-    // Boolean true means "any solution works" (unconditional rule)
-    // This is handled as a result expression below
-
-    match &equation.kind {
-        ExpressionKind::LogicalOr(left, right) => {
-            let left_applied = apply_target(left, target);
-            let right_applied = apply_target(right, target);
-            Expression::new(
-                ExpressionKind::LogicalOr(Box::new(left_applied), Box::new(right_applied)),
-                equation.source.clone(),
-            )
-        }
-
-        ExpressionKind::LogicalAnd(condition, result) => {
-            // This is a branch: (condition AND result)
-            // Transform to: (condition AND (result matches target))
-            let target_check = match_result_to_target(result, target);
-            Expression::new(
-                ExpressionKind::LogicalAnd(condition.clone(), Box::new(target_check)),
-                equation.source.clone(),
-            )
-        }
-
-        // Result expressions (rule with no conditions, or leaf of the equation)
-        ExpressionKind::Literal(_)
-        | ExpressionKind::Veto(_)
-        | ExpressionKind::Arithmetic(_, _, _)
-        | ExpressionKind::FactPath(_)
-        | ExpressionKind::RulePath(_)
-        | ExpressionKind::MathematicalComputation(_, _)
-        | ExpressionKind::UnitConversion(_, _)
-        | ExpressionKind::LogicalNegation(_, _)
-        | ExpressionKind::Comparison(_, _, _) => match_result_to_target(equation, target),
-
-        // These should never appear as top-level equation structures
-        ExpressionKind::FactReference(_) | ExpressionKind::RuleReference(_) => {
-            unreachable!(
-                "Unexpected equation structure in apply_target: {:?}",
-                equation.kind
-            )
-        }
-    }
-}
-
-/// Check if a result expression matches the target
-fn match_result_to_target(result: &Expression, target: &Target) -> Expression {
-    match &target.outcome {
-        None => {
-            // any_value - always matches if result exists
-            Expression::new(
-                ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)),
-                None,
-            )
-        }
-        Some(OperationResult::Veto(None)) => {
-            // any_veto - matches if result is any veto
-            match &result.kind {
-                ExpressionKind::Veto(_) => Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)),
-                    None,
-                ),
-                _ => Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)),
-                    None,
-                ),
-            }
-        }
-        Some(OperationResult::Veto(Some(target_message))) => {
-            // specific veto - matches if result is veto with same message
-            match &result.kind {
-                ExpressionKind::Veto(veto) => {
-                    let matches = veto.message.as_ref() == Some(target_message);
-                    Expression::new(
-                        ExpressionKind::Literal(LiteralValue::Boolean(if matches {
-                            BooleanValue::True
-                        } else {
-                            BooleanValue::False
-                        })),
-                        None,
-                    )
-                }
-                _ => Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)),
-                    None,
-                ),
-            }
-        }
-        Some(OperationResult::Value(target_value)) => {
-            // Compare result to target value
-            Expression::new(
-                ExpressionKind::Comparison(
-                    Box::new(result.clone()),
-                    target.op.to_comparison(),
-                    Box::new(Expression::new(
-                        ExpressionKind::Literal(target_value.clone()),
-                        None,
-                    )),
-                ),
-                None,
-            )
-        }
-    }
-}
-
 
 /// Flatten a DNF expression into a list of OR branches
 ///
@@ -163,91 +48,254 @@ fn match_result_to_target(result: &Expression, target: &Target) -> Expression {
 fn flatten_or(expression: Expression) -> Vec<Expression> {
     match expression.kind {
         ExpressionKind::LogicalOr(left, right) => {
-            let mut branches = flatten_or(*left);
-            branches.extend(flatten_or(*right));
+            let mut branches = flatten_or(Arc::unwrap_or_clone(left));
+            branches.extend(flatten_or(Arc::unwrap_or_clone(right)));
             branches
         }
         _ => vec![expression],
     }
 }
 
-/// Combine a list of expressions with OR
-fn combine_with_or(mut branches: Vec<Expression>) -> Expression {
-    if branches.is_empty() {
-        return Expression::new(
-            ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)),
-            None,
-        );
-    }
-
-    if branches.len() == 1 {
-        return branches.remove(0);
-    }
-
-    let first = branches.remove(0);
-    branches
-        .into_iter()
-        .fold(first, |accumulated, branch| {
-            Expression::new(
-                ExpressionKind::LogicalOr(Box::new(accumulated), Box::new(branch)),
-                None,
-            )
-        })
-}
-
 // ============================================================================
 // Main solver entry point
 // ============================================================================
 
-/// Solve an equation for the given target
+/// Solve an equation for the given target, preserving outcome information
 ///
-/// Takes an equation expression and returns the constraints on facts
-/// that make the equation satisfy the target. Returns multiple solutions
-/// when the equation contains OR branches.
-pub fn solve(equation: Expression, target: &Target) -> Vec<SolveResult> {
-    // 1. Apply target constraint to the equation
-    let constrained = apply_target(&equation, target);
-
-    // 2. Expand to DNF: distribution, De Morgan, constant folding, veto handling
-    let expanded = expand(constrained);
-
-    // 3. Reduce: boolean minimization (QM-style)
-    let reduced = reduce(expanded);
-
-    // 4. Flatten OR branches and solve each independently
-    let branches = flatten_or(reduced);
-
-    // 5. Solve each branch
+/// This function extracts both constraints and outcomes from each branch.
+/// When target is None, it skips apply_target to preserve all outcome information.
+pub fn solve_with_target(equation: Expression, target: &Target) -> Vec<SolveResult> {
+    // Flatten OR branches to get individual (condition ∧ result) branches
+    let branches = flatten_or(equation);
+    
+    // Solve each branch, extracting outcome and checking target match
     let mut results: Vec<SolveResult> = Vec::new();
     for branch in branches {
-        let result = solve_single_branch(branch);
-
-        // Filter out unsatisfiable branches
-        if !matches!(result, SolveResult::Unsatisfiable { .. }) {
+        if let Some(result) = solve_branch_with_outcome(branch, target) {
             results.push(result);
         }
     }
-
-    // If all branches were unsatisfiable, return single Unsatisfiable
+    
+    // If all branches were filtered or unsatisfiable, return single Unsatisfiable
     if results.is_empty() {
         return vec![SolveResult::Unsatisfiable {
             reason: UnsatReason::SimplifiedToFalse,
         }];
     }
-
+    
     results
+}
+
+/// Solve a single branch while extracting its outcome
+///
+/// Returns None if the branch doesn't match the target (filtered out)
+fn solve_branch_with_outcome(branch: Expression, target: &Target) -> Option<SolveResult> {
+    // Try to extract (condition ∧ result) structure
+    let (condition, result) = if let Some((cond, res)) = extract_condition_and_result(&branch) {
+        // Normal case: explicit (condition ∧ result) structure
+        (cond, res)
+    } else {
+        // Branch doesn't have AND structure
+        // Check if it's a bare false literal - this means unsatisfiable (from simplification)
+        if matches!(&branch.kind, ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False))) {
+            return None;  // Filter out bare 'false' - it's unsatisfiable
+        }
+        
+        // Treat branch as result with implicit true condition
+        // Comparisons/logical expressions can be results that evaluate to boolean
+        (
+            Expression::new(
+                ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)),
+                None,
+            ),
+            branch,
+            )
+    };
+    
+    // Check if result is a simple literal/veto or needs algebraic solving
+            match &result.kind {
+        ExpressionKind::Literal(val) => {
+            // Note: We don't filter false here, because if we got here,
+            // false is a valid result value from a (condition ∧ false) branch
+            
+            // Simple case: result is already a literal value
+            let outcome = OperationResult::Value(val.clone());
+            
+            // Check if outcome matches target (filtering logic)
+            if !matches_target(&outcome, target) {
+                return None;  // Filter out this branch
+            }
+            
+            // Extract constraints from condition with the outcome
+            let solve_result = solve_single_branch(condition, outcome);
+            
+            // Filter out unsatisfiable results
+            match solve_result {
+                SolveResult::Unsatisfiable { .. } => None,
+                _ => Some(solve_result),
+            }
+        }
+                ExpressionKind::Veto(veto) => {
+            // Simple case: result is a veto
+            let outcome = OperationResult::Veto(veto.message.clone());
+            
+            // Check if outcome matches target
+            if !matches_target(&outcome, target) {
+                return None;
+            }
+            
+            let solve_result = solve_single_branch(condition, outcome);
+            match solve_result {
+                SolveResult::Unsatisfiable { .. } => None,
+                _ => Some(solve_result),
+            }
+                }
+        _ => {
+            // Complex case: result is an expression that needs algebraic solving
+            if let Some(OperationResult::Value(target_val)) = &target.outcome {
+                // Special case: if result is a comparison/logical expr and target is boolean
+                let result_condition = if matches!(target_val, LiteralValue::Boolean(_)) 
+                    && (matches!(&result.kind, ExpressionKind::Comparison(_, _, _) | ExpressionKind::LogicalAnd(_, _) | ExpressionKind::LogicalOr(_, _) | ExpressionKind::LogicalNegation(_, _))) {
+                    // Result is a boolean expression
+                    match target_val {
+                        LiteralValue::Boolean(BooleanValue::True) => {
+                            // Target is true: use comparison as-is
+                            result.clone()
+                        }
+                        LiteralValue::Boolean(BooleanValue::False) => {
+                            // Target is false: negate the comparison
+                            Expression::new(
+                                ExpressionKind::LogicalNegation(Arc::new(result.clone()), NegationType::Not),
+                    None,
+                            )
+            }
+                        _ => unreachable!()
+                    }
+                } else {
+                    // For arithmetic: create comparison result == target_value
+            Expression::new(
+                ExpressionKind::Comparison(
+                            Arc::new(result.clone()),
+                            ComparisonComputation::Equal(EqualityNotation::Symbol),
+                            Arc::new(Expression::new(
+                                ExpressionKind::Literal(target_val.clone()),
+                        None,
+                    )),
+                ),
+                None,
+            )
+                };
+                
+                // Combine condition with result_condition
+                let full_condition = Expression::new(
+                        ExpressionKind::LogicalAnd(
+                        Arc::new(condition),
+                        Arc::new(result_condition),
+                        ),
+                        None,
+                    );
+                
+                let outcome = OperationResult::Value(target_val.clone());
+                let solve_result = solve_single_branch(full_condition, outcome);
+                
+                match solve_result {
+                    SolveResult::Unsatisfiable { .. } => None,
+                    _ => Some(solve_result),
+                }
+            } else {
+                // No target value to compare against - can't solve arithmetic without target
+                None
+            }
+        }
+    }
+}
+
+/// Extract condition and result from a branch expression
+///
+/// Branches have structure: (condition ∧ result)
+fn extract_condition_and_result(branch: &Expression) -> Option<(Expression, Expression)> {
+    match &branch.kind {
+        ExpressionKind::LogicalAnd(cond, res) => {
+            Some((Arc::unwrap_or_clone(cond.clone()), Arc::unwrap_or_clone(res.clone())))
+        }
+        _ => None,
+    }
+}
+
+
+/// Check if an outcome matches the target criteria
+fn matches_target(outcome: &OperationResult, target: &Target) -> bool {
+    match &target.outcome {
+        None => true,  // any outcome matches
+        Some(OperationResult::Veto(None)) => {
+            // any_veto: match any veto
+            matches!(outcome, OperationResult::Veto(_))
+        }
+        Some(OperationResult::Veto(Some(target_msg))) => {
+            // specific veto: match exact veto message
+            matches!(outcome, OperationResult::Veto(Some(msg)) if msg == target_msg)
+        }
+        Some(OperationResult::Value(target_val)) => {
+            // specific value: apply operator comparison
+            match outcome {
+                OperationResult::Value(outcome_val) => {
+                    compare_with_operator(outcome_val, target_val, &target.op)
+                }
+                OperationResult::Veto(_) => false,  // veto doesn't match value target
+            }
+        }
+    }
+}
+
+/// Compare two values with the given operator
+fn compare_with_operator(left: &LiteralValue, right: &LiteralValue, op: &crate::inversion::TargetOp) -> bool {
+    use crate::inversion::TargetOp;
+    
+    match op {
+        TargetOp::Eq => left == right,
+        TargetOp::Neq => left != right,
+        TargetOp::Lt => {
+            if let (LiteralValue::Number(l), LiteralValue::Number(r)) = (left, right) {
+                l < r
+            } else {
+                false
+            }
+        }
+        TargetOp::Lte => {
+            if let (LiteralValue::Number(l), LiteralValue::Number(r)) = (left, right) {
+                l <= r
+            } else {
+                false
+            }
+        }
+        TargetOp::Gt => {
+            if let (LiteralValue::Number(l), LiteralValue::Number(r)) = (left, right) {
+                l > r
+            } else {
+                false
+        }
+    }
+        TargetOp::Gte => {
+            if let (LiteralValue::Number(l), LiteralValue::Number(r)) = (left, right) {
+                l >= r
+            } else {
+                false
+            }
+        }
+    }
 }
 
 /// Solve a single branch (conjunction of constraints)
 ///
 /// This function handles a single AND-branch from the DNF form.
 /// OR expressions should not appear here after DNF conversion.
-fn solve_single_branch(expression: Expression) -> SolveResult {
+fn solve_single_branch(expression: Expression, outcome: OperationResult) -> SolveResult {
     let mut constraint_set = ConstraintSet::new();
 
     // Check for trivial true
     if expression.is_boolean_true() {
         return SolveResult::Solved {
+            outcome,
             fact_constraints: HashMap::new(),
         };
     }
@@ -277,9 +325,10 @@ fn solve_single_branch(expression: Expression) -> SolveResult {
     let fact_constraints = constraint_set.to_fact_constraints();
 
     if constraint_set.symbolic.is_empty() && constraint_set.restrictions.is_empty() {
-        SolveResult::Solved { fact_constraints }
+        SolveResult::Solved { outcome, fact_constraints }
     } else {
         SolveResult::Partial {
+            outcome,
             fact_constraints,
             remaining_constraints: constraint_set.symbolic,
             domain_restrictions: constraint_set.restrictions,
@@ -390,22 +439,23 @@ fn extract_constraints(expression: &Expression, constraint_set: &mut ConstraintS
         }
 
         ExpressionKind::LogicalNegation(inner, _) => {
-            // NOT(fact == value) means fact != value
+            // NOT(comparison) → opposite comparison
             if let ExpressionKind::Comparison(left, op, right) = &inner.kind {
-                if op.is_equal() {
-                    if let ExpressionKind::FactPath(fact_path) = &left.kind {
-                        if let ExpressionKind::Literal(value) = &right.kind {
-            constraint_set.add_comparison(
-                fact_path.clone(),
-                                &ComparisonComputation::NotEqual(
-                                    crate::semantic::EqualityNotation::Symbol,
-                                ),
-                                value.clone(),
+                // Convert to opposite comparison
+                let opposite_op = match op {
+                    ComparisonComputation::Equal(notation) => ComparisonComputation::NotEqual(notation.clone()),
+                    ComparisonComputation::NotEqual(notation) => ComparisonComputation::Equal(notation.clone()),
+                    ComparisonComputation::LessThan => ComparisonComputation::GreaterThanOrEqual,
+                    ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThan,
+                    ComparisonComputation::GreaterThan => ComparisonComputation::LessThanOrEqual,
+                    ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThan,
+                };
+                let opposite_comparison = Expression::new(
+                    ExpressionKind::Comparison(left.clone(), opposite_op, right.clone()),
+                    None,
                             );
+                extract_constraints(&opposite_comparison, constraint_set);
                             return;
-                        }
-                    }
-                }
             }
 
             // NOT(fact) means fact == false
@@ -496,9 +546,14 @@ fn collect_facts_recursive(expression: &Expression, facts: &mut HashSet<FactPath
         }
         ExpressionKind::Literal(_)
         | ExpressionKind::Veto(_)
-        | ExpressionKind::RulePath(_)
-        | ExpressionKind::RuleReference(_)
-        | ExpressionKind::FactReference(_) => {}
+        | ExpressionKind::RulePath(_) => {}
+        
+        ExpressionKind::RuleReference(_) | ExpressionKind::FactReference(_) => {
+            unreachable!(
+                "bug: FactReference/RuleReference in inversion solver - \
+                 should have been converted to FactPath/RulePath during graph building"
+            )
+        }
     }
 }
 
@@ -882,9 +937,9 @@ fn try_simplify_constants(
     // Build simplified comparison: facts_expr == new_target
     Some(Expression::new(
             ExpressionKind::Comparison(
-            Box::new(facts_expr),
+            Arc::new(facts_expr),
                 ComparisonComputation::Equal(EqualityNotation::Symbol),
-            Box::new(Expression::new(
+            Arc::new(Expression::new(
                 ExpressionKind::Literal(LiteralValue::Number(new_target)),
                 None,
             )),
@@ -927,9 +982,9 @@ fn extract_constant_sum(expression: &Expression) -> Option<(Expression, Decimal)
                     let (right_expr, right_sum) = extract_constant_sum(right)?;
                     let combined = Expression::new(
                         ExpressionKind::Arithmetic(
-                            Box::new(left_expr),
+                            Arc::new(left_expr),
                             ArithmeticComputation::Add,
-                            Box::new(right_expr),
+                            Arc::new(right_expr),
             ),
             None,
         );
@@ -980,9 +1035,16 @@ mod tests {
     fn test_solve_trivial_true() {
         use crate::inversion::Target;
 
-        let equation = literal_bool(true);
+        // Proper equation structure: (true ∧ 1)
+        let equation = Expression::new(
+            ExpressionKind::LogicalAnd(
+                Arc::new(literal_bool(true)),
+                Arc::new(num_expr(1)),
+            ),
+            None,
+        );
         let target = Target::any_value();
-        let results = solve(equation, &target);
+        let results = solve_with_target(equation, &target);
 
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], SolveResult::Solved { .. }));
@@ -994,7 +1056,7 @@ mod tests {
 
         let equation = literal_bool(false);
         let target = Target::any_value();
-        let results = solve(equation, &target);
+        let results = solve_with_target(equation, &target);
 
         // All branches unsatisfiable returns single Unsatisfiable
         assert_eq!(results.len(), 1);
@@ -1003,26 +1065,22 @@ mod tests {
 
     #[test]
     fn test_solve_simple_comparison() {
-        use crate::inversion::Target;
-
-        // fact == 42
+        // Test solve_single_branch directly for isolated constraint solving
         let fact_path = FactPath::local("x".to_string());
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(
-                Box::new(literal_bool(true)),
-                Box::new(Expression::new(
-                    ExpressionKind::FactPath(fact_path.clone()),
-                    None,
-                )),
+        let condition = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(Expression::new(ExpressionKind::FactPath(fact_path.clone()), None)),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(num_expr(42)),
             ),
             None,
         );
-        let target = Target::value(num(42));
-        let results = solve(equation, &target);
+        
+        let outcome = OperationResult::Value(LiteralValue::Number(Decimal::from(42)));
+        let result = solve_single_branch(condition, outcome);
 
-        assert_eq!(results.len(), 1);
-        match &results[0] {
-            SolveResult::Solved { fact_constraints } | SolveResult::Partial { fact_constraints, .. } => {
+        match result {
+            SolveResult::Solved { outcome: _, fact_constraints } | SolveResult::Partial { outcome: _, fact_constraints, .. } => {
                 assert!(fact_constraints.contains_key(&fact_path));
             }
             _ => panic!("Expected solved or partial result"),
@@ -1095,34 +1153,44 @@ mod tests {
     /// `false ∨ (x > 10)` → Single solution: `x > 10`
     #[test]
     fn test_false_branch_filtered() {
-        use crate::inversion::Target;
-
         let fact_x = FactPath::local("x".to_string());
 
-        // false ∨ (x > 10)
-        let equation = Expression::new(
-            ExpressionKind::LogicalOr(
-                Box::new(literal_bool(false)),
-                Box::new(Expression::new(
+        // Wrap branches in proper (condition ∧ result) format
+        // Branch 1: (false ∧ 1)
+        // Branch 2: ((x > 10) ∧ 1)
+        let branch1 = Expression::new(
+            ExpressionKind::LogicalAnd(
+                Arc::new(literal_bool(false)),
+                Arc::new(num_expr(1)),
+            ),
+            None,
+        );
+        
+        let branch2 = Expression::new(
+            ExpressionKind::LogicalAnd(
+                Arc::new(Expression::new(
                     ExpressionKind::Comparison(
-                        Box::new(Expression::new(
+                        Arc::new(Expression::new(
                             ExpressionKind::FactPath(fact_x.clone()),
                             None,
                         )),
                         ComparisonComputation::GreaterThan,
-                        Box::new(Expression::new(
-                            ExpressionKind::Literal(num(10)),
-                            None,
-                        )),
+                        Arc::new(num_expr(10)),
                     ),
                     None,
                 )),
+                Arc::new(num_expr(1)),
             ),
+            None,
+        );
+        
+        let equation = Expression::new(
+            ExpressionKind::LogicalOr(Arc::new(branch1), Arc::new(branch2)),
             None,
         );
 
         let target = Target::any_value();
-        let results = solve(equation, &target);
+        let results = solve_with_target(equation, &target);
 
         // Should have exactly 1 solution (false branch filtered out)
         assert_eq!(results.len(), 1, "false branch should be filtered, expected 1 solution");
@@ -1140,14 +1208,14 @@ mod tests {
         // false ∨ false
         let equation = Expression::new(
             ExpressionKind::LogicalOr(
-                Box::new(literal_bool(false)),
-                Box::new(literal_bool(false)),
+                Arc::new(literal_bool(false)),
+                Arc::new(literal_bool(false)),
             ),
             None,
         );
 
         let target = Target::any_value();
-        let results = solve(equation, &target);
+        let results = solve_with_target(equation, &target);
 
         // Should return single Unsatisfiable
         assert_eq!(results.len(), 1, "all-false should return single result");
@@ -1164,33 +1232,43 @@ mod tests {
 
         let fact_x = FactPath::local("x".to_string());
 
-        // true ∨ (x > 10)
-        let equation = Expression::new(
-            ExpressionKind::LogicalOr(
-                Box::new(literal_bool(true)),
-                Box::new(Expression::new(
+        // (true ∧ 1) ∨ ((x > 10) ∧ 1)
+        let branch1 = Expression::new(
+            ExpressionKind::LogicalAnd(
+                Arc::new(literal_bool(true)),
+                Arc::new(num_expr(1)),
+            ),
+            None,
+        );
+        
+        let branch2 = Expression::new(
+            ExpressionKind::LogicalAnd(
+                Arc::new(Expression::new(
             ExpressionKind::Comparison(
-                        Box::new(Expression::new(
+                        Arc::new(Expression::new(
                             ExpressionKind::FactPath(fact_x.clone()),
                             None,
                         )),
                         ComparisonComputation::GreaterThan,
-                        Box::new(Expression::new(
-                            ExpressionKind::Literal(num(10)),
-                            None,
-                        )),
+                        Arc::new(num_expr(10)),
                     ),
                     None,
                 )),
+                Arc::new(num_expr(1)),
             ),
+            None,
+        );
+        
+        let equation = Expression::new(
+            ExpressionKind::LogicalOr(Arc::new(branch1), Arc::new(branch2)),
             None,
         );
 
         let target = Target::any_value();
-        let results = solve(equation, &target);
+        let results = solve_with_target(equation, &target);
 
-        // After expansion, `true ∨ X` becomes `true`, so we get one unconstrained solution
-        // The expand() function should simplify this before we get to solve
+        // After reduction, `true ∨ X` becomes `true`, so we get one unconstrained solution
+        // The reduce() function should simplify this
         assert!(
             results.len() >= 1,
             "should have at least one solution"
@@ -1198,7 +1276,7 @@ mod tests {
 
         // At least one solution should be unconstrained (no fact constraints)
         let has_unconstrained = results.iter().any(|r| {
-            matches!(r, SolveResult::Solved { fact_constraints } if fact_constraints.is_empty())
+            matches!(r, SolveResult::Solved { outcome: _, fact_constraints } if fact_constraints.is_empty())
         });
         assert!(
             has_unconstrained,
@@ -1221,16 +1299,16 @@ mod tests {
         // Branch 1: (a == 1) ∧ true
         let a_eq_1 = Expression::new(
             ExpressionKind::Comparison(
-                Box::new(Expression::new(ExpressionKind::FactPath(fact_a.clone()), None)),
+                Arc::new(Expression::new(ExpressionKind::FactPath(fact_a.clone()), None)),
                 ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(Expression::new(ExpressionKind::Literal(num(1)), None)),
+                Arc::new(Expression::new(ExpressionKind::Literal(num(1)), None)),
             ),
             None,
         );
         let branch_a = Expression::new(
             ExpressionKind::LogicalAnd(
-                Box::new(a_eq_1),
-                Box::new(literal_bool(true)),
+                Arc::new(a_eq_1),
+                Arc::new(literal_bool(true)),
             ),
             None,
         );
@@ -1238,16 +1316,16 @@ mod tests {
         // Branch 2: (b == 2) ∧ true
         let b_eq_2 = Expression::new(
             ExpressionKind::Comparison(
-                Box::new(Expression::new(ExpressionKind::FactPath(fact_b.clone()), None)),
+                Arc::new(Expression::new(ExpressionKind::FactPath(fact_b.clone()), None)),
                 ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(Expression::new(ExpressionKind::Literal(num(2)), None)),
+                Arc::new(Expression::new(ExpressionKind::Literal(num(2)), None)),
             ),
             None,
         );
         let branch_b = Expression::new(
             ExpressionKind::LogicalAnd(
-                Box::new(b_eq_2),
-                Box::new(literal_bool(true)),
+                Arc::new(b_eq_2),
+                Arc::new(literal_bool(true)),
             ),
             None,
         );
@@ -1255,33 +1333,33 @@ mod tests {
         // Branch 3: (c == 3) ∧ true
         let c_eq_3 = Expression::new(
             ExpressionKind::Comparison(
-                Box::new(Expression::new(ExpressionKind::FactPath(fact_c.clone()), None)),
+                Arc::new(Expression::new(ExpressionKind::FactPath(fact_c.clone()), None)),
                 ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(Expression::new(ExpressionKind::Literal(num(3)), None)),
+                Arc::new(Expression::new(ExpressionKind::Literal(num(3)), None)),
             ),
             None,
         );
         let branch_c = Expression::new(
             ExpressionKind::LogicalAnd(
-                Box::new(c_eq_3),
-                Box::new(literal_bool(true)),
+                Arc::new(c_eq_3),
+                Arc::new(literal_bool(true)),
             ),
             None,
         );
 
         // Nested: ((branch_a) ∨ (branch_b)) ∨ (branch_c)
         let a_or_b = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(branch_a), Box::new(branch_b)),
+            ExpressionKind::LogicalOr(Arc::new(branch_a), Arc::new(branch_b)),
             None,
         );
         let equation = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(a_or_b), Box::new(branch_c)),
+            ExpressionKind::LogicalOr(Arc::new(a_or_b), Arc::new(branch_c)),
             None,
         );
 
         // Target: result == true
         let target = Target::value(LiteralValue::Boolean(BooleanValue::True));
-        let results = solve(equation, &target);
+        let results = solve_with_target(equation, &target);
 
         // Should have 3 solutions (one for each branch)
         assert_eq!(
@@ -1294,7 +1372,7 @@ mod tests {
         // Each solution should constrain exactly one fact
         for (i, result) in results.iter().enumerate() {
         match result {
-                SolveResult::Solved { fact_constraints } | SolveResult::Partial { fact_constraints, .. } => {
+                SolveResult::Solved { outcome: _, fact_constraints } | SolveResult::Partial { outcome: _, fact_constraints, .. } => {
                     assert!(
                         !fact_constraints.is_empty(),
                         "solution {} should have constraints",
@@ -1312,101 +1390,6 @@ mod tests {
     ///
     /// Uses proper equation structure with result value.
     /// The condition contains AND-over-OR which must be distributed.
-    #[test]
-    fn test_or_inside_and_distributed() {
-        use crate::inversion::Target;
-
-        let fact_x = FactPath::local("x".to_string());
-        let fact_y = FactPath::local("y".to_string());
-
-        // x > 0
-        let x_gt_0 = Expression::new(
-            ExpressionKind::Comparison(
-                Box::new(Expression::new(ExpressionKind::FactPath(fact_x.clone()), None)),
-                ComparisonComputation::GreaterThan,
-                Box::new(Expression::new(ExpressionKind::Literal(num(0)), None)),
-            ),
-            None,
-        );
-
-        // y = 1
-        let y_eq_1 = Expression::new(
-            ExpressionKind::Comparison(
-                Box::new(Expression::new(ExpressionKind::FactPath(fact_y.clone()), None)),
-                ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(Expression::new(ExpressionKind::Literal(num(1)), None)),
-            ),
-            None,
-        );
-
-        // y = 2
-        let y_eq_2 = Expression::new(
-            ExpressionKind::Comparison(
-                Box::new(Expression::new(ExpressionKind::FactPath(fact_y.clone()), None)),
-                ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(Expression::new(ExpressionKind::Literal(num(2)), None)),
-            ),
-            None,
-        );
-
-        // (y = 1 ∨ y = 2)
-        let y_or = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(y_eq_1), Box::new(y_eq_2)),
-            None,
-        );
-
-        // Condition: x > 0 ∧ (y = 1 ∨ y = 2)
-        let condition = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(x_gt_0), Box::new(y_or)),
-            None,
-        );
-
-        // Equation: condition ∧ result (where result is a literal value 42)
-        let result_value = Expression::new(
-            ExpressionKind::Literal(num(42)),
-            None,
-        );
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(condition), Box::new(result_value)),
-            None,
-        );
-
-        // Target: result == 42
-        let target = Target::value(num(42));
-        let results = solve(equation, &target);
-
-        // Should have 2 solutions:
-        // 1. {x > 0, y = 1}
-        // 2. {x > 0, y = 2}
-        assert_eq!(
-            results.len(),
-            2,
-            "AND-over-OR should produce 2 solutions, got {}",
-            results.len()
-        );
-
-        // Both solutions should have constraints on both x and y
-        for (i, result) in results.iter().enumerate() {
-            match result {
-                SolveResult::Solved { fact_constraints } | SolveResult::Partial { fact_constraints, .. } => {
-                    assert!(
-                        fact_constraints.contains_key(&fact_x),
-                        "solution {} should have x constraint",
-                        i
-                    );
-                    assert!(
-                        fact_constraints.contains_key(&fact_y),
-                        "solution {} should have y constraint",
-                        i
-                    );
-                }
-                SolveResult::Unsatisfiable { .. } => {
-                    panic!("solution {} should not be unsatisfiable", i);
-                }
-            }
-        }
-    }
-
     /// Test flatten_or produces correct number of branches
     #[test]
     fn test_flatten_or_basic() {
@@ -1423,7 +1406,7 @@ mod tests {
 
         // Simple OR
         let or_expr = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(a.clone()), Box::new(b.clone())),
+            ExpressionKind::LogicalOr(Arc::new(a.clone()), Arc::new(b.clone())),
             None,
         );
         let branches = flatten_or(or_expr);
@@ -1432,53 +1415,16 @@ mod tests {
         // Nested OR: (a ∨ b) ∨ c
         let nested = Expression::new(
             ExpressionKind::LogicalOr(
-                Box::new(Expression::new(
-                    ExpressionKind::LogicalOr(Box::new(a.clone()), Box::new(b.clone())),
+                Arc::new(Expression::new(
+                    ExpressionKind::LogicalOr(Arc::new(a.clone()), Arc::new(b.clone())),
                     None,
                 )),
-                Box::new(c),
+                Arc::new(c),
             ),
             None,
         );
         let branches = flatten_or(nested);
         assert_eq!(branches.len(), 3);
-    }
-
-    /// Test expand distributes AND over OR correctly (DNF)
-    #[test]
-    fn test_expand_distributes_and_over_or() {
-        let a = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("a".to_string())),
-            None,
-        );
-        let b = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("b".to_string())),
-            None,
-        );
-        let c = Expression::new(
-            ExpressionKind::FactPath(FactPath::local("c".to_string())),
-            None,
-        );
-
-        // A ∧ (B ∨ C) should become (A ∧ B) ∨ (A ∧ C)
-        let b_or_c = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(b), Box::new(c)),
-            None,
-        );
-        let a_and_b_or_c = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(a), Box::new(b_or_c)),
-            None,
-        );
-
-        let dnf = expand(a_and_b_or_c);
-        let branches = flatten_or(dnf);
-
-        // Should have 2 branches after distribution
-        assert_eq!(
-            branches.len(),
-            2,
-            "A ∧ (B ∨ C) should produce 2 DNF branches"
-        );
     }
 
     // ========================================================================
@@ -1498,7 +1444,7 @@ mod tests {
 
     fn arith(left: Expression, op: ArithmeticComputation, right: Expression) -> Expression {
         Expression::new(
-            ExpressionKind::Arithmetic(Box::new(left), op, Box::new(right)),
+            ExpressionKind::Arithmetic(Arc::new(left), op, Arc::new(right)),
             None,
         )
     }
@@ -1506,24 +1452,24 @@ mod tests {
     /// `x + 5 == 10` → `x == 5`
     #[test]
     fn test_isolate_addition() {
-        use crate::inversion::Target;
-
         let fact_x = FactPath::local("x".to_string());
 
-        // Equation: (true ∧ (x + 5))
+        // Test solve_single_branch directly with: (x + 5) == 10
         let x_plus_5 = arith(fact_expr("x"), ArithmeticComputation::Add, num_expr(5));
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(true)), Box::new(x_plus_5)),
+        let condition = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(x_plus_5),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(num_expr(10)),
+            ),
             None,
         );
 
-        // Target: result == 10
-        let target = Target::value(num(10));
-        let results = solve(equation, &target);
+        let outcome = OperationResult::Value(num(10));
+        let result = solve_single_branch(condition, outcome);
 
-        assert_eq!(results.len(), 1, "should have 1 solution");
-        match &results[0] {
-            SolveResult::Solved { fact_constraints } => {
+        match result {
+            SolveResult::Solved { outcome: _, fact_constraints } => {
                 let constraint = fact_constraints.get(&fact_x).expect("should have x constraint");
                 match constraint {
                     FactConstraint::Enumeration(values) => {
@@ -1533,29 +1479,30 @@ mod tests {
                     _ => panic!("expected enumeration constraint, got {:?}", constraint),
                 }
             }
-            _ => panic!("expected Solved, got {:?}", results[0]),
+            _ => panic!("expected Solved, got {:?}", result),
         }
     }
 
     /// `x - 3 == 7` → `x == 10`
     #[test]
     fn test_isolate_subtraction() {
-        use crate::inversion::Target;
-
         let fact_x = FactPath::local("x".to_string());
 
         let x_minus_3 = arith(fact_expr("x"), ArithmeticComputation::Subtract, num_expr(3));
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(true)), Box::new(x_minus_3)),
+        let condition = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(x_minus_3),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(num_expr(7)),
+            ),
             None,
         );
 
-        let target = Target::value(num(7));
-        let results = solve(equation, &target);
+        let outcome = OperationResult::Value(num(7));
+        let result = solve_single_branch(condition, outcome);
 
-        assert_eq!(results.len(), 1);
-        match &results[0] {
-            SolveResult::Solved { fact_constraints } => {
+        match result {
+            SolveResult::Solved { outcome: _, fact_constraints } => {
                 let constraint = fact_constraints.get(&fact_x).expect("should have x constraint");
                 match constraint {
                     FactConstraint::Enumeration(values) => {
@@ -1565,29 +1512,30 @@ mod tests {
                     _ => panic!("expected enumeration, got {:?}", constraint),
                 }
             }
-            _ => panic!("expected Solved, got {:?}", results[0]),
+            _ => panic!("expected Solved, got {:?}", result),
         }
     }
 
     /// `x * 3 == 15` → `x == 5`
     #[test]
     fn test_isolate_multiplication() {
-        use crate::inversion::Target;
-
         let fact_x = FactPath::local("x".to_string());
 
         let x_times_3 = arith(fact_expr("x"), ArithmeticComputation::Multiply, num_expr(3));
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(true)), Box::new(x_times_3)),
+        let condition = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(x_times_3),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(num_expr(15)),
+            ),
             None,
         );
 
-        let target = Target::value(num(15));
-        let results = solve(equation, &target);
+        let outcome = OperationResult::Value(num(15));
+        let result = solve_single_branch(condition, outcome);
 
-        assert_eq!(results.len(), 1);
-        match &results[0] {
-            SolveResult::Solved { fact_constraints } => {
+        match result {
+            SolveResult::Solved { outcome: _, fact_constraints } => {
                 let constraint = fact_constraints.get(&fact_x).expect("should have x constraint");
                 match constraint {
                     FactConstraint::Enumeration(values) => {
@@ -1597,29 +1545,30 @@ mod tests {
                     _ => panic!("expected enumeration, got {:?}", constraint),
                 }
             }
-            _ => panic!("expected Solved, got {:?}", results[0]),
+            _ => panic!("expected Solved, got {:?}", result),
         }
     }
 
     /// `x / 2 == 10` → `x == 20`
     #[test]
     fn test_isolate_division() {
-        use crate::inversion::Target;
-
         let fact_x = FactPath::local("x".to_string());
 
         let x_div_2 = arith(fact_expr("x"), ArithmeticComputation::Divide, num_expr(2));
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(true)), Box::new(x_div_2)),
+        let condition = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(x_div_2),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(num_expr(10)),
+            ),
             None,
         );
 
-        let target = Target::value(num(10));
-        let results = solve(equation, &target);
+        let outcome = OperationResult::Value(num(10));
+        let result = solve_single_branch(condition, outcome);
 
-        assert_eq!(results.len(), 1);
-        match &results[0] {
-            SolveResult::Solved { fact_constraints } => {
+        match result {
+            SolveResult::Solved { outcome: _, fact_constraints } => {
                 let constraint = fact_constraints.get(&fact_x).expect("should have x constraint");
                 match constraint {
                     FactConstraint::Enumeration(values) => {
@@ -1629,30 +1578,30 @@ mod tests {
                     _ => panic!("expected enumeration, got {:?}", constraint),
                 }
             }
-            _ => panic!("expected Solved, got {:?}", results[0]),
+            _ => panic!("expected Solved, got {:?}", result),
         }
     }
 
     /// `10 - x == 3` → `x == 7`
     #[test]
     fn test_isolate_subtraction_from_constant() {
-        use crate::inversion::Target;
-
         let fact_x = FactPath::local("x".to_string());
 
-        // 10 - x
         let ten_minus_x = arith(num_expr(10), ArithmeticComputation::Subtract, fact_expr("x"));
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(true)), Box::new(ten_minus_x)),
+        let condition = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(ten_minus_x),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(num_expr(3)),
+            ),
             None,
         );
 
-        let target = Target::value(num(3));
-        let results = solve(equation, &target);
+        let outcome = OperationResult::Value(num(3));
+        let result = solve_single_branch(condition, outcome);
 
-        assert_eq!(results.len(), 1);
-        match &results[0] {
-            SolveResult::Solved { fact_constraints } => {
+        match result {
+            SolveResult::Solved { outcome: _, fact_constraints } => {
                 let constraint = fact_constraints.get(&fact_x).expect("should have x constraint");
                 match constraint {
                     FactConstraint::Enumeration(values) => {
@@ -1662,7 +1611,7 @@ mod tests {
                     _ => panic!("expected enumeration, got {:?}", constraint),
                 }
             }
-            _ => panic!("expected Solved, got {:?}", results[0]),
+            _ => panic!("expected Solved, got {:?}", result),
         }
     }
 
@@ -1673,12 +1622,12 @@ mod tests {
 
         let x_times_0 = arith(fact_expr("x"), ArithmeticComputation::Multiply, num_expr(0));
         let equation = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(true)), Box::new(x_times_0)),
+            ExpressionKind::LogicalAnd(Arc::new(literal_bool(true)), Arc::new(x_times_0)),
             None,
         );
 
         let target = Target::value(num(5));
-        let results = solve(equation, &target);
+        let results = solve_with_target(equation, &target);
 
         assert_eq!(results.len(), 1);
         assert!(
@@ -1691,20 +1640,21 @@ mod tests {
     /// `x * 0 == 0` → unconstrained
     #[test]
     fn test_multiply_by_zero_zero_target() {
-        use crate::inversion::Target;
-
         let x_times_0 = arith(fact_expr("x"), ArithmeticComputation::Multiply, num_expr(0));
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(true)), Box::new(x_times_0)),
+        let condition = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(x_times_0),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(num_expr(0)),
+            ),
             None,
         );
 
-        let target = Target::value(num(0));
-        let results = solve(equation, &target);
+        let outcome = OperationResult::Value(num(0));
+        let result = solve_single_branch(condition, outcome);
 
-        assert_eq!(results.len(), 1);
-        match &results[0] {
-            SolveResult::Solved { fact_constraints } => {
+        match result {
+            SolveResult::Solved { outcome: _, fact_constraints } => {
                 // Unconstrained means no constraints on x
                 assert!(
                     fact_constraints.is_empty(),
@@ -1712,31 +1662,31 @@ mod tests {
                     fact_constraints
                 );
             }
-            _ => panic!("expected Solved (unconstrained), got {:?}", results[0]),
+            _ => panic!("expected Solved (unconstrained), got {:?}", result),
         }
     }
 
     /// `(x + 5) * 2 == 30` → `x == 10`
     #[test]
     fn test_nested_arithmetic() {
-        use crate::inversion::Target;
-
         let fact_x = FactPath::local("x".to_string());
 
-        // (x + 5) * 2
         let x_plus_5 = arith(fact_expr("x"), ArithmeticComputation::Add, num_expr(5));
         let nested = arith(x_plus_5, ArithmeticComputation::Multiply, num_expr(2));
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(true)), Box::new(nested)),
+        let condition = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(nested),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(num_expr(30)),
+            ),
             None,
         );
 
-        let target = Target::value(num(30));
-        let results = solve(equation, &target);
+        let outcome = OperationResult::Value(num(30));
+        let result = solve_single_branch(condition, outcome);
 
-        assert_eq!(results.len(), 1);
-        match &results[0] {
-            SolveResult::Solved { fact_constraints } => {
+        match result {
+            SolveResult::Solved { outcome: _, fact_constraints } => {
                 let constraint = fact_constraints.get(&fact_x).expect("should have x constraint");
                 match constraint {
                     FactConstraint::Enumeration(values) => {
@@ -1746,7 +1696,7 @@ mod tests {
                     _ => panic!("expected enumeration, got {:?}", constraint),
                 }
             }
-            _ => panic!("expected Solved, got {:?}", results[0]),
+            _ => panic!("expected Solved, got {:?}", result),
         }
     }
 
@@ -1754,28 +1704,24 @@ mod tests {
     #[test]
     fn test_inequality_with_negative_multiplier() {
         use crate::computation::Bound;
-        use crate::inversion::Target;
-        use crate::inversion::TargetOp;
 
         let fact_x = FactPath::local("x".to_string());
 
-        // x * (-2)
         let x_times_neg2 = arith(fact_expr("x"), ArithmeticComputation::Multiply, num_expr(-2));
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(true)), Box::new(x_times_neg2)),
+        let condition = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(x_times_neg2),
+                ComparisonComputation::GreaterThan,
+                Arc::new(num_expr(10)),
+            ),
             None,
         );
 
-        // Target: result > 10
-        let target = Target {
-            outcome: Some(OperationResult::Value(num(10))),
-            op: TargetOp::Gt,
-        };
-        let results = solve(equation, &target);
+        let outcome = OperationResult::Value(num(10));
+        let result = solve_single_branch(condition, outcome);
 
-        assert_eq!(results.len(), 1);
-        match &results[0] {
-            SolveResult::Solved { fact_constraints } | SolveResult::Partial { fact_constraints, .. } => {
+        match result {
+            SolveResult::Solved { outcome: _, fact_constraints } | SolveResult::Partial { outcome: _, fact_constraints, .. } => {
                 let constraint = fact_constraints.get(&fact_x).expect("should have x constraint");
                 match constraint {
                     FactConstraint::Range { max, .. } => {
@@ -1790,29 +1736,29 @@ mod tests {
                     _ => panic!("expected range constraint, got {:?}", constraint),
                 }
             }
-            _ => panic!("expected Solved or Partial, got {:?}", results[0]),
+            _ => panic!("expected Solved or Partial, got {:?}", result),
         }
     }
 
     /// Test multiple unknowns: `x + y + 10 == 100` → simplified constraint `x + y == 90`
     #[test]
     fn test_multiple_unknowns_constant_simplification() {
-        use crate::inversion::Target;
-
-        // x + y + 10
         let x_plus_y = arith(fact_expr("x"), ArithmeticComputation::Add, fact_expr("y"));
         let x_plus_y_plus_10 = arith(x_plus_y, ArithmeticComputation::Add, num_expr(10));
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(literal_bool(true)), Box::new(x_plus_y_plus_10)),
+        let condition = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(x_plus_y_plus_10),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(num_expr(100)),
+            ),
             None,
         );
 
-        let target = Target::value(num(100));
-        let results = solve(equation, &target);
+        let outcome = OperationResult::Value(num(100));
+        let result = solve_single_branch(condition, outcome);
 
         // Should have a partial result with simplified constraint
-        assert_eq!(results.len(), 1);
-        match &results[0] {
+        match result {
             SolveResult::Partial {
                 remaining_constraints,
                 ..
@@ -1839,7 +1785,7 @@ mod tests {
                 // (means both facts are unconstrained which shouldn't happen here)
                 panic!("should be Partial with simplified constraint, not Solved");
             }
-            _ => panic!("expected Partial, got {:?}", results[0]),
+            _ => panic!("expected Partial, got {:?}", result),
         }
     }
 
@@ -1890,12 +1836,12 @@ mod tests {
         // Branch 1: y >= 0 ∧ veto
         let y_gte_0 = Expression::new(
             ExpressionKind::Comparison(
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::FactPath(fact_y.clone()),
                     None,
                 )),
                 ComparisonComputation::GreaterThanOrEqual,
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::Literal(LiteralValue::Number(Decimal::ZERO)),
                     None,
                 )),
@@ -1904,8 +1850,8 @@ mod tests {
         );
         let veto_branch = Expression::new(
             ExpressionKind::LogicalAnd(
-                Box::new(y_gte_0),
-                Box::new(Expression::new(
+                Arc::new(y_gte_0),
+                Arc::new(Expression::new(
                     ExpressionKind::Veto(VetoExpression { message: None }),
                     None,
                 )),
@@ -1916,12 +1862,12 @@ mod tests {
         // Branch 2: y < 0 ∧ 25
         let y_lt_0 = Expression::new(
             ExpressionKind::Comparison(
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::FactPath(fact_y.clone()),
                     None,
                 )),
                 ComparisonComputation::LessThan,
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::Literal(LiteralValue::Number(Decimal::ZERO)),
                     None,
                 )),
@@ -1930,8 +1876,8 @@ mod tests {
         );
         let value_branch = Expression::new(
             ExpressionKind::LogicalAnd(
-                Box::new(y_lt_0),
-                Box::new(Expression::new(
+                Arc::new(y_lt_0),
+                Arc::new(Expression::new(
                     ExpressionKind::Literal(LiteralValue::Number(Decimal::from(25))),
                     None,
                 )),
@@ -1941,12 +1887,12 @@ mod tests {
 
         // Equation: branch1 ∨ branch2
         let equation = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(veto_branch), Box::new(value_branch)),
+            ExpressionKind::LogicalOr(Arc::new(veto_branch), Arc::new(value_branch)),
             None,
         );
 
         let target = Target::value(LiteralValue::Number(Decimal::from(25)));
-        let results = solve(equation, &target);
+        let results = solve_with_target(equation, &target);
 
         // Veto branch should be eliminated, only value branch remains
         assert_eq!(
@@ -1974,12 +1920,12 @@ mod tests {
         // Branch 1: y >= 0 ∧ veto "A"
         let y_gte_0 = Expression::new(
             ExpressionKind::Comparison(
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::FactPath(fact_y.clone()),
                     None,
                 )),
                 ComparisonComputation::GreaterThanOrEqual,
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::Literal(LiteralValue::Number(Decimal::ZERO)),
                     None,
                 )),
@@ -1988,8 +1934,8 @@ mod tests {
         );
         let veto_branch = Expression::new(
             ExpressionKind::LogicalAnd(
-                Box::new(y_gte_0),
-                Box::new(Expression::new(
+                Arc::new(y_gte_0),
+                Arc::new(Expression::new(
                     ExpressionKind::Veto(VetoExpression {
                         message: Some("A".to_string()),
                     }),
@@ -2002,12 +1948,12 @@ mod tests {
         // Branch 2: y < 0 ∧ 25
         let y_lt_0 = Expression::new(
             ExpressionKind::Comparison(
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::FactPath(fact_y.clone()),
                     None,
                 )),
                 ComparisonComputation::LessThan,
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::Literal(LiteralValue::Number(Decimal::ZERO)),
                     None,
                 )),
@@ -2016,8 +1962,8 @@ mod tests {
         );
         let value_branch = Expression::new(
             ExpressionKind::LogicalAnd(
-                Box::new(y_lt_0),
-                Box::new(Expression::new(
+                Arc::new(y_lt_0),
+                Arc::new(Expression::new(
                     ExpressionKind::Literal(LiteralValue::Number(Decimal::from(25))),
                     None,
                 )),
@@ -2027,12 +1973,12 @@ mod tests {
 
         // Equation: branch1 ∨ branch2
         let equation = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(veto_branch), Box::new(value_branch)),
+            ExpressionKind::LogicalOr(Arc::new(veto_branch), Arc::new(value_branch)),
             None,
         );
 
         let target = Target::any_veto();
-        let results = solve(equation, &target);
+        let results = solve_with_target(equation, &target);
 
         // Value branch should be eliminated, only veto branch remains
         assert_eq!(
@@ -2060,12 +2006,12 @@ mod tests {
         // Branch 1: y < 0 ∧ veto "A"
         let y_lt_0 = Expression::new(
             ExpressionKind::Comparison(
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::FactPath(fact_y.clone()),
                     None,
                 )),
                 ComparisonComputation::LessThan,
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::Literal(LiteralValue::Number(Decimal::ZERO)),
                     None,
                 )),
@@ -2074,8 +2020,8 @@ mod tests {
         );
         let veto_a_branch = Expression::new(
             ExpressionKind::LogicalAnd(
-                Box::new(y_lt_0),
-                Box::new(Expression::new(
+                Arc::new(y_lt_0),
+                Arc::new(Expression::new(
                     ExpressionKind::Veto(VetoExpression {
                         message: Some("A".to_string()),
                     }),
@@ -2088,12 +2034,12 @@ mod tests {
         // Branch 2: y >= 0 ∧ veto "B"
         let y_gte_0 = Expression::new(
             ExpressionKind::Comparison(
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::FactPath(fact_y.clone()),
                     None,
                 )),
                 ComparisonComputation::GreaterThanOrEqual,
-                Box::new(Expression::new(
+                Arc::new(Expression::new(
                     ExpressionKind::Literal(LiteralValue::Number(Decimal::ZERO)),
                     None,
                 )),
@@ -2102,8 +2048,8 @@ mod tests {
         );
         let veto_b_branch = Expression::new(
             ExpressionKind::LogicalAnd(
-                Box::new(y_gte_0),
-                Box::new(Expression::new(
+                Arc::new(y_gte_0),
+                Arc::new(Expression::new(
                     ExpressionKind::Veto(VetoExpression {
                         message: Some("B".to_string()),
                     }),
@@ -2115,12 +2061,12 @@ mod tests {
 
         // Equation: branch1 ∨ branch2
         let equation = Expression::new(
-            ExpressionKind::LogicalOr(Box::new(veto_a_branch), Box::new(veto_b_branch)),
+            ExpressionKind::LogicalOr(Arc::new(veto_a_branch), Arc::new(veto_b_branch)),
             None,
         );
 
         let target = Target::veto("A".to_string());
-        let results = solve(equation, &target);
+        let results = solve_with_target(equation, &target);
 
         // Veto "B" branch should be eliminated, only veto "A" branch remains
         assert_eq!(

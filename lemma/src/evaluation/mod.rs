@@ -11,12 +11,12 @@ pub mod response;
 
 use crate::planning::ExecutionPlan;
 use crate::{
-    FactPath, FactReference, FactValue, LemmaError, LemmaFact, LemmaResult, LiteralValue, RulePath,
+    FactPath, LemmaFact, LemmaResult, LiteralValue, RulePath,
 };
 use indexmap::IndexMap;
 pub use operations::{ComputationKind, OperationKind, OperationRecord, OperationResult};
 pub use response::{Facts, Response, RuleResult};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Evaluation context for storing intermediate results
 pub struct EvaluationContext {
@@ -90,12 +90,9 @@ impl Evaluator {
 
         let mut response = Response {
             doc_name: plan.doc_name.clone(),
-            facts: Vec::new(),
+            facts: plan.facts.clone(),
             results: IndexMap::new(),
         };
-
-        let mut seen_facts = HashSet::new();
-        let mut fact_list = Vec::new();
 
         // Execute each rule in topological order (already sorted by ExecutionPlan)
         for exec_rule in &plan.rules {
@@ -108,40 +105,6 @@ impl Evaluator {
                 .rule_results
                 .insert(exec_rule.path.clone(), result.clone());
             context.set_rule_proof(exec_rule.path.clone(), proof.clone());
-
-            let rule_operations = context.operations.clone();
-
-            // Collect facts from operations as we go
-            for op in &rule_operations {
-                if let OperationKind::FactUsed {
-                    fact_ref,
-                    value,
-                    expression: _,
-                } = &op.kind
-                {
-                    if seen_facts.insert(fact_ref.clone()) {
-                        let segments: Vec<String> =
-                            fact_ref.segments.iter().map(|s| s.fact.clone()).collect();
-                        let fact = match plan.facts.get(fact_ref) {
-                            Some(f) => f,
-                            None => {
-                                return Err(LemmaError::Engine(format!(
-                                    "Fact '{}' used in evaluation but not found in execution plan",
-                                    fact_ref
-                                )));
-                            }
-                        };
-                        fact_list.push(LemmaFact {
-                            reference: FactReference {
-                                segments,
-                                fact: fact_ref.fact.clone(),
-                            },
-                            value: FactValue::Literal(value.clone()),
-                            source: fact.source.clone(),
-                        });
-                    }
-                }
-            }
 
             response.add_result(RuleResult {
                 rule: crate::LemmaRule {
@@ -158,19 +121,9 @@ impl Evaluator {
                     source: exec_rule.source.clone(),
                 },
                 result,
-                operations: rule_operations,
+                operations: context.operations.clone(),
                 proof: Some(proof),
             });
-        }
-
-        if !fact_list.is_empty() {
-            response.facts = vec![Facts {
-                fact_path: String::new(),
-                referencing_fact_name: String::new(),
-                document_reference: None,
-                facts: fact_list,
-                referenced_docs: Vec::new(),
-            }];
         }
 
         Ok(response)

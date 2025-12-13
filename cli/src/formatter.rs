@@ -38,7 +38,7 @@ impl Formatter {
 
         if !response.facts.is_empty() {
             output.push_str("Facts\n");
-            output.push_str(&self.format_facts_tree(&response.facts, &response.doc_name));
+            output.push_str(&self.format_facts(&response.facts));
             output.push('\n');
         }
 
@@ -161,12 +161,9 @@ impl Formatter {
         output
     }
 
-    fn format_facts_tree(&self, facts_groups: &[lemma::Facts], doc_name: &str) -> String {
-        let mut output = String::new();
-
-        for group in facts_groups {
-            if group.facts.is_empty() && group.referenced_docs.is_empty() {
-                continue;
+    fn format_facts(&self, facts: &std::collections::HashMap<lemma::FactPath, lemma::LemmaFact>) -> String {
+        if facts.is_empty() {
+            return String::new();
             }
 
             let mut table = Table::new();
@@ -174,114 +171,21 @@ impl Formatter {
             table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
             table.set_style(super_table::TableComponent::HorizontalLines, '─');
 
-            table.add_row(vec![
-                Cell::new(doc_name.to_string()).set_alignment(CellAlignment::Left)
-            ]);
-
-            let (left_content, right_content) = if let Some(doc_ref) = &group.document_reference {
-                let mut left_lines = vec![group.referencing_fact_name.clone()];
-                let mut right_lines = vec![format!("doc {}", doc_ref)];
-
-                let (nested_left, nested_right) =
-                    self.build_facts_content_for_referenced_doc(group);
-                if !nested_left.is_empty() {
-                    left_lines.push(nested_left);
-                    right_lines.push(nested_right);
-                }
-
-                (left_lines.join("\n"), right_lines.join("\n"))
-            } else {
-                self.build_facts_content(group, "")
+        for (_, fact) in facts.iter() {
+            let name = &fact.reference.fact;
+            let value_str = match &fact.value {
+                lemma::FactValue::Literal(lit) => self.format_literal(lit),
+                lemma::FactValue::DocumentReference(doc_ref) => format!("doc {}", doc_ref),
+                lemma::FactValue::TypeAnnotation(ty) => format!("[{}]", ty),
             };
 
             table.add_row(vec![
-                Cell::new(left_content).set_alignment(CellAlignment::Left),
-                Cell::new(right_content).set_alignment(CellAlignment::Right),
+                Cell::new(name).set_alignment(CellAlignment::Left),
+                Cell::new(value_str).set_alignment(CellAlignment::Right),
             ]);
-
-            output.push_str(&table.to_string());
-            output.push('\n');
         }
 
-        output
-    }
-
-    fn build_facts_content_for_referenced_doc(&self, group: &lemma::Facts) -> (String, String) {
-        let mut left_lines = Vec::new();
-        let mut right_lines = Vec::new();
-
-        let len = group.facts.len();
-        for (idx, fact) in group.facts.iter().enumerate() {
-            let connector = if idx == len - 1 { "└─" } else { "├─" };
-            let value_str = match &fact.value {
-                lemma::FactValue::Literal(lit) => self.format_literal(lit),
-                lemma::FactValue::DocumentReference(_) => fact.value.to_string(),
-                lemma::FactValue::TypeAnnotation(_) => String::new(),
-            };
-
-            left_lines.push(format!("{} {}", connector, fact.reference.fact));
-            right_lines.push(value_str);
-        }
-
-        (left_lines.join("\n"), right_lines.join("\n"))
-    }
-
-    fn build_facts_content(&self, group: &lemma::Facts, prefix: &str) -> (String, String) {
-        let mut left_lines = Vec::new();
-        let mut right_lines = Vec::new();
-
-        let is_top_level = prefix.is_empty();
-        let next_prefix = if is_top_level {
-            String::new()
-        } else {
-            format!("{}│  ", prefix)
-        };
-
-        let total_items = group.referenced_docs.len() + group.facts.len();
-
-        for (idx, child_group) in group.referenced_docs.iter().enumerate() {
-            let is_last = idx == total_items - 1;
-            let connector = if is_last { "└─ " } else { "├─ " };
-
-            let doc_name_str = child_group
-                .document_reference
-                .as_ref()
-                .map(|d| format!("doc {}", d))
-                .unwrap_or_default();
-
-            left_lines.push(format!(
-                "{}{}{}",
-                next_prefix, connector, child_group.referencing_fact_name
-            ));
-            right_lines.push(doc_name_str);
-
-            let child_prefix = format!("{}{}", next_prefix, if is_last { "   " } else { "│  " });
-            let (child_left, child_right) = self.build_facts_content(child_group, &child_prefix);
-            if !child_left.is_empty() {
-                left_lines.push(child_left);
-                right_lines.push(child_right);
-            }
-        }
-
-        let facts_start = group.referenced_docs.len();
-        for (idx, fact) in group.facts.iter().enumerate() {
-            let is_last = facts_start + idx == total_items - 1;
-            let connector = if is_last { "└─ " } else { "├─ " };
-
-            let value_str = match &fact.value {
-                lemma::FactValue::Literal(lit) => self.format_literal(lit),
-                lemma::FactValue::DocumentReference(_) => fact.value.to_string(),
-                lemma::FactValue::TypeAnnotation(_) => String::new(),
-            };
-
-            left_lines.push(format!(
-                "{}{}{}",
-                next_prefix, connector, fact.reference.fact
-            ));
-            right_lines.push(value_str);
-        }
-
-        (left_lines.join("\n"), right_lines.join("\n"))
+        table.to_string()
     }
 
     fn format_literal(&self, lit: &LiteralValue) -> String {

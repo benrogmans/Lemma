@@ -127,7 +127,7 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
     }
 
     collect_facts_for_rules(&mut executable_rules, graph);
-    build_equations_for_rules(&mut executable_rules);
+    build_equations_for_rules(&mut executable_rules, graph);
 
     ExecutionPlan::new(
         main_doc_name.to_string(),
@@ -163,11 +163,19 @@ fn collect_facts_for_rules(rules: &mut [ExecutableRule], graph: &Graph) {
 }
 
 /// Build equations for all rules (linear pass in topological order)
-fn build_equations_for_rules(rules: &mut [ExecutableRule]) {
-    let mut cache: HashMap<RulePath, Expression> = HashMap::new();
+///
+/// Uses Arc<Expression> cache for structural sharing to avoid exponential memory growth.
+fn build_equations_for_rules(rules: &mut [ExecutableRule], graph: &Graph) {
+    let mut cache: HashMap<RulePath, std::sync::Arc<Expression>> = HashMap::new();
 
     for rule in rules.iter_mut() {
-        rule.equation = equation::build_equation(&rule.branches, &rule.path, &mut cache);
+        let has_dependencies = graph
+            .rules()
+            .get(&rule.path)
+            .map(|node| !node.depends_on_rules.is_empty())
+            .unwrap_or(false);
+        
+        rule.equation = equation::build_equation(&rule.branches, &rule.path, &mut cache, has_dependencies);
     }
 }
 
@@ -336,6 +344,7 @@ impl ExecutionPlan {
 mod tests {
     use super::*;
     use crate::semantic::{FactPath, FactReference, FactValue, LemmaType, LiteralValue};
+    use std::sync::Arc;
     use serde_json;
 
     fn default_limits() -> ResourceLimits {
@@ -529,12 +538,12 @@ mod tests {
             branches: vec![Branch {
                 condition: Expression::new(
                     ExpressionKind::Comparison(
-                        Box::new(Expression::new(
+                        Arc::new(Expression::new(
                             ExpressionKind::FactPath(age_path.clone()),
                             create_test_source(),
                         )),
                         crate::ComparisonComputation::GreaterThanOrEqual,
-                        Box::new(create_literal_expr(LiteralValue::Number(18.into()))),
+                        Arc::new(create_literal_expr(LiteralValue::Number(18.into()))),
                     ),
                     create_test_source(),
                 ),
@@ -723,12 +732,12 @@ mod tests {
                 Branch {
                     condition: Expression::new(
                         ExpressionKind::Comparison(
-                            Box::new(Expression::new(
+                            Arc::new(Expression::new(
                                 ExpressionKind::FactPath(points_path.clone()),
                                 create_test_source(),
                             )),
                             crate::ComparisonComputation::GreaterThanOrEqual,
-                            Box::new(create_literal_expr(LiteralValue::Number(100.into()))),
+                            Arc::new(create_literal_expr(LiteralValue::Number(100.into()))),
                         ),
                         create_test_source(),
                     ),
@@ -738,12 +747,12 @@ mod tests {
                 Branch {
                     condition: Expression::new(
                         ExpressionKind::Comparison(
-                            Box::new(Expression::new(
+                            Arc::new(Expression::new(
                                 ExpressionKind::FactPath(points_path.clone()),
                                 create_test_source(),
                             )),
                             crate::ComparisonComputation::GreaterThanOrEqual,
-                            Box::new(create_literal_expr(LiteralValue::Number(500.into()))),
+                            Arc::new(create_literal_expr(LiteralValue::Number(500.into()))),
                         ),
                         create_test_source(),
                     ),
@@ -837,12 +846,12 @@ mod tests {
                 ),
                 result: Expression::new(
                     ExpressionKind::Arithmetic(
-                        Box::new(Expression::new(
+                        Arc::new(Expression::new(
                             ExpressionKind::FactPath(x_path.clone()),
                             create_test_source(),
                         )),
                         crate::ArithmeticComputation::Multiply,
-                        Box::new(create_literal_expr(LiteralValue::Number(2.into()))),
+                        Arc::new(create_literal_expr(LiteralValue::Number(2.into()))),
                     ),
                     create_test_source(),
                 ),
@@ -909,12 +918,12 @@ mod tests {
             branches: vec![Branch {
                 condition: Expression::new(
                     ExpressionKind::Comparison(
-                        Box::new(Expression::new(
+                        Arc::new(Expression::new(
                             ExpressionKind::FactPath(age_path.clone()),
                             create_test_source(),
                         )),
                         crate::ComparisonComputation::GreaterThanOrEqual,
-                        Box::new(create_literal_expr(LiteralValue::Number(18.into()))),
+                        Arc::new(create_literal_expr(LiteralValue::Number(18.into()))),
                     ),
                     create_test_source(),
                 ),

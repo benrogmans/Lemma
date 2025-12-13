@@ -19,7 +19,8 @@ pub struct Facts {
 #[derive(Debug, Clone, Serialize)]
 pub struct Response {
     pub doc_name: String,
-    pub facts: Vec<Facts>,
+    #[serde(serialize_with = "crate::serialization::serialize_fact_path_map")]
+    pub facts: std::collections::HashMap<crate::FactPath, crate::LemmaFact>,
     pub results: IndexMap<String, RuleResult>,
 }
 
@@ -96,7 +97,7 @@ mod tests {
         );
         let response = Response {
             doc_name: "test_doc".to_string(),
-            facts: vec![],
+            facts: std::collections::HashMap::new(),
             results,
         };
 
@@ -129,7 +130,7 @@ mod tests {
         );
         let mut response = Response {
             doc_name: "test_doc".to_string(),
-            facts: vec![],
+            facts: std::collections::HashMap::new(),
             results,
         };
 

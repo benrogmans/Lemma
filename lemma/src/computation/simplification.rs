@@ -10,18 +10,32 @@ use crate::semantic::{
     BooleanValue, ComparisonComputation, Expression, ExpressionKind, FactPath, LiteralValue,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Reduce a DNF expression using Quine-McCluskey style minimization
 pub fn reduce(expression: Expression) -> Expression {
+
     // 1. Flatten OR branches
     let branches = flatten_or_branches(&expression);
 
-    // 2. Convert each branch to a set of terms, detecting contradictions
+    // 2. Convert each branch to a set of terms, detecting contradictions and deduplicating
     let mut term_sets: Vec<Vec<Expression>> = Vec::new();
     for branch in branches {
         let terms = flatten_and_terms(&branch);
-        if !has_contradiction(&terms) {
-            term_sets.push(terms);
+        
+        // Deduplicate terms within the branch
+        let mut deduped: Vec<Expression> = Vec::new();
+        for term in terms {
+            if !deduped.iter().any(|existing| existing.semantically_equal(&term)) {
+                deduped.push(term);
+            }
+        }
+        
+        // Remove redundant inequalities (e.g., x==1 AND x!=2 → just x==1)
+        let cleaned = remove_redundant_inequalities(deduped);
+        
+        if !has_contradiction(&cleaned) {
+            term_sets.push(cleaned);
         }
     }
 
@@ -77,6 +91,40 @@ fn flatten_and_terms(expression: &Expression) -> Vec<Expression> {
         ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)) => {
             vec![literal_false()]
         }
+        // Fold constant comparisons: 1 == 1 → true, 0 == 1 → false
+        ExpressionKind::Comparison(left, op, right) => {
+            if let (ExpressionKind::Literal(lval), ExpressionKind::Literal(rval)) = (&left.kind, &right.kind) {
+                let result = match op {
+                    ComparisonComputation::Equal(_) => lval == rval,
+                    ComparisonComputation::NotEqual(_) => lval != rval,
+                    _ => return vec![expression.clone()],
+                };
+                return if result { vec![] } else { vec![literal_false()] };
+            }
+            vec![expression.clone()]
+        }
+        // Simplify NOT(comparison) → opposite comparison
+        ExpressionKind::LogicalNegation(inner, _negation_type) => {
+            if let ExpressionKind::Comparison(left, op, right) = &inner.kind {
+                // Convert to opposite comparison
+                let opposite_op = match op {
+                    ComparisonComputation::Equal(notation) => ComparisonComputation::NotEqual(notation.clone()),
+                    ComparisonComputation::NotEqual(notation) => ComparisonComputation::Equal(notation.clone()),
+                    ComparisonComputation::LessThan => ComparisonComputation::GreaterThanOrEqual,
+                    ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThan,
+                    ComparisonComputation::GreaterThan => ComparisonComputation::LessThanOrEqual,
+                    ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThan,
+                };
+                let simplified = Expression::new(
+                    ExpressionKind::Comparison(left.clone(), opposite_op, right.clone()),
+                    None,
+                );
+                vec![simplified]
+            } else {
+                // Can't simplify this negation, keep it as-is
+                vec![expression.clone()]
+            }
+        }
         _ => vec![expression.clone()],
     }
 }
@@ -86,8 +134,10 @@ fn flatten_and_terms(expression: &Expression) -> Vec<Expression> {
 // ============================================================================
 
 fn has_contradiction(terms: &[Expression]) -> bool {
-    // Check for explicit false
-    if terms.iter().any(|t| t.is_boolean_false()) {
+    // Check for explicit false ONLY if it's the sole term
+    // A branch with just [false] is unsatisfiable
+    // But (condition ∧ false) where false is the result value is valid
+    if terms.len() == 1 && terms[0].is_boolean_false() {
         return true;
     }
 
@@ -136,6 +186,54 @@ fn extract_equality(expr: &Expression) -> Option<(FactPath, LiteralValue)> {
     None
 }
 
+fn extract_inequality(expr: &Expression) -> Option<(FactPath, LiteralValue)> {
+    if let ExpressionKind::Comparison(left, op, right) = &expr.kind {
+        if !op.is_not_equal() {
+            return None;
+        }
+        if let ExpressionKind::FactPath(fact) = &left.kind {
+            if let ExpressionKind::Literal(value) = &right.kind {
+                return Some((fact.clone(), value.clone()));
+            }
+        }
+        if let ExpressionKind::Literal(value) = &left.kind {
+            if let ExpressionKind::FactPath(fact) = &right.kind {
+                return Some((fact.clone(), value.clone()));
+            }
+        }
+    }
+    None
+}
+
+/// Remove redundant inequality terms when there's a definite equality
+///
+/// If we have (fact == X) in the branch, remove all (fact != Y) where Y != X
+/// since they're redundant - if fact equals X, it's automatically not equal to other values
+fn remove_redundant_inequalities(terms: Vec<Expression>) -> Vec<Expression> {
+    // First, collect all equality constraints
+    let mut equalities: HashMap<FactPath, LiteralValue> = HashMap::new();
+    for term in &terms {
+        if let Some((fact, value)) = extract_equality(term) {
+            equalities.insert(fact, value);
+        }
+    }
+    
+    // Filter out redundant inequalities
+    terms.into_iter().filter(|term| {
+        if let Some((fact, value)) = extract_inequality(term) {
+            // This is a != comparison
+            // Check if we have an equality for this fact
+            if let Some(eq_value) = equalities.get(&fact) {
+                // If fact == X, then (fact != Y) is redundant when Y != X
+                if eq_value != &value {
+                    return false; // Remove this redundant term
+                }
+            }
+        }
+        true // Keep this term
+    }).collect()
+}
+
 // ============================================================================
 // Complement Detection
 // ============================================================================
@@ -143,12 +241,12 @@ fn extract_equality(expr: &Expression) -> Option<(FactPath, LiteralValue)> {
 fn are_complements(a: &Expression, b: &Expression) -> bool {
     // NOT(X) vs X
     if let ExpressionKind::LogicalNegation(inner, _) = &a.kind {
-        if expressions_equal(inner, b) {
+        if inner.semantically_equal(b) {
             return true;
         }
     }
     if let ExpressionKind::LogicalNegation(inner, _) = &b.kind {
-        if expressions_equal(inner, a) {
+        if inner.semantically_equal(a) {
             return true;
         }
     }
@@ -159,7 +257,7 @@ fn are_complements(a: &Expression, b: &Expression) -> bool {
         ExpressionKind::Comparison(lb, ob, rb),
     ) = (&a.kind, &b.kind)
     {
-        if expressions_equal(la, lb) && expressions_equal(ra, rb) {
+        if la.semantically_equal(lb) && ra.semantically_equal(rb) {
             return ops_are_complementary(oa, ob);
         }
     }
@@ -184,40 +282,12 @@ fn ops_are_complementary(a: &ComparisonComputation, b: &ComparisonComputation) -
 // Expression Equality
 // ============================================================================
 
-fn expressions_equal(a: &Expression, b: &Expression) -> bool {
-    match (&a.kind, &b.kind) {
-        (ExpressionKind::Literal(la), ExpressionKind::Literal(lb)) => la == lb,
-        (ExpressionKind::FactPath(fa), ExpressionKind::FactPath(fb)) => fa == fb,
-        (
-            ExpressionKind::Comparison(la, oa, ra),
-            ExpressionKind::Comparison(lb, ob, rb),
-        ) => oa == ob && expressions_equal(la, lb) && expressions_equal(ra, rb),
-        (
-            ExpressionKind::LogicalNegation(ia, _),
-            ExpressionKind::LogicalNegation(ib, _),
-        ) => expressions_equal(ia, ib),
-        (
-            ExpressionKind::LogicalAnd(la, ra),
-            ExpressionKind::LogicalAnd(lb, rb),
-        ) => expressions_equal(la, lb) && expressions_equal(ra, rb),
-        (
-            ExpressionKind::LogicalOr(la, ra),
-            ExpressionKind::LogicalOr(lb, rb),
-        ) => expressions_equal(la, lb) && expressions_equal(ra, rb),
-        (
-            ExpressionKind::Arithmetic(la, oa, ra),
-            ExpressionKind::Arithmetic(lb, ob, rb),
-        ) => oa == ob && expressions_equal(la, lb) && expressions_equal(ra, rb),
-        _ => false,
-    }
-}
-
 fn terms_set_equal(a: &[Expression], b: &[Expression]) -> bool {
     if a.len() != b.len() {
         return false;
     }
     a.iter()
-        .all(|ta| b.iter().any(|tb| expressions_equal(ta, tb)))
+        .all(|ta| b.iter().any(|tb| ta.semantically_equal(tb)))
 }
 
 // ============================================================================
@@ -259,7 +329,7 @@ fn is_subset(smaller: &[Expression], larger: &[Expression]) -> bool {
     }
     smaller
         .iter()
-        .all(|term| larger.iter().any(|other| expressions_equal(term, other)))
+        .all(|term| larger.iter().any(|other| term.semantically_equal(other)))
 }
 
 // ============================================================================
@@ -320,18 +390,26 @@ fn try_combine(branch_a: &[Expression], branch_b: &[Expression]) -> Option<Vec<E
         return None;
     }
 
+    // Don't combine branches that contain veto - each veto is a distinct outcome
+    let has_veto = |branch: &[Expression]| {
+        branch.iter().any(|term| matches!(term.kind, ExpressionKind::Veto(_)))
+    };
+    if has_veto(branch_a) || has_veto(branch_b) {
+        return None;
+    }
+
     // Find terms in A not in B, and terms in B not in A
     let mut only_in_a: Vec<&Expression> = Vec::new();
     let mut only_in_b: Vec<&Expression> = Vec::new();
 
     for term in branch_a {
-        if !branch_b.iter().any(|t| expressions_equal(term, t)) {
+        if !branch_b.iter().any(|t| term.semantically_equal(t)) {
             only_in_a.push(term);
         }
     }
 
     for term in branch_b {
-        if !branch_a.iter().any(|t| expressions_equal(term, t)) {
+        if !branch_a.iter().any(|t| term.semantically_equal(t)) {
             only_in_b.push(term);
         }
     }
@@ -349,7 +427,7 @@ fn try_combine(branch_a: &[Expression], branch_b: &[Expression]) -> Option<Vec<E
     // Combine: remove the complementary term
     let combined: Vec<Expression> = branch_a
         .iter()
-        .filter(|t| !expressions_equal(t, only_in_a[0]))
+        .filter(|t| !t.semantically_equal(only_in_a[0]))
         .cloned()
         .collect();
 
@@ -420,11 +498,11 @@ fn is_consensus_term(
                 // Found X in a and ¬X in b
                 let rest_a: Vec<&Expression> = branch_a
                     .iter()
-                    .filter(|t| !expressions_equal(t, term_a))
+                    .filter(|t| !t.semantically_equal(term_a))
                     .collect();
                 let rest_b: Vec<&Expression> = branch_b
                     .iter()
-                    .filter(|t| !expressions_equal(t, term_b))
+                    .filter(|t| !t.semantically_equal(term_b))
                     .collect();
 
                 // Expected consensus = rest_a ∪ rest_b
@@ -437,10 +515,10 @@ fn is_consensus_term(
                 // Check if branch_c contains exactly rest_a ∪ rest_b
                 let all_rest_a_in_c = rest_a
                     .iter()
-                    .all(|t| branch_c.iter().any(|c| expressions_equal(t, c)));
+                    .all(|t| branch_c.iter().any(|c| t.semantically_equal(c)));
                 let all_rest_b_in_c = rest_b
                     .iter()
-                    .all(|t| branch_c.iter().any(|c| expressions_equal(t, c)));
+                    .all(|t| branch_c.iter().any(|c| t.semantically_equal(c)));
 
                 if all_rest_a_in_c && all_rest_b_in_c {
                     return true;
@@ -466,7 +544,7 @@ fn rebuild_or_expression(branches: Vec<Vec<Expression>>) -> Expression {
         .into_iter()
         .reduce(|acc, branch| {
             Expression::new(
-                ExpressionKind::LogicalOr(Box::new(acc), Box::new(branch)),
+                ExpressionKind::LogicalOr(Arc::new(acc), Arc::new(branch)),
                 None,
             )
         })
@@ -482,7 +560,7 @@ fn rebuild_and_expression(terms: Vec<Expression>) -> Expression {
         .into_iter()
         .reduce(|acc, term| {
             Expression::new(
-                ExpressionKind::LogicalAnd(Box::new(acc), Box::new(term)),
+                ExpressionKind::LogicalAnd(Arc::new(acc), Arc::new(term)),
                 None,
             )
         })
@@ -530,9 +608,9 @@ mod tests {
     fn eq(left: Expression, right: Expression) -> Expression {
         Expression::new(
             ExpressionKind::Comparison(
-                Box::new(left),
+                Arc::new(left),
                 ComparisonComputation::Equal(EqualityNotation::Symbol),
-                Box::new(right),
+                Arc::new(right),
             ),
             None,
         )
@@ -541,9 +619,9 @@ mod tests {
     fn neq(left: Expression, right: Expression) -> Expression {
         Expression::new(
             ExpressionKind::Comparison(
-                Box::new(left),
+                Arc::new(left),
                 ComparisonComputation::NotEqual(EqualityNotation::Symbol),
-                Box::new(right),
+                Arc::new(right),
             ),
             None,
         )
@@ -551,14 +629,14 @@ mod tests {
 
     fn and(left: Expression, right: Expression) -> Expression {
         Expression::new(
-            ExpressionKind::LogicalAnd(Box::new(left), Box::new(right)),
+            ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right)),
             None,
         )
     }
 
     fn or(left: Expression, right: Expression) -> Expression {
         Expression::new(
-            ExpressionKind::LogicalOr(Box::new(left), Box::new(right)),
+            ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
             None,
         )
     }
@@ -678,5 +756,65 @@ mod tests {
             1,
             "should combine to single branch"
         );
+    }
+
+    #[test]
+    fn test_redundant_inequality_removal() {
+        // (x == 1 ∧ x != 2) → x == 1
+        // The x != 2 is redundant since x already equals 1
+        let x = fact("x");
+        let eq_1 = eq(x.clone(), literal_num(1));
+        let neq_2 = neq(x.clone(), literal_num(2));
+        
+        let expr = and(eq_1.clone(), neq_2);
+        let result = reduce(expr);
+        
+        // Result should be just x == 1, not have the redundant != 2
+        // Count the AND terms - should be 1 (just the equality)
+        match &result.kind {
+            ExpressionKind::Comparison(_, _, _) => {
+                // Good - simplified to single comparison
+            }
+            ExpressionKind::LogicalAnd(_, _) => {
+                panic!("Should have removed redundant inequality, but still has AND");
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn test_multiple_redundant_inequalities() {
+        // (x == "latte" ∧ x != "cappuccino" ∧ x != "mocha") → x == "latte"
+        let x = fact("drink");
+        let latte = Expression::new(
+            ExpressionKind::Literal(LiteralValue::Text("latte".to_string())),
+            None,
+        );
+        let cappuccino = Expression::new(
+            ExpressionKind::Literal(LiteralValue::Text("cappuccino".to_string())),
+            None,
+        );
+        let mocha = Expression::new(
+            ExpressionKind::Literal(LiteralValue::Text("mocha".to_string())),
+            None,
+        );
+        
+        let eq_latte = eq(x.clone(), latte);
+        let neq_cap = neq(x.clone(), cappuccino);
+        let neq_mocha = neq(x.clone(), mocha);
+        
+        let expr = and(and(eq_latte.clone(), neq_cap), neq_mocha);
+        let result = reduce(expr);
+        
+        // Should simplify to just x == "latte"
+        match &result.kind {
+            ExpressionKind::Comparison(_, _, _) => {
+                // Good - simplified to single comparison
+            }
+            ExpressionKind::LogicalAnd(_, _) => {
+                panic!("Should have removed all redundant inequalities");
+            }
+            _ => {}
+        }
     }
 }

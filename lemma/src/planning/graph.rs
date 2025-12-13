@@ -1,3 +1,4 @@
+use crate::computation::simplification;
 use crate::parsing::source::Source;
 use crate::planning::execution_plan::Branch;
 use crate::semantic::{
@@ -8,6 +9,7 @@ use crate::semantic::{
 use crate::LemmaError;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Graph {
@@ -136,38 +138,29 @@ struct GraphBuilder<'a> {
     errors: Vec<LemmaError>,
 }
 
-/// Build suffix OR conditions for "last wins" semantics, excluding later branches
-/// that produce the same result.
+/// Build suffix OR conditions for "last wins" semantics
 ///
-/// If a later branch yields the same result as the current branch, excluding it is
-/// unnecessary (it doesn't change the rule's output), and it creates artificial
-/// mutual-exclusion constraints that hurt inversion simplification.
-fn build_suffix_or_conditions_excluding_same_result(
+/// For each branch at index i, computes the OR of all conditions from branches i+1 onwards.
+/// This ensures strict mutual exclusion: each branch excludes ALL later branches.
+fn build_suffix_or_conditions(
     branches: &[(Option<Expression>, Expression)],
 ) -> Vec<Option<Expression>> {
     let mut suffix_or: Vec<Option<Expression>> = vec![None; branches.len()];
 
     for i in 0..branches.len() {
-        let (_, result_i) = &branches[i];
         let mut acc: Option<Expression> = None;
 
         for j in (i + 1)..branches.len() {
-            let (cond_j, result_j) = &branches[j];
-            if cond_j.is_none() {
-                continue;
-            }
-            if result_j.semantically_equal(result_i) {
-                continue;
-            }
-            let cond = cond_j.as_ref().expect("checked is_none above").clone();
+            if let Some(cond) = &branches[j].0 {
             let cond_source = cond.source.clone();
             acc = Some(match acc {
-                None => cond,
+                    None => cond.clone(),
                 Some(prev) => Expression::new(
-                    ExpressionKind::LogicalOr(Box::new(cond), Box::new(prev)),
+                        ExpressionKind::LogicalOr(Arc::new(cond.clone()), Arc::new(prev)),
                     cond_source,
                 ),
             });
+            }
         }
 
         suffix_or[i] = acc;
@@ -184,7 +177,7 @@ fn normalize_rule_branches(
     branches: &[(Option<Expression>, Expression)],
     source: &Option<Source>,
 ) -> Vec<Branch> {
-    let suffix_or = build_suffix_or_conditions_excluding_same_result(branches);
+    let suffix_or = build_suffix_or_conditions(branches);
     let mut normalized = Vec::new();
 
     for (idx, (condition, result)) in branches.iter().enumerate() {
@@ -196,26 +189,33 @@ fn normalize_rule_branches(
             )
         });
 
-        // Apply last-wins: base_condition AND NOT(suffix_or)
-        // For default branch: true AND NOT(cond_1 OR cond_2 OR ...) = NOT(cond_1) AND NOT(cond_2) AND ...
-        // For branch 1: cond_1 AND NOT(cond_2 OR cond_3 OR ...) = cond_1 AND NOT(cond_2) AND NOT(cond_3) AND ...
+        // Apply last-wins with De Morgan's law applied directly
+        // Instead of: base_condition ∧ ¬(cond_1 ∨ cond_2 ∨ ...)
+        // Create: base_condition ∧ ¬cond_1 ∧ ¬cond_2 ∧ ...
         let normalized_condition = if let Some(later_or) = &suffix_or[idx] {
-            Expression::new(
-                ExpressionKind::LogicalAnd(
-                    Box::new(base_condition),
-                    Box::new(Expression::new(
-                        ExpressionKind::LogicalNegation(
-                            Box::new(later_or.clone()),
-                            NegationType::Not,
-                        ),
+            let mut result = base_condition;
+            
+            // Flatten OR and negate each term
+            let later_conditions = flatten_or_list(later_or);
+            for cond in later_conditions {
+                let negated = Expression::new(
+                    ExpressionKind::LogicalNegation(Arc::new(cond), NegationType::Not),
                         source.clone(),
-                    )),
-                ),
+                );
+                // Don't expand here - let the main equation building pipeline handle expansion
+                result = Expression::new(
+                    ExpressionKind::LogicalAnd(Arc::new(result), Arc::new(negated)),
                 source.clone(),
-            )
+                );
+            }
+            result
         } else {
             base_condition // Last branch - no later branches to exclude
         };
+
+        // Simplify to eliminate redundant negations
+        // Pattern: (fact == X) ∧ ¬(fact == Y) where X ≠ Y → (fact == X)
+        let normalized_condition = simplification::reduce(normalized_condition);
 
         normalized.push(Branch {
             condition: normalized_condition,
@@ -225,6 +225,18 @@ fn normalize_rule_branches(
     }
 
     normalized
+}
+
+/// Flatten OR expression into a list of terms
+fn flatten_or_list(expr: &Expression) -> Vec<Expression> {
+    match &expr.kind {
+        ExpressionKind::LogicalOr(left, right) => {
+            let mut result = flatten_or_list(left);
+            result.extend(flatten_or_list(right));
+            result
+        }
+        _ => vec![expr.clone()],
+    }
 }
 
 impl Graph {
@@ -754,7 +766,7 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    kind: ExpressionKind::LogicalAnd(Box::new(l), Box::new(r)),
+                    kind: ExpressionKind::LogicalAnd(Arc::new(l), Arc::new(r)),
                     source: expr.source.clone(),
                 })
             }
@@ -770,7 +782,7 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    kind: ExpressionKind::LogicalOr(Box::new(l), Box::new(r)),
+                    kind: ExpressionKind::LogicalOr(Arc::new(l), Arc::new(r)),
                     source: expr.source.clone(),
                 })
             }
@@ -786,7 +798,7 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    kind: ExpressionKind::Arithmetic(Box::new(l), op.clone(), Box::new(r)),
+                    kind: ExpressionKind::Arithmetic(Arc::new(l), op.clone(), Arc::new(r)),
                     source: expr.source.clone(),
                 })
             }
@@ -802,7 +814,7 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    kind: ExpressionKind::Comparison(Box::new(l), op.clone(), Box::new(r)),
+                    kind: ExpressionKind::Comparison(Arc::new(l), op.clone(), Arc::new(r)),
                     source: expr.source.clone(),
                 })
             }
@@ -817,7 +829,7 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    kind: ExpressionKind::UnitConversion(Box::new(converted_value), target.clone()),
+                    kind: ExpressionKind::UnitConversion(Arc::new(converted_value), target.clone()),
                     source: expr.source.clone(),
                 })
             }
@@ -833,7 +845,7 @@ impl<'a> GraphBuilder<'a> {
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::LogicalNegation(
-                        Box::new(converted_operand),
+                        Arc::new(converted_operand),
                         neg_type.clone(),
                     ),
                     source: expr.source.clone(),
@@ -852,7 +864,7 @@ impl<'a> GraphBuilder<'a> {
                 Some(Expression {
                     kind: ExpressionKind::MathematicalComputation(
                         op.clone(),
-                        Box::new(converted_operand),
+                        Arc::new(converted_operand),
                     ),
                     source: expr.source.clone(),
                 })

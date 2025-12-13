@@ -38,8 +38,8 @@ fn inversion_produces_all_branch_solutions() {
 
     assert_eq!(
         response.solutions.len(),
-        4,
-        "should have 4 solutions (default + 3 unless clauses)"
+        5,
+        "should have 5 solutions: 2 for default (has_trade_in=false or unspecified trade_in_conditions) + 3 unless clauses"
     );
 
     let outcomes: Vec<String> = response
@@ -152,21 +152,22 @@ fn inversion_finds_default_value() {
 
     assert_eq!(
         response.solutions.len(),
-        1,
-        "should have exactly 1 solution for default value 0"
+        2,
+        "should have 2 solutions for default value 0: (1) has_trade_in=false, (2) has_trade_in=true with other conditions"
     );
 
-    // Check the solution indicates has_trade_in should be false
-    let constraints = &response.solutions[0].fact_constraints;
-    let has_trade_in_constraint = constraints
-        .get(&FactPath::local("has_trade_in".to_string()))
-        .expect("solution should contain has_trade_in");
-
-    let constraint_str = has_trade_in_constraint.to_string();
+    // Check that at least one solution indicates has_trade_in should be false
+    let has_false_solution = response.solutions.iter().any(|sol| {
+        if let Some(constraint) = sol.fact_constraints.get(&FactPath::local("has_trade_in".to_string())) {
+            constraint.to_string().contains("false")
+        } else {
+            false
+        }
+    });
+    
     assert!(
-        constraint_str.contains("false"),
-        "constraint for default should indicate has_trade_in is false, got: {}",
-        constraint_str
+        has_false_solution,
+        "at least one solution should indicate has_trade_in is false"
     );
 }
 

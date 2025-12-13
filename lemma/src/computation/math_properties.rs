@@ -330,6 +330,7 @@ mod tests {
     use super::*;
     use rust_decimal::Decimal;
     use std::str::FromStr;
+    use std::sync::Arc;
 
     #[test]
     fn test_sin_range() {
@@ -437,7 +438,7 @@ mod tests {
         let expression = Expression::new(
             ExpressionKind::MathematicalComputation(
                 MathematicalComputation::Sqrt,
-                Box::new(Expression::new(ExpressionKind::FactPath(fact_path), None)),
+                Arc::new(Expression::new(ExpressionKind::FactPath(fact_path), None)),
             ),
             None,
         );
@@ -453,9 +454,9 @@ mod tests {
         let y = FactPath::local("y".to_string());
         let expression = Expression::new(
             ExpressionKind::Arithmetic(
-                Box::new(Expression::new(ExpressionKind::FactPath(x), None)),
+                Arc::new(Expression::new(ExpressionKind::FactPath(x), None)),
                 ArithmeticComputation::Divide,
-                Box::new(Expression::new(ExpressionKind::FactPath(y), None)),
+                Arc::new(Expression::new(ExpressionKind::FactPath(y), None)),
             ),
             None,
         );
