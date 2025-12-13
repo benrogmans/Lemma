@@ -28,9 +28,6 @@ pub enum LemmaError {
     /// Engine error without specific source location
     Engine(String),
 
-    /// Missing fact error during evaluation
-    MissingFact(crate::FactPath),
-
     /// Circular dependency error
     CircularDependency(String),
 
@@ -168,7 +165,6 @@ impl fmt::Display for LemmaError {
                 Ok(())
             }
             LemmaError::Engine(msg) => write!(f, "Engine error: {msg}"),
-            LemmaError::MissingFact(fact_ref) => write!(f, "Missing fact: {fact_ref}"),
             LemmaError::CircularDependency(msg) => write!(f, "Circular dependency: {msg}"),
             LemmaError::ResourceLimitExceeded {
                 limit_name,

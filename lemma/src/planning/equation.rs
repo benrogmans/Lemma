@@ -6,7 +6,7 @@
 //! 3. Substituting rule references with their equations
 //! 4. Reducing algebraically (compile-time optimization)
 
-use crate::computation::reduce;
+use crate::computation::expand;
 use crate::semantic::{
     BooleanValue, Expression, ExpressionKind, LiteralValue, PathSegment, RulePath,
 };
@@ -25,7 +25,7 @@ pub fn build_equation(
     cache: &mut HashMap<RulePath, Expression>,
 ) -> Expression {
     let raw_equation = build_rule_equation(branches, cache);
-    let equation = reduce(raw_equation);
+    let equation = expand(raw_equation);
     cache.insert(rule_path.clone(), equation.clone());
     equation
 }

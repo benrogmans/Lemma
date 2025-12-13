@@ -185,7 +185,6 @@ fn format_error(error: &LemmaError) -> String {
         LemmaError::Semantic(details) => format!("Semantic Error: {}", details.message),
         LemmaError::Runtime(details) => format!("Runtime Error: {}", details.message),
         LemmaError::Engine(msg) => format!("Engine Error: {msg}"),
-        LemmaError::MissingFact(fact_ref) => format!("Missing Fact: {fact_ref}"),
         LemmaError::CircularDependency(msg) => format!("Circular Dependency: {msg}"),
         LemmaError::ResourceLimitExceeded {
             limit_name,

@@ -96,6 +96,9 @@ pub enum UnsatReason {
 
     /// Expression simplified to false
     SimplifiedToFalse,
+
+    /// Arithmetic impossibility (e.g., x * 0 == 5)
+    ArithmeticContradiction { message: String },
 }
 
 // ============================================================================

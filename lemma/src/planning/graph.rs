@@ -136,30 +136,41 @@ struct GraphBuilder<'a> {
     errors: Vec<LemmaError>,
 }
 
-/// Build suffix OR conditions for "last wins" semantics
+/// Build suffix OR conditions for "last wins" semantics, excluding later branches
+/// that produce the same result.
 ///
-/// For each branch i, returns the OR of all conditions from branches i+1 to end.
-/// This represents "any later branch could match", which we need to exclude.
-fn build_suffix_or_conditions(
+/// If a later branch yields the same result as the current branch, excluding it is
+/// unnecessary (it doesn't change the rule's output), and it creates artificial
+/// mutual-exclusion constraints that hurt inversion simplification.
+fn build_suffix_or_conditions_excluding_same_result(
     branches: &[(Option<Expression>, Expression)],
 ) -> Vec<Option<Expression>> {
     let mut suffix_or: Vec<Option<Expression>> = vec![None; branches.len()];
-    let mut acc: Option<Expression> = None;
 
-    // Build from end to beginning
-    for i in (0..branches.len()).rev() {
-        suffix_or[i] = acc.clone();
+    for i in 0..branches.len() {
+        let (_, result_i) = &branches[i];
+        let mut acc: Option<Expression> = None;
 
-        // Add this branch's condition to the accumulator
-        if let Some((Some(cond), _)) = branches.get(i) {
+        for j in (i + 1)..branches.len() {
+            let (cond_j, result_j) = &branches[j];
+            if cond_j.is_none() {
+                continue;
+            }
+            if result_j.semantically_equal(result_i) {
+                continue;
+            }
+            let cond = cond_j.as_ref().expect("checked is_none above").clone();
+            let cond_source = cond.source.clone();
             acc = Some(match acc {
-                None => cond.clone(),
+                None => cond,
                 Some(prev) => Expression::new(
-                    ExpressionKind::LogicalOr(Box::new(cond.clone()), Box::new(prev)),
-                    cond.source.clone(),
+                    ExpressionKind::LogicalOr(Box::new(cond), Box::new(prev)),
+                    cond_source,
                 ),
             });
         }
+
+        suffix_or[i] = acc;
     }
 
     suffix_or
@@ -173,7 +184,7 @@ fn normalize_rule_branches(
     branches: &[(Option<Expression>, Expression)],
     source: &Option<Source>,
 ) -> Vec<Branch> {
-    let suffix_or = build_suffix_or_conditions(branches);
+    let suffix_or = build_suffix_or_conditions_excluding_same_result(branches);
     let mut normalized = Vec::new();
 
     for (idx, (condition, result)) in branches.iter().enumerate() {

@@ -103,6 +103,48 @@ In `bdd.rs::reduce()`, when encountering Comparison or Arithmetic with OR operan
 
 ---
 
+## Phase 2.5: Boolean Simplification
+
+### Goal
+Eliminate redundant and contradictory branches after DNF conversion.
+
+### Where
+In `bdd.rs`, after distribution produces flat DNF structure.
+
+### Simplification Rules
+
+```
+A ∧ A           →  A                    (idempotence)
+A ∨ A           →  A                    (idempotence)
+A ∨ (A ∧ B)     →  A                    (absorption)
+(A ∧ B) ∨ (¬A ∧ C) ∨ (B ∧ C)  →  (A ∧ B) ∨ (¬A ∧ C)   (consensus)
+```
+
+### Fact Contradiction Detection
+
+After DNF, each branch is a flat AND. Check for same-fact conflicts:
+
+```
+(fact == X ∧ fact == Y)  →  false       (when X ≠ Y)
+```
+
+This requires flat branches, so it runs AFTER distribution/DNF conversion.
+
+### Requirements
+- Idempotence elimination
+- Absorption of subsumed branches
+- Consensus elimination of redundant branches
+- Fact equality contradiction → false
+- `false ∨ X` → `X` cleans up contradictory branches
+
+### Expected Behaviors
+- `(drink == "latte" ∧ drink == "latte")` → `drink == "latte"`
+- `(drink == "latte" ∧ drink == "espresso")` → `false`
+- `(A ∧ B) ∨ (¬A ∧ C) ∨ (B ∧ C)` → `(A ∧ B) ∨ (¬A ∧ C)`
+- `A ∨ (A ∧ B)` → `A`
+
+---
+
 ## Phase 3: Algebraic Solving
 
 ### Goal
@@ -251,34 +293,41 @@ pub struct Solution {
 8. Ensure recursive application
 9. Test nested OR distribution
 
+### Milestone 2.5: Boolean Simplification
+10. Implement idempotence (`A ∧ A` → `A`)
+11. Implement absorption (`A ∨ (A ∧ B)` → `A`)
+12. Implement consensus elimination
+13. Implement fact contradiction detection (`fact == X ∧ fact == Y` → `false`)
+14. Clean up false branches (`false ∨ X` → `X`)
+
 ### Milestone 3: Basic Algebra
-10. Implement single-unknown linear solving
-11. Handle addition/subtraction
-12. Handle multiplication/division
-13. Handle division-by-zero cases
+15. Implement single-unknown linear solving
+16. Handle addition/subtraction
+17. Handle multiplication/division
+18. Handle division-by-zero cases
 
 ### Milestone 4: Inequality Algebra
-14. Extend algebra to inequalities
-15. Handle sign flipping for negative multipliers
-16. Preserve strict vs non-strict
+19. Extend algebra to inequalities
+20. Handle sign flipping for negative multipliers
+21. Preserve strict vs non-strict
 
 ### Milestone 5: Math Functions
-17. Implement sqrt/exp/log inversion
-18. Implement abs (two solutions)
-19. Keep trig as symbolic
+22. Implement sqrt/exp/log inversion
+23. Implement abs (two solutions)
+24. Keep trig as symbolic
 
 ### Milestone 6: Polish
-20. Solution deduplication
-21. Sorting
-22. Documentation
-23. Integration tests
+25. Solution sorting by specificity
+26. Documentation
+27. Integration tests
 
 ---
 
 ## Test Requirements
 
 Tests live in:
-- `computation/bdd.rs` - distribution tests
+- `computation/bdd.rs` - distribution and boolean simplification tests
+- `tests/bdd_consensus.rs` - boolean simplification integration tests
 - `inversion/solver.rs` - solving tests
 - `inversion/mod.rs` - integration tests
 
