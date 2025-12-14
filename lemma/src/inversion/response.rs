@@ -2,7 +2,8 @@
 //!
 //! Contains the solution and response structures returned by inversion.
 
-use crate::computation::{FactConstraint, OperationResult};
+use crate::algebra::constraints::FactConstraint;
+use crate::computation::OperationResult;
 use crate::semantic::FactPath;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::collections::HashMap;

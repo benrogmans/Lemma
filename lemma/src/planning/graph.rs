@@ -1,4 +1,4 @@
-use crate::computation::simplification;
+use crate::algebra::simplification;
 use crate::parsing::source::Source;
 use crate::planning::execution_plan::Branch;
 use crate::semantic::{
@@ -177,6 +177,7 @@ fn normalize_rule_branches(
     branches: &[(Option<Expression>, Expression)],
     source: &Option<Source>,
 ) -> Vec<Branch> {
+    todo!("Remove normalization");
     let suffix_or = build_suffix_or_conditions(branches);
     let mut normalized = Vec::new();
 

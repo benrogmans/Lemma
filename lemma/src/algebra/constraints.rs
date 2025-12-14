@@ -7,7 +7,8 @@
 //!
 //! Used by planning (compile-time validation) and inversion (query-time solving).
 
-use super::{comparison_operation, reverse_comparison, OperationResult};
+use crate::computation::{comparison_operation, OperationResult};
+use crate::algebra::expansion::reverse_comparison;
 use crate::algebra::isolation::{try_isolate_comparison, IsolationResult};
 use crate::semantic::{
     BooleanValue, ComparisonComputation, EqualityNotation, Expression, ExpressionKind, FactPath,

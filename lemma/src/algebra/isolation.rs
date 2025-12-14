@@ -2,7 +2,7 @@
 //!
 //! Provides functions to isolate facts from arithmetic expressions for constraint solving.
 
-use crate::computation::constraints::UnsatReason;
+use crate::algebra::constraints::UnsatReason;
 use crate::semantic::{
     ArithmeticComputation, ComparisonComputation, EqualityNotation, Expression, ExpressionKind,
     FactPath, LiteralValue,

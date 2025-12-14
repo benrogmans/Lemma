@@ -6,7 +6,7 @@
 //!
 //! Used for detecting impossible constraints during planning and inversion.
 
-use super::constraints::{DomainRestriction, UnsatReason};
+use crate::algebra::constraints::{DomainRestriction, UnsatReason};
 use crate::semantic::{
     ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, FactPath,
     LiteralValue, MathematicalComputation,

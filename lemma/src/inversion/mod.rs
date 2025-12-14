@@ -16,7 +16,7 @@
 
 mod response;
 
-pub use crate::computation::{Bound, DomainRestriction, FactConstraint, UnsatReason};
+pub use crate::algebra::constraints::{Bound, DomainRestriction, FactConstraint, UnsatReason};
 pub use response::{InversionResponse, Solution};
 
 use crate::computation::OperationResult;
