@@ -10,9 +10,7 @@ pub mod proof;
 pub mod response;
 
 use crate::planning::ExecutionPlan;
-use crate::{
-    FactPath, LemmaFact, LemmaResult, LiteralValue, RulePath,
-};
+use crate::{FactPath, LemmaFact, LemmaResult, LiteralValue, RulePath};
 use indexmap::IndexMap;
 pub use operations::{ComputationKind, OperationKind, OperationRecord, OperationResult};
 pub use response::{Facts, Response, RuleResult};
@@ -190,10 +188,7 @@ impl Evaluator {
             match expression::evaluate_expression(expr, context) {
                 Ok(expression::EvaluationResult::Evaluated(OperationResult::Value(lit))) => {
                     // Fully evaluated to literal value
-                    Expression::new(
-                        ExpressionKind::Literal(lit),
-                        expr.source.clone(),
-                    )
+                    Expression::new(ExpressionKind::Literal(lit), expr.source.clone())
                 }
                 Ok(expression::EvaluationResult::Evaluated(OperationResult::Veto(msg))) => {
                     // Evaluated to veto
@@ -226,7 +221,8 @@ impl Evaluator {
                     context.proof_nodes.clear();
 
                     // Evaluate condition symbolically
-                    let simplified_condition = evaluate_to_expression(&branch.condition, &mut context);
+                    let simplified_condition =
+                        evaluate_to_expression(&branch.condition, &mut context);
 
                     // Prune branches that evaluate to false
                     if matches!(
@@ -277,5 +273,261 @@ impl Evaluator {
             reduced_rules,
             plan.graph().clone(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::planning::{Branch, ExecutableRule};
+    use crate::semantic::{
+        BooleanValue, Expression, ExpressionKind, FactPath, LiteralValue, RulePath,
+    };
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_symbolic_evaluation_preserves_complex_condition() {
+        // Test that symbolic evaluation preserves complex expressions with unknown facts
+        // Pattern: ((discount_code is "SAVE30" and member_level is "platinum")
+        //          or (discount_code is "SAVE30" and not (member_level is "platinum")))
+        //          and tag1 is "yes"
+        // Should remain as complex expression when no facts are known
+
+        let discount_code_path = FactPath::local("discount_code".to_string());
+        let member_level_path = FactPath::local("member_level".to_string());
+        let tag1_path = FactPath::local("tag1".to_string());
+
+        let save30 = LiteralValue::Text("SAVE30".to_string());
+        let platinum = LiteralValue::Text("platinum".to_string());
+        let yes = LiteralValue::Text("yes".to_string());
+
+        // Build the complex condition
+        let discount_eq = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(Expression::new(
+                    ExpressionKind::FactPath(discount_code_path.clone()),
+                    None,
+                )),
+                crate::semantic::ComparisonComputation::Equal(
+                    crate::semantic::EqualityNotation::Symbol,
+                ),
+                Arc::new(Expression::new(
+                    ExpressionKind::Literal(save30.clone()),
+                    None,
+                )),
+            ),
+            None,
+        );
+
+        let member_eq = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(Expression::new(
+                    ExpressionKind::FactPath(member_level_path.clone()),
+                    None,
+                )),
+                crate::semantic::ComparisonComputation::Equal(
+                    crate::semantic::EqualityNotation::Symbol,
+                ),
+                Arc::new(Expression::new(
+                    ExpressionKind::Literal(platinum.clone()),
+                    None,
+                )),
+            ),
+            None,
+        );
+
+        let member_neq = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(Expression::new(
+                    ExpressionKind::FactPath(member_level_path.clone()),
+                    None,
+                )),
+                crate::semantic::ComparisonComputation::NotEqual(
+                    crate::semantic::EqualityNotation::Symbol,
+                ),
+                Arc::new(Expression::new(
+                    ExpressionKind::Literal(platinum.clone()),
+                    None,
+                )),
+            ),
+            None,
+        );
+
+        let tag1_eq = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(Expression::new(
+                    ExpressionKind::FactPath(tag1_path.clone()),
+                    None,
+                )),
+                crate::semantic::ComparisonComputation::Equal(
+                    crate::semantic::EqualityNotation::Symbol,
+                ),
+                Arc::new(Expression::new(ExpressionKind::Literal(yes.clone()), None)),
+            ),
+            None,
+        );
+
+        let branch1 = Expression::new(
+            ExpressionKind::LogicalAnd(Arc::new(discount_eq.clone()), Arc::new(member_eq)),
+            None,
+        );
+
+        let branch2 = Expression::new(
+            ExpressionKind::LogicalAnd(Arc::new(discount_eq.clone()), Arc::new(member_neq)),
+            None,
+        );
+
+        let or_expr = Expression::new(
+            ExpressionKind::LogicalOr(Arc::new(branch1), Arc::new(branch2)),
+            None,
+        );
+
+        let complex_condition = Expression::new(
+            ExpressionKind::LogicalAnd(Arc::new(or_expr), Arc::new(tag1_eq)),
+            None,
+        );
+
+        // Create a rule with this condition
+        let rule = ExecutableRule {
+            path: RulePath {
+                segments: vec![],
+                rule: "test".to_string(),
+            },
+            name: "test".to_string(),
+            branches: vec![Branch {
+                condition: complex_condition.clone(),
+                optimized_condition: None,
+                result: Expression::new(
+                    ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::from(1))),
+                    None,
+                ),
+                source: None,
+            }],
+            needs_facts: {
+                let mut set = std::collections::HashSet::new();
+                set.insert(discount_code_path);
+                set.insert(member_level_path);
+                set.insert(tag1_path);
+                set
+            },
+            source: None,
+        };
+
+        let plan = ExecutionPlan::new(
+            "test_doc".to_string(),
+            HashMap::new(),
+            vec![rule],
+            crate::planning::graph::Graph::empty(),
+        );
+
+        // Apply symbolic evaluation
+        let evaluator = Evaluator;
+        let reduced_plan = evaluator.evaluate_symbolic(&plan);
+
+        // Get the reduced branch
+        let reduced_rule = reduced_plan.get_rule("test").expect("Rule should exist");
+        let reduced_branch = reduced_rule.branches.get(0).expect("Branch should exist");
+
+        // Verify the condition is still complex (not reduced to a single FactPath)
+        match &reduced_branch.condition.kind {
+            ExpressionKind::FactPath(_) => {
+                panic!("Condition should not be reduced to a single FactPath - it should remain complex");
+            }
+            ExpressionKind::LogicalAnd(_, _) | ExpressionKind::LogicalOr(_, _) => {
+                // Good - condition is still complex
+            }
+            ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)) => {
+                panic!("Condition should not evaluate to false when no facts are known");
+            }
+            ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)) => {
+                panic!("Condition should not evaluate to true when no facts are known");
+            }
+            other => {
+                panic!(
+                    "Unexpected condition structure after symbolic evaluation: {:?}",
+                    other
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_evaluate_expression_with_complex_unknown_expression() {
+        // Test evaluate_expression directly with a complex expression containing unknown facts
+        use crate::evaluation::expression::evaluate_expression;
+        use crate::semantic::{Expression, ExpressionKind, FactPath, LiteralValue};
+        use std::sync::Arc;
+
+        let discount_code_path = FactPath::local("discount_code".to_string());
+        let tag1_path = FactPath::local("tag1".to_string());
+
+        let save30 = LiteralValue::Text("SAVE30".to_string());
+        let yes = LiteralValue::Text("yes".to_string());
+
+        // Create: discount_code is "SAVE30" and tag1 is "yes"
+        let discount_expr = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(Expression::new(
+                    ExpressionKind::FactPath(discount_code_path.clone()),
+                    None,
+                )),
+                crate::semantic::ComparisonComputation::Equal(
+                    crate::semantic::EqualityNotation::Symbol,
+                ),
+                Arc::new(Expression::new(
+                    ExpressionKind::Literal(save30.clone()),
+                    None,
+                )),
+            ),
+            None,
+        );
+
+        let tag1_expr = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(Expression::new(
+                    ExpressionKind::FactPath(tag1_path.clone()),
+                    None,
+                )),
+                crate::semantic::ComparisonComputation::Equal(
+                    crate::semantic::EqualityNotation::Symbol,
+                ),
+                Arc::new(Expression::new(ExpressionKind::Literal(yes.clone()), None)),
+            ),
+            None,
+        );
+
+        let and_expr = Expression::new(
+            ExpressionKind::LogicalAnd(Arc::new(discount_expr), Arc::new(tag1_expr)),
+            None,
+        );
+
+        // Create evaluation context with no known facts (symbolic mode)
+        let plan = ExecutionPlan::default();
+        let mut context = EvaluationContext::new_symbolic(&plan);
+
+        // Evaluate the expression
+        let result = evaluate_expression(&and_expr, &mut context)
+            .expect("evaluate_expression should not error");
+
+        match result {
+            crate::evaluation::expression::EvaluationResult::Symbolic(expr) => {
+                // Verify it's still a LogicalAnd, not reduced to a FactPath
+                match &expr.kind {
+                    ExpressionKind::LogicalAnd(_, _) => {
+                        // Good - expression is preserved
+                    }
+                    ExpressionKind::FactPath(_) => {
+                        panic!("Expression should not be reduced to a single FactPath - should remain as LogicalAnd");
+                    }
+                    other => {
+                        panic!("Unexpected expression structure: {:?}", other);
+                    }
+                }
+            }
+            crate::evaluation::expression::EvaluationResult::Evaluated(_) => {
+                panic!("Expression with unknown facts should return Symbolic, not Evaluated");
+            }
+        }
     }
 }

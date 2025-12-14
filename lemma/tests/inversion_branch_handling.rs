@@ -158,13 +158,16 @@ fn inversion_finds_default_value() {
 
     // Check that at least one solution indicates has_trade_in should be false
     let has_false_solution = response.solutions.iter().any(|sol| {
-        if let Some(constraint) = sol.fact_constraints.get(&FactPath::local("has_trade_in".to_string())) {
+        if let Some(constraint) = sol
+            .fact_constraints
+            .get(&FactPath::local("has_trade_in".to_string()))
+        {
             constraint.to_string().contains("false")
         } else {
             false
         }
     });
-    
+
     assert!(
         has_false_solution,
         "at least one solution should indicate has_trade_in is false"

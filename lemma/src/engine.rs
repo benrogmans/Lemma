@@ -278,7 +278,6 @@ impl Engine {
         outcome: Option<crate::computation::OperationResult>,
         json: &[u8],
     ) -> LemmaResult<crate::InversionResponse> {
-        
         let base_plan = self
             .execution_plans
             .get(doc_name)

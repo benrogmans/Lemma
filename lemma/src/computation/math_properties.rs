@@ -103,8 +103,7 @@ pub fn check_function_range_violation(
                 }
             }
             // Special case for exp: exp(x) is never exactly 0
-            if matches!(math_op, MathematicalComputation::Exp)
-                && numeric_value == &Decimal::from(0)
+            if matches!(math_op, MathematicalComputation::Exp) && numeric_value == &Decimal::from(0)
             {
                 return Some(UnsatReason::FunctionRangeViolation {
                     function: "exp".to_string(),
@@ -466,4 +465,3 @@ mod tests {
         assert_eq!(restrictions[0].source, "division");
     }
 }
-

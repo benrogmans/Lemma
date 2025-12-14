@@ -161,15 +161,18 @@ impl Formatter {
         output
     }
 
-    fn format_facts(&self, facts: &std::collections::HashMap<lemma::FactPath, lemma::LemmaFact>) -> String {
+    fn format_facts(
+        &self,
+        facts: &std::collections::HashMap<lemma::FactPath, lemma::LemmaFact>,
+    ) -> String {
         if facts.is_empty() {
             return String::new();
-            }
+        }
 
-            let mut table = Table::new();
-            table.load_preset(presets::UTF8_FULL);
-            table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
-            table.set_style(super_table::TableComponent::HorizontalLines, '─');
+        let mut table = Table::new();
+        table.load_preset(presets::UTF8_FULL);
+        table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
+        table.set_style(super_table::TableComponent::HorizontalLines, '─');
 
         for (_, fact) in facts.iter() {
             let name = &fact.reference.fact;

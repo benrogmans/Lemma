@@ -42,7 +42,9 @@ fn boolean_multiple_unless_clauses_specific_target() {
             "shop",
             "discount",
             "=",
-            Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(10)))),
+            Some(OperationResult::Value(LiteralValue::Percentage(
+                Decimal::from(10),
+            ))),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -144,7 +146,9 @@ fn text_enumeration_with_veto() {
             "workflow",
             "can_proceed",
             "=",
-            Some(OperationResult::Value(LiteralValue::Boolean(BooleanValue::True))),
+            Some(OperationResult::Value(LiteralValue::Boolean(
+                BooleanValue::True,
+            ))),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -321,7 +325,9 @@ fn rule_references_expand_correctly() {
             "rewards",
             "rate",
             "=",
-            Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(15)))),
+            Some(OperationResult::Value(LiteralValue::Percentage(
+                Decimal::from(15),
+            ))),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -389,7 +395,9 @@ fn complex_pricing_with_member_coupon_combo() {
             "pricing",
             "discount",
             "=",
-            Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(20)))),
+            Some(OperationResult::Value(LiteralValue::Percentage(
+                Decimal::from(20),
+            ))),
             HashMap::new(),
         )
         .expect("invert should succeed");
@@ -503,7 +511,7 @@ fn multi_branch_trade_in_values() {
         outcomes.contains(&"10".to_string()),
         "should have outcome 10"
     );
-    
+
     // Verify we have exactly 4 distinct outcomes
     let unique_outcomes: std::collections::HashSet<String> = outcomes.into_iter().collect();
     assert_eq!(

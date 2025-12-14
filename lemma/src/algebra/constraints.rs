@@ -7,9 +7,9 @@
 //!
 //! Used by planning (compile-time validation) and inversion (query-time solving).
 
-use crate::computation::{comparison_operation, OperationResult};
 use crate::algebra::expansion::reverse_comparison;
 use crate::algebra::isolation::{try_isolate_comparison, IsolationResult};
+use crate::computation::{comparison_operation, OperationResult};
 use crate::semantic::{
     BooleanValue, ComparisonComputation, EqualityNotation, Expression, ExpressionKind, FactPath,
     LiteralValue,
@@ -155,10 +155,9 @@ impl FactBounds {
         if self.excluded.is_empty() {
             base_constraint
         } else {
-            let excluded_constraint =
-                FactConstraint::Complement(Box::new(FactConstraint::Enumeration(
-                    self.excluded.clone(),
-                )));
+            let excluded_constraint = FactConstraint::Complement(Box::new(
+                FactConstraint::Enumeration(self.excluded.clone()),
+            ));
             base_constraint.intersect(&excluded_constraint)
         }
     }
@@ -200,7 +199,9 @@ impl ConstraintSet {
 
     /// Get or create FactBounds for a fact
     pub fn get_or_create_bounds(&mut self, fact: &FactPath) -> &mut FactBounds {
-        self.facts.entry(fact.clone()).or_insert_with(FactBounds::new)
+        self.facts
+            .entry(fact.clone())
+            .or_insert_with(FactBounds::new)
     }
 
     /// Add a comparison constraint for a single fact
@@ -1009,6 +1010,166 @@ mod tests {
             Some(UnsatReason::EnumContradiction { .. })
         ));
     }
+
+    #[test]
+    fn test_extract_constraints_from_simplified_discount_code_pattern() {
+        // Test that extract_constraints correctly extracts constraints from the simplified
+        // discount_code pattern: discount_code is "SAVE30"
+        use crate::semantic::{Expression, ExpressionKind, LiteralValue};
+        use std::sync::Arc;
+
+        let discount_code_path = FactPath::local("discount_code".to_string());
+        let save30 = LiteralValue::Text("SAVE30".to_string());
+
+        // Create the simplified expression: discount_code is "SAVE30"
+        let simplified_expr = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(Expression::new(
+                    ExpressionKind::FactPath(discount_code_path.clone()),
+                    None,
+                )),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(Expression::new(
+                    ExpressionKind::Literal(save30.clone()),
+                    None,
+                )),
+            ),
+            None,
+        );
+
+        let mut constraint_set = ConstraintSet::new();
+        extract_constraints(&simplified_expr, &mut constraint_set);
+
+        let fact_constraints = constraint_set.to_fact_constraints();
+
+        // Verify discount_code constraint is extracted
+        let discount_constraint = fact_constraints
+            .get(&discount_code_path)
+            .expect("discount_code constraint should be extracted");
+
+        match discount_constraint {
+            FactConstraint::Enumeration(values) => {
+                assert!(
+                    values.contains(&save30),
+                    "discount_code should be constrained to 'SAVE30', got {:?}",
+                    values
+                );
+            }
+            other => {
+                panic!(
+                    "discount_code should be Enumeration constraint, got {:?}",
+                    other
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_extract_constraints_from_and_with_or() {
+        // Test that extract_constraints correctly handles AND expressions containing OR
+        // Pattern: discount_code is "SAVE30" and (tag1 is "yes" or tag2 is "yes")
+        // Should extract discount_code constraint, but OR part should be symbolic
+        use crate::semantic::{Expression, ExpressionKind, LiteralValue};
+        use std::sync::Arc;
+
+        let discount_code_path = FactPath::local("discount_code".to_string());
+        let tag1_path = FactPath::local("tag1".to_string());
+        let tag2_path = FactPath::local("tag2".to_string());
+
+        let save30 = LiteralValue::Text("SAVE30".to_string());
+        let yes = LiteralValue::Text("yes".to_string());
+
+        // Create: discount_code is "SAVE30" and (tag1 is "yes" or tag2 is "yes")
+        let discount_expr = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(Expression::new(
+                    ExpressionKind::FactPath(discount_code_path.clone()),
+                    None,
+                )),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(Expression::new(
+                    ExpressionKind::Literal(save30.clone()),
+                    None,
+                )),
+            ),
+            None,
+        );
+
+        let tag1_expr = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(Expression::new(
+                    ExpressionKind::FactPath(tag1_path.clone()),
+                    None,
+                )),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(Expression::new(ExpressionKind::Literal(yes.clone()), None)),
+            ),
+            None,
+        );
+
+        let tag2_expr = Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(Expression::new(
+                    ExpressionKind::FactPath(tag2_path.clone()),
+                    None,
+                )),
+                ComparisonComputation::Equal(EqualityNotation::Symbol),
+                Arc::new(Expression::new(ExpressionKind::Literal(yes.clone()), None)),
+            ),
+            None,
+        );
+
+        let or_expr = Expression::new(
+            ExpressionKind::LogicalOr(Arc::new(tag1_expr), Arc::new(tag2_expr)),
+            None,
+        );
+
+        let and_expr = Expression::new(
+            ExpressionKind::LogicalAnd(Arc::new(discount_expr), Arc::new(or_expr)),
+            None,
+        );
+
+        let mut constraint_set = ConstraintSet::new();
+        extract_constraints(&and_expr, &mut constraint_set);
+
+        let fact_constraints = constraint_set.to_fact_constraints();
+
+        // Verify discount_code constraint is extracted
+        let discount_constraint = fact_constraints
+            .get(&discount_code_path)
+            .expect("discount_code constraint should be extracted");
+
+        match discount_constraint {
+            FactConstraint::Enumeration(values) => {
+                assert!(
+                    values.contains(&save30),
+                    "discount_code should be constrained to 'SAVE30'"
+                );
+            }
+            other => {
+                panic!(
+                    "discount_code should be Enumeration constraint, got {:?}",
+                    other
+                );
+            }
+        }
+
+        // Verify tag constraints are NOT extracted (OR is symbolic)
+        assert!(
+            fact_constraints.get(&tag1_path).is_none(),
+            "tag1 should not have direct constraint (OR is symbolic)"
+        );
+        assert!(
+            fact_constraints.get(&tag2_path).is_none(),
+            "tag2 should not have direct constraint (OR is symbolic)"
+        );
+
+        // Verify OR expression is marked as symbolic
+        assert!(
+            !constraint_set.symbolic.is_empty(),
+            "OR expression should be added as symbolic"
+        );
+    }
 }
 
 /// Extract constraints from an expression into a ConstraintSet
@@ -1168,4 +1329,3 @@ pub fn extract_constraints(expression: &Expression, constraint_set: &mut Constra
         }
     }
 }
-

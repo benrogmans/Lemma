@@ -75,15 +75,21 @@ fn test_equation_with_rule_reference() {
             "test",
             "rate",
             "=",
-            Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(10)))),
+            Some(OperationResult::Value(LiteralValue::Percentage(
+                Decimal::from(10),
+            ))),
             HashMap::new(),
         )
         .expect("invert should succeed");
 
     println!("\nGot {} solutions:", response.solutions.len());
     for (i, sol) in response.solutions.iter().enumerate() {
-        println!("Solution {}: outcome={}, constraints={}", 
-            i, sol.outcome, sol.fact_constraints.len());
+        println!(
+            "Solution {}: outcome={}, constraints={}",
+            i,
+            sol.outcome,
+            sol.fact_constraints.len()
+        );
         for (path, constraint) in &sol.fact_constraints {
             println!("  {}: {}", path, constraint);
         }
@@ -100,7 +106,7 @@ fn test_equation_with_rule_reference() {
         response.solutions.iter().all(|s| matches!(&s.outcome, OperationResult::Value(LiteralValue::Percentage(p)) if *p == Decimal::from(10))),
         "All solutions should have 10% outcome"
     );
-    
+
     let points_path = FactPath::local("points".to_string());
     let has_points_constraint = response
         .solutions

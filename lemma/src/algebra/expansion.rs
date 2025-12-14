@@ -10,9 +10,7 @@
 //! Uses fixed-point iteration to handle nested cases correctly.
 
 use crate::parsing::source::Source;
-use crate::semantic::{
-    ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind,
-};
+use crate::semantic::{ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind};
 use std::sync::Arc;
 
 /// Check if expression has OR at top level
@@ -52,11 +50,7 @@ fn make_comparison(
 }
 
 /// Pure constructor for OR
-fn make_or(
-    left: Expression,
-    right: Expression,
-    source: Option<Source>,
-) -> Expression {
+fn make_or(left: Expression, right: Expression, source: Option<Source>) -> Expression {
     Expression::new(
         ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
         source,
@@ -64,11 +58,7 @@ fn make_or(
 }
 
 /// Pure constructor for AND
-fn make_and(
-    left: Expression,
-    right: Expression,
-    source: Option<Source>,
-) -> Expression {
+fn make_and(left: Expression, right: Expression, source: Option<Source>) -> Expression {
     Expression::new(
         ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right)),
         source,
@@ -76,7 +66,7 @@ fn make_and(
 }
 
 /// Flatten OR tree into a flat list of branches
-/// 
+///
 /// Converts nested OR expressions like ((A ∨ B) ∨ C) into [A, B, C]
 fn flatten_or(expr: Expression) -> Vec<Expression> {
     match expr.kind {
@@ -169,7 +159,7 @@ fn distribute_or_through_arithmetic(
     } else {
         vec![right]
     };
-    
+
     let products = cross_multiply_arithmetic(left_branches, op, right_branches, source);
     combine_with_or(products)
 }
@@ -189,7 +179,7 @@ fn distribute_or_through_arithmetic_right(
         vec![left]
     };
     let right_branches = flatten_or(or_expr);
-    
+
     let products = cross_multiply_arithmetic(left_branches, op, right_branches, source);
     combine_with_or(products)
 }
@@ -209,7 +199,7 @@ fn distribute_or_through_comparison(
     } else {
         vec![right]
     };
-    
+
     let products = cross_multiply_comparison(left_branches, op, right_branches, source);
     combine_with_or(products)
 }
@@ -229,7 +219,7 @@ fn distribute_or_through_comparison_right(
         vec![left]
     };
     let right_branches = flatten_or(or_expr);
-    
+
     let products = cross_multiply_comparison(left_branches, op, right_branches, source);
     combine_with_or(products)
 }
@@ -306,24 +296,44 @@ pub fn expand(expr: Expression) -> Expression {
         ExpressionKind::Arithmetic(left, op, right) => {
             // Priority 1: OR distribution (must happen before recursion)
             if has_or_at_top(&left) {
-                return distribute_or_through_arithmetic(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+                return distribute_or_through_arithmetic(
+                    Arc::unwrap_or_clone(left),
+                    op,
+                    Arc::unwrap_or_clone(right),
+                    source,
+                );
             }
             if has_or_at_top(&right) {
-                return distribute_or_through_arithmetic_right(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+                return distribute_or_through_arithmetic_right(
+                    Arc::unwrap_or_clone(left),
+                    op,
+                    Arc::unwrap_or_clone(right),
+                    source,
+                );
             }
 
             // Priority 2: Push into AND (equation branch structure)
             if has_and_at_top(&left) {
-                return push_arithmetic_into_and(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+                return push_arithmetic_into_and(
+                    Arc::unwrap_or_clone(left),
+                    op,
+                    Arc::unwrap_or_clone(right),
+                    source,
+                );
             }
             if has_and_at_top(&right) {
-                return push_arithmetic_into_and_right(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+                return push_arithmetic_into_and_right(
+                    Arc::unwrap_or_clone(left),
+                    op,
+                    Arc::unwrap_or_clone(right),
+                    source,
+                );
             }
 
             // Priority 3: Recurse into children
             let left_expanded = expand(Arc::unwrap_or_clone(left));
             let right_expanded = expand(Arc::unwrap_or_clone(right));
-            
+
             // Priority 4: Check if recursion exposed ORs at the top level
             // This handles nested cases like (X + (A ∨ B)) where the OR becomes
             // visible only after expanding the child expression
@@ -331,42 +341,72 @@ pub fn expand(expr: Expression) -> Expression {
                 return distribute_or_through_arithmetic(left_expanded, op, right_expanded, source);
             }
             if has_or_at_top(&right_expanded) {
-                return distribute_or_through_arithmetic_right(left_expanded, op, right_expanded, source);
+                return distribute_or_through_arithmetic_right(
+                    left_expanded,
+                    op,
+                    right_expanded,
+                    source,
+                );
             }
-            
+
             make_arithmetic(left_expanded, op, right_expanded, source)
         }
 
         ExpressionKind::Comparison(left, op, right) => {
             // Priority 1: OR distribution
             if has_or_at_top(&left) {
-                return distribute_or_through_comparison(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+                return distribute_or_through_comparison(
+                    Arc::unwrap_or_clone(left),
+                    op,
+                    Arc::unwrap_or_clone(right),
+                    source,
+                );
             }
             if has_or_at_top(&right) {
-                return distribute_or_through_comparison_right(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+                return distribute_or_through_comparison_right(
+                    Arc::unwrap_or_clone(left),
+                    op,
+                    Arc::unwrap_or_clone(right),
+                    source,
+                );
             }
 
             // Priority 2: Push into AND
             if has_and_at_top(&left) {
-                return push_comparison_into_and(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+                return push_comparison_into_and(
+                    Arc::unwrap_or_clone(left),
+                    op,
+                    Arc::unwrap_or_clone(right),
+                    source,
+                );
             }
             if has_and_at_top(&right) {
-                return push_comparison_into_and_right(Arc::unwrap_or_clone(left), op, Arc::unwrap_or_clone(right), source);
+                return push_comparison_into_and_right(
+                    Arc::unwrap_or_clone(left),
+                    op,
+                    Arc::unwrap_or_clone(right),
+                    source,
+                );
             }
 
             // Priority 3: Recurse into children
             let left_expanded = expand(Arc::unwrap_or_clone(left));
             let right_expanded = expand(Arc::unwrap_or_clone(right));
-            
+
             // Priority 4: Check if recursion exposed ORs or ANDs at the top level
             // This handles nested cases where structure becomes visible after expansion
             if has_or_at_top(&left_expanded) {
                 return distribute_or_through_comparison(left_expanded, op, right_expanded, source);
             }
             if has_or_at_top(&right_expanded) {
-                return distribute_or_through_comparison_right(left_expanded, op, right_expanded, source);
+                return distribute_or_through_comparison_right(
+                    left_expanded,
+                    op,
+                    right_expanded,
+                    source,
+                );
             }
-            
+
             // Also check for AND after recursion
             if has_and_at_top(&left_expanded) {
                 return push_comparison_into_and(left_expanded, op, right_expanded, source);
@@ -374,14 +414,14 @@ pub fn expand(expr: Expression) -> Expression {
             if has_and_at_top(&right_expanded) {
                 return push_comparison_into_and_right(left_expanded, op, right_expanded, source);
             }
-            
+
             make_comparison(left_expanded, op, right_expanded, source)
         }
 
         ExpressionKind::LogicalAnd(left, right) => {
             let left_expanded = expand(Arc::unwrap_or_clone(left));
             let right_expanded = expand(Arc::unwrap_or_clone(right));
-            
+
             // Distribute OR through AND for DNF: (A ∨ B) ∧ C → (A ∧ C) ∨ (B ∧ C)
             if has_or_at_top(&left_expanded) || has_or_at_top(&right_expanded) {
                 let left_branches = if has_or_at_top(&left_expanded) {
@@ -394,7 +434,7 @@ pub fn expand(expr: Expression) -> Expression {
                 } else {
                     vec![right_expanded]
                 };
-                
+
                 // Cross product: combine each left with each right
                 let mut products = Vec::new();
                 for l in left_branches {
@@ -404,7 +444,7 @@ pub fn expand(expr: Expression) -> Expression {
                 }
                 return combine_with_or(products);
             }
-            
+
             make_and(left_expanded, right_expanded, source)
         }
 
@@ -416,7 +456,7 @@ pub fn expand(expr: Expression) -> Expression {
 
         ExpressionKind::LogicalNegation(inner, negation_type) => {
             let inner_expanded = expand(Arc::unwrap_or_clone(inner));
-            
+
             // Apply De Morgan's law for DNF conversion
             match &inner_expanded.kind {
                 ExpressionKind::LogicalAnd(left, right) => {
@@ -445,7 +485,7 @@ pub fn expand(expr: Expression) -> Expression {
                 }
                 _ => Expression::new(
                     ExpressionKind::LogicalNegation(Arc::new(inner_expanded), negation_type),
-                source,
+                    source,
                 ),
             }
         }
@@ -470,7 +510,6 @@ pub fn expand(expr: Expression) -> Expression {
         _ => expr,
     }
 }
-
 
 pub fn reverse_comparison(op: &ComparisonComputation) -> ComparisonComputation {
     match op {
@@ -621,7 +660,7 @@ mod tests {
         let expr = make_arithmetic(and_expr, ArithmeticComputation::Add, literal_num(5), None);
 
         let expanded = expand(expr);
-        
+
         // Should be AND at top level
         assert!(
             matches!(expanded.kind, ExpressionKind::LogicalAnd(_, _)),
@@ -642,7 +681,7 @@ mod tests {
         );
 
         let expanded = expand(expr);
-        
+
         // Should be AND at top level
         assert!(
             matches!(expanded.kind, ExpressionKind::LogicalAnd(_, _)),
@@ -683,15 +722,14 @@ mod tests {
         // (c0 ∧ 10) ∨ (c1 ∧ 20) should stay as is (already in DNF)
         let c0 = fact("c0");
         let c1 = fact("c1");
-        
+
         let branch0 = make_and(c0, literal_num(10), None);
         let branch1 = make_and(c1, literal_num(20), None);
         let expr = make_or(branch0, branch1, None);
 
         let expanded = expand(expr.clone());
-        
+
         // Should be unchanged (already in DNF form)
         assert!(expr.semantically_equal(&expanded));
     }
 }
-

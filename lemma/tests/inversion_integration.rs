@@ -36,7 +36,9 @@ fn test_invert_simple_rule() {
         "test",
         "can_vote",
         "=",
-        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))),
+        Some(OperationResult::Value(LiteralValue::Boolean(
+            lemma::BooleanValue::True,
+        ))),
         HashMap::new(),
     );
 
@@ -69,7 +71,9 @@ fn test_invert_piecewise_rule() {
         "test",
         "tier",
         "=",
-        Some(OperationResult::Value(LiteralValue::Text("silver".to_string()))),
+        Some(OperationResult::Value(LiteralValue::Text(
+            "silver".to_string(),
+        ))),
         HashMap::new(),
     );
 
@@ -105,7 +109,9 @@ fn test_invert_rule_with_rule_reference() {
         "test",
         "rate",
         "=",
-        Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(10)))),
+        Some(OperationResult::Value(LiteralValue::Percentage(
+            Decimal::from(10),
+        ))),
         HashMap::new(),
     );
 
@@ -171,7 +177,9 @@ fn test_invert_with_provided_facts() {
         "test",
         "is_large",
         "=",
-        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))),
+        Some(OperationResult::Value(LiteralValue::Boolean(
+            lemma::BooleanValue::True,
+        ))),
         values,
     );
 
@@ -202,8 +210,16 @@ fn test_invert_no_solution() {
         HashMap::new(),
     );
 
-    // Should fail because "no" is never produced
-    assert!(result.is_err(), "Should fail for impossible target");
+    // Should succeed but return empty solutions for impossible target
+    assert!(
+        result.is_ok(),
+        "Inversion should succeed even for impossible targets"
+    );
+    let response = result.unwrap();
+    assert!(
+        response.solutions.is_empty(),
+        "Should have no solutions for impossible target"
+    );
 }
 
 #[test]
@@ -223,7 +239,9 @@ fn test_invert_multi_rule_dependency() {
         "test",
         "discount",
         "=",
-        Some(OperationResult::Value(LiteralValue::Percentage(Decimal::from(10)))),
+        Some(OperationResult::Value(LiteralValue::Percentage(
+            Decimal::from(10),
+        ))),
         HashMap::new(),
     );
 
@@ -256,7 +274,9 @@ fn test_invert_domains_extracted() {
         "test",
         "can_drive",
         "=",
-        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))),
+        Some(OperationResult::Value(LiteralValue::Boolean(
+            lemma::BooleanValue::True,
+        ))),
         HashMap::new(),
     );
 
@@ -286,7 +306,9 @@ fn test_invert_comparison_operators() {
         "test",
         "grade",
         ">=",
-        Some(OperationResult::Value(LiteralValue::Number(Decimal::from(90)))),
+        Some(OperationResult::Value(LiteralValue::Number(Decimal::from(
+            90,
+        )))),
         HashMap::new(),
     );
 
@@ -315,7 +337,9 @@ fn test_invert_veto_excluded_from_domain() {
         "test",
         "of_age",
         "=",
-        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::False))),
+        Some(OperationResult::Value(LiteralValue::Boolean(
+            lemma::BooleanValue::False,
+        ))),
         HashMap::new(),
     );
 
@@ -369,7 +393,9 @@ fn test_invert_boolean_expression_result() {
         "test",
         "is_positive",
         "=",
-        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))),
+        Some(OperationResult::Value(LiteralValue::Boolean(
+            lemma::BooleanValue::True,
+        ))),
         HashMap::new(),
     );
 
@@ -417,7 +443,9 @@ fn test_invert_boolean_expression_false() {
         "test",
         "is_positive",
         "=",
-        Some(OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::False))),
+        Some(OperationResult::Value(LiteralValue::Boolean(
+            lemma::BooleanValue::False,
+        ))),
         HashMap::new(),
     );
 

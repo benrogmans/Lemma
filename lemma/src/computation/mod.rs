@@ -12,8 +12,8 @@ pub mod math_properties;
 pub mod result;
 pub mod units;
 
-pub use units::{convert_unit, to_base_unit_value};
 pub use arithmetic::arithmetic_operation;
 pub use comparison::comparison_operation;
 pub use math_properties::{check_function_range_violation, collect_domain_restrictions};
 pub use result::OperationResult;
+pub use units::{convert_unit, to_base_unit_value};

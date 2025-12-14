@@ -10,6 +10,7 @@ use super::proof::{ProofNode, ValueOrigin};
 use crate::planning::ExecutableRule;
 use crate::{BooleanValue, Expression, ExpressionKind, LiteralValue, MathematicalComputation};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Result of expression evaluation
 pub enum EvaluationResult {
@@ -17,6 +18,79 @@ pub enum EvaluationResult {
     Evaluated(OperationResult),
     /// Contains unknown facts (symbolic mode only)
     Symbolic(Expression),
+}
+
+/// Substitute evaluated operands in an expression tree
+/// Replaces child expressions with their evaluated values when known,
+/// preserving symbolic expressions when unknown
+fn substitute_evaluated_operands(
+    expr: &Expression,
+    results: &HashMap<Expression, OperationResult>,
+    symbolic_exprs: &HashMap<Expression, Expression>,
+) -> Expression {
+    // Helper to get the substituted version of a child expression
+    let substitute_child = |child: &Arc<Expression>| -> Expression {
+        if let Some(OperationResult::Value(lit)) = results.get(child.as_ref()) {
+            // Child evaluated to a literal - substitute it
+            Expression::new(ExpressionKind::Literal(lit.clone()), child.source.clone())
+        } else if let Some(symbolic) = symbolic_exprs.get(child.as_ref()) {
+            // Child is symbolic - use its simplified form
+            symbolic.clone()
+        } else {
+            // Child unchanged
+            child.as_ref().clone()
+        }
+    };
+
+    match &expr.kind {
+        ExpressionKind::Arithmetic(left, op, right) => Expression::new(
+            ExpressionKind::Arithmetic(
+                Arc::new(substitute_child(left)),
+                op.clone(),
+                Arc::new(substitute_child(right)),
+            ),
+            expr.source.clone(),
+        ),
+        ExpressionKind::Comparison(left, op, right) => Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(substitute_child(left)),
+                op.clone(),
+                Arc::new(substitute_child(right)),
+            ),
+            expr.source.clone(),
+        ),
+        ExpressionKind::LogicalAnd(left, right) => Expression::new(
+            ExpressionKind::LogicalAnd(
+                Arc::new(substitute_child(left)),
+                Arc::new(substitute_child(right)),
+            ),
+            expr.source.clone(),
+        ),
+        ExpressionKind::LogicalOr(left, right) => Expression::new(
+            ExpressionKind::LogicalOr(
+                Arc::new(substitute_child(left)),
+                Arc::new(substitute_child(right)),
+            ),
+            expr.source.clone(),
+        ),
+        ExpressionKind::LogicalNegation(operand, style) => Expression::new(
+            ExpressionKind::LogicalNegation(Arc::new(substitute_child(operand)), style.clone()),
+            expr.source.clone(),
+        ),
+        ExpressionKind::UnitConversion(operand, unit) => Expression::new(
+            ExpressionKind::UnitConversion(Arc::new(substitute_child(operand)), unit.clone()),
+            expr.source.clone(),
+        ),
+        ExpressionKind::MathematicalComputation(op, operand) => Expression::new(
+            ExpressionKind::MathematicalComputation(
+                op.clone(),
+                Arc::new(substitute_child(operand)),
+            ),
+            expr.source.clone(),
+        ),
+        // Leaf nodes remain unchanged
+        _ => expr.clone(),
+    }
 }
 
 /// Get a proof node that must exist (returns LemmaError if missing - indicates engine bug)
@@ -313,6 +387,7 @@ pub(crate) fn evaluate_expression(
 
     // Now evaluate expressions in dependency order
     let mut results: HashMap<Expression, OperationResult> = HashMap::new();
+    let mut symbolic_exprs: HashMap<Expression, Expression> = HashMap::new();
     let mut remaining: Vec<Expression> = all_exprs.keys().cloned().collect();
 
     while !remaining.is_empty() {
@@ -322,18 +397,19 @@ pub(crate) fn evaluate_expression(
         for expr_key in &remaining {
             let current = expr_key;
 
-            // Check if all dependencies are ready
+            // Check if all dependencies are ready (either evaluated or symbolic)
             let deps_ready = match &current.kind {
                 ExpressionKind::Arithmetic(left, _, right)
                 | ExpressionKind::Comparison(left, _, right)
                 | ExpressionKind::LogicalAnd(left, right)
                 | ExpressionKind::LogicalOr(left, right) => {
-                    results.contains_key(left) && results.contains_key(right)
+                    (results.contains_key(left) || symbolic_exprs.contains_key(left))
+                        && (results.contains_key(right) || symbolic_exprs.contains_key(right))
                 }
                 ExpressionKind::LogicalNegation(operand, _)
                 | ExpressionKind::UnitConversion(operand, _)
                 | ExpressionKind::MathematicalComputation(_, operand) => {
-                    results.contains_key(operand)
+                    results.contains_key(operand) || symbolic_exprs.contains_key(operand)
                 }
                 _ => true,
             };
@@ -345,6 +421,37 @@ pub(crate) fn evaluate_expression(
         }
 
         if !progress {
+            // Check if any remaining expressions have symbolic dependencies
+            // If so, mark them as symbolic and propagate up
+            let mut found_symbolic = false;
+            for expr_key in &remaining {
+                let has_symbolic_dep = match &expr_key.kind {
+                    ExpressionKind::Arithmetic(left, _, right)
+                    | ExpressionKind::Comparison(left, _, right)
+                    | ExpressionKind::LogicalAnd(left, right)
+                    | ExpressionKind::LogicalOr(left, right) => {
+                        symbolic_exprs.contains_key(left) || symbolic_exprs.contains_key(right)
+                    }
+                    ExpressionKind::LogicalNegation(operand, _)
+                    | ExpressionKind::UnitConversion(operand, _)
+                    | ExpressionKind::MathematicalComputation(_, operand) => {
+                        symbolic_exprs.contains_key(operand)
+                    }
+                    _ => false,
+                };
+
+                if has_symbolic_dep {
+                    // This expression has a symbolic dependency, so it's also symbolic
+                    symbolic_exprs.insert(expr_key.clone(), expr_key.clone());
+                    found_symbolic = true;
+                }
+            }
+
+            if found_symbolic {
+                // Continue processing - we marked some expressions as symbolic
+                continue;
+            }
+
             // This should never happen - planning should have validated all dependencies
             // If we can't make progress, it indicates a bug in normalization or evaluation
             let remaining_exprs: Vec<String> = remaining
@@ -361,6 +468,34 @@ pub(crate) fn evaluate_expression(
 
         // Evaluate expressions that are ready
         for expr_key in &to_remove {
+            // Check if any dependency is symbolic
+            let has_symbolic_dep = match &expr_key.kind {
+                ExpressionKind::Arithmetic(left, _, right)
+                | ExpressionKind::Comparison(left, _, right)
+                | ExpressionKind::LogicalAnd(left, right)
+                | ExpressionKind::LogicalOr(left, right) => {
+                    symbolic_exprs.contains_key(left) || symbolic_exprs.contains_key(right)
+                }
+                ExpressionKind::LogicalNegation(operand, _)
+                | ExpressionKind::UnitConversion(operand, _)
+                | ExpressionKind::MathematicalComputation(_, operand) => {
+                    symbolic_exprs.contains_key(operand)
+                }
+                _ => false,
+            };
+
+            if has_symbolic_dep {
+                // Expression has symbolic dependencies - substitute known operands
+                let simplified_expr =
+                    substitute_evaluated_operands(expr_key, &results, &symbolic_exprs);
+
+                if expr_key == expr {
+                    return Ok(EvaluationResult::Symbolic(simplified_expr));
+                }
+                symbolic_exprs.insert(expr_key.clone(), simplified_expr);
+                continue;
+            }
+
             // Evaluate the expression
             let eval_result = evaluate_single_expression(expr_key, &results, context)?;
             match eval_result {
@@ -368,8 +503,12 @@ pub(crate) fn evaluate_expression(
                     results.insert(expr_key.clone(), op_result);
                 }
                 EvaluationResult::Symbolic(_) => {
-                    // Symbolic result - propagate up immediately
-                    return Ok(eval_result);
+                    // Symbolic result - if this is the root expression, return it
+                    // Otherwise, mark it as symbolic and continue
+                    if expr_key == expr {
+                        return Ok(eval_result);
+                    }
+                    symbolic_exprs.insert(expr_key.clone(), expr_key.clone());
                 }
             }
         }
@@ -379,13 +518,18 @@ pub(crate) fn evaluate_expression(
         }
     }
 
+    // Check if the root expression is symbolic
+    if let Some(symbolic_expr) = symbolic_exprs.get(expr) {
+        return Ok(EvaluationResult::Symbolic(symbolic_expr.clone()));
+    }
+
     results
         .get(expr)
         .cloned()
         .map(EvaluationResult::Evaluated)
         .ok_or_else(|| {
-        crate::LemmaError::Engine("bug: expression was processed but has no result".to_string())
-    })
+            crate::LemmaError::Engine("bug: expression was processed but has no result".to_string())
+        })
 }
 
 /// Evaluate a single expression given its dependencies are already evaluated
@@ -402,7 +546,9 @@ fn evaluate_single_expression(
                 source: current.source.clone(),
             };
             context.set_proof_node(current, proof_node);
-            return Ok(EvaluationResult::Evaluated(OperationResult::Value(lit.clone())));
+            return Ok(EvaluationResult::Evaluated(OperationResult::Value(
+                lit.clone(),
+            )));
         }
 
         ExpressionKind::FactPath(fact_path) => {
@@ -431,14 +577,14 @@ fn evaluate_single_expression(
                         return Ok(EvaluationResult::Symbolic(current.clone()));
                     } else {
                         // Normal mode: create veto for missing fact
-                    let proof_node = ProofNode::Veto {
-                        message: Some(format!("Missing fact: {}", fact_path)),
-                        source: current.source.clone(),
-                    };
-                    context.set_proof_node(current, proof_node);
+                        let proof_node = ProofNode::Veto {
+                            message: Some(format!("Missing fact: {}", fact_path)),
+                            source: current.source.clone(),
+                        };
+                        context.set_proof_node(current, proof_node);
                         return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
-                            format!("Missing fact: {}", fact_path)
-                    ))));
+                            format!("Missing fact: {}", fact_path),
+                        ))));
                     }
                 }
             }
@@ -483,6 +629,11 @@ fn evaluate_single_expression(
                     return Ok(EvaluationResult::Evaluated(r));
                 }
                 None => {
+                    // During symbolic evaluation, preserve rule references as symbolic
+                    // instead of converting to veto (they'll be expanded later during world building)
+                    if context.symbolic_mode {
+                        return Ok(EvaluationResult::Symbolic(current.clone()));
+                    }
                     let proof_node = ProofNode::Veto {
                         message: Some(format!(
                             "Rule {} not found or not yet computed",
@@ -491,10 +642,9 @@ fn evaluate_single_expression(
                         source: current.source.clone(),
                     };
                     context.set_proof_node(current, proof_node);
-                    return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(format!(
-                        "Rule {} not found or not yet computed",
-                        rule_path.rule
-                    )))));
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
+                        format!("Rule {} not found or not yet computed", rule_path.rule),
+                    ))));
                 }
             }
         }
@@ -792,7 +942,9 @@ fn evaluate_single_expression(
                 source: current.source.clone(),
             };
             context.set_proof_node(current, proof_node);
-            Ok(EvaluationResult::Evaluated(OperationResult::Veto(veto_expr.message.clone())))
+            Ok(EvaluationResult::Evaluated(OperationResult::Veto(
+                veto_expr.message.clone(),
+            )))
         }
 
         ExpressionKind::FactReference(_) | ExpressionKind::RuleReference(_) => {
@@ -834,16 +986,24 @@ fn evaluate_mathematical_operator(
                 MathematicalComputation::Log => float_val.ln(),
                 MathematicalComputation::Exp => float_val.exp(),
                 MathematicalComputation::Abs => {
-                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(LiteralValue::Number(n.abs()))));
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(
+                        LiteralValue::Number(n.abs()),
+                    )));
                 }
                 MathematicalComputation::Floor => {
-                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(LiteralValue::Number(n.floor()))));
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(
+                        LiteralValue::Number(n.floor()),
+                    )));
                 }
                 MathematicalComputation::Ceil => {
-                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(LiteralValue::Number(n.ceil()))));
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(
+                        LiteralValue::Number(n.ceil()),
+                    )));
                 }
                 MathematicalComputation::Round => {
-                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(LiteralValue::Number(n.round()))));
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(
+                        LiteralValue::Number(n.round()),
+                    )));
                 }
             };
 
@@ -863,7 +1023,9 @@ fn evaluate_mathematical_operator(
                 result: result_value.clone(),
                 expression: get_source_text(context, expr)?,
             });
-            Ok(EvaluationResult::Evaluated(OperationResult::Value(result_value)))
+            Ok(EvaluationResult::Evaluated(OperationResult::Value(
+                result_value,
+            )))
         }
         _ => Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
             "Mathematical operators require number operands".to_string(),

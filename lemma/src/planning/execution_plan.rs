@@ -6,14 +6,15 @@
 
 use crate::planning::graph::Graph;
 use crate::semantic::{
-    Expression, FactPath, FactValue, LemmaFact, LemmaType,
-    LiteralValue, RulePath, TypeAnnotation,
+    Expression, ExpressionKind, FactPath, FactValue, LemmaFact, LemmaType, LiteralValue,
+    NegationType, RulePath, TypeAnnotation,
 };
 use crate::LemmaError;
 use crate::ResourceLimits;
 use crate::Source;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// A complete execution plan ready for the evaluator
 ///
@@ -153,7 +154,6 @@ fn collect_facts_for_rules(rules: &mut [ExecutableRule], graph: &Graph) {
         rule.needs_facts = facts;
     }
 }
-
 
 impl Default for ExecutionPlan {
     fn default() -> Self {
@@ -332,14 +332,88 @@ impl ExecutionPlan {
         }
         self
     }
+
+    /// Normalize branches to account for last-wins semantics
+    ///
+    /// For each branch i, conjoin its condition with the negation of all later branches:
+    /// `normalized[i] = condition[i] AND NOT (condition[i+1] OR condition[i+2] OR ...)`
+    ///
+    /// This makes each branch's condition explicitly represent when it applies,
+    /// accounting for branches that would override it.
+    pub fn normalize_branches(mut self) -> Self {
+        for rule in &mut self.rules {
+            let n = rule.branches.len();
+            if n <= 1 {
+                continue; // Single branch - nothing to normalize
+            }
+
+            // Process each branch except the last
+            for i in 0..(n - 1) {
+                // Collect conditions of all branches after i
+                let later_conditions: Vec<Expression> = rule.branches[i + 1..]
+                    .iter()
+                    .map(|b| b.condition.clone())
+                    .collect();
+
+                // Create: condition[i] AND NOT (later[0] OR later[1] OR ...)
+                let original_condition = rule.branches[i].condition.clone();
+                rule.branches[i].condition =
+                    make_normalized_condition(original_condition, later_conditions);
+            }
+            // Last branch (index n-1) remains unchanged - nothing overrides it
+        }
+        self
+    }
+}
+
+/// Helper function to create a normalized condition
+///
+/// Returns: `original AND NOT (later[0] OR later[1] OR ...)`
+fn make_normalized_condition(original: Expression, later_conditions: Vec<Expression>) -> Expression {
+    if later_conditions.is_empty() {
+        return original;
+    }
+
+    // Create OR of all later conditions
+    let negated_disjunction = if later_conditions.len() == 1 {
+        // NOT condition
+        Expression::new(
+            ExpressionKind::LogicalNegation(
+                Arc::new(later_conditions[0].clone()),
+                NegationType::Not,
+            ),
+            None,
+        )
+    } else {
+        // Build: later[0] OR later[1] OR ...
+        let mut or_expr = later_conditions[0].clone();
+        for later in &later_conditions[1..] {
+            or_expr = Expression::new(
+                ExpressionKind::LogicalOr(Arc::new(or_expr), Arc::new(later.clone())),
+                None,
+            );
+        }
+
+        // Negate: NOT (later[0] OR later[1] OR ...)
+        Expression::new(
+            ExpressionKind::LogicalNegation(Arc::new(or_expr), NegationType::Not),
+            None,
+        )
+    };
+
+    // Create: original AND NOT (...)
+    Expression::new(
+        ExpressionKind::LogicalAnd(Arc::new(original), Arc::new(negated_disjunction)),
+        None,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::semantic::{FactPath, FactReference, FactValue, LemmaType, LiteralValue};
-    use std::sync::Arc;
     use serde_json;
+    use std::sync::Arc;
 
     fn default_limits() -> ResourceLimits {
         ResourceLimits::default()
