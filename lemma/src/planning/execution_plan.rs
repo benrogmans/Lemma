@@ -6,7 +6,7 @@
 
 use crate::planning::graph::Graph;
 use crate::semantic::{
-    BooleanValue, Expression, ExpressionKind, FactPath, FactValue, LemmaFact, LemmaType,
+    Expression, FactPath, FactValue, LemmaFact, LemmaType,
     LiteralValue, RulePath, TypeAnnotation,
 };
 use crate::LemmaError;
@@ -541,6 +541,7 @@ mod tests {
                     ),
                     create_test_source(),
                 ),
+                optimized_condition: None,
                 result: create_literal_expr(LiteralValue::Boolean(
                     crate::semantic::BooleanValue::True,
                 )),

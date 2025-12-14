@@ -384,8 +384,8 @@ pub(crate) fn evaluate_expression(
         .cloned()
         .map(EvaluationResult::Evaluated)
         .ok_or_else(|| {
-            crate::LemmaError::Engine("bug: expression was processed but has no result".to_string())
-        })
+        crate::LemmaError::Engine("bug: expression was processed but has no result".to_string())
+    })
 }
 
 /// Evaluate a single expression given its dependencies are already evaluated
@@ -431,14 +431,14 @@ fn evaluate_single_expression(
                         return Ok(EvaluationResult::Symbolic(current.clone()));
                     } else {
                         // Normal mode: create veto for missing fact
-                        let proof_node = ProofNode::Veto {
-                            message: Some(format!("Missing fact: {}", fact_path)),
-                            source: current.source.clone(),
-                        };
-                        context.set_proof_node(current, proof_node);
+                    let proof_node = ProofNode::Veto {
+                        message: Some(format!("Missing fact: {}", fact_path)),
+                        source: current.source.clone(),
+                    };
+                    context.set_proof_node(current, proof_node);
                         return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
                             format!("Missing fact: {}", fact_path)
-                        ))));
+                    ))));
                     }
                 }
             }

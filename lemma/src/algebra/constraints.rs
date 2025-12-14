@@ -18,7 +18,6 @@ use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
 
 // ============================================================================
 // Constraint Types
@@ -410,6 +409,38 @@ impl FactConstraint {
     /// Intersect this constraint with another
     pub fn intersect(&self, other: &FactConstraint) -> FactConstraint {
         intersect_constraints(self.clone(), other.clone())
+    }
+
+    /// Check if constraint represents a single exact value
+    pub fn is_exact(&self) -> bool {
+        matches!(self, FactConstraint::Enumeration(vals) if vals.len() == 1)
+    }
+
+    /// Create constraint for exact value
+    pub fn exact(value: LiteralValue) -> Self {
+        FactConstraint::Enumeration(vec![value])
+    }
+
+    /// Check if a value satisfies this constraint
+    pub fn contains(&self, value: &LiteralValue) -> bool {
+        match self {
+            FactConstraint::Unconstrained => true,
+            FactConstraint::Enumeration(vals) => vals.contains(value),
+            FactConstraint::Range { min, max } => {
+                value_in_bounds(value, min) && value_in_bounds(value, max)
+            }
+            FactConstraint::Union(parts) => parts.iter().any(|p| p.contains(value)),
+            FactConstraint::Complement(inner) => !inner.contains(value),
+        }
+    }
+}
+
+/// Check if a value satisfies a bound constraint
+fn value_in_bounds(value: &LiteralValue, bound: &Bound) -> bool {
+    match bound {
+        Bound::Unbounded => true,
+        Bound::Inclusive(b) => lit_cmp(value, b) <= 0,
+        Bound::Exclusive(b) => lit_cmp(value, b) < 0,
     }
 }
 

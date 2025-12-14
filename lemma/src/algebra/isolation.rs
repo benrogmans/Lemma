@@ -2,12 +2,14 @@
 //!
 //! Provides functions to isolate facts from arithmetic expressions for constraint solving.
 
-use crate::algebra::constraints::UnsatReason;
+use crate::algebra::constraints::{DomainRestriction, FactConstraint, UnsatReason};
+use crate::computation::OperationResult;
 use crate::semantic::{
     ArithmeticComputation, ComparisonComputation, EqualityNotation, Expression, ExpressionKind,
-    FactPath, LiteralValue,
+    FactPath, LiteralValue, MathematicalComputation,
 };
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -525,5 +527,336 @@ fn extract_constant_sum(expression: &Expression) -> Option<(Expression, Decimal)
         }
 
         _ => None,
+    }
+}
+
+// ============================================================================
+// Non-Linear Inversion (Phase 7)
+// ============================================================================
+
+/// A single solution from inversion (mini-world)
+#[derive(Debug, Clone)]
+pub struct InversionSolution {
+    /// The value for this solution
+    pub value: LiteralValue,
+    
+    /// Additional constraints for this solution branch
+    /// Example: x^2 = 4 gives x=2 with constraint x>0
+    pub constraints: HashMap<FactPath, FactConstraint>,
+    
+    /// Domain restrictions encountered during inversion
+    pub restrictions: Vec<DomainRestriction>,
+}
+
+/// Result of inverting an expression
+/// 
+/// Can have 0 (unsatisfiable), 1 (typical), or multiple solutions (quadratic, abs, etc.)
+/// All outcomes are domain information - empty vec = empty valid domain
+#[derive(Debug, Clone)]
+pub struct InversionResult {
+    /// All possible solution branches
+    /// Empty = unsatisfiable (no valid domain)
+    pub solutions: Vec<InversionSolution>,
+}
+
+impl InversionResult {
+    pub fn solved(value: LiteralValue) -> Self {
+        Self {
+            solutions: vec![InversionSolution {
+                value,
+                constraints: HashMap::new(),
+                restrictions: vec![],
+            }],
+        }
+    }
+    
+    pub fn unsatisfiable(_restriction: DomainRestriction) -> Self {
+        Self {
+            solutions: vec![],
+        }
+    }
+    
+    pub fn is_unsatisfiable(&self) -> bool {
+        self.solutions.is_empty()
+    }
+}
+
+/// Recursively invert an expression to solve for a target fact
+/// Example: solve sqrt(income) = 500 for income
+///          -> income = 500^2 = 250000
+///
+/// Returns InversionResult with 0+ solutions (empty = unsatisfiable)
+pub fn invert_expression(
+    expr: &Expression,
+    target_fact: &FactPath,
+    target_value: &LiteralValue,
+) -> InversionResult {
+    match &expr.kind {
+        // Base case: found the target fact
+        ExpressionKind::FactPath(path) if path == target_fact => {
+            InversionResult::solved(target_value.clone())
+        }
+        
+        // Arithmetic: y = x + C => x = y - C
+        ExpressionKind::Arithmetic(left, op, right) => {
+            let left_has_fact = contains_fact(left, target_fact);
+            let right_has_fact = contains_fact(right, target_fact);
+            
+            // Can only invert if fact appears on one side only
+            if left_has_fact && !right_has_fact {
+                // Isolate from left: y = x op C => x = ...
+                let right_result = evaluate_to_literal(right);
+                if right_result.is_unsatisfiable() {
+                    return right_result;
+                }
+                let right_value = &right_result.solutions[0].value;
+                
+                let inverted = invert_arithmetic_left(target_value, op.clone(), right_value);
+                if inverted.is_unsatisfiable() {
+                    return inverted;
+                }
+                let new_target = &inverted.solutions[0].value;
+                
+                invert_expression(left, target_fact, new_target)
+            } else if !left_has_fact && right_has_fact {
+                // Isolate from right: y = C op x => x = ...
+                let left_result = evaluate_to_literal(left);
+                if left_result.is_unsatisfiable() {
+                    return left_result;
+                }
+                let left_value = &left_result.solutions[0].value;
+                
+                let inverted = invert_arithmetic_right(left_value, op.clone(), target_value);
+                if inverted.is_unsatisfiable() {
+                    return inverted;
+                }
+                let new_target = &inverted.solutions[0].value;
+                
+                invert_expression(right, target_fact, new_target)
+            } else {
+                InversionResult::unsatisfiable(DomainRestriction {
+                    facts: vec![target_fact.clone()],
+                    description: "Fact appears multiple times in expression".to_string(),
+                    source: "inversion".to_string(),
+                })
+            }
+        }
+        
+        // Non-linear: y = sqrt(x) => x = y^2
+        ExpressionKind::MathematicalComputation(op, inner) => {
+            let inverted_result = match op {
+                MathematicalComputation::Sqrt => square_value(target_value),
+                MathematicalComputation::Sin | MathematicalComputation::Cos | MathematicalComputation::Tan => {
+                    apply_inverse_trig(op, target_value)
+                }
+                MathematicalComputation::Log => exp_value(target_value),
+                MathematicalComputation::Exp => log_value(target_value),
+                MathematicalComputation::Abs => {
+                    // y = |x| => x = ±y (TWO solutions!)
+                    // TODO: implement multiple solution branches
+                    return InversionResult::unsatisfiable(DomainRestriction {
+                        facts: vec![target_fact.clone()],
+                        description: "Absolute value inversion not yet implemented (±)".to_string(),
+                        source: "abs inversion".to_string(),
+                    });
+                }
+                _ => return InversionResult::unsatisfiable(DomainRestriction {
+                    facts: vec![target_fact.clone()],
+                    description: format!("Unsupported operation: {:?}", op),
+                    source: "inversion".to_string(),
+                }),
+            };
+            
+            if inverted_result.is_unsatisfiable() {
+                return inverted_result;
+            }
+            
+            let new_target = &inverted_result.solutions[0].value;
+            invert_expression(inner, target_fact, new_target)
+        }
+        
+        // Comparison: already handled by try_isolate_comparison
+        ExpressionKind::Comparison(_, _, _) => {
+            InversionResult::unsatisfiable(DomainRestriction {
+                facts: vec![],
+                description: "Cannot invert through comparison".to_string(),
+                source: "inversion".to_string(),
+            })
+        }
+        
+        // Cannot invert through logical operations
+        ExpressionKind::LogicalAnd(_, _) | ExpressionKind::LogicalOr(_, _) => {
+            InversionResult::unsatisfiable(DomainRestriction {
+                facts: vec![],
+                description: "Cannot invert through logical operations".to_string(),
+                source: "inversion".to_string(),
+            })
+        }
+        
+        // Literal doesn't contain the fact
+        ExpressionKind::Literal(_) => {
+            InversionResult::unsatisfiable(DomainRestriction {
+                facts: vec![],
+                description: "Fact not found in expression".to_string(),
+                source: "inversion".to_string(),
+            })
+        }
+        
+        _ => InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: "Unsupported expression type".to_string(),
+            source: "inversion".to_string(),
+        }),
+    }
+}
+
+// Arithmetic inversion helpers
+fn invert_arithmetic_left(
+    target: &LiteralValue,
+    op: ArithmeticComputation,
+    right: &LiteralValue,
+) -> InversionResult {
+    use crate::computation::arithmetic::arithmetic_operation;
+    use ArithmeticComputation::*;
+    
+    let (inverse_op, inverse_right) = match op {
+        Add => (Subtract, right.clone()),           // y = x + C => x = y - C
+        Subtract => (Add, right.clone()),           // y = x - C => x = y + C
+        Multiply => (Divide, right.clone()),        // y = x * C => x = y / C
+        Divide => (Multiply, right.clone()),        // y = x / C => x = y * C
+        Power => {
+            // y = x ^ C => x = y ^ (1/C)
+            let one = LiteralValue::Number(Decimal::from(1));
+            match arithmetic_operation(&one, &Divide, right) {
+                OperationResult::Value(inv_exp) => (Power, inv_exp),
+                OperationResult::Veto(msg) => {
+                    return InversionResult::unsatisfiable(DomainRestriction {
+                        facts: vec![],
+                        description: format!("Cannot compute 1/{}: {}", right, msg.unwrap_or_default()),
+                        source: "power inversion".to_string(),
+                    });
+                }
+            }
+        }
+        _ => return InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: format!("Unsupported operation: {:?}", op),
+            source: "arithmetic inversion".to_string(),
+        }),
+    };
+    
+    match arithmetic_operation(target, &inverse_op, &inverse_right) {
+        OperationResult::Value(result) => InversionResult::solved(result),
+        OperationResult::Veto(msg) => InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: msg.unwrap_or_else(|| "Arithmetic operation failed".to_string()),
+            source: "arithmetic inversion".to_string(),
+        }),
+    }
+}
+
+fn invert_arithmetic_right(
+    left: &LiteralValue,
+    op: ArithmeticComputation,
+    target: &LiteralValue,
+) -> InversionResult {
+    use crate::computation::arithmetic::arithmetic_operation;
+    use ArithmeticComputation::*;
+    
+    let result = match op {
+        Add => arithmetic_operation(target, &Subtract, left),        // y = C + x => x = y - C
+        Subtract => arithmetic_operation(left, &Subtract, target),   // y = C - x => x = C - y
+        Multiply => arithmetic_operation(target, &Divide, left),     // y = C * x => x = y / C
+        Divide => arithmetic_operation(left, &Divide, target),       // y = C / x => x = C / y
+        Power => {
+            // y = C ^ x => x = log_C(y) - needs numerical implementation
+            return InversionResult::unsatisfiable(DomainRestriction {
+                facts: vec![],
+                description: "Logarithm inversion requires numerical implementation".to_string(),
+                source: "power inversion".to_string(),
+            });
+        }
+        _ => return InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: format!("Unsupported operation: {:?}", op),
+            source: "arithmetic inversion".to_string(),
+        }),
+    };
+    
+    match result {
+        OperationResult::Value(value) => InversionResult::solved(value),
+        OperationResult::Veto(msg) => InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: msg.unwrap_or_else(|| "Arithmetic operation failed".to_string()),
+            source: "arithmetic inversion".to_string(),
+        }),
+    }
+}
+
+// Mathematical operation helpers
+// NOTE: Use computation::arithmetic::arithmetic_operation directly
+// Veto results become unsatisfiable domain restrictions
+
+fn square_value(value: &LiteralValue) -> InversionResult {
+    use crate::computation::arithmetic::arithmetic_operation;
+    let two = LiteralValue::Number(Decimal::from(2));
+    match arithmetic_operation(value, &ArithmeticComputation::Power, &two) {
+        OperationResult::Value(result) => InversionResult::solved(result),
+        OperationResult::Veto(msg) => InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: msg.unwrap_or_else(|| "Cannot square value".to_string()),
+            source: "sqrt inversion".to_string(),
+        }),
+    }
+}
+
+fn exp_value(_value: &LiteralValue) -> InversionResult {
+    // Use e^x - needs numerical implementation
+    InversionResult::unsatisfiable(DomainRestriction {
+        facts: vec![],
+        description: "Exponential requires numerical implementation".to_string(),
+        source: "log inversion".to_string(),
+    })
+}
+
+fn log_value(_value: &LiteralValue) -> InversionResult {
+    // Natural log - needs numerical implementation
+    InversionResult::unsatisfiable(DomainRestriction {
+        facts: vec![],
+        description: "Logarithm requires numerical implementation".to_string(),
+        source: "exp inversion".to_string(),
+    })
+}
+
+fn apply_inverse_trig(op: &MathematicalComputation, _value: &LiteralValue) -> InversionResult {
+    // asin, acos, atan - needs numerical implementation
+    InversionResult::unsatisfiable(DomainRestriction {
+        facts: vec![],
+        description: format!("Inverse {:?} requires numerical implementation", op),
+        source: "trig inversion".to_string(),
+    })
+}
+
+fn evaluate_to_literal(expr: &Expression) -> InversionResult {
+    // Evaluate constant expression using existing evaluator
+    let plan = crate::planning::ExecutionPlan::default();
+    let mut context = crate::evaluation::EvaluationContext::new_for_inversion(&plan);
+    
+    match crate::evaluation::expression::evaluate_expression(expr, &mut context) {
+        Ok(crate::evaluation::expression::EvaluationResult::Evaluated(OperationResult::Value(v))) => {
+            InversionResult::solved(v)
+        }
+        Ok(crate::evaluation::expression::EvaluationResult::Evaluated(OperationResult::Veto(msg))) => {
+            InversionResult::unsatisfiable(DomainRestriction {
+                facts: vec![],
+                description: msg.unwrap_or_else(|| "Expression vetoed".to_string()),
+                source: "constant evaluation".to_string(),
+            })
+        }
+        _ => InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: "Expression contains unknown facts".to_string(),
+            source: "constant evaluation".to_string(),
+        }),
     }
 }

@@ -15,105 +15,21 @@
 //!    and exact symbolic preservation.
 
 mod response;
+mod world;
+mod world_builder;
 
 pub use crate::algebra::constraints::{Bound, DomainRestriction, FactConstraint, UnsatReason};
 pub use response::{InversionResponse, Solution};
+pub use world::World;
+pub use world_builder::WorldBuilder;
 
+use crate::algebra::isolation::{collect_facts, invert_expression};
 use crate::computation::OperationResult;
+use crate::evaluation::Evaluator;
 use crate::planning::ExecutionPlan;
-use crate::semantic::{Expression, ExpressionKind, FactValue};
+use crate::semantic::{ComparisonComputation, Expression, ExpressionKind, FactPath, LiteralValue};
 use crate::{LemmaError, LemmaResult};
-use std::sync::Arc;
-
-/// Substitute provided fact values into an equation
-fn substitute_fact_values(expression: Expression, plan: &ExecutionPlan) -> Expression {
-    let source = expression.source.clone();
-    
-    match &expression.kind {
-        ExpressionKind::FactPath(fact_path) => {
-            // Check if this fact has a literal value in the plan
-            if let Some(fact) = plan.facts.get(fact_path) {
-                if let FactValue::Literal(lit_val) = &fact.value {
-                    // Replace with literal value
-                    return Expression::new(
-                        ExpressionKind::Literal(lit_val.clone()),
-                        source,
-                    );
-                }
-            }
-            // No substitution, return as-is
-            expression
-        }
-        
-        // Recursively substitute in compound expressions
-        ExpressionKind::LogicalAnd(left, right) => {
-            let left_sub = substitute_fact_values(Arc::unwrap_or_clone(left.clone()), plan);
-            let right_sub = substitute_fact_values(Arc::unwrap_or_clone(right.clone()), plan);
-            Expression::new(
-                ExpressionKind::LogicalAnd(Arc::new(left_sub), Arc::new(right_sub)),
-                source,
-            )
-        }
-        
-        ExpressionKind::LogicalOr(left, right) => {
-            let left_sub = substitute_fact_values(Arc::unwrap_or_clone(left.clone()), plan);
-            let right_sub = substitute_fact_values(Arc::unwrap_or_clone(right.clone()), plan);
-            Expression::new(
-                ExpressionKind::LogicalOr(Arc::new(left_sub), Arc::new(right_sub)),
-                source,
-            )
-        }
-        
-        ExpressionKind::LogicalNegation(inner, negation_type) => {
-            let inner_sub = substitute_fact_values(Arc::unwrap_or_clone(inner.clone()), plan);
-            Expression::new(
-                ExpressionKind::LogicalNegation(Arc::new(inner_sub), negation_type.clone()),
-                source,
-            )
-        }
-        
-        ExpressionKind::Arithmetic(left, op, right) => {
-            let left_sub = substitute_fact_values(Arc::unwrap_or_clone(left.clone()), plan);
-            let right_sub = substitute_fact_values(Arc::unwrap_or_clone(right.clone()), plan);
-            Expression::new(
-                ExpressionKind::Arithmetic(Arc::new(left_sub), op.clone(), Arc::new(right_sub)),
-                source,
-            )
-        }
-        
-        ExpressionKind::Comparison(left, op, right) => {
-            let left_sub = substitute_fact_values(Arc::unwrap_or_clone(left.clone()), plan);
-            let right_sub = substitute_fact_values(Arc::unwrap_or_clone(right.clone()), plan);
-            Expression::new(
-                ExpressionKind::Comparison(Arc::new(left_sub), op.clone(), Arc::new(right_sub)),
-                source,
-            )
-        }
-        
-        ExpressionKind::UnitConversion(inner, target) => {
-            let inner_sub = substitute_fact_values(Arc::unwrap_or_clone(inner.clone()), plan);
-            Expression::new(
-                ExpressionKind::UnitConversion(Arc::new(inner_sub), target.clone()),
-                source,
-            )
-        }
-        
-        ExpressionKind::MathematicalComputation(op, inner) => {
-            let inner_sub = substitute_fact_values(Arc::unwrap_or_clone(inner.clone()), plan);
-            Expression::new(
-                ExpressionKind::MathematicalComputation(op.clone(), Arc::new(inner_sub)),
-                source,
-            )
-        }
-        
-        // These don't contain facts to substitute
-        ExpressionKind::Literal(_) 
-        | ExpressionKind::Veto(_)
-        | ExpressionKind::RulePath(_)
-        | ExpressionKind::FactReference(_)
-        | ExpressionKind::RuleReference(_) => expression,
-    }
-}
+use std::collections::HashMap;
 
 /// Target specification for an inversion query
 ///
@@ -203,7 +119,14 @@ impl TargetOp {
             ))),
         }
     }
+}
 
+impl Target {
+    /// Create a target from operator string and outcome
+    pub fn from_str(operator: &str, outcome: Option<OperationResult>) -> LemmaResult<Self> {
+        let op = TargetOp::from_str(operator)?;
+        Ok(Target { op, outcome })
+    }
 }
 
 /// Invert a rule to find input fact values that produce a desired outcome.
@@ -245,7 +168,169 @@ pub fn invert(
     operator: &str,
     outcome: Option<OperationResult>,
 ) -> LemmaResult<InversionResponse> {
-    todo!("Inversion broken - Phase 1 deletion")
+    let target = Target::from_str(operator, outcome)?;
+    
+    // 1. Apply symbolic evaluation to reduce the plan (substitute known facts, prune branches)
+    let evaluator = Evaluator;
+    let reduced_plan = evaluator.evaluate_symbolic(plan);
+    
+    // 2. Optimize the reduced plan (DNF expansion and simplification)
+    let optimized_plan = reduced_plan.optimize();
+    
+    // 3. Build worlds on-demand from the optimized plan
+    let mut builder = WorldBuilder::new(&optimized_plan);
+    let rule_worlds = builder.build_worlds(rule_name)?;
+    
+    // 4. Filter worlds matching target
+    let matching_worlds: Vec<&World> = rule_worlds.iter()
+        .filter(|w| matches_target(&w.value, &target))
+        .collect();
+    
+    // 5. For each world, solve algebraically
+    let solutions: Vec<Solution> = matching_worlds.iter()
+        .flat_map(|world| solve_world(world, &target))
+        .collect();
+    
+    Ok(InversionResponse { solutions })
+}
+
+/// Check if a world's value expression matches the target
+fn matches_target(expr: &Expression, target: &Target) -> bool {
+    match &expr.kind {
+        ExpressionKind::Literal(lit) => {
+            match &target.outcome {
+                Some(OperationResult::Value(target_val)) => {
+                    matches_comparison(lit, &target.op, target_val)
+                }
+                Some(OperationResult::Veto(_)) => false,
+                None => true,
+            }
+        }
+        ExpressionKind::Veto(veto) => {
+            match &target.outcome {
+                Some(OperationResult::Veto(target_veto)) => {
+                    match (target_veto, &veto.message) {
+                        (None, _) => true,
+                        (Some(target_msg), Some(veto_msg)) => target_msg == veto_msg,
+                        _ => false,
+                    }
+                }
+                _ => false,
+            }
+        }
+        _ => {
+            // For non-literal expressions, we need to solve algebraically
+            // Return true here - solve_world will handle the actual solving
+            true
+        }
+    }
+}
+
+/// Compare a literal value with a target value using the given operator
+fn matches_comparison(value: &LiteralValue, op: &TargetOp, target: &LiteralValue) -> bool {
+    use crate::computation::comparison::comparison_operation;
+    use crate::semantic::EqualityNotation;
+    
+    let cmp_op = match op {
+        TargetOp::Eq => ComparisonComputation::Equal(EqualityNotation::Symbol),
+        TargetOp::Neq => ComparisonComputation::NotEqual(EqualityNotation::Symbol),
+        TargetOp::Lt => ComparisonComputation::LessThan,
+        TargetOp::Lte => ComparisonComputation::LessThanOrEqual,
+        TargetOp::Gt => ComparisonComputation::GreaterThan,
+        TargetOp::Gte => ComparisonComputation::GreaterThanOrEqual,
+    };
+    
+    match comparison_operation(value, &cmp_op, target) {
+        OperationResult::Value(LiteralValue::Boolean(crate::semantic::BooleanValue::True)) => true,
+        _ => false,
+    }
+}
+
+/// Solve a single world
+fn solve_world(world: &World, target: &Target) -> Vec<Solution> {
+    // World.value is now an Expression (not Value enum)
+    match &world.value.kind {
+        // Case 1: Literal value
+        ExpressionKind::Literal(lit) => {
+            // Already matches (pre-filtered)
+            vec![Solution::new(
+                OperationResult::Value(lit.clone()),
+                world.constraints.clone()
+            )]
+        }
+        
+        // Case 2: Veto
+        ExpressionKind::Veto(veto) => {
+            vec![Solution::new(
+                OperationResult::Veto(veto.message.clone()),
+                world.constraints.clone()
+            )]
+        }
+        
+        // Case 3: Expression containing unknown facts - needs algebraic inversion
+        _ => {
+            // Extract target value
+            let target_value = match &target.outcome {
+                Some(OperationResult::Value(val)) => val.clone(),
+                _ => return vec![],
+            };
+            
+            // Find which fact needs to be solved for
+            let unknown_fact = match find_unknown_fact(&world.value, &world.constraints) {
+                Ok(fact) => fact,
+                Err(_) => return vec![],
+            };
+            
+            // Use algebraic inversion (handles linear + non-linear, multiple solutions)
+            let inversion_result = invert_expression(&world.value, &unknown_fact, &target_value);
+            
+            let mut solutions = Vec::new();
+            for inv_solution in inversion_result.solutions {
+                // Verify solution satisfies world constraints
+                if world.constraints.get(&unknown_fact).map_or(true, |c| c.contains(&inv_solution.value)) {
+                    let mut solution_constraints = world.constraints.clone();
+                    
+                    // Merge solution's constraints
+                    for (fact, constraint) in inv_solution.constraints {
+                        solution_constraints.insert(fact, constraint);
+                    }
+                    
+                    // Add exact constraint for the solved fact
+                    solution_constraints.insert(
+                        unknown_fact.clone(),
+                        FactConstraint::exact(inv_solution.value.clone())
+                    );
+                    
+                    solutions.push(Solution::new(
+                        OperationResult::Value(target_value.clone()),
+                        solution_constraints
+                    ));
+                }
+                // else: solution outside valid range, skip
+            }
+            
+            // Return all valid solutions (empty if none work or inversion failed)
+            solutions
+        }
+    }
+}
+
+/// Find an unknown fact in an expression that needs to be solved for
+fn find_unknown_fact(expr: &Expression, constraints: &HashMap<FactPath, FactConstraint>) -> Result<FactPath, LemmaError> {
+    // Find facts in expression that don't have exact values in constraints
+    let facts_in_expr = collect_facts(expr);
+    
+    for fact in facts_in_expr {
+        if let Some(constraint) = constraints.get(&fact) {
+            if !constraint.is_exact() {
+                return Ok(fact);
+            }
+        } else {
+            return Ok(fact);
+        }
+    }
+    
+    Err(LemmaError::Engine("No unknown fact found in expression".to_string()))
 }
 
 #[cfg(test)]
@@ -254,7 +339,6 @@ mod tests {
     use crate::planning::{Branch, ExecutableRule};
     use crate::semantic::{BooleanValue, Expression, ExpressionKind, LiteralValue, RulePath};
     use rust_decimal::Decimal;
-    use std::sync::Arc;
     use std::collections::{HashMap, HashSet};
 
     fn literal_bool(value: bool) -> Expression {
@@ -294,14 +378,6 @@ mod tests {
     #[test]
     fn test_invert_simple_rule() {
         // Create a simple rule: result = 42 (always)
-        // Equation: true AND 42
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(
-                Arc::new(literal_bool(true)),
-                Arc::new(literal_num(42)),
-            ),
-            None,
-        );
         let rule = ExecutableRule {
             path: rule_path("test"),
             name: "test".to_string(),
@@ -312,7 +388,6 @@ mod tests {
                 source: None,
             }],
             needs_facts: HashSet::new(),
-            equation,
             source: None,
         };
 
@@ -361,13 +436,6 @@ mod tests {
 
     #[test]
     fn test_invert_invalid_operator() {
-        let equation = Expression::new(
-            ExpressionKind::LogicalAnd(
-                Arc::new(literal_bool(true)),
-                Arc::new(literal_num(42)),
-            ),
-            None,
-        );
         let rule = ExecutableRule {
             path: rule_path("test"),
             name: "test".to_string(),
@@ -378,7 +446,6 @@ mod tests {
                 source: None,
             }],
             needs_facts: HashSet::new(),
-            equation,
             source: None,
         };
 

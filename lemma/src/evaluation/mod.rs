@@ -54,6 +54,20 @@ impl EvaluationContext {
         }
     }
 
+    /// Create a minimal evaluation context for inversion constant evaluation
+    /// Used by algebraic isolation to evaluate constant expressions
+    pub fn new_for_inversion(plan: &ExecutionPlan) -> Self {
+        Self {
+            facts: plan.facts.clone(),
+            rule_results: HashMap::new(),
+            rule_proofs: HashMap::new(),
+            operations: Vec::new(),
+            source_text: plan.graph().sources().clone(),
+            proof_nodes: HashMap::new(),
+            symbolic_mode: false,
+        }
+    }
+
     fn get_fact(&self, fact_path: &FactPath) -> Option<&LiteralValue> {
         self.facts.get(fact_path).and_then(|f| match &f.value {
             crate::FactValue::Literal(lit) => Some(lit),

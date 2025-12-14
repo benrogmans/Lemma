@@ -1,9 +1,8 @@
-use crate::algebra::simplification;
 use crate::parsing::source::Source;
 use crate::planning::execution_plan::Branch;
 use crate::semantic::{
     ArithmeticComputation, BooleanValue, ConversionTarget, Expression, ExpressionKind, FactPath,
-    FactValue, LemmaDoc, LemmaFact, LemmaRule, LemmaType, LiteralValue, NegationType, PathSegment,
+    FactValue, LemmaDoc, LemmaFact, LemmaRule, LemmaType, LiteralValue, PathSegment,
     RulePath, TypeAnnotation,
 };
 use crate::LemmaError;

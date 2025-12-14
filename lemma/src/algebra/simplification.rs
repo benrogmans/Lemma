@@ -47,6 +47,14 @@ pub fn reduce(expression: Expression) -> Expression {
     // 3. Remove duplicate branches (idempotence)
     term_sets = remove_duplicates(term_sets);
 
+    // 4. Apply absorption: A ∨ (A ∧ B) → A
+    term_sets = apply_absorption(term_sets);
+
+    // 5. Apply term combination: (A ∧ B) ∨ (A ∧ ¬B) → A
+    term_sets = apply_term_combination(term_sets);
+
+    // 6. Apply consensus elimination: (A ∧ B) ∨ (¬A ∧ C) ∨ (B ∧ C) → (A ∧ B) ∨ (¬A ∧ C)
+    term_sets = apply_consensus_elimination(term_sets);
 
     // 7. Check for tautology (empty branch = true)
     if term_sets.iter().any(|b| b.is_empty()) {
@@ -296,6 +304,219 @@ fn remove_duplicates(branches: Vec<Vec<Expression>>) -> Vec<Vec<Expression>> {
     unique
 }
 
+// ============================================================================
+// Absorption: A ∨ (A ∧ B) → A
+// ============================================================================
+
+/// Apply absorption: if one branch is a subset of another, remove the larger one
+fn apply_absorption(branches: Vec<Vec<Expression>>) -> Vec<Vec<Expression>> {
+    let mut result: Vec<Vec<Expression>> = Vec::new();
+    
+    for branch in branches {
+        // Check if this branch is absorbed by any existing branch
+        let is_absorbed = result.iter().any(|existing| {
+            // If existing is a subset of branch, branch absorbs existing
+            // If branch is a subset of existing, existing absorbs branch
+            terms_set_is_subset(existing, &branch) || terms_set_is_subset(&branch, existing)
+        });
+        
+        if !is_absorbed {
+            // Remove any existing branches that are absorbed by this one
+            result.retain(|existing| !terms_set_is_subset(existing, &branch));
+            result.push(branch);
+        }
+    }
+    
+    result
+}
+
+/// Check if term set A is a subset of term set B (all terms in A are in B)
+fn terms_set_is_subset(a: &[Expression], b: &[Expression]) -> bool {
+    a.iter().all(|term_a| b.iter().any(|term_b| term_a.semantically_equal(term_b)))
+}
+
+// ============================================================================
+// Term Combination: (A ∧ B) ∨ (A ∧ ¬B) → A
+// ============================================================================
+
+/// Apply term combination: if two branches differ only in complementary terms, merge them
+fn apply_term_combination(branches: Vec<Vec<Expression>>) -> Vec<Vec<Expression>> {
+    let mut result: Vec<Vec<Expression>> = Vec::new();
+    let mut processed = vec![false; branches.len()];
+    
+    for i in 0..branches.len() {
+        if processed[i] {
+            continue;
+        }
+        
+        let mut combined = branches[i].clone();
+        let mut found_combination = false;
+        
+        // Look for branches that differ only in complementary terms
+        for j in (i + 1)..branches.len() {
+            if processed[j] {
+                continue;
+            }
+            
+            if let Some(common_terms) = try_combine_complementary(&branches[i], &branches[j]) {
+                combined = common_terms;
+                processed[j] = true;
+                found_combination = true;
+                break;
+            }
+        }
+        
+        if found_combination {
+            // Recursively try to combine the merged result with other branches
+            let mut remaining: Vec<Vec<Expression>> = branches.iter()
+                .enumerate()
+                .filter(|(idx, _)| !processed[*idx] && *idx != i)
+                .map(|(_, branch)| branch.clone())
+                .collect();
+            remaining.insert(0, combined);
+            return apply_term_combination(remaining);
+        }
+        
+        result.push(branches[i].clone());
+    }
+    
+    result
+}
+
+/// Try to combine two branches that differ only in complementary terms
+/// Returns Some(common_terms) if they can be combined, None otherwise
+fn try_combine_complementary(a: &[Expression], b: &[Expression]) -> Option<Vec<Expression>> {
+    // Find terms that are in both branches (common terms)
+    let mut common: Vec<Expression> = Vec::new();
+    let mut only_in_a: Vec<Expression> = Vec::new();
+    let mut only_in_b: Vec<Expression> = Vec::new();
+    
+    // Classify terms in a
+    for term_a in a {
+        if b.iter().any(|term_b| term_a.semantically_equal(term_b)) {
+            common.push(term_a.clone());
+        } else {
+            only_in_a.push(term_a.clone());
+        }
+    }
+    
+    // Classify terms in b
+    for term_b in b {
+        if !a.iter().any(|term_a| term_a.semantically_equal(term_b)) {
+            only_in_b.push(term_b.clone());
+        }
+    }
+    
+    // If they differ only in complementary terms, we can combine
+    // Check if only_in_a and only_in_b are complementary pairs
+    if only_in_a.len() == 1 && only_in_b.len() == 1 {
+        if are_complements(&only_in_a[0], &only_in_b[0]) {
+            return Some(common);
+        }
+    }
+    
+    None
+}
+
+// ============================================================================
+// Consensus Elimination: (A ∧ B) ∨ (¬A ∧ C) ∨ (B ∧ C) → (A ∧ B) ∨ (¬A ∧ C)
+// ============================================================================
+
+/// Apply consensus elimination: remove redundant branches created by consensus
+fn apply_consensus_elimination(branches: Vec<Vec<Expression>>) -> Vec<Vec<Expression>> {
+    let mut result: Vec<Vec<Expression>> = Vec::new();
+    
+    for branch in branches {
+        // Check if this branch is redundant due to consensus with two other branches
+        let is_redundant = is_consensus_redundant(&branch, &result);
+        
+        if !is_redundant {
+            result.push(branch);
+        }
+    }
+    
+    result
+}
+
+/// Check if a branch is redundant due to consensus
+/// A branch (B ∧ C) is redundant if there exist branches (A ∧ B) and (¬A ∧ C)
+fn is_consensus_redundant(
+    branch: &[Expression],
+    all_branches: &[Vec<Expression>],
+) -> bool {
+    // For consensus elimination, we need:
+    // - Two branches that have complementary terms
+    // - A third branch that contains the consensus terms
+    
+    // Check if branch is the consensus of two other branches
+    for i in 0..all_branches.len() {
+        for j in (i + 1)..all_branches.len() {
+            let branch1 = &all_branches[i];
+            let branch2 = &all_branches[j];
+            
+            // Find complementary terms between branch1 and branch2
+            if let Some((complementary_term1, complementary_term2, consensus_terms)) =
+                find_consensus_terms(branch1, branch2)
+            {
+                // Check if branch contains exactly the consensus terms
+                // The consensus is redundant if it appears as a separate branch
+                if terms_set_equal(branch, &consensus_terms) {
+                    // Verify that branch1 has the complementary term and branch2 has its complement
+                    let branch1_has_complement = branch1.iter()
+                        .any(|t| t.semantically_equal(&complementary_term1));
+                    let branch2_has_complement = branch2.iter()
+                        .any(|t| t.semantically_equal(&complementary_term2));
+                    
+                    if branch1_has_complement && branch2_has_complement {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    
+    false
+}
+
+/// Find consensus terms between two branches with complementary terms
+/// Returns (complementary_term1, complementary_term2, consensus_terms) if found
+/// Consensus is the union of all non-complementary terms from both branches
+fn find_consensus_terms(
+    branch1: &[Expression],
+    branch2: &[Expression],
+) -> Option<(Expression, Expression, Vec<Expression>)> {
+    // Find complementary terms (one in branch1, complement in branch2)
+    for term1 in branch1 {
+        for term2 in branch2 {
+            if are_complements(term1, term2) {
+                // Found complementary pair - compute consensus
+                // Consensus = all terms from both branches except the complementary pair
+                let mut consensus: Vec<Expression> = Vec::new();
+                
+                // Add all terms from branch1 except term1
+                for t in branch1 {
+                    if !t.semantically_equal(term1) {
+                        consensus.push(t.clone());
+                    }
+                }
+                
+                // Add all terms from branch2 except term2
+                for t in branch2 {
+                    if !t.semantically_equal(term2) {
+                        // Avoid duplicates
+                        if !consensus.iter().any(|c| c.semantically_equal(t)) {
+                            consensus.push(t.clone());
+                        }
+                    }
+                }
+                
+                return Some((term1.clone(), term2.clone(), consensus));
+            }
+        }
+    }
+    
+    None
+}
 
 // ============================================================================
 // Rebuilding

@@ -15,17 +15,37 @@
 - Clean module separation established
 
 **Phase 3: COMPLETE** ✅
-- Planning-time branch optimization added
+- ExecutionPlan::optimize() method added
 - Branches have optimized_condition field
-- optimize_branches called during planning
+- Optimization moved from planning to post-symbolic-evaluation (called after Phase 4)
 
 **Phase 4: COMPLETE** ✅
-- Symbolic evaluation added to Evaluator
+- EvaluationResult enum added (Evaluated/Symbolic)
+- Symbolic evaluation mode in Evaluator
 - Partial evaluation with unknown facts
 - Branch pruning (false conditions and last-wins optimization)
 - Returns reduced ExecutionPlan
 
-**Next: Phase 5** - Add World structure
+**Phase 5: COMPLETE** ✅
+- FactConstraint helper methods added (is_exact, exact, contains)
+- World struct created with merge() method
+- Constraint intersection-based pruning
+
+**Phase 6: COMPLETE** ✅
+- WorldBuilder struct created
+- build_worlds() implemented with caching
+- collect_rule_paths() and substitute_rule_path() helpers
+- Recursive world building with cross-product merging
+
+**Phase 7: COMPLETE** ✅
+- InversionResult and InversionSolution structs added
+- invert_expression() implemented for recursive inversion
+- Arithmetic inversion helpers (left/right isolation)
+- Mathematical inversion helpers (sqrt, pow, trig - some require numerical impl)
+- evaluate_to_literal() helper for constant evaluation
+- EvaluationContext::new_for_inversion() public method added
+
+**Next: Phase 8** - Wire up new inversion flow
 
 ---
 
@@ -42,11 +62,11 @@
 6. **Move** `computation/expansion.rs` → `algebra/expansion.rs` - **Phase 2** ✅
 7. **Move** `computation/simplification.rs` → `algebra/simplification.rs` - **Phase 2** ✅
 8. **Move** `computation/constraints.rs` → `algebra/constraints.rs` - **Phase 2** ✅
-9. **Add** planning-time branch optimization - **Phase 3** ✅
-10. **Add** symbolic evaluation (critical optimization) - **Phase 4**
-11. **Add** path structure with full Expression support - **Phase 5**
-12. **Add** path builder with symbolic eval integration - **Phase 6**
-13. **Enhance** algebraic isolation for non-linear math - **Phase 7**
+9. **Add** ExecutionPlan::optimize() method for DNF/simplification - **Phase 3** ✅
+10. **Add** symbolic evaluation (critical optimization) - **Phase 4** ✅
+11. **Add** World structure with full Expression support - **Phase 5** ✅
+12. **Add** WorldBuilder with symbolic eval integration - **Phase 6** ✅
+13. **Enhance** algebraic isolation for non-linear math - **Phase 7** ✅
 14. **Wire up** new inversion flow - **Phase 8**
 
 **Result:** Clean separation between `computation/` (runtime) and `algebra/` (reasoning), with path-based inversion + symbolic evaluation avoiding exponential complexity.
@@ -61,11 +81,11 @@
 **Phase Overview:**
 - **Phase 1**: DELETE old approach (equation.rs, solver.rs) ✅ **COMPLETE**
 - **Phase 2**: CREATE algebra module, MOVE files from computation/ ✅ **COMPLETE**
-- **Phase 3**: ADD planning-time branch optimization ✅ **COMPLETE**
+- **Phase 3**: ADD ExecutionPlan::optimize() method for DNF/simplification ✅ **COMPLETE**
 - **Phase 4**: ADD symbolic evaluation (substitute knowns, prune branches) ✅ **COMPLETE**
-- **Phase 5**: ADD world structure (Expression-based values)
-- **Phase 6**: ADD world builder (with symbolic eval integration)
-- **Phase 7**: ENHANCE algebraic isolation (non-linear inversion)
+- **Phase 5**: ADD world structure (Expression-based values) ✅ **COMPLETE**
+- **Phase 6**: ADD world builder (works with reduced plan from Phase 4) ✅ **COMPLETE**
+- **Phase 7**: ENHANCE algebraic isolation (non-linear inversion) ✅ **COMPLETE**
 - **Phase 8**: WIRE UP new inversion flow
 
 ---
@@ -164,26 +184,30 @@ inversion/
 
 **Proposed:**
 ```
-algebra/                    ← NEW: Mathematical reasoning tools (engine-level)
+algebra/                    ← Mathematical reasoning tools (engine-level)
   ├── mod.rs
-  ├── expansion.rs          ← Move from computation/ (DNF, distribution)
-  ├── simplification.rs     ← Move from computation/ (contradiction, folding)
-  ├── constraints.rs        ← Move from computation/ (solution spaces)
-  ├── isolation.rs          ← Extract from inversion/solver.rs (equation solving)
-  └── math_properties.rs    ← NEW: Algebraic identities, commutativity
-computation/                ← Runtime evaluation only (kept for future)
-  ├── arithmetic.rs         ← Evaluate +, -, *, / (existing)
-  ├── comparison.rs         ← Evaluate >, <, == (existing)
+  ├── expansion.rs          ← Moved from computation/ (DNF, distribution) ✅
+  ├── simplification.rs     ← Moved from computation/ (contradiction, folding) ✅
+  ├── constraints.rs        ← Moved + ENHANCE Phase 5 (is_exact, contains)
+  ├── isolation.rs          ← Extracted + ENHANCE Phase 7 (wraps computation/arithmetic)
+  └── math_properties.rs    ← Moved (Algebraic identities) ✅
+computation/                ← Runtime operations (REUSED by algebra/)
+  ├── arithmetic.rs         ← Type-aware arithmetic (REUSED in Phase 7)
+  ├── comparison.rs         ← Type-aware comparisons
+  ├── datetime.rs           ← Date/time operations  
+  ├── units.rs              ← Unit conversions
   └── mod.rs
 evaluation/                 ← Execution of plans with full or symbolic facts
-  ├── mod.rs                ← MODIFY: add symbolic_mode to EvaluationContext, evaluate_symbolic() (Phase 4)
-  ├── expression.rs         ← MODIFY: handle unknown facts in symbolic mode (Phase 4)
+  ├── mod.rs                ← MODIFIED: symbolic_mode, evaluate_symbolic() Phase 4 ✅
+  ├── expression.rs         ← MODIFIED: EvaluationResult enum, symbolic mode Phase 4 ✅
   └── operations.rs         ← Existing: arithmetic/comparison operations
 inversion/
-  ├── world.rs              ← NEW: World structure (Phase 5)
-  └── world_builder.rs      ← NEW: On-demand world building (Phase 6)
+  ├── world.rs              ← NEW Phase 5: World (reuses constraint.intersect())
+  ├── world_builder.rs      ← NEW Phase 6: WorldBuilder (reuses extract_constraints, separate collect_rule_paths)
+  ├── response.rs           ← Existing (REUSED Phase 8: Solution/InversionResponse)
+  └── mod.rs                ← MODIFY Phase 8: new invert() (reuses Target/TargetOp)
 planning/
-  └── optimization.rs       ← NEW: Per-branch optimization (Phase 3)
+  └── execution_plan.rs     ← MODIFIED: optimize() method Phase 3 ✅
 ```
 
 **Key distinction:**
@@ -461,87 +485,41 @@ use crate::algebra::{expand, simplification, ConstraintSet};
 
 **File: `lemma/src/planning/optimization.rs`** (NEW)
 
+Modify Branch struct (around line 69):
 ```rust
-//! Per-branch optimization during planning
-//!
-//! Prepares branches for fast inversion by:
-//! 1. Expanding conditions to DNF
-//! 2. Simplifying (contradiction detection, constant folding)
-//! 3. Storing optimized conditions
-//!
-//! This happens ONCE during document loading, not during every inversion query.
-
-use crate::algebra::{expand, simplification};  // ← Note: algebra, not computation
-use crate::semantic::Expression;
-use super::execution_plan::Branch;
-
-/// Optimize all branches for a rule during planning
-///
-/// Expands + simplifies each branch condition for fast inversion runtime.
-/// No cross-rule substitution - just local per-branch optimization.
-pub fn optimize_branches(branches: &mut [Branch]) {
-    for branch in branches {
-        // Expand condition to DNF
-        let expanded = expand(branch.condition.clone());
-        
-        // Simplify (detect contradictions, fold constants, remove redundancies)
-        let simplified = simplification::reduce(expanded);
-        
-        // Store for fast inversion runtime
-        branch.optimized_condition = Some(simplified);
-    }
-}
-```
-
-**File: `lemma/src/planning/mod.rs`**
-
-```rust
-// ADD:
-pub mod optimization;
-```
-
-**File: `lemma/src/planning/execution_plan.rs`**
-
-Add import near line 7:
-```rust
-use crate::planning::optimization;
-```
-
-Modify Branch struct (lines 75-84):
 ```rust
 pub struct Branch {
-    /// Condition expression (always present, explicit with last-wins semantics applied)
     pub condition: Expression,
     
-    /// Pre-optimized condition (expanded + simplified during planning)
-    /// Used by inversion for fast constraint extraction
+    /// Optimized condition (expanded to DNF + simplified)
+    /// Set by ExecutionPlan::optimize() after symbolic evaluation
     pub optimized_condition: Option<Expression>,  // NEW
     
-    /// Result expression
     pub result: Expression,
-    
-    /// Source location for error messages
     pub source: Option<Source>,
 }
 ```
 
-In build() function (after line 129), add:
+Add `optimize()` method to ExecutionPlan impl (after other methods):
+
 ```rust
-// Optimize branches for fast inversion runtime
-for rule in &mut executable_rules {
-    optimization::optimize_branches(&mut rule.branches);
+/// Optimize branch conditions for constraint extraction
+///
+/// Expands to DNF and simplifies boolean expressions.
+/// Should be called after symbolic evaluation to optimize only surviving branches.
+pub fn optimize(mut self) -> Self {
+    for rule in &mut self.rules {
+        for branch in &mut rule.branches {
+            let expanded = crate::algebra::expand(branch.condition.clone());
+            let simplified = crate::algebra::simplification::reduce(expanded);
+            branch.optimized_condition = Some(simplified);
+        }
+    }
+    self
 }
 ```
 
-In test code, update all Branch constructors (lines ~538, 722, 732, 747, 840, 918):
-```rust
-Branch {
-    condition: ...,
-    optimized_condition: None,  // Tests don't need pre-optimization
-    result: ...,
-    source: ...,
-}
-```
+Update all Branch constructors in tests to include `optimized_condition: None`
 
 ### Phase 4: Add Symbolic Evaluation (Critical Optimization)
 
@@ -553,6 +531,46 @@ of reimplementing evaluation logic. This is partial evaluation - evaluate what y
 leave what you can't (unknown facts) symbolic.
 
 #### Changes:
+
+**File: `lemma/src/evaluation/expression.rs`** (ADD `EvaluationResult` enum)
+
+Add enum at top of file:
+
+```rust
+/// Result of expression evaluation
+pub enum EvaluationResult {
+    /// Successfully evaluated to a value or veto
+    Evaluated(OperationResult),
+    /// Contains unknown facts (symbolic mode only)
+    Symbolic(Expression),
+}
+```
+
+Change `evaluate_expression` return type:
+
+```rust
+pub(crate) fn evaluate_expression(
+    expr: &Expression,
+    context: &mut crate::evaluation::EvaluationContext,
+) -> crate::LemmaResult<EvaluationResult>  // Changed from OperationResult
+```
+
+Update FactPath handling to return `Symbolic` instead of `Err`:
+
+```rust
+None => {
+    if context.is_symbolic() {
+        return Ok(EvaluationResult::Symbolic(current.clone()));
+    } else {
+        // Normal mode veto
+        return Ok(EvaluationResult::Evaluated(OperationResult::Veto(...)));
+    }
+}
+```
+
+Wrap all other `Ok(OperationResult::...)` returns with `Ok(EvaluationResult::Evaluated(...))`
+
+Update callers in `evaluate_rule` to unwrap `Evaluated` variant (panic on Symbolic in normal mode)
 
 **File: `lemma/src/evaluation/mod.rs`** (MODIFY `EvaluationContext`)
 
@@ -608,34 +626,9 @@ impl EvaluationContext {
 }
 ```
 
-**File: `lemma/src/evaluation/expression.rs`** (MODIFY `evaluate_expression`)
-
-Find the `ExpressionKind::FactPath` match arm and modify to handle symbolic mode:
-
-```rust
-ExpressionKind::FactPath(path) => {
-    if let Some(value) = context.get_fact(path) {
-        // Fact is known - substitute with literal value
-        Ok(Expression::new(
-            ExpressionKind::Literal(value.clone()),
-            expr.source.clone(),
-        ))
-    } else if context.is_symbolic() {
-        // Symbolic mode: return original expression for unknown facts
-        Ok(expr.clone())
-    } else {
-        // Normal mode: error on unknown facts
-        Err(LemmaError::Engine(format!(
-            "Fact not found: {}",
-            path
-        )))
-    }
-}
-```
-
 **File: `lemma/src/evaluation/mod.rs`** (ADD method to `Evaluator` impl)
 
-Add after the `evaluate` method (around line 130):
+Add `evaluate_symbolic` method after the `evaluate` method (around line 130):
 
 ```rust
 /// Symbolically reduce execution plan using known fact values
@@ -731,12 +724,55 @@ pub fn evaluate_symbolic(&self, plan: &ExecutionPlan) -> ExecutionPlan {
 ```
 
 **Key Benefits:**
+- Clean `EvaluationResult` enum - no error-as-control-flow
 - Reuses ALL existing evaluation logic (arithmetic, comparisons, boolean ops, etc.)
 - Single flag change (`symbolic_mode`) enables partial evaluation
 - Aggressive pruning: removes false branches AND unreachable earlier branches
 - Natural integration with existing evaluation infrastructure
+- Optimization happens AFTER symbolic evaluation (only on surviving branches)
 
 ### Phase 5: Add World Structure
+
+**File: `lemma/src/algebra/constraints.rs`** (ENHANCE existing FactConstraint)
+
+Add helper methods to existing FactConstraint impl (around line 408):
+
+```rust
+impl FactConstraint {
+    // ... existing methods ...
+    
+    /// Check if constraint represents a single exact value
+    pub fn is_exact(&self) -> bool {
+        matches!(self, FactConstraint::Enumeration(vals) if vals.len() == 1)
+    }
+    
+    /// Create constraint for exact value
+    pub fn exact(value: LiteralValue) -> Self {
+        FactConstraint::Enumeration(vec![value])
+    }
+    
+    /// Check if a value satisfies this constraint
+    pub fn contains(&self, value: &LiteralValue) -> bool {
+        match self {
+            FactConstraint::Unconstrained => true,
+            FactConstraint::Enumeration(vals) => vals.contains(value),
+            FactConstraint::Range { min, max } => {
+                value_in_bounds(value, min) && value_in_bounds(value, max)
+            }
+            FactConstraint::Union(parts) => parts.iter().any(|p| p.contains(value)),
+            FactConstraint::Complement(inner) => !inner.contains(value),
+        }
+    }
+}
+
+fn value_in_bounds(value: &LiteralValue, bound: &Bound) -> bool {
+    match bound {
+        Bound::Unbounded => true,
+        Bound::Inclusive(b) => value <= b,
+        Bound::Exclusive(b) => value < b,
+    }
+}
+```
 
 **File: `lemma/src/inversion/world.rs`** (NEW)
 
@@ -745,7 +781,7 @@ Simplified - value is just an Expression (supports non-linear math).
 ```rust
 use std::collections::HashMap;
 use crate::semantic::{Expression, FactPath};
-use crate::computation::FactConstraint;
+use crate::algebra::constraints::FactConstraint;
 
 /// A World represents one "universe" where specific constraints hold
 #[derive(Clone, Debug)]
@@ -782,30 +818,13 @@ impl World {
             }
         }
         
-        // Combine values algebraically
+        // Combine values using provided function
         let new_value = combine_values(&self.value, &other.value);
         
         Some(World {
             constraints: new_constraints,
             value: new_value,
         })
-    }
-    
-    /// Evaluate world at specific fact value (for minimization)
-    pub fn eval_at(&self, fact: &FactPath, value: &LiteralValue) -> Option<LiteralValue> {
-        // Substitute fact value and evaluate expression
-        let mut substitution = HashMap::new();
-        substitution.insert(fact.clone(), value.clone());
-        
-        // Use symbolic evaluation to substitute and fold
-        let evaluated = crate::evaluation::symbolic(&self.value, &substitution);
-        
-        // Extract literal if fully evaluated
-        if let ExpressionKind::Literal(lit) = &evaluated.kind {
-            Some(lit.clone())
-        } else {
-            None
-        }
     }
 }
 
@@ -837,10 +856,12 @@ pub struct WorldBuilder<'a> {
 }
 
 impl<'a> WorldBuilder<'a> {
-    /// Create WorldBuilder with pre-reduced plan
+    /// Create WorldBuilder with pre-reduced and optimized plan
     /// 
-    /// The plan should have had `Evaluator::evaluate_symbolic()` called on it
-    /// to substitute known facts and prune impossible branches.
+    /// The plan should have been:
+    /// 1. Injected with known facts via with_typed_values()
+    /// 2. Symbolically evaluated via evaluate_symbolic()
+    /// 3. Optimized via optimize() for DNF structure
     pub fn new(plan: &'a ExecutionPlan) -> Self {
         Self {
             plan,
@@ -865,9 +886,9 @@ impl<'a> WorldBuilder<'a> {
         let mut worlds = Vec::new();
         
         for branch in &rule.branches {
-            // Branch condition already symbolically evaluated and stored in optimized_condition
+            // Branch already symbolically evaluated - use optimized_condition if available
             let condition = branch.optimized_condition.as_ref().unwrap_or(&branch.condition);
-            let result = &branch.result; // Already symbolically evaluated
+            let result = &branch.result;
             
             // If condition is literal true, result applies unconditionally
             if matches!(&condition.kind, 
@@ -879,25 +900,25 @@ impl<'a> WorldBuilder<'a> {
                 continue;
             }
             
-            // Extract constraints from condition
+            // Extract constraints from condition (benefits from DNF optimization)
             let mut constraint_set = ConstraintSet::new();
             extract_constraints(condition, &mut constraint_set);
             let constraints = constraint_set.to_fact_constraints();
             
-            // 6. Check if result references other rules
-            let rule_refs = extract_rule_references(&simplified_result);
+            // Check if result references other rules
+            let rule_refs = extract_rule_references(result);
             
             if rule_refs.is_empty() {
                 // Simple case: no rule dependencies in result
                 worlds.push(World {
                     constraints,
-                    value: simplified_result,
+                    value: result.clone(),
                 });
             } else {
                 // Complex case: recursively build referenced rule worlds
                 let branch_worlds = self.build_with_references(
                     constraints,
-                    &simplified_result,
+                    result,
                     &rule_refs
                 )?;
                 worlds.extend(branch_worlds);
@@ -948,20 +969,97 @@ impl<'a> WorldBuilder<'a> {
 }
 
 // Helper functions
-fn is_literal_true(expr: &Expression) -> bool {
-    matches!(&expr.kind, ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)))
+// NOTE: These utilities already exist in the codebase:
+// - expr.is_boolean_true() - semantic.rs line 171
+// - expr.is_boolean_false() - semantic.rs line 162
+// - algebra::isolation::collect_facts() - pattern for walking expression tree
+// - algebra::constraints::extract_constraints() - extracts constraints from conditions
+
+/// Collect all rule paths from an expression (similar to algebra::isolation::collect_facts)
+fn collect_rule_paths(expr: &Expression) -> HashSet<RulePath> {
+    let mut paths = HashSet::new();
+    collect_rule_paths_recursive(expr, &mut paths);
+    paths
 }
 
-fn is_literal_false(expr: &Expression) -> bool {
-    matches!(&expr.kind, ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)))
+fn collect_rule_paths_recursive(expr: &Expression, paths: &mut HashSet<RulePath>) {
+    match &expr.kind {
+        ExpressionKind::RulePath(path) => {
+            paths.insert(path.clone());
+        }
+        ExpressionKind::Arithmetic(left, _, right)
+        | ExpressionKind::Comparison(left, _, right)
+        | ExpressionKind::LogicalAnd(left, right)
+        | ExpressionKind::LogicalOr(left, right) => {
+            collect_rule_paths_recursive(left, paths);
+            collect_rule_paths_recursive(right, paths);
+        }
+        ExpressionKind::LogicalNegation(inner, _)
+        | ExpressionKind::MathematicalComputation(_, inner)
+        | ExpressionKind::UnitConversion(inner, _) => {
+            collect_rule_paths_recursive(inner, paths);
+        }
+        _ => {}
+    }
 }
 
-fn extract_rule_references(expr: &Expression) -> Vec<RuleReference> {
-    todo!("Extract all rule references from expression tree")
-}
-
-fn substitute_rule_reference(expr: &Expression, rule_path: &RulePath, value: &Expression) -> Expression {
-    todo!("Recursively replace RulePath(rule_path) with value in expr")
+/// Substitute a rule path with its value expression
+fn substitute_rule_path(expr: &Expression, target: &RulePath, replacement: &Expression) -> Expression {
+    match &expr.kind {
+        ExpressionKind::RulePath(path) if path == target => replacement.clone(),
+        ExpressionKind::Arithmetic(left, op, right) => Expression::new(
+            ExpressionKind::Arithmetic(
+                Arc::new(substitute_rule_path(left, target, replacement)),
+                *op,
+                Arc::new(substitute_rule_path(right, target, replacement)),
+            ),
+            expr.source.clone(),
+        ),
+        ExpressionKind::Comparison(left, op, right) => Expression::new(
+            ExpressionKind::Comparison(
+                Arc::new(substitute_rule_path(left, target, replacement)),
+                *op,
+                Arc::new(substitute_rule_path(right, target, replacement)),
+            ),
+            expr.source.clone(),
+        ),
+        ExpressionKind::LogicalAnd(left, right) => Expression::new(
+            ExpressionKind::LogicalAnd(
+                Arc::new(substitute_rule_path(left, target, replacement)),
+                Arc::new(substitute_rule_path(right, target, replacement)),
+            ),
+            expr.source.clone(),
+        ),
+        ExpressionKind::LogicalOr(left, right) => Expression::new(
+            ExpressionKind::LogicalOr(
+                Arc::new(substitute_rule_path(left, target, replacement)),
+                Arc::new(substitute_rule_path(right, target, replacement)),
+            ),
+            expr.source.clone(),
+        ),
+        ExpressionKind::LogicalNegation(inner, style) => Expression::new(
+            ExpressionKind::LogicalNegation(
+                Arc::new(substitute_rule_path(inner, target, replacement)),
+                *style,
+            ),
+            expr.source.clone(),
+        ),
+        ExpressionKind::MathematicalComputation(op, inner) => Expression::new(
+            ExpressionKind::MathematicalComputation(
+                *op,
+                Arc::new(substitute_rule_path(inner, target, replacement)),
+            ),
+            expr.source.clone(),
+        ),
+        ExpressionKind::UnitConversion(inner, target_unit) => Expression::new(
+            ExpressionKind::UnitConversion(
+                Arc::new(substitute_rule_path(inner, target, replacement)),
+                target_unit.clone(),
+            ),
+            expr.source.clone(),
+        ),
+        _ => expr.clone(),
+    }
 }
 
 struct RuleReference {
@@ -978,18 +1076,67 @@ Add recursive expression inversion to handle non-linear math.
 ```rust
 // ADD to existing isolation.rs:
 
+/// A single solution from inversion (mini-world)
+#[derive(Debug, Clone)]
+pub struct InversionSolution {
+    /// The value for this solution
+    pub value: LiteralValue,
+    
+    /// Additional constraints for this solution branch
+    /// Example: x^2 = 4 gives x=2 with constraint x>0
+    pub constraints: HashMap<FactPath, FactConstraint>,
+    
+    /// Domain restrictions encountered during inversion
+    pub restrictions: Vec<DomainRestriction>,
+}
+
+/// Result of inverting an expression
+/// 
+/// Can have 0 (unsatisfiable), 1 (typical), or multiple solutions (quadratic, abs, etc.)
+/// All outcomes are domain information - empty vec = empty valid domain
+#[derive(Debug, Clone)]
+pub struct InversionResult {
+    /// All possible solution branches
+    /// Empty = unsatisfiable (no valid domain)
+    pub solutions: Vec<InversionSolution>,
+}
+
+impl InversionResult {
+    pub fn solved(value: LiteralValue) -> Self {
+        Self {
+            solutions: vec![InversionSolution {
+                value,
+                constraints: HashMap::new(),
+                restrictions: vec![],
+            }],
+        }
+    }
+    
+    pub fn unsatisfiable(restriction: DomainRestriction) -> Self {
+        Self {
+            solutions: vec![],
+        }
+    }
+    
+    pub fn is_unsatisfiable(&self) -> bool {
+        self.solutions.is_empty()
+    }
+}
+
 /// Recursively invert an expression to solve for a target fact
 /// Example: solve sqrt(income) = 500 for income
 ///          -> income = 500^2 = 250000
+///
+/// Returns InversionResult with 0+ solutions (empty = unsatisfiable)
 pub fn invert_expression(
     expr: &Expression,
     target_fact: &FactPath,
     target_value: &LiteralValue,
-) -> Result<LiteralValue, InversionError> {
+) -> InversionResult {
     match &expr.kind {
         // Base case: found the target fact
         ExpressionKind::FactPath(path) if path == target_fact => {
-            Ok(target_value.clone())
+            InversionResult::solved(target_value.clone())
         }
         
         // Arithmetic: y = x + C => x = y - C
@@ -1002,16 +1149,40 @@ pub fn invert_expression(
             // Can only invert if fact appears on one side only
             if left_has_fact && !right_has_fact {
                 // Isolate from left: y = x op C => x = ...
-                let right_value = evaluate_to_literal(right)?;
-                let new_target = invert_arithmetic_left(target_value, *op, &right_value)?;
-                invert_expression(left, target_fact, &new_target)
+                let right_result = evaluate_to_literal(right);
+                if right_result.is_unsatisfiable() {
+                    return right_result;
+                }
+                let right_value = &right_result.solutions[0].value;
+                
+                let inverted = invert_arithmetic_left(target_value, *op, right_value);
+                if inverted.is_unsatisfiable() {
+                    return inverted;
+                }
+                let new_target = &inverted.solutions[0].value;
+                
+                invert_expression(left, target_fact, new_target)
             } else if !left_has_fact && right_has_fact {
                 // Isolate from right: y = C op x => x = ...
-                let left_value = evaluate_to_literal(left)?;
-                let new_target = invert_arithmetic_right(&left_value, *op, target_value)?;
-                invert_expression(right, target_fact, &new_target)
+                let left_result = evaluate_to_literal(left);
+                if left_result.is_unsatisfiable() {
+                    return left_result;
+                }
+                let left_value = &left_result.solutions[0].value;
+                
+                let inverted = invert_arithmetic_right(left_value, *op, target_value);
+                if inverted.is_unsatisfiable() {
+                    return inverted;
+                }
+                let new_target = &inverted.solutions[0].value;
+                
+                invert_expression(right, target_fact, new_target)
             } else {
-                Err(InversionError::MultipleOccurrences)
+                InversionResult::unsatisfiable(DomainRestriction {
+                    facts: vec![target_fact.clone()],
+                    description: "Fact appears multiple times in expression".to_string(),
+                    source: "inversion".to_string(),
+                })
             }
         }
         
@@ -1019,49 +1190,67 @@ pub fn invert_expression(
         ExpressionKind::MathematicalComputation(op, inner) => {
             use MathematicalComputation::*;
             
-            let new_target = match op {
-                Sqrt => {
-                    // y = sqrt(x) => x = y^2
-                    square_value(target_value)?
-                }
-                Sin | Cos | Tan => {
-                    // Inverse trig functions
-                    apply_inverse_trig(*op, target_value)?
-                }
-                Log => {
-                    // y = log(x) => x = e^y
-                    exp_value(target_value)?
-                }
-                Exp => {
-                    // y = e^x => x = log(y)
-                    log_value(target_value)?
-                }
+            let inverted_result = match op {
+                Sqrt => square_value(target_value),
+                Sin | Cos | Tan => apply_inverse_trig(*op, target_value),
+                Log => exp_value(target_value),
+                Exp => log_value(target_value),
                 Abs => {
-                    // y = |x| => x = ±y (ambiguous - need constraints)
-                    return Err(InversionError::AmbiguousInversion);
+                    // y = |x| => x = ±y (TWO solutions!)
+                    // TODO: implement multiple solution branches
+                    return InversionResult::unsatisfiable(DomainRestriction {
+                        facts: vec![target_fact.clone()],
+                        description: "Absolute value inversion not yet implemented (±)".to_string(),
+                        source: "abs inversion".to_string(),
+                    });
                 }
-                _ => return Err(InversionError::UnsupportedOperation),
+                _ => return InversionResult::unsatisfiable(DomainRestriction {
+                    facts: vec![target_fact.clone()],
+                    description: format!("Unsupported operation: {:?}", op),
+                    source: "inversion".to_string(),
+                }),
             };
             
-            invert_expression(inner, target_fact, &new_target)
+            if inverted_result.is_unsatisfiable() {
+                return inverted_result;
+            }
+            
+            let new_target = &inverted_result.solutions[0].value;
+            invert_expression(inner, target_fact, new_target)
         }
         
         // Comparison: already handled by try_isolate_comparison
         ExpressionKind::Comparison(_, _, _) => {
-            Err(InversionError::ComparisonNotInvertible)
+            InversionResult::unsatisfiable(DomainRestriction {
+                facts: vec![],
+                description: "Cannot invert through comparison".to_string(),
+                source: "inversion".to_string(),
+            })
         }
         
         // Cannot invert through logical operations
         ExpressionKind::LogicalAnd(_, _) | ExpressionKind::LogicalOr(_, _) => {
-            Err(InversionError::LogicalNotInvertible)
+            InversionResult::unsatisfiable(DomainRestriction {
+                facts: vec![],
+                description: "Cannot invert through logical operations".to_string(),
+                source: "inversion".to_string(),
+            })
         }
         
         // Literal doesn't contain the fact
         ExpressionKind::Literal(_) => {
-            Err(InversionError::FactNotFound)
+            InversionResult::unsatisfiable(DomainRestriction {
+                facts: vec![],
+                description: "Fact not found in expression".to_string(),
+                source: "inversion".to_string(),
+            })
         }
         
-        _ => Err(InversionError::UnsupportedExpression),
+        _ => InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: "Unsupported expression type".to_string(),
+            source: "inversion".to_string(),
+        }),
     }
 }
 
@@ -1070,16 +1259,43 @@ fn invert_arithmetic_left(
     target: &LiteralValue,
     op: ArithmeticComputation,
     right: &LiteralValue,
-) -> Result<LiteralValue, InversionError> {
+) -> InversionResult {
     use ArithmeticComputation::*;
+    use crate::computation::arithmetic::arithmetic_operation;
     
-    match op {
-        Add => subtract_values(target, right),      // y = x + C => x = y - C
-        Subtract => add_values(target, right),       // y = x - C => x = y + C
-        Multiply => divide_values(target, right),    // y = x * C => x = y / C
-        Divide => multiply_values(target, right),    // y = x / C => x = y * C
-        Power => root_values(target, right),         // y = x ^ C => x = y ^ (1/C)
-        _ => Err(InversionError::UnsupportedOperation),
+    let (inverse_op, inverse_right) = match op {
+        Add => (Subtract, right.clone()),           // y = x + C => x = y - C
+        Subtract => (Add, right.clone()),           // y = x - C => x = y + C
+        Multiply => (Divide, right.clone()),        // y = x * C => x = y / C
+        Divide => (Multiply, right.clone()),        // y = x / C => x = y * C
+        Power => {
+            // y = x ^ C => x = y ^ (1/C)
+            let one = LiteralValue::Number(Decimal::from(1));
+            match arithmetic_operation(&one, &Divide, right) {
+                OperationResult::Value(inv_exp) => (Power, inv_exp),
+                OperationResult::Veto(msg) => {
+                    return InversionResult::unsatisfiable(DomainRestriction {
+                        facts: vec![],
+                        description: format!("Cannot compute 1/{}: {}", right, msg.unwrap_or_default()),
+                        source: "power inversion".to_string(),
+                    });
+                }
+            }
+        }
+        _ => return InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: format!("Unsupported operation: {:?}", op),
+            source: "arithmetic inversion".to_string(),
+        }),
+    };
+    
+    match arithmetic_operation(target, &inverse_op, &inverse_right) {
+        OperationResult::Value(result) => InversionResult::solved(result),
+        OperationResult::Veto(msg) => InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: msg.unwrap_or_else(|| "Arithmetic operation failed".to_string()),
+            source: "arithmetic inversion".to_string(),
+        }),
     }
 }
 
@@ -1087,83 +1303,135 @@ fn invert_arithmetic_right(
     left: &LiteralValue,
     op: ArithmeticComputation,
     target: &LiteralValue,
-) -> Result<LiteralValue, InversionError> {
+) -> InversionResult {
     use ArithmeticComputation::*;
+    use crate::computation::arithmetic::arithmetic_operation;
     
-    match op {
-        Add => subtract_values(target, left),        // y = C + x => x = y - C
-        Subtract => subtract_values(left, target),   // y = C - x => x = C - y
-        Multiply => divide_values(target, left),     // y = C * x => x = y / C
-        Divide => divide_values(left, target),       // y = C / x => x = C / y
-        Power => log_base_values(target, left),      // y = C ^ x => x = log_C(y)
-        _ => Err(InversionError::UnsupportedOperation),
+    let result = match op {
+        Add => arithmetic_operation(target, &Subtract, left),        // y = C + x => x = y - C
+        Subtract => arithmetic_operation(left, &Subtract, target),   // y = C - x => x = C - y
+        Multiply => arithmetic_operation(target, &Divide, left),     // y = C * x => x = y / C
+        Divide => arithmetic_operation(left, &Divide, target),       // y = C / x => x = C / y
+        Power => {
+            // y = C ^ x => x = log_C(y) - needs numerical implementation
+            return InversionResult::unsatisfiable(DomainRestriction {
+                facts: vec![],
+                description: "Logarithm inversion requires numerical implementation".to_string(),
+                source: "power inversion".to_string(),
+            });
+        }
+        _ => return InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: format!("Unsupported operation: {:?}", op),
+            source: "arithmetic inversion".to_string(),
+        }),
+    };
+    
+    match result {
+        OperationResult::Value(value) => InversionResult::solved(value),
+        OperationResult::Veto(msg) => InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: msg.unwrap_or_else(|| "Arithmetic operation failed".to_string()),
+            source: "arithmetic inversion".to_string(),
+        }),
     }
 }
 
 // Mathematical operation helpers
-fn square_value(value: &LiteralValue) -> Result<LiteralValue, InversionError> {
-    todo!("Square a numeric literal")
+// NOTE: Use computation::arithmetic::arithmetic_operation directly
+// Veto results become unsatisfiable domain restrictions
+
+fn square_value(value: &LiteralValue) -> InversionResult {
+    use crate::computation::arithmetic::arithmetic_operation;
+    let two = LiteralValue::Number(Decimal::from(2));
+    match arithmetic_operation(value, &ArithmeticComputation::Power, &two) {
+        OperationResult::Value(result) => InversionResult::solved(result),
+        OperationResult::Veto(msg) => InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: msg.unwrap_or_else(|| "Cannot square value".to_string()),
+            source: "sqrt inversion".to_string(),
+        }),
+    }
 }
 
-fn exp_value(value: &LiteralValue) -> Result<LiteralValue, InversionError> {
-    todo!("Compute e^value")
+fn exp_value(value: &LiteralValue) -> InversionResult {
+    // Use e^x - needs numerical implementation
+    InversionResult::unsatisfiable(DomainRestriction {
+        facts: vec![],
+        description: "Exponential requires numerical implementation".to_string(),
+        source: "log inversion".to_string(),
+    })
 }
 
-fn log_value(value: &LiteralValue) -> Result<LiteralValue, InversionError> {
-    todo!("Compute natural log")
+fn log_value(value: &LiteralValue) -> InversionResult {
+    // Natural log - needs numerical implementation
+    InversionResult::unsatisfiable(DomainRestriction {
+        facts: vec![],
+        description: "Logarithm requires numerical implementation".to_string(),
+        source: "exp inversion".to_string(),
+    })
 }
 
-fn apply_inverse_trig(op: MathematicalComputation, value: &LiteralValue) -> Result<LiteralValue, InversionError> {
-    todo!("Apply asin/acos/atan")
+fn apply_inverse_trig(op: MathematicalComputation, value: &LiteralValue) -> InversionResult {
+    // asin, acos, atan - needs numerical implementation
+    InversionResult::unsatisfiable(DomainRestriction {
+        facts: vec![],
+        description: format!("Inverse {:?} requires numerical implementation", op),
+        source: "trig inversion".to_string(),
+    })
 }
 
-// Arithmetic helpers
-fn add_values(a: &LiteralValue, b: &LiteralValue) -> Result<LiteralValue, InversionError> {
-    todo!("Add two literals")
+fn evaluate_to_literal(expr: &Expression) -> InversionResult {
+    // Evaluate constant expression using existing evaluator
+    let plan = crate::planning::ExecutionPlan::empty();
+    let mut context = crate::evaluation::EvaluationContext::new(&plan);
+    
+    match crate::evaluation::expression::evaluate_expression(expr, &mut context) {
+        Ok(crate::evaluation::expression::EvaluationResult::Evaluated(OperationResult::Value(v))) => {
+            InversionResult::solved(v)
+        }
+        Ok(crate::evaluation::expression::EvaluationResult::Evaluated(OperationResult::Veto(msg))) => {
+            InversionResult::unsatisfiable(DomainRestriction {
+                facts: vec![],
+                description: msg.unwrap_or_else(|| "Expression vetoed".to_string()),
+                source: "constant evaluation".to_string(),
+            })
+        }
+        _ => InversionResult::unsatisfiable(DomainRestriction {
+            facts: vec![],
+            description: "Expression contains unknown facts".to_string(),
+            source: "constant evaluation".to_string(),
+        }),
+    }
 }
 
-fn subtract_values(a: &LiteralValue, b: &LiteralValue) -> Result<LiteralValue, InversionError> {
-    todo!("Subtract two literals")
-}
-
-fn multiply_values(a: &LiteralValue, b: &LiteralValue) -> Result<LiteralValue, InversionError> {
-    todo!("Multiply two literals")
-}
-
-fn divide_values(a: &LiteralValue, b: &LiteralValue) -> Result<LiteralValue, InversionError> {
-    todo!("Divide two literals")
-}
-
-fn root_values(base: &LiteralValue, exp: &LiteralValue) -> Result<LiteralValue, InversionError> {
-    todo!("Compute base^(1/exp)")
-}
-
-fn log_base_values(value: &LiteralValue, base: &LiteralValue) -> Result<LiteralValue, InversionError> {
-    todo!("Compute log_base(value)")
-}
-
-fn evaluate_to_literal(expr: &Expression) -> Result<LiteralValue, InversionError> {
-    todo!("Evaluate expression that should be constant")
-}
-
-#[derive(Debug)]
-pub enum InversionError {
-    FactNotFound,
-    MultipleOccurrences,
-    UnsupportedOperation,
-    UnsupportedExpression,
-    ComparisonNotInvertible,
-    LogicalNotInvertible,
-    AmbiguousInversion,
-    DivisionByZero,
-    InvalidValue,
-}
+// NOTE: All outcomes are domain information!
+// Empty solutions vec = empty valid domain (unsatisfiable)
+// Multiple solutions = multiple valid domains (e.g., x^2=4 gives ±2)
+// Each solution carries its own constraints and restrictions
 ```
 
+**Key reuse opportunities in Phase 7:**
+- ✅ All arithmetic operations use `computation::arithmetic::arithmetic_operation` directly
+- ✅ **Veto treated as constraint**, not error - becomes unsatisfiable domain
+- ✅ No wrapper functions needed - use `arithmetic_operation` directly
+- ✅ Existing linear isolation in `try_isolate_comparison()` and `isolate_single_fact()` unchanged
+- ✅ `evaluate_to_literal()` reuses evaluation infrastructure with empty plan
+- ⚠️ Non-linear functions (exp, log, trig) need numerical implementation via Rust standard library
+
+**Design improvement:**
+- `InversionResult` struct with `Vec<InversionSolution>` (0+ solutions)
+- `InversionSolution` has value, constraints, and restrictions (mini-world)
+- Division by zero? → Empty solutions vec (empty domain)
+- Sqrt of negative? → Empty solutions vec
+- x^2 = 4? → TWO solutions: {value: 2, constraints: x>0} and {value: -2, constraints: x<0}
+- **All outcomes are domain information** - empty vec = empty valid domain
+
 This gives us:
-- **Linear inversion**: Add, Subtract, Multiply, Divide (existing)
-- **Non-linear inversion**: Sqrt, Pow, Log, Exp, Trig functions (NEW)
-- **Fallback**: When symbolic inversion fails, can fall back to numerical methods (bisection)
+- **Linear inversion**: Add, Subtract, Multiply, Divide (existing in `try_isolate_comparison`)
+- **Non-linear inversion**: Sqrt, Pow, Log, Exp, Trig functions (NEW in `invert_expression`)
+- **Multiple solutions**: Natural support for quadratics, abs value, periodic functions
+- **Clean semantics**: Everything is constraint/domain information, no special error cases
 
 ### Phase 8: Wire Up New Inversion
 
@@ -1182,24 +1450,20 @@ pub fn invert(
     plan: &ExecutionPlan,
     rule_name: &str,
     operator: &str,
-    outcome: Option<OperationResult>,
-    provided_facts: &HashMap<String, String>,  // User-provided known facts
+    outcome: Option<OperationResult>
 ) -> LemmaResult<InversionResponse> {
     let target = Target::from_str(operator, outcome)?;
     
-    // 1. Convert provided_facts to FactPath -> LiteralValue map
-    let known_facts = parse_provided_facts(provided_facts, plan)?;
-    
-    // 2. Build worlds on-demand with symbolic evaluation
-    let mut builder = WorldBuilder::new(plan, known_facts);
+    // 1. Build worlds on-demand with symbolic evaluation
+    let mut builder = WorldBuilder::new(plan);
     let rule_worlds = builder.build_worlds(rule_name)?;
     
-    // 3. Filter worlds matching target
+    // 2. Filter worlds matching target
     let matching_worlds: Vec<&World> = rule_worlds.iter()
         .filter(|w| matches_target(&w.value, &target))
         .collect();
     
-    // 4. For each world, solve algebraically
+    // 3. For each world, solve algebraically
     let solutions: Vec<Solution> = matching_worlds.iter()
         .flat_map(|world| solve_world(world, &target))
         .collect();
@@ -1239,30 +1503,38 @@ fn solve_world(world: &World, target: &Target) -> Vec<Solution> {
             // Find which fact needs to be solved for
             let unknown_fact = find_unknown_fact(&world.value, &world.constraints)?;
             
-            // Use algebraic inversion (handles linear + non-linear)
-            match invert_expression(&world.value, &unknown_fact, &target_value) {
-                Ok(solved_value) => {
-                    // Verify solution satisfies world constraints
-                    if world.constraints.get(&unknown_fact).map_or(true, |c| c.contains(&solved_value)) {
-                        let mut solution_constraints = world.constraints.clone();
-                        solution_constraints.insert(
-                            unknown_fact,
-                            FactConstraint::exact(solved_value.clone())
-                        );
-                        vec![Solution::new(
-                            OperationResult::Value(target_value),
-                            solution_constraints
-                        )]
-                    } else {
-                        vec![] // Solution outside valid range
+            // Use algebraic inversion (handles linear + non-linear, multiple solutions)
+            let inversion_result = invert_expression(&world.value, &unknown_fact, &target_value);
+            
+            let mut solutions = Vec::new();
+            for inv_solution in inversion_result.solutions {
+                // Verify solution satisfies world constraints
+                if world.constraints.get(&unknown_fact).map_or(true, |c| c.contains(&inv_solution.value)) {
+                    let mut solution_constraints = world.constraints.clone();
+                    
+                    // Merge solution's constraints
+                    for (fact, constraint) in inv_solution.constraints {
+                        solution_constraints.insert(fact, constraint);
                     }
+                    
+                    // Add exact constraint for the solved fact
+                    solution_constraints.insert(
+                        unknown_fact.clone(),
+                        FactConstraint::exact(inv_solution.value)
+                    );
+                    
+                    solutions.push(Solution::new(
+                        OperationResult::Value(target_value.clone()),
+                        solution_constraints
+                    ));
                 }
-                Err(_) => {
-                    // Fallback: If symbolic inversion fails, try numerical methods
-                    // (bisection, Newton-Raphson, etc.)
-                    vec![]
-                }
+                // else: solution outside valid range, skip
+                // todo: what does this mean?
+                // should we error? should we inform about a veto/constraint?
             }
+            
+            // Return all valid solutions (empty if none work or inversion failed)
+            solutions
         }
     }
 }
@@ -1548,43 +1820,59 @@ fn cross_multiply_comparison(...) {
 - ✅ Clean module separation: `algebra/` (reasoning) vs `computation/` (runtime)
 - ❌ All inversion tests fail (old entry points deleted - expected)
 
-**Phase 3 (PLANNING OPTIMIZATION):** ✅ **COMPLETE**
-- ✅ `planning/optimization.rs` created with `optimize_branches` function
-- ✅ `pub mod optimization` added to `planning/mod.rs`
+**Phase 3 (BRANCH OPTIMIZATION):** ✅ **COMPLETE**
 - ✅ Branches have `optimized_condition: Option<Expression>` field
-- ✅ `optimization::optimize_branches` called during `build_execution_plan`
+- ✅ `ExecutionPlan::optimize()` method added (inlined optimization logic)
+- ✅ Optimization removed from planning (moved to post-symbolic-evaluation)
+- ✅ `planning/optimization.rs` module removed (logic inlined)
 - ✅ All Branch constructors in tests updated with `optimized_condition: None`
-- ✅ Branch constructors in `graph.rs` and `inversion/mod.rs` updated
 
 **Phase 4 (SYMBOLIC EVALUATION):** ✅ **COMPLETE**
 - ✅ Code compiles
 - ✅ `EvaluationResult` enum added (Evaluated/Symbolic) - no error-as-control-flow
 - ✅ `symbolic_mode: bool` field added to `EvaluationContext`
 - ✅ `new_symbolic()` constructor and `is_symbolic()` method added to `EvaluationContext`
-- ✅ `expression::evaluate_expression` returns `EvaluationResult` and handles unknown facts in symbolic mode
+- ✅ `expression::evaluate_expression` returns `EvaluationResult` and handles unknown facts
+- ✅ All return points updated to return `EvaluationResult::Evaluated` or `Symbolic`
 - ✅ `evaluate_mathematical_operator` and `propagate_veto_proof` updated to return `EvaluationResult`
 - ✅ `Evaluator::evaluate_symbolic()` method added with `evaluate_to_expression` helper
 - ✅ Can partially evaluate with known facts, leave unknown facts symbolic
 - ✅ Prunes branches that evaluate to false
 - ✅ Prunes earlier branches when one becomes unconditionally true (last-wins optimization)
 - ✅ Returns reduced ExecutionPlan with simplified conditions
-- ✅ `ExecutionPlan::optimize()` method added (inlined from Phase 3)
-- ✅ Phase 3 optimization removed from planning (now called after symbolic evaluation for inversion only)
 
-**Phase 5 (WORLD STRUCTURE):**
+**Phase 5 (WORLD STRUCTURE):** ✅ **COMPLETE**
 - ✅ Code compiles
 - ✅ `inversion/world.rs` created
-- ✅ World uses full Expression (not limited Value enum)
+- ✅ World struct with constraints HashMap and value Expression
+- ✅ World::merge() method with constraint intersection and pruning
+- ✅ FactConstraint helper methods added: is_exact(), exact(), contains()
+- ✅ value_in_bounds() helper function added
+- ✅ eval_at() removed (not needed for current implementation)
 
-**Phase 6 (WORLD BUILDER):**
+**Phase 6 (WORLD BUILDER):** ✅ **COMPLETE**
 - ✅ Code compiles
 - ✅ `inversion/world_builder.rs` created
-- ✅ WorldBuilder applies symbolic evaluation first
+- ✅ WorldBuilder struct with plan reference and cache
+- ✅ build_worlds() method with lazy on-demand building
+- ✅ Recursive world building for rule references
+- ✅ Cross-product merging with automatic constraint pruning
+- ✅ collect_rule_paths() helper for expression tree walking
+- ✅ substitute_rule_path() helper for expression substitution
+- ✅ extract_rule_references() helper
 
-**Phase 7 (ENHANCED ISOLATION):**
+**Phase 7 (ENHANCED ISOLATION):** ✅ **COMPLETE**
 - ✅ Code compiles
-- ✅ `algebra/isolation.rs` extended with `invert_expression`
-- ✅ Supports non-linear inversion (sqrt, pow, trig)
+- ✅ `algebra/isolation.rs` extended with inversion structures
+- ✅ InversionResult and InversionSolution structs added
+- ✅ invert_expression() implemented for recursive expression inversion
+- ✅ Supports arithmetic inversion (add, subtract, multiply, divide, power)
+- ✅ Supports mathematical inversion (sqrt implemented, exp/log/trig require numerical impl)
+- ✅ invert_arithmetic_left() and invert_arithmetic_right() helpers
+- ✅ square_value(), exp_value(), log_value(), apply_inverse_trig() helpers
+- ✅ evaluate_to_literal() helper for constant expression evaluation
+- ✅ EvaluationContext::new_for_inversion() public method added
+- ✅ Veto results converted to unsatisfiable domain restrictions (not errors)
 
 **Phase 8 (WIRE UP):**
 - ✅ All tests pass
@@ -1624,15 +1912,27 @@ fn cross_multiply_comparison(...) {
 - `lemma/src/algebra/math_properties.rs` (~10 lines) - placeholder ✅
 
 **ADDED (Phase 3):** ✅
-- `lemma/src/planning/optimization.rs` (~30 lines) - per-branch optimization ✅
-- Parts of `execution_plan.rs` (~10 lines) - optimized_condition field ✅
+- Parts of `execution_plan.rs` (~25 lines) - optimized_condition field + optimize() method ✅
 
-**ADDED (Future phases):**
-- `lemma/src/evaluation/mod.rs` (~85 lines added) - symbolic_mode, evaluate_symbolic() (Phase 4)
-- `lemma/src/evaluation/expression.rs` (~10 lines modified) - handle unknown facts in symbolic mode (Phase 4)
-- `lemma/src/inversion/world.rs` (~80 lines) - World structure with Expression (Phase 5)
-- `lemma/src/inversion/world_builder.rs` (~150 lines) - world building from reduced plan (Phase 6)
-- Enhanced `algebra/isolation.rs` (~300 lines added) - non-linear inversion (Phase 7)
+**ADDED (Phase 4):** ✅
+- `lemma/src/evaluation/expression.rs` (~20 lines) - EvaluationResult enum, symbolic mode handling ✅
+- `lemma/src/evaluation/mod.rs` (~85 lines) - symbolic_mode, evaluate_symbolic() ✅
+
+**ADDED (Phase 5):** ✅
+- `lemma/src/algebra/constraints.rs` (~30 lines) - is_exact(), exact(), contains() methods, value_in_bounds() helper ✅
+- `lemma/src/inversion/world.rs` (~57 lines) - World struct, merge() method ✅
+- `lemma/src/inversion/mod.rs` - world module export added ✅
+
+**ADDED (Phase 6):** ✅
+- `lemma/src/inversion/world_builder.rs` (~238 lines) - WorldBuilder, build_worlds(), collect_rule_paths(), substitute_rule_path(), extract_rule_references() ✅
+- `lemma/src/inversion/mod.rs` - world_builder module export added ✅
+
+**ADDED (Phase 7):** ✅
+- `lemma/src/algebra/isolation.rs` (~400 lines added) - InversionResult/InversionSolution structs, invert_expression(), arithmetic/mathematical inversion helpers ✅
+- `lemma/src/evaluation/mod.rs` - EvaluationContext::new_for_inversion() public method added ✅
+
+**TO ADD (Phase 8):**
+- `lemma/src/inversion/mod.rs` (~150 lines modified) - new invert(), solve_world(), find_unknown_fact()
 
 **IMPORT UPDATES (Phase 2):** ✅
 - All files using `computation::expand` → `algebra::expand` ✅
