@@ -7,14 +7,17 @@
 //!
 //! Used by planning (compile-time validation) and inversion (query-time solving).
 
-use super::{comparison_operation, OperationResult};
+use super::{comparison_operation, reverse_comparison, OperationResult};
+use crate::algebra::isolation::{try_isolate_comparison, IsolationResult};
 use crate::semantic::{
-    BooleanValue, ComparisonComputation, EqualityNotation, Expression, FactPath, LiteralValue,
+    BooleanValue, ComparisonComputation, EqualityNotation, Expression, ExpressionKind, FactPath,
+    LiteralValue,
 };
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 // ============================================================================
 // Constraint Types
@@ -973,6 +976,164 @@ mod tests {
             constraint_set.contradiction,
             Some(UnsatReason::EnumContradiction { .. })
         ));
+    }
+}
+
+/// Extract constraints from an expression into a ConstraintSet
+///
+/// Converts an optimized condition (already in DNF) into fact constraints.
+pub fn extract_constraints(expression: &Expression, constraint_set: &mut ConstraintSet) {
+    match &expression.kind {
+        ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)) => {
+            // true contributes no constraints
+        }
+
+        ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)) => {
+            // false means unsatisfiable
+            constraint_set.contradiction = Some(UnsatReason::SimplifiedToFalse);
+        }
+
+        ExpressionKind::LogicalAnd(left, right) => {
+            extract_constraints(left, constraint_set);
+            extract_constraints(right, constraint_set);
+        }
+
+        ExpressionKind::LogicalOr(left, right) => {
+            // OR represents alternative branches - add as symbolic for now
+            constraint_set.add_symbolic(expression.clone());
+            let _ = (left, right);
+        }
+
+        ExpressionKind::Comparison(left, op, right) => {
+            // Try to extract fact op literal (direct case)
+            if let ExpressionKind::FactPath(fact_path) = &left.kind {
+                if let ExpressionKind::Literal(value) = &right.kind {
+                    constraint_set.add_comparison(fact_path.clone(), op, value.clone());
+                    return;
+                }
+            }
+
+            // Try reversed: literal op fact
+            if let ExpressionKind::FactPath(fact_path) = &right.kind {
+                if let ExpressionKind::Literal(value) = &left.kind {
+                    let reversed_op = reverse_comparison(op);
+                    constraint_set.add_comparison(fact_path.clone(), &reversed_op, value.clone());
+                    return;
+                }
+            }
+
+            // Try fact op fact (relational constraint)
+            if let (ExpressionKind::FactPath(left_fact), ExpressionKind::FactPath(right_fact)) =
+                (&left.kind, &right.kind)
+            {
+                constraint_set.add_relation(left_fact.clone(), op.clone(), right_fact.clone());
+                return;
+            }
+
+            // Try algebraic isolation for arithmetic expressions
+            match try_isolate_comparison(left, op, right) {
+                IsolationResult::Isolated { fact, op, value } => {
+                    constraint_set.add_comparison(fact, &op, value);
+                    return;
+                }
+                IsolationResult::Unconstrained => {
+                    // No constraint needed - expression is always true
+                    return;
+                }
+                IsolationResult::Unsatisfiable(reason) => {
+                    constraint_set.contradiction = Some(reason);
+                    return;
+                }
+                IsolationResult::MultipleUnknowns(simplified) => {
+                    // Add the simplified expression as symbolic
+                    constraint_set.add_symbolic(simplified);
+                    return;
+                }
+                IsolationResult::Symbolic => {
+                    // Fall through to add as symbolic
+                }
+            }
+
+            // Also try with reversed operands (literal op arithmetic_expr)
+            if let ExpressionKind::Literal(_) = &left.kind {
+                let reversed_op = reverse_comparison(op);
+                match try_isolate_comparison(right, &reversed_op, left) {
+                    IsolationResult::Isolated { fact, op, value } => {
+                        constraint_set.add_comparison(fact, &op, value);
+                        return;
+                    }
+                    IsolationResult::Unconstrained => {
+                        return;
+                    }
+                    IsolationResult::Unsatisfiable(reason) => {
+                        constraint_set.contradiction = Some(reason);
+                        return;
+                    }
+                    IsolationResult::MultipleUnknowns(simplified) => {
+                        constraint_set.add_symbolic(simplified);
+                        return;
+                    }
+                    IsolationResult::Symbolic => {
+                        // Fall through
+                    }
+                }
+            }
+
+            // Complex comparison - add as symbolic
+            constraint_set.add_symbolic(expression.clone());
+        }
+
+        ExpressionKind::LogicalNegation(inner, _) => {
+            // NOT(comparison) → opposite comparison
+            if let ExpressionKind::Comparison(left, op, right) = &inner.kind {
+                // Convert to opposite comparison
+                let opposite_op = match op {
+                    ComparisonComputation::Equal(notation) => {
+                        ComparisonComputation::NotEqual(notation.clone())
+                    }
+                    ComparisonComputation::NotEqual(notation) => {
+                        ComparisonComputation::Equal(notation.clone())
+                    }
+                    ComparisonComputation::LessThan => ComparisonComputation::GreaterThanOrEqual,
+                    ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThan,
+                    ComparisonComputation::GreaterThan => ComparisonComputation::LessThanOrEqual,
+                    ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThan,
+                };
+                let opposite_comparison = Expression::new(
+                    ExpressionKind::Comparison(left.clone(), opposite_op, right.clone()),
+                    None,
+                );
+                extract_constraints(&opposite_comparison, constraint_set);
+                return;
+            }
+
+            // NOT(fact) means fact == false
+            if let ExpressionKind::FactPath(fact_path) = &inner.kind {
+                constraint_set.add_comparison(
+                    fact_path.clone(),
+                    &ComparisonComputation::Equal(EqualityNotation::Symbol),
+                    LiteralValue::Boolean(BooleanValue::False),
+                );
+                return;
+            }
+
+            // Complex negation - add as symbolic
+            constraint_set.add_symbolic(expression.clone());
+        }
+
+        ExpressionKind::FactPath(fact_path) => {
+            // Bare fact reference means fact == true
+            constraint_set.add_comparison(
+                fact_path.clone(),
+                &ComparisonComputation::Equal(EqualityNotation::Symbol),
+                LiteralValue::Boolean(BooleanValue::True),
+            );
+        }
+
+        // Other expression types - add as symbolic
+        _ => {
+            constraint_set.add_symbolic(expression.clone());
+        }
     }
 }
 

@@ -15,19 +15,15 @@
 //!    and exact symbolic preservation.
 
 mod response;
-mod solver;
 
 pub use crate::computation::{Bound, DomainRestriction, FactConstraint, UnsatReason};
 pub use response::{InversionResponse, Solution};
-pub use solver::SolveResult;
 
 use crate::computation::OperationResult;
 use crate::planning::ExecutionPlan;
 use crate::semantic::{Expression, ExpressionKind, FactValue};
 use crate::{LemmaError, LemmaResult};
 use std::sync::Arc;
-
-use solver::solve_with_target;
 
 /// Substitute provided fact values into an equation
 fn substitute_fact_values(expression: Expression, plan: &ExecutionPlan) -> Expression {
@@ -249,64 +245,7 @@ pub fn invert(
     operator: &str,
     outcome: Option<OperationResult>,
 ) -> LemmaResult<InversionResponse> {
-    // Parse operator
-    let op = TargetOp::from_str(operator)?;
-
-    // Create target
-    let target = Target { op, outcome };
-
-    // Find the target rule
-    let target_rule = plan.get_rule(rule_name).ok_or_else(|| {
-        LemmaError::Engine(format!("Rule not found: {}.{}", plan.doc_name, rule_name))
-    })?;
-
-    // Substitute provided fact values into the equation
-    let equation = substitute_fact_values(target_rule.equation.clone(), plan);
-
-    if rule_name == "rate" {
-        eprintln!("\n=== Inverting rate rule ===");
-        eprintln!("Equation: {:#?}", equation);
-    }
-
-    // Solve the equation with the target constraint
-    // Returns multiple solutions when equation contains OR branches
-    // solve_with_target preserves outcome information from each branch
-    let solve_results = solve_with_target(equation, &target);
-
-    // Convert each solve result to a solution
-    let mut solutions: Vec<Solution> = Vec::new();
-
-    for solve_result in solve_results {
-        match solve_result {
-            SolveResult::Solved { outcome, fact_constraints } => {
-                let solution = Solution::new(outcome, fact_constraints);
-                solutions.push(solution);
-            }
-            SolveResult::Partial {
-                outcome,
-                fact_constraints,
-                remaining_constraints: _,
-                domain_restrictions: _,
-            } => {
-                let solution = Solution::new(outcome, fact_constraints);
-                solutions.push(solution);
-            }
-            SolveResult::Unsatisfiable { .. } => {
-                // Unsatisfiable branches are filtered out (OR-3)
-                // If this is the only result, we'll return error below
-            }
-        }
-    }
-
-    // If no valid solutions, return error
-    if solutions.is_empty() {
-        return Err(LemmaError::Engine(format!(
-            "No solution: rule '{}' cannot produce the requested outcome",
-            rule_name
-        )));
-    }
-
-    Ok(InversionResponse::new(solutions))
+    todo!("Inversion broken - Phase 1 deletion")
 }
 
 #[cfg(test)]

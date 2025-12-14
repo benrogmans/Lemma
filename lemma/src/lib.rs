@@ -46,6 +46,7 @@
 //! Lemma has a rich type system including units (mass, length, time, money)
 //! with automatic conversions.
 
+pub mod algebra;
 pub mod computation;
 pub mod engine;
 pub mod error;

@@ -4,7 +4,6 @@
 //! The plan contains all facts, rules flattened into executable branches,
 //! and execution order - no document structure needed during evaluation.
 
-use crate::planning::equation;
 use crate::planning::graph::Graph;
 use crate::semantic::{
     BooleanValue, Expression, ExpressionKind, FactPath, FactValue, LemmaFact, LemmaType,
@@ -62,10 +61,6 @@ pub struct ExecutableRule {
     #[serde(deserialize_with = "crate::serialization::deserialize_fact_path_set")]
     pub needs_facts: HashSet<FactPath>,
 
-    /// Symbolic equation for inversion: (cond_0 ∧ result_0) ∨ (cond_1 ∧ result_1) ∨ ...
-    /// Rule references are substituted with their equations (computed in topo order).
-    pub equation: Expression,
-
     /// Source location for error messages
     pub source: Option<Source>,
 }
@@ -119,15 +114,10 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
             branches,
             source: rule_node.source.clone(),
             needs_facts: HashSet::new(),
-            equation: Expression::new(
-                ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)),
-                None,
-            ),
         });
     }
 
     collect_facts_for_rules(&mut executable_rules, graph);
-    build_equations_for_rules(&mut executable_rules, graph);
 
     ExecutionPlan::new(
         main_doc_name.to_string(),
@@ -162,22 +152,6 @@ fn collect_facts_for_rules(rules: &mut [ExecutableRule], graph: &Graph) {
     }
 }
 
-/// Build equations for all rules (linear pass in topological order)
-///
-/// Uses Arc<Expression> cache for structural sharing to avoid exponential memory growth.
-fn build_equations_for_rules(rules: &mut [ExecutableRule], graph: &Graph) {
-    let mut cache: HashMap<RulePath, std::sync::Arc<Expression>> = HashMap::new();
-
-    for rule in rules.iter_mut() {
-        let has_dependencies = graph
-            .rules()
-            .get(&rule.path)
-            .map(|node| !node.depends_on_rules.is_empty())
-            .unwrap_or(false);
-        
-        rule.equation = equation::build_equation(&rule.branches, &rule.path, &mut cache, has_dependencies);
-    }
-}
 
 impl Default for ExecutionPlan {
     fn default() -> Self {
@@ -557,7 +531,6 @@ mod tests {
                 set.insert(age_path);
                 set
             },
-            equation: create_literal_expr(LiteralValue::Boolean(BooleanValue::False)),
             source: create_test_source(),
         };
 
@@ -765,7 +738,6 @@ mod tests {
                 set.insert(points_path);
                 set
             },
-            equation: create_literal_expr(LiteralValue::Boolean(BooleanValue::False)),
             source: create_test_source(),
         };
 
@@ -862,7 +834,6 @@ mod tests {
                 set.insert(x_path);
                 set
             },
-            equation: create_literal_expr(LiteralValue::Boolean(BooleanValue::False)),
             source: create_test_source(),
         };
 
@@ -937,7 +908,6 @@ mod tests {
                 set.insert(age_path);
                 set
             },
-            equation: create_literal_expr(LiteralValue::Boolean(BooleanValue::False)),
             source: create_test_source(),
         };
 

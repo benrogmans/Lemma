@@ -128,7 +128,7 @@ fn cross_multiply_arithmetic(
     for left in left_branches {
         for right in &right_branches {
             let product = make_arithmetic(left.clone(), op.clone(), right.clone(), source.clone());
-            results.push(expand(product));
+            results.push(product);
         }
     }
     results
@@ -148,7 +148,7 @@ fn cross_multiply_comparison(
     for left in left_branches {
         for right in &right_branches {
             let product = make_comparison(left.clone(), op.clone(), right.clone(), source.clone());
-            results.push(expand(product));
+            results.push(product);
         }
     }
     results
