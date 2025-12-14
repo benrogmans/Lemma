@@ -257,7 +257,7 @@ pub fn evaluate_rule(
 
 /// Evaluate an expression iteratively without recursion
 /// Uses a work list approach: collect all expressions first, then evaluate in dependency order
-fn evaluate_expression(
+pub(crate) fn evaluate_expression(
     expr: &Expression,
     context: &mut crate::evaluation::EvaluationContext,
 ) -> crate::LemmaResult<OperationResult> {
@@ -392,15 +392,24 @@ fn evaluate_single_expression(
                     return Ok(OperationResult::Value(v));
                 }
                 None => {
-                    let proof_node = ProofNode::Veto {
-                        message: Some(format!("Missing fact: {}", fact_path)),
-                        source: current.source.clone(),
-                    };
-                    context.set_proof_node(current, proof_node);
-                    return Ok(OperationResult::Veto(Some(format!(
-                        "Missing fact: {}",
-                        fact_path
-                    ))));
+                    if context.is_symbolic() {
+                        // Symbolic mode: return error to signal caller to use original expression
+                        return Err(crate::LemmaError::Engine(format!(
+                            "Symbolic evaluation: unknown fact {}",
+                            fact_path
+                        )));
+                    } else {
+                        // Normal mode: create veto for missing fact
+                        let proof_node = ProofNode::Veto {
+                            message: Some(format!("Missing fact: {}", fact_path)),
+                            source: current.source.clone(),
+                        };
+                        context.set_proof_node(current, proof_node);
+                        return Ok(OperationResult::Veto(Some(format!(
+                            "Missing fact: {}",
+                            fact_path
+                        ))));
+                    }
                 }
             }
         }

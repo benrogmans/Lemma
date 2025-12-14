@@ -19,7 +19,13 @@
 - Branches have optimized_condition field
 - optimize_branches called during planning
 
-**Next: Phase 4** - Add symbolic evaluation (critical optimization)
+**Phase 4: COMPLETE** ✅
+- Symbolic evaluation added to Evaluator
+- Partial evaluation with unknown facts
+- Branch pruning (false conditions and last-wins optimization)
+- Returns reduced ExecutionPlan
+
+**Next: Phase 5** - Add World structure
 
 ---
 
@@ -56,7 +62,7 @@
 - **Phase 1**: DELETE old approach (equation.rs, solver.rs) ✅ **COMPLETE**
 - **Phase 2**: CREATE algebra module, MOVE files from computation/ ✅ **COMPLETE**
 - **Phase 3**: ADD planning-time branch optimization ✅ **COMPLETE**
-- **Phase 4**: ADD symbolic evaluation (substitute knowns, prune branches) ⭐
+- **Phase 4**: ADD symbolic evaluation (substitute knowns, prune branches) ✅ **COMPLETE**
 - **Phase 5**: ADD world structure (Expression-based values)
 - **Phase 6**: ADD world builder (with symbolic eval integration)
 - **Phase 7**: ENHANCE algebraic isolation (non-linear inversion)
@@ -117,16 +123,18 @@ OLD (Equation-Based):
   → Exponential memory, stack overflow
 
 NEW (World-Based with Symbolic Evaluation):
-  1. Start from target rule with known facts (e.g., state="CA")
-  2. For each branch:
-     a. Get pre-optimized condition (from Phase 3)
-     b. APPLY SYMBOLIC EVALUATION - substitute known facts, prune dead branches
-        Example: if state="CA" AND income>X becomes income>X (if in CA branch)
-     c. If condition → false, skip branch entirely (pruned)
-     d. If condition → true, world applies unconditionally
-     e. Extract constraints from remaining condition → World
-     f. If references other rules:
-        - Recursively build referenced rule's worlds (with same known facts)
+  1. APPLY SYMBOLIC EVALUATION (Phase 4) - before world building
+     - Inject known facts into plan: `plan.with_typed_values({"state": "CA", ...})`
+     - Call: `reduced_plan = evaluator.evaluate_symbolic(&plan)`
+     - Example: `state == "CA" && income > X` becomes `income > X`
+     - False branches pruned, earlier branches pruned if one becomes true
+  2. Build worlds from reduced plan (Phase 6)
+     For each branch in reduced plan:
+     a. Condition already simplified (from optimized_condition)
+     b. If condition → true: world applies unconditionally
+     c. Extract constraints from condition → World
+     d. If references other rules:
+        - Recursively build referenced rule's worlds (using same reduced plan)
         - Merge via constraint intersection
         - Contradictions return None (auto-prune)
   3. Solve each world:
@@ -168,8 +176,8 @@ computation/                ← Runtime evaluation only (kept for future)
   ├── comparison.rs         ← Evaluate >, <, == (existing)
   └── mod.rs
 evaluation/                 ← Execution of plans with full or symbolic facts
-  ├── mod.rs                ← ADD: symbolic() function (Phase 4)
-  ├── expression.rs         ← Existing: iterative expression evaluation
+  ├── mod.rs                ← MODIFY: add symbolic_mode to EvaluationContext, evaluate_symbolic() (Phase 4)
+  ├── expression.rs         ← MODIFY: handle unknown facts in symbolic mode (Phase 4)
   └── operations.rs         ← Existing: arithmetic/comparison operations
 inversion/
   ├── world.rs              ← NEW: World structure (Phase 5)
@@ -537,178 +545,196 @@ Branch {
 
 ### Phase 4: Add Symbolic Evaluation (Critical Optimization)
 
-**File: `lemma/src/evaluation/mod.rs`** (ADD function)
+This is the most important optimization - reduces search space before world building by partially
+evaluating with known facts. Transforms 50 states × 4 statuses = 200 paths → 1 path when state/status known.
 
-This is the most important optimization from the guide - reduces search space before path building.
+**Key Design Decision:** Reuse existing evaluation infrastructure with a `symbolic_mode` flag instead
+of reimplementing evaluation logic. This is partial evaluation - evaluate what you can (known facts),
+leave what you can't (unknown facts) symbolic.
 
-Add after the `Evaluator` impl (around line 131):
+#### Changes:
+
+**File: `lemma/src/evaluation/mod.rs`** (MODIFY `EvaluationContext`)
+
+Add `symbolic_mode` field to `EvaluationContext` struct (around line 22):
 
 ```rust
-/// Symbolically evaluate an expression with known facts
-///
-/// Substitutes known fact values and folds constants, leaving unknown facts symbolic.
-/// This is used by the inversion system to simplify expressions before path building.
-///
-/// Example:
-/// - Input: `state == "CA" && income > 50000`
-/// - Known: `state = "CA"`
-/// - Output: `income > 50000`
-///
-/// Why in evaluation/: This is symbolic evaluation - evaluation with symbolic inputs.
-/// Natural extension of the evaluation system. Reuses operations::arithmetic_operation
-/// and operations::comparison_operation for constant folding.
-pub fn symbolic(
-    expr: &Expression,
-    known_facts: &HashMap<FactPath, LiteralValue>,
-) -> Expression {
-    use crate::{ArithmeticComputation, BooleanValue, ComparisonComputation, ExpressionKind};
-    use std::sync::Arc;
+pub struct EvaluationContext {
+    facts: HashMap<FactPath, LemmaFact>,
+    rule_results: HashMap<RulePath, OperationResult>,
+    rule_proofs: HashMap<RulePath, crate::evaluation::proof::Proof>,
+    operations: Vec<crate::OperationRecord>,
+    source_text: HashMap<String, (String, String)>,
+    proof_nodes: HashMap<crate::Expression, crate::evaluation::proof::ProofNode>,
+    symbolic_mode: bool, // NEW: when true, return symbolic expr for unknown facts
+}
+```
 
-    match &expr.kind {
-        // 1. Substitute known facts
-        ExpressionKind::FactPath(path) => {
-            if let Some(value) = known_facts.get(path) {
-                Expression::new(
-                    ExpressionKind::Literal(value.clone()),
-                    expr.location.clone(),
-                )
-            } else {
-                expr.clone()
-            }
+Add constructor and helper method to `EvaluationContext` impl (around line 32):
+
+```rust
+impl EvaluationContext {
+    fn new(plan: &ExecutionPlan) -> Self {
+        Self {
+            facts: plan.facts.clone(),
+            rule_results: HashMap::new(),
+            rule_proofs: HashMap::new(),
+            operations: Vec::new(),
+            source_text: plan.graph().sources().clone(),
+            proof_nodes: HashMap::new(),
+            symbolic_mode: false, // Normal mode
         }
+    }
 
-        // 2. Fold constant arithmetic (reuses existing operations)
-        ExpressionKind::Arithmetic(left, op, right) => {
-            let left_eval = symbolic(left, known_facts);
-            let right_eval = symbolic(right, known_facts);
-
-            if let (ExpressionKind::Literal(l), ExpressionKind::Literal(r)) =
-                (&left_eval.kind, &right_eval.kind)
-            {
-                // Both sides are literals - compute now using existing operation
-                if let Ok(result) = operations::arithmetic_operation(l, *op, r) {
-                    if let OperationResult::Value(val) = result {
-                        return Expression::new(
-                            ExpressionKind::Literal(val),
-                            expr.location.clone(),
-                        );
-                    }
-                }
-            }
-
-            Expression::new(
-                ExpressionKind::Arithmetic(Arc::new(left_eval), *op, Arc::new(right_eval)),
-                expr.location.clone(),
-            )
+    // NEW: Create context for symbolic evaluation
+    fn new_symbolic(plan: &ExecutionPlan) -> Self {
+        Self {
+            facts: plan.facts.clone(),
+            rule_results: HashMap::new(),
+            rule_proofs: HashMap::new(),
+            operations: Vec::new(),
+            source_text: plan.graph().sources().clone(),
+            proof_nodes: HashMap::new(),
+            symbolic_mode: true, // Symbolic mode - unknown facts return original expr
         }
+    }
 
-        // 3. Prune logical AND branches
-        ExpressionKind::LogicalAnd(left, right) => {
-            let left_eval = symbolic(left, known_facts);
-            let right_eval = symbolic(right, known_facts);
+    // ... existing get_fact, push_operation, etc. ...
 
-            match &left_eval.kind {
-                ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)) => left_eval,
-                ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)) => right_eval,
-                _ => match &right_eval.kind {
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)) => {
-                        right_eval
-                    }
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)) => {
-                        left_eval
-                    }
-                    _ => Expression::new(
-                        ExpressionKind::LogicalAnd(Arc::new(left_eval), Arc::new(right_eval)),
-                        expr.location.clone(),
-                    ),
-                },
-            }
-        }
-
-        // 4. Prune logical OR branches
-        ExpressionKind::LogicalOr(left, right) => {
-            let left_eval = symbolic(left, known_facts);
-            let right_eval = symbolic(right, known_facts);
-
-            match &left_eval.kind {
-                ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)) => left_eval,
-                ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)) => right_eval,
-                _ => match &right_eval.kind {
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)) => {
-                        right_eval
-                    }
-                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False)) => {
-                        left_eval
-                    }
-                    _ => Expression::new(
-                        ExpressionKind::LogicalOr(Arc::new(left_eval), Arc::new(right_eval)),
-                        expr.location.clone(),
-                    ),
-                },
-            }
-        }
-
-        // 5. Fold constant comparisons (reuses existing operations)
-        ExpressionKind::Comparison(left, op, right) => {
-            let left_eval = symbolic(left, known_facts);
-            let right_eval = symbolic(right, known_facts);
-
-            if let (ExpressionKind::Literal(l), ExpressionKind::Literal(r)) =
-                (&left_eval.kind, &right_eval.kind)
-            {
-                if let Ok(result) = operations::comparison_operation(l, *op, r) {
-                    if let OperationResult::Value(val) = result {
-                        return Expression::new(
-                            ExpressionKind::Literal(val),
-                            expr.location.clone(),
-                        );
-                    }
-                }
-            }
-
-            Expression::new(
-                ExpressionKind::Comparison(Arc::new(left_eval), *op, Arc::new(right_eval)),
-                expr.location.clone(),
-            )
-        }
-
-        // 6. Fold negations
-        ExpressionKind::LogicalNegation(inner, neg_type) => {
-            let inner_eval = symbolic(inner, known_facts);
-
-            if let ExpressionKind::Literal(LiteralValue::Boolean(b)) = &inner_eval.kind {
-                return Expression::new(
-                    ExpressionKind::Literal(LiteralValue::Boolean(!b)),
-                    expr.location.clone(),
-                );
-            }
-
-            Expression::new(
-                ExpressionKind::LogicalNegation(Arc::new(inner_eval), *neg_type),
-                expr.location.clone(),
-            )
-        }
-
-        // 7. Recurse into math operations (could add constant folding if needed)
-        ExpressionKind::MathematicalComputation(op, inner) => {
-            let inner_eval = symbolic(inner, known_facts);
-            Expression::new(
-                ExpressionKind::MathematicalComputation(*op, Arc::new(inner_eval)),
-                expr.location.clone(),
-            )
-        }
-
-        // Literals, references, vetos pass through unchanged
-        _ => expr.clone(),
+    // NEW: Check if we're in symbolic mode
+    fn is_symbolic(&self) -> bool {
+        self.symbolic_mode
     }
 }
 ```
 
-**Key Design Decision:** 
-- Placed in `evaluation/mod.rs` (not `algebra/`) because this is **evaluation with symbolic inputs**
-- Reuses existing `operations::arithmetic_operation` and `operations::comparison_operation`
-- Natural extension of evaluation module (~100 lines, similar to `evaluate()`)
-- No new module needed - clean public function
+**File: `lemma/src/evaluation/expression.rs`** (MODIFY `evaluate_expression`)
+
+Find the `ExpressionKind::FactPath` match arm and modify to handle symbolic mode:
+
+```rust
+ExpressionKind::FactPath(path) => {
+    if let Some(value) = context.get_fact(path) {
+        // Fact is known - substitute with literal value
+        Ok(Expression::new(
+            ExpressionKind::Literal(value.clone()),
+            expr.source.clone(),
+        ))
+    } else if context.is_symbolic() {
+        // Symbolic mode: return original expression for unknown facts
+        Ok(expr.clone())
+    } else {
+        // Normal mode: error on unknown facts
+        Err(LemmaError::Engine(format!(
+            "Fact not found: {}",
+            path
+        )))
+    }
+}
+```
+
+**File: `lemma/src/evaluation/mod.rs`** (ADD method to `Evaluator` impl)
+
+Add after the `evaluate` method (around line 130):
+
+```rust
+/// Symbolically reduce execution plan using known fact values
+///
+/// Partially evaluates branch conditions and results using known facts,
+/// leaving unknown facts symbolic. Prunes branches that evaluate to false.
+/// Also prunes earlier branches when a branch becomes unconditionally true
+/// (last-wins optimization).
+///
+/// Example:
+/// - Plan has branches: `state == "CA" && income > 50000`, `state == "NY" && ...`
+/// - Plan has `state = "CA"` (known), `income` not set (unknown)
+/// - Branch 1 simplifies to: `income > 50000` (keep)
+/// - Branch 2 simplifies to: `false` (pruned)
+///
+/// This transforms multi-dimensional search (50 states × 4 statuses = 200 paths)
+/// into 1D search (just income) when state and status are known.
+///
+/// Known facts should be injected into the plan using `with_values`/`with_typed_values` first.
+pub fn evaluate_symbolic(&self, plan: &ExecutionPlan) -> ExecutionPlan {
+    use crate::planning::{Branch, ExecutableRule};
+    use crate::semantic::{BooleanValue, ExpressionKind, LiteralValue};
+
+    let mut context = EvaluationContext::new_symbolic(plan);
+
+    let reduced_rules: Vec<ExecutableRule> = plan
+        .rules
+        .iter()
+        .map(|rule| {
+            let mut simplified_branches: Vec<Branch> = Vec::new();
+
+            for branch in &rule.branches {
+                context.operations.clear();
+                context.proof_nodes.clear();
+
+                // Evaluate condition symbolically (returns expr if unknown facts)
+                let simplified_condition = 
+                    expression::evaluate_expression(&branch.condition, &mut context)
+                        .unwrap_or_else(|_| branch.condition.clone());
+
+                // Prune branches that evaluate to false
+                if matches!(
+                    &simplified_condition.kind,
+                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False))
+                ) {
+                    continue; // Skip this branch
+                }
+
+                // Evaluate result symbolically
+                let simplified_result = 
+                    expression::evaluate_expression(&branch.result, &mut context)
+                        .unwrap_or_else(|_| branch.result.clone());
+
+                simplified_branches.push(Branch {
+                    condition: branch.condition.clone(),
+                    optimized_condition: Some(simplified_condition),
+                    result: simplified_result,
+                    source: branch.source.clone(),
+                });
+            }
+
+            // Last-wins optimization: if a branch is unconditionally true,
+            // prune all earlier branches (they'll never be reached)
+            let final_branches = if let Some(pos) = simplified_branches.iter().position(|b| {
+                matches!(
+                    &b.optimized_condition.as_ref().unwrap().kind,
+                    ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True))
+                )
+            }) {
+                // Keep only from this position onward
+                simplified_branches.into_iter().skip(pos).collect()
+            } else {
+                simplified_branches
+            };
+
+            ExecutableRule {
+                path: rule.path.clone(),
+                name: rule.name.clone(),
+                branches: final_branches,
+                needs_facts: rule.needs_facts.clone(),
+                source: rule.source.clone(),
+            }
+        })
+        .collect();
+
+    ExecutionPlan::new(
+        plan.doc_name.clone(),
+        plan.facts.clone(),
+        reduced_rules,
+        plan.graph().clone(),
+    )
+}
+```
+
+**Key Benefits:**
+- Reuses ALL existing evaluation logic (arithmetic, comparisons, boolean ops, etc.)
+- Single flag change (`symbolic_mode`) enables partial evaluation
+- Aggressive pruning: removes false branches AND unreachable earlier branches
+- Natural integration with existing evaluation infrastructure
 
 ### Phase 5: Add World Structure
 
@@ -789,41 +815,46 @@ impl World {
 
 **File: `lemma/src/inversion/world_builder.rs`** (NEW)
 
-Modified to apply symbolic evaluation FIRST with known facts.
+Works with pre-reduced ExecutionPlan (symbolic evaluation already applied).
 
 ```rust
 //! On-demand world building for inversion queries
 
-use crate::evaluation::symbolic;
-use crate::computation::{FactConstraint, extract_constraints, ConstraintSet};
+use crate::algebra::constraints::{ConstraintSet, extract_constraints};
 use crate::planning::ExecutionPlan;
-use crate::semantic::{Expression, FactPath, LiteralValue, RulePath};
+use crate::semantic::{BooleanValue, Expression, ExpressionKind, FactPath, LiteralValue, RulePath};
+use crate::LemmaError;
 use std::collections::HashMap;
 
 use super::world::World;
 
 /// Builds worlds on-demand for inversion queries
 pub struct WorldBuilder<'a> {
+    /// Pre-reduced execution plan (evaluate_symbolic already called)
     plan: &'a ExecutionPlan,
     /// Cache to avoid rebuilding same rule's worlds
     cache: HashMap<RulePath, Vec<World>>,
-    /// Known fact values to apply symbolic evaluation
-    known_facts: HashMap<FactPath, LiteralValue>,
 }
 
 impl<'a> WorldBuilder<'a> {
-    pub fn new(plan: &'a ExecutionPlan, known_facts: HashMap<FactPath, LiteralValue>) -> Self {
+    /// Create WorldBuilder with pre-reduced plan
+    /// 
+    /// The plan should have had `Evaluator::evaluate_symbolic()` called on it
+    /// to substitute known facts and prune impossible branches.
+    pub fn new(plan: &'a ExecutionPlan) -> Self {
         Self {
             plan,
             cache: HashMap::new(),
-            known_facts,
         }
     }
     
     /// Build worlds for a rule (lazy, on-demand)
-    /// Applies symbolic evaluation to prune search space
-    pub fn build_worlds(&mut self, rule_name: &str) -> Result<Vec<World>, Error> {
-        let rule = self.plan.get_rule(rule_name)?;
+    /// 
+    /// Branches have already been symbolically evaluated and pruned.
+    /// This extracts constraints and builds worlds from simplified branches.
+    pub fn build_worlds(&mut self, rule_name: &str) -> Result<Vec<World>, LemmaError> {
+        let rule = self.plan.get_rule(rule_name)
+            .ok_or_else(|| LemmaError::Engine(format!("Rule not found: {}", rule_name)))?;
         let rule_path = rule.path.clone();
         
         // Check cache
@@ -834,31 +865,23 @@ impl<'a> WorldBuilder<'a> {
         let mut worlds = Vec::new();
         
         for branch in &rule.branches {
-            // 1. Get pre-optimized condition (from Phase 3 planning optimization)
-            let optimized = branch.optimized_condition.as_ref()
-                .unwrap_or(&branch.condition);
+            // Branch condition already symbolically evaluated and stored in optimized_condition
+            let condition = branch.optimized_condition.as_ref().unwrap_or(&branch.condition);
+            let result = &branch.result; // Already symbolically evaluated
             
-            // 2. APPLY SYMBOLIC EVALUATION - substitute known facts, prune dead branches
-            let simplified_condition = symbolic(optimized, &self.known_facts);
-            let simplified_result = symbolic(&branch.result, &self.known_facts);
-            
-            // 3. If condition simplified to false, skip this branch entirely
-            if is_literal_false(&simplified_condition) {
-                continue;
-            }
-            
-            // 4. If condition simplified to true, result applies unconditionally
-            if is_literal_true(&simplified_condition) {
+            // If condition is literal true, result applies unconditionally
+            if matches!(&condition.kind, 
+                ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True))) {
                 worlds.push(World {
                     constraints: HashMap::new(),
-                    value: simplified_result,
+                    value: result.clone(),
                 });
                 continue;
             }
             
-            // 5. Extract constraints from simplified condition
+            // Extract constraints from condition
             let mut constraint_set = ConstraintSet::new();
-            extract_constraints(&simplified_condition, &mut constraint_set);
+            extract_constraints(condition, &mut constraint_set);
             let constraints = constraint_set.to_fact_constraints();
             
             // 6. Check if result references other rules
@@ -1533,10 +1556,16 @@ fn cross_multiply_comparison(...) {
 - ✅ All Branch constructors in tests updated with `optimized_condition: None`
 - ✅ Branch constructors in `graph.rs` and `inversion/mod.rs` updated
 
-**Phase 4 (SYMBOLIC EVALUATION):**
+**Phase 4 (SYMBOLIC EVALUATION):** ✅ **COMPLETE**
 - ✅ Code compiles
-- ✅ `evaluation::symbolic()` function added
-- ✅ Can substitute known facts and prune dead branches
+- ✅ `symbolic_mode: bool` field added to `EvaluationContext`
+- ✅ `new_symbolic()` constructor and `is_symbolic()` method added to `EvaluationContext`
+- ✅ `expression::evaluate_expression` made pub(crate) and modified to handle unknown facts in symbolic mode
+- ✅ `Evaluator::evaluate_symbolic()` method added with `eval_to_expr` helper
+- ✅ Can partially evaluate with known facts, leave unknown facts symbolic
+- ✅ Prunes branches that evaluate to false
+- ✅ Prunes earlier branches when one becomes unconditionally true (last-wins optimization)
+- ✅ Returns reduced ExecutionPlan
 
 **Phase 5 (WORLD STRUCTURE):**
 - ✅ Code compiles
@@ -1595,9 +1624,10 @@ fn cross_multiply_comparison(...) {
 - Parts of `execution_plan.rs` (~10 lines) - optimized_condition field ✅
 
 **ADDED (Future phases):**
-- `lemma/src/evaluation/mod.rs` (~100 lines added) - symbolic() function (Phase 4)
+- `lemma/src/evaluation/mod.rs` (~85 lines added) - symbolic_mode, evaluate_symbolic() (Phase 4)
+- `lemma/src/evaluation/expression.rs` (~10 lines modified) - handle unknown facts in symbolic mode (Phase 4)
 - `lemma/src/inversion/world.rs` (~80 lines) - World structure with Expression (Phase 5)
-- `lemma/src/inversion/world_builder.rs` (~200 lines) - world building with symbolic eval (Phase 6)
+- `lemma/src/inversion/world_builder.rs` (~150 lines) - world building from reduced plan (Phase 6)
 - Enhanced `algebra/isolation.rs` (~300 lines added) - non-linear inversion (Phase 7)
 
 **IMPORT UPDATES (Phase 2):** ✅
@@ -1615,8 +1645,8 @@ fn cross_multiply_comparison(...) {
 **Net change:** 
 - ~2761 lines deleted
 - ~2956 lines reorganized
-- ~720 lines new (symbolic() in evaluation/mod.rs, path, path_builder, enhanced isolation, optimization)
-- **Total: +915 lines with massively cleaner architecture**
+- ~625 lines new (evaluate_symbolic, world structure, world builder, enhanced isolation, optimization)
+- **Total: +820 lines with massively cleaner architecture**
 
 The increase provides:
 - **Symbolic evaluation** - reduces N-dimensional problems to 1D (critical optimization)

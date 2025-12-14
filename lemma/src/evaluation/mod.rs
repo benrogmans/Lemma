@@ -26,6 +26,7 @@ pub struct EvaluationContext {
     operations: Vec<crate::OperationRecord>,
     source_text: HashMap<String, (String, String)>,
     proof_nodes: HashMap<crate::Expression, crate::evaluation::proof::ProofNode>,
+    symbolic_mode: bool,
 }
 
 impl EvaluationContext {
@@ -37,6 +38,19 @@ impl EvaluationContext {
             operations: Vec::new(),
             source_text: plan.graph().sources().clone(),
             proof_nodes: HashMap::new(),
+            symbolic_mode: false,
+        }
+    }
+
+    fn new_symbolic(plan: &ExecutionPlan) -> Self {
+        Self {
+            facts: plan.facts.clone(),
+            rule_results: HashMap::new(),
+            rule_proofs: HashMap::new(),
+            operations: Vec::new(),
+            source_text: plan.graph().sources().clone(),
+            proof_nodes: HashMap::new(),
+            symbolic_mode: true,
         }
     }
 
@@ -45,6 +59,10 @@ impl EvaluationContext {
             crate::FactValue::Literal(lit) => Some(lit),
             _ => None,
         })
+    }
+
+    fn is_symbolic(&self) -> bool {
+        self.symbolic_mode
     }
 
     fn push_operation(&mut self, kind: OperationKind) {
@@ -127,5 +145,119 @@ impl Evaluator {
         }
 
         Ok(response)
+    }
+
+    /// Symbolically reduce execution plan using known fact values
+    ///
+    /// Partially evaluates branch conditions and results using known facts,
+    /// leaving unknown facts symbolic. Prunes branches that evaluate to false.
+    /// Also prunes earlier branches when a branch becomes unconditionally true
+    /// (last-wins optimization).
+    ///
+    /// Example:
+    /// - Plan has branches: `state == "CA" && income > 50000`, `state == "NY" && ...`
+    /// - Plan has `state = "CA"` (known), `income` not set (unknown)
+    /// - Branch 1 simplifies to: `income > 50000` (keep)
+    /// - Branch 2 simplifies to: `false` (pruned)
+    ///
+    /// This transforms multi-dimensional search (50 states × 4 statuses = 200 paths)
+    /// into 1D search (just income) when state and status are known.
+    ///
+    /// Known facts should be injected into the plan using `with_values`/`with_typed_values` first.
+    pub fn evaluate_symbolic(&self, plan: &ExecutionPlan) -> ExecutionPlan {
+        use crate::planning::{Branch, ExecutableRule};
+        use crate::semantic::{BooleanValue, Expression, ExpressionKind, LiteralValue};
+
+        // Helper: evaluate expression and convert result back to Expression
+        fn eval_to_expr(
+            expr: &Expression,
+            context: &mut EvaluationContext,
+        ) -> Expression {
+            match expression::evaluate_expression(expr, context) {
+                Ok(OperationResult::Value(lit)) => {
+                    // Fully evaluated to literal value
+                    Expression::new(
+                        ExpressionKind::Literal(lit),
+                        expr.source.clone(),
+                    )
+                }
+                Ok(OperationResult::Veto(msg)) => {
+                    // Evaluated to veto
+                    Expression::new(
+                        ExpressionKind::Veto(crate::semantic::VetoExpression { message: msg }),
+                        expr.source.clone(),
+                    )
+                }
+                Err(_) => {
+                    // Error in symbolic mode (unknown facts) - return original
+                    expr.clone()
+                }
+            }
+        }
+
+        let mut context = EvaluationContext::new_symbolic(plan);
+
+        let reduced_rules: Vec<ExecutableRule> = plan
+            .rules
+            .iter()
+            .map(|rule| {
+                let mut simplified_branches: Vec<Branch> = Vec::new();
+
+                for branch in &rule.branches {
+                    context.operations.clear();
+                    context.proof_nodes.clear();
+
+                    // Evaluate condition symbolically
+                    let simplified_condition = eval_to_expr(&branch.condition, &mut context);
+
+                    // Prune branches that evaluate to false
+                    if matches!(
+                        &simplified_condition.kind,
+                        ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::False))
+                    ) {
+                        continue;
+                    }
+
+                    // Evaluate result symbolically
+                    let simplified_result = eval_to_expr(&branch.result, &mut context);
+
+                    simplified_branches.push(Branch {
+                        condition: branch.condition.clone(),
+                        optimized_condition: Some(simplified_condition),
+                        result: simplified_result,
+                        source: branch.source.clone(),
+                    });
+                }
+
+                // Last-wins optimization: if a branch is unconditionally true,
+                // prune all earlier branches (they'll never be reached)
+                let final_branches = if let Some(pos) = simplified_branches.iter().position(|b| {
+                    matches!(
+                        &b.optimized_condition.as_ref().unwrap().kind,
+                        ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True))
+                    )
+                }) {
+                    // Keep only from this position onward
+                    simplified_branches.into_iter().skip(pos).collect()
+                } else {
+                    simplified_branches
+                };
+
+                ExecutableRule {
+                    path: rule.path.clone(),
+                    name: rule.name.clone(),
+                    branches: final_branches,
+                    needs_facts: rule.needs_facts.clone(),
+                    source: rule.source.clone(),
+                }
+            })
+            .collect();
+
+        ExecutionPlan::new(
+            plan.doc_name.clone(),
+            plan.facts.clone(),
+            reduced_rules,
+            plan.graph().clone(),
+        )
     }
 }
