@@ -6,6 +6,7 @@
 
 pub mod execution_plan;
 pub mod graph;
+pub mod optimization;
 
 pub use execution_plan::{Branch, ExecutableRule, ExecutionPlan};
 pub use graph::{Graph, RuleNode};

@@ -5,6 +5,7 @@
 //! and execution order - no document structure needed during evaluation.
 
 use crate::planning::graph::Graph;
+use crate::planning::optimization;
 use crate::semantic::{
     BooleanValue, Expression, ExpressionKind, FactPath, FactValue, LemmaFact, LemmaType,
     LiteralValue, RulePath, TypeAnnotation,
@@ -71,6 +72,10 @@ pub struct Branch {
     /// Condition expression (always present, explicit with last-wins semantics applied)
     pub condition: Expression,
 
+    /// Pre-optimized condition (expanded + simplified during planning)
+    /// Used by inversion for fast constraint extraction
+    pub optimized_condition: Option<Expression>,
+
     /// Result expression
     pub result: Expression,
 
@@ -118,6 +123,11 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
     }
 
     collect_facts_for_rules(&mut executable_rules, graph);
+
+    // Optimize branches for fast inversion runtime
+    for rule in &mut executable_rules {
+        optimization::optimize_branches(&mut rule.branches);
+    }
 
     ExecutionPlan::new(
         main_doc_name.to_string(),
@@ -699,6 +709,7 @@ mod tests {
                         )),
                         create_test_source(),
                     ),
+                    optimized_condition: None,
                     result: create_literal_expr(LiteralValue::Text("bronze".to_string())),
                     source: create_test_source(),
                 },
@@ -714,6 +725,7 @@ mod tests {
                         ),
                         create_test_source(),
                     ),
+                    optimized_condition: None,
                     result: create_literal_expr(LiteralValue::Text("silver".to_string())),
                     source: create_test_source(),
                 },
@@ -729,6 +741,7 @@ mod tests {
                         ),
                         create_test_source(),
                     ),
+                    optimized_condition: None,
                     result: create_literal_expr(LiteralValue::Text("gold".to_string())),
                     source: create_test_source(),
                 },
@@ -816,6 +829,7 @@ mod tests {
                     )),
                     create_test_source(),
                 ),
+                optimized_condition: None,
                 result: Expression::new(
                     ExpressionKind::Arithmetic(
                         Arc::new(Expression::new(
@@ -898,6 +912,7 @@ mod tests {
                     ),
                     create_test_source(),
                 ),
+                optimized_condition: None,
                 result: create_literal_expr(LiteralValue::Boolean(
                     crate::semantic::BooleanValue::True,
                 )),

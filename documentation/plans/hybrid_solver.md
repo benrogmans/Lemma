@@ -14,7 +14,12 @@
 - No backward compatibility re-exports
 - Clean module separation established
 
-**Next: Phase 3** - Add planning-time branch optimization
+**Phase 3: COMPLETE** ✅
+- Planning-time branch optimization added
+- Branches have optimized_condition field
+- optimize_branches called during planning
+
+**Next: Phase 4** - Add symbolic evaluation (critical optimization)
 
 ---
 
@@ -31,7 +36,7 @@
 6. **Move** `computation/expansion.rs` → `algebra/expansion.rs` - **Phase 2** ✅
 7. **Move** `computation/simplification.rs` → `algebra/simplification.rs` - **Phase 2** ✅
 8. **Move** `computation/constraints.rs` → `algebra/constraints.rs` - **Phase 2** ✅
-9. **Add** planning-time branch optimization - **Phase 3**
+9. **Add** planning-time branch optimization - **Phase 3** ✅
 10. **Add** symbolic evaluation (critical optimization) - **Phase 4**
 11. **Add** path structure with full Expression support - **Phase 5**
 12. **Add** path builder with symbolic eval integration - **Phase 6**
@@ -50,7 +55,7 @@
 **Phase Overview:**
 - **Phase 1**: DELETE old approach (equation.rs, solver.rs) ✅ **COMPLETE**
 - **Phase 2**: CREATE algebra module, MOVE files from computation/ ✅ **COMPLETE**
-- **Phase 3**: ADD planning-time branch optimization
+- **Phase 3**: ADD planning-time branch optimization ✅ **COMPLETE**
 - **Phase 4**: ADD symbolic evaluation (substitute knowns, prune branches) ⭐
 - **Phase 5**: ADD world structure (Expression-based values)
 - **Phase 6**: ADD world builder (with symbolic eval integration)
@@ -1520,10 +1525,13 @@ fn cross_multiply_comparison(...) {
 - ✅ Clean module separation: `algebra/` (reasoning) vs `computation/` (runtime)
 - ❌ All inversion tests fail (old entry points deleted - expected)
 
-**Phase 3 (PLANNING OPTIMIZATION):**
-- ✅ Code compiles
-- ✅ Branches have `optimized_condition` field
-- ✅ `optimization::optimize_branches` called during planning
+**Phase 3 (PLANNING OPTIMIZATION):** ✅ **COMPLETE**
+- ✅ `planning/optimization.rs` created with `optimize_branches` function
+- ✅ `pub mod optimization` added to `planning/mod.rs`
+- ✅ Branches have `optimized_condition: Option<Expression>` field
+- ✅ `optimization::optimize_branches` called during `build_execution_plan`
+- ✅ All Branch constructors in tests updated with `optimized_condition: None`
+- ✅ Branch constructors in `graph.rs` and `inversion/mod.rs` updated
 
 **Phase 4 (SYMBOLIC EVALUATION):**
 - ✅ Code compiles
@@ -1581,12 +1589,16 @@ fn cross_multiply_comparison(...) {
 
 **ADDED (Phase 2):** ✅
 - `lemma/src/algebra/math_properties.rs` (~10 lines) - placeholder ✅
+
+**ADDED (Phase 3):** ✅
+- `lemma/src/planning/optimization.rs` (~30 lines) - per-branch optimization ✅
+- Parts of `execution_plan.rs` (~10 lines) - optimized_condition field ✅
+
+**ADDED (Future phases):**
 - `lemma/src/evaluation/mod.rs` (~100 lines added) - symbolic() function (Phase 4)
-- `lemma/src/planning/optimization.rs` (~30 lines) - per-branch optimization (Phase 3)
 - `lemma/src/inversion/world.rs` (~80 lines) - World structure with Expression (Phase 5)
 - `lemma/src/inversion/world_builder.rs` (~200 lines) - world building with symbolic eval (Phase 6)
 - Enhanced `algebra/isolation.rs` (~300 lines added) - non-linear inversion (Phase 7)
-- Parts of `execution_plan.rs` (~10 lines) - optimized_condition field (Phase 3)
 
 **IMPORT UPDATES (Phase 2):** ✅
 - All files using `computation::expand` → `algebra::expand` ✅

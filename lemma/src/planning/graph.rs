@@ -220,6 +220,7 @@ fn normalize_rule_branches(
 
         normalized.push(Branch {
             condition: normalized_condition,
+            optimized_condition: None,
             result: result.clone(),
             source: source.clone(),
         });

@@ -307,6 +307,7 @@ mod tests {
             name: "test".to_string(),
             branches: vec![Branch {
                 condition: literal_bool(true),
+                optimized_condition: None,
                 result: literal_num(42),
                 source: None,
             }],
@@ -372,6 +373,7 @@ mod tests {
             name: "test".to_string(),
             branches: vec![Branch {
                 condition: literal_bool(true),
+                optimized_condition: None,
                 result: literal_num(42),
                 source: None,
             }],
