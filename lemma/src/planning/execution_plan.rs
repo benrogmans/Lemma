@@ -5,7 +5,6 @@
 //! and execution order - no document structure needed during evaluation.
 
 use crate::planning::graph::Graph;
-use crate::planning::optimization;
 use crate::semantic::{
     BooleanValue, Expression, ExpressionKind, FactPath, FactValue, LemmaFact, LemmaType,
     LiteralValue, RulePath, TypeAnnotation,
@@ -121,11 +120,6 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
     }
 
     collect_facts_for_rules(&mut executable_rules, graph);
-
-    // Optimize branches for fast inversion runtime
-    for rule in &mut executable_rules {
-        optimization::optimize_branches(&mut rule.branches);
-    }
 
     ExecutionPlan::new(
         main_doc_name.to_string(),
@@ -319,6 +313,24 @@ impl ExecutionPlan {
         }
 
         Ok(typed)
+    }
+
+    /// Optimize branch conditions for constraint extraction
+    ///
+    /// Expands to DNF and simplifies boolean expressions.
+    /// Should be called after symbolic evaluation to optimize only surviving branches.
+    ///
+    /// This prepares conditions for efficient constraint extraction in world building.
+    pub fn optimize(mut self) -> Self {
+        for rule in &mut self.rules {
+            for branch in &mut rule.branches {
+                // Expand to DNF and simplify
+                let expanded = crate::algebra::expand(branch.condition.clone());
+                let simplified = crate::algebra::simplification::reduce(expanded);
+                branch.optimized_condition = Some(simplified);
+            }
+        }
+        self
     }
 }
 

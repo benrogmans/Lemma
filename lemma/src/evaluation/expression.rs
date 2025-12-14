@@ -11,6 +11,14 @@ use crate::planning::ExecutableRule;
 use crate::{BooleanValue, Expression, ExpressionKind, LiteralValue, MathematicalComputation};
 use std::collections::HashMap;
 
+/// Result of expression evaluation
+pub enum EvaluationResult {
+    /// Successfully evaluated to a value or veto
+    Evaluated(OperationResult),
+    /// Contains unknown facts (symbolic mode only)
+    Symbolic(Expression),
+}
+
 /// Get a proof node that must exist (returns LemmaError if missing - indicates engine bug)
 fn get_proof_node_required(
     context: &crate::evaluation::EvaluationContext,
@@ -68,10 +76,10 @@ fn propagate_veto_proof(
     vetoed_operand: &Expression,
     veto_result: OperationResult,
     operand_name: &str,
-) -> crate::LemmaResult<OperationResult> {
+) -> crate::LemmaResult<EvaluationResult> {
     let proof = get_proof_node_required(context, vetoed_operand, operand_name)?;
     context.set_proof_node(current, proof);
-    Ok(veto_result)
+    Ok(EvaluationResult::Evaluated(veto_result))
 }
 
 /// Evaluate a rule to produce its final result and proof
@@ -102,7 +110,14 @@ pub fn evaluate_rule(
         let condition_expr = get_source_text(context, &branch.condition)?;
         let result_expr = get_source_text(context, &branch.result)?;
 
-        let condition_result = evaluate_expression(&branch.condition, context)?;
+        let condition_result = match evaluate_expression(&branch.condition, context)? {
+            EvaluationResult::Evaluated(result) => result,
+            EvaluationResult::Symbolic(_) => {
+                return Err(crate::LemmaError::Engine(
+                    "bug: symbolic result in normal evaluation mode".to_string(),
+                ))
+            }
+        };
 
         // Ensure proof node exists for the condition (defensive check for normalized conditions)
         let condition_proof = if let Some(proof) = context.get_proof_node(&branch.condition) {
@@ -185,7 +200,14 @@ pub fn evaluate_rule(
 
         if bool::from(matched) {
             // This branch matched - evaluate its result
-            let result = evaluate_expression(&branch.result, context)?;
+            let result = match evaluate_expression(&branch.result, context)? {
+                EvaluationResult::Evaluated(result) => result,
+                EvaluationResult::Symbolic(_) => {
+                    return Err(crate::LemmaError::Engine(
+                        "bug: symbolic result in normal evaluation mode".to_string(),
+                    ))
+                }
+            };
 
             context.push_operation(OperationKind::RuleBranchEvaluated {
                 index: idx,
@@ -260,7 +282,7 @@ pub fn evaluate_rule(
 pub(crate) fn evaluate_expression(
     expr: &Expression,
     context: &mut crate::evaluation::EvaluationContext,
-) -> crate::LemmaResult<OperationResult> {
+) -> crate::LemmaResult<EvaluationResult> {
     // First, collect all expressions in the tree
     let mut all_exprs: HashMap<Expression, ()> = HashMap::new();
     let mut work_list: Vec<&Expression> = vec![expr];
@@ -340,8 +362,16 @@ pub(crate) fn evaluate_expression(
         // Evaluate expressions that are ready
         for expr_key in &to_remove {
             // Evaluate the expression
-            let result = evaluate_single_expression(expr_key, &results, context)?;
-            results.insert(expr_key.clone(), result);
+            let eval_result = evaluate_single_expression(expr_key, &results, context)?;
+            match eval_result {
+                EvaluationResult::Evaluated(op_result) => {
+                    results.insert(expr_key.clone(), op_result);
+                }
+                EvaluationResult::Symbolic(_) => {
+                    // Symbolic result - propagate up immediately
+                    return Ok(eval_result);
+                }
+            }
         }
 
         for key in &to_remove {
@@ -349,9 +379,13 @@ pub(crate) fn evaluate_expression(
         }
     }
 
-    results.get(expr).cloned().ok_or_else(|| {
-        crate::LemmaError::Engine("bug: expression was processed but has no result".to_string())
-    })
+    results
+        .get(expr)
+        .cloned()
+        .map(EvaluationResult::Evaluated)
+        .ok_or_else(|| {
+            crate::LemmaError::Engine("bug: expression was processed but has no result".to_string())
+        })
 }
 
 /// Evaluate a single expression given its dependencies are already evaluated
@@ -359,7 +393,7 @@ fn evaluate_single_expression(
     current: &Expression,
     results: &HashMap<Expression, OperationResult>,
     context: &mut crate::evaluation::EvaluationContext,
-) -> crate::LemmaResult<OperationResult> {
+) -> crate::LemmaResult<EvaluationResult> {
     let result = match &current.kind {
         ExpressionKind::Literal(lit) => {
             let proof_node = ProofNode::Value {
@@ -368,7 +402,7 @@ fn evaluate_single_expression(
                 source: current.source.clone(),
             };
             context.set_proof_node(current, proof_node);
-            return Ok(OperationResult::Value(lit.clone()));
+            return Ok(EvaluationResult::Evaluated(OperationResult::Value(lit.clone())));
         }
 
         ExpressionKind::FactPath(fact_path) => {
@@ -389,15 +423,12 @@ fn evaluate_single_expression(
                         source: current.source.clone(),
                     };
                     context.set_proof_node(current, proof_node);
-                    return Ok(OperationResult::Value(v));
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(v)));
                 }
                 None => {
                     if context.is_symbolic() {
-                        // Symbolic mode: return error to signal caller to use original expression
-                        return Err(crate::LemmaError::Engine(format!(
-                            "Symbolic evaluation: unknown fact {}",
-                            fact_path
-                        )));
+                        // Symbolic mode: return symbolic result for unknown fact
+                        return Ok(EvaluationResult::Symbolic(current.clone()));
                     } else {
                         // Normal mode: create veto for missing fact
                         let proof_node = ProofNode::Veto {
@@ -405,9 +436,8 @@ fn evaluate_single_expression(
                             source: current.source.clone(),
                         };
                         context.set_proof_node(current, proof_node);
-                        return Ok(OperationResult::Veto(Some(format!(
-                            "Missing fact: {}",
-                            fact_path
+                        return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
+                            format!("Missing fact: {}", fact_path)
                         ))));
                     }
                 }
@@ -450,7 +480,7 @@ fn evaluate_single_expression(
                         expansion: Box::new(expansion),
                     };
                     context.set_proof_node(current, proof_node);
-                    return Ok(r);
+                    return Ok(EvaluationResult::Evaluated(r));
                 }
                 None => {
                     let proof_node = ProofNode::Veto {
@@ -461,10 +491,10 @@ fn evaluate_single_expression(
                         source: current.source.clone(),
                     };
                     context.set_proof_node(current, proof_node);
-                    return Ok(OperationResult::Veto(Some(format!(
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(format!(
                         "Rule {} not found or not yet computed",
                         rule_path.rule
-                    ))));
+                    )))));
                 }
             }
         }
@@ -518,7 +548,7 @@ fn evaluate_single_expression(
             } else if let OperationResult::Veto(_) = result {
                 context.set_proof_node(current, left_proof);
             }
-            Ok(result)
+            Ok(EvaluationResult::Evaluated(result))
         }
 
         ExpressionKind::Comparison(left, op, right) => {
@@ -570,7 +600,7 @@ fn evaluate_single_expression(
             } else if let OperationResult::Veto(_) = result {
                 context.set_proof_node(current, left_proof);
             }
-            Ok(result)
+            Ok(EvaluationResult::Evaluated(result))
         }
 
         ExpressionKind::LogicalAnd(left, right) => {
@@ -582,14 +612,14 @@ fn evaluate_single_expression(
             let left_bool = match left_result.value() {
                 Some(LiteralValue::Boolean(b)) => b,
                 Some(_) => {
-                    return Ok(OperationResult::Veto(Some(
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
                         "Logical AND requires boolean operands".to_string(),
-                    )));
+                    ))));
                 }
                 None => {
-                    return Ok(OperationResult::Veto(Some(
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
                         "Left operand is vetoed".to_string(),
-                    )))
+                    ))));
                 }
             };
 
@@ -605,8 +635,8 @@ fn evaluate_single_expression(
                     operands: vec![left_proof],
                 };
                 context.set_proof_node(current, proof_node);
-                Ok(OperationResult::Value(LiteralValue::Boolean(
-                    BooleanValue::False,
+                Ok(EvaluationResult::Evaluated(OperationResult::Value(
+                    LiteralValue::Boolean(BooleanValue::False),
                 )))
             } else {
                 let right_result = get_operand_result(results, right, "right")?;
@@ -627,7 +657,7 @@ fn evaluate_single_expression(
                     operands: vec![left_proof, right_proof],
                 };
                 context.set_proof_node(current, proof_node);
-                Ok(right_result)
+                Ok(EvaluationResult::Evaluated(right_result))
             }
         }
 
@@ -640,14 +670,14 @@ fn evaluate_single_expression(
             let left_bool = match left_result.value() {
                 Some(LiteralValue::Boolean(b)) => b,
                 Some(_) => {
-                    return Ok(OperationResult::Veto(Some(
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
                         "Logical OR requires boolean operands".to_string(),
-                    )));
+                    ))));
                 }
                 None => {
-                    return Ok(OperationResult::Veto(Some(
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
                         "Left operand is vetoed".to_string(),
-                    )))
+                    ))));
                 }
             };
 
@@ -663,8 +693,8 @@ fn evaluate_single_expression(
                     operands: vec![left_proof],
                 };
                 context.set_proof_node(current, proof_node);
-                Ok(OperationResult::Value(LiteralValue::Boolean(
-                    BooleanValue::True,
+                Ok(EvaluationResult::Evaluated(OperationResult::Value(
+                    LiteralValue::Boolean(BooleanValue::True),
                 )))
             } else {
                 let right_result = get_operand_result(results, right, "right")?;
@@ -685,7 +715,7 @@ fn evaluate_single_expression(
                     operands: vec![left_proof, right_proof],
                 };
                 context.set_proof_node(current, proof_node);
-                Ok(right_result)
+                Ok(EvaluationResult::Evaluated(right_result))
             }
         }
 
@@ -712,17 +742,17 @@ fn evaluate_single_expression(
                         operands: vec![operand_proof],
                     };
                     context.set_proof_node(current, proof_node);
-                    Ok(OperationResult::Value(LiteralValue::Boolean(
-                        if result_bool {
+                    Ok(EvaluationResult::Evaluated(OperationResult::Value(
+                        LiteralValue::Boolean(if result_bool {
                             BooleanValue::True
                         } else {
                             BooleanValue::False
-                        },
+                        }),
                     )))
                 }
-                _ => Ok(OperationResult::Veto(Some(
+                _ => Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
                     "Logical NOT requires boolean operand".to_string(),
-                ))),
+                )))),
             }
         }
 
@@ -738,7 +768,7 @@ fn evaluate_single_expression(
             let operand_proof = get_proof_node_required(context, value_expr, "operand")?;
             let conversion_result = super::operations::convert_unit(value, target);
             context.set_proof_node(current, operand_proof);
-            Ok(conversion_result)
+            Ok(EvaluationResult::Evaluated(conversion_result))
         }
 
         ExpressionKind::MathematicalComputation(op, operand) => {
@@ -762,7 +792,7 @@ fn evaluate_single_expression(
                 source: current.source.clone(),
             };
             context.set_proof_node(current, proof_node);
-            Ok(OperationResult::Veto(veto_expr.message.clone()))
+            Ok(EvaluationResult::Evaluated(OperationResult::Veto(veto_expr.message.clone())))
         }
 
         ExpressionKind::FactReference(_) | ExpressionKind::RuleReference(_) => {
@@ -780,16 +810,16 @@ fn evaluate_mathematical_operator(
     value: &LiteralValue,
     expr: &Expression,
     context: &mut crate::evaluation::EvaluationContext,
-) -> crate::LemmaResult<OperationResult> {
+) -> crate::LemmaResult<EvaluationResult> {
     match value {
         LiteralValue::Number(n) => {
             use rust_decimal::prelude::ToPrimitive;
             let float_val = match n.to_f64() {
                 Some(v) => v,
                 None => {
-                    return Ok(OperationResult::Veto(Some(
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
                         "Cannot convert to float for mathematical operation".to_string(),
-                    )));
+                    ))));
                 }
             };
 
@@ -804,25 +834,25 @@ fn evaluate_mathematical_operator(
                 MathematicalComputation::Log => float_val.ln(),
                 MathematicalComputation::Exp => float_val.exp(),
                 MathematicalComputation::Abs => {
-                    return Ok(OperationResult::Value(LiteralValue::Number(n.abs())));
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(LiteralValue::Number(n.abs()))));
                 }
                 MathematicalComputation::Floor => {
-                    return Ok(OperationResult::Value(LiteralValue::Number(n.floor())));
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(LiteralValue::Number(n.floor()))));
                 }
                 MathematicalComputation::Ceil => {
-                    return Ok(OperationResult::Value(LiteralValue::Number(n.ceil())));
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(LiteralValue::Number(n.ceil()))));
                 }
                 MathematicalComputation::Round => {
-                    return Ok(OperationResult::Value(LiteralValue::Number(n.round())));
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Value(LiteralValue::Number(n.round()))));
                 }
             };
 
             let decimal_result = match rust_decimal::Decimal::from_f64_retain(math_result) {
                 Some(d) => d,
                 None => {
-                    return Ok(OperationResult::Veto(Some(
+                    return Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
                         "Mathematical operation result cannot be represented".to_string(),
-                    )));
+                    ))));
                 }
             };
 
@@ -833,10 +863,10 @@ fn evaluate_mathematical_operator(
                 result: result_value.clone(),
                 expression: get_source_text(context, expr)?,
             });
-            Ok(OperationResult::Value(result_value))
+            Ok(EvaluationResult::Evaluated(OperationResult::Value(result_value)))
         }
-        _ => Ok(OperationResult::Veto(Some(
+        _ => Ok(EvaluationResult::Evaluated(OperationResult::Veto(Some(
             "Mathematical operators require number operands".to_string(),
-        ))),
+        )))),
     }
 }

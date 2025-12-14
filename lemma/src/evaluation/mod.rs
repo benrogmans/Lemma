@@ -169,28 +169,32 @@ impl Evaluator {
         use crate::semantic::{BooleanValue, Expression, ExpressionKind, LiteralValue};
 
         // Helper: evaluate expression and convert result back to Expression
-        fn eval_to_expr(
+        fn evaluate_to_expression(
             expr: &Expression,
             context: &mut EvaluationContext,
         ) -> Expression {
             match expression::evaluate_expression(expr, context) {
-                Ok(OperationResult::Value(lit)) => {
+                Ok(expression::EvaluationResult::Evaluated(OperationResult::Value(lit))) => {
                     // Fully evaluated to literal value
                     Expression::new(
                         ExpressionKind::Literal(lit),
                         expr.source.clone(),
                     )
                 }
-                Ok(OperationResult::Veto(msg)) => {
+                Ok(expression::EvaluationResult::Evaluated(OperationResult::Veto(msg))) => {
                     // Evaluated to veto
                     Expression::new(
                         ExpressionKind::Veto(crate::semantic::VetoExpression { message: msg }),
                         expr.source.clone(),
                     )
                 }
-                Err(_) => {
-                    // Error in symbolic mode (unknown facts) - return original
-                    expr.clone()
+                Ok(expression::EvaluationResult::Symbolic(e)) => {
+                    // Contains unknown facts - return as-is
+                    e
+                }
+                Err(e) => {
+                    // Real error - this is a bug
+                    panic!("Bug during symbolic evaluation: {}", e)
                 }
             }
         }
@@ -208,7 +212,7 @@ impl Evaluator {
                     context.proof_nodes.clear();
 
                     // Evaluate condition symbolically
-                    let simplified_condition = eval_to_expr(&branch.condition, &mut context);
+                    let simplified_condition = evaluate_to_expression(&branch.condition, &mut context);
 
                     // Prune branches that evaluate to false
                     if matches!(
@@ -219,11 +223,11 @@ impl Evaluator {
                     }
 
                     // Evaluate result symbolically
-                    let simplified_result = eval_to_expr(&branch.result, &mut context);
+                    let simplified_result = evaluate_to_expression(&branch.result, &mut context);
 
                     simplified_branches.push(Branch {
-                        condition: branch.condition.clone(),
-                        optimized_condition: Some(simplified_condition),
+                        condition: simplified_condition,
+                        optimized_condition: None,
                         result: simplified_result,
                         source: branch.source.clone(),
                     });
@@ -233,7 +237,7 @@ impl Evaluator {
                 // prune all earlier branches (they'll never be reached)
                 let final_branches = if let Some(pos) = simplified_branches.iter().position(|b| {
                     matches!(
-                        &b.optimized_condition.as_ref().unwrap().kind,
+                        &b.condition.kind,
                         ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True))
                     )
                 }) {

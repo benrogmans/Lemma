@@ -1558,14 +1558,18 @@ fn cross_multiply_comparison(...) {
 
 **Phase 4 (SYMBOLIC EVALUATION):** ✅ **COMPLETE**
 - ✅ Code compiles
+- ✅ `EvaluationResult` enum added (Evaluated/Symbolic) - no error-as-control-flow
 - ✅ `symbolic_mode: bool` field added to `EvaluationContext`
 - ✅ `new_symbolic()` constructor and `is_symbolic()` method added to `EvaluationContext`
-- ✅ `expression::evaluate_expression` made pub(crate) and modified to handle unknown facts in symbolic mode
-- ✅ `Evaluator::evaluate_symbolic()` method added with `eval_to_expr` helper
+- ✅ `expression::evaluate_expression` returns `EvaluationResult` and handles unknown facts in symbolic mode
+- ✅ `evaluate_mathematical_operator` and `propagate_veto_proof` updated to return `EvaluationResult`
+- ✅ `Evaluator::evaluate_symbolic()` method added with `evaluate_to_expression` helper
 - ✅ Can partially evaluate with known facts, leave unknown facts symbolic
 - ✅ Prunes branches that evaluate to false
 - ✅ Prunes earlier branches when one becomes unconditionally true (last-wins optimization)
-- ✅ Returns reduced ExecutionPlan
+- ✅ Returns reduced ExecutionPlan with simplified conditions
+- ✅ `ExecutionPlan::optimize()` method added (inlined from Phase 3)
+- ✅ Phase 3 optimization removed from planning (now called after symbolic evaluation for inversion only)
 
 **Phase 5 (WORLD STRUCTURE):**
 - ✅ Code compiles
