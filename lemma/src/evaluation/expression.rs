@@ -81,9 +81,8 @@ pub fn evaluate_rule(
 ) -> crate::LemmaResult<(OperationResult, crate::evaluation::proof::Proof)> {
     use crate::evaluation::proof::{Branch, NonMatchedBranch};
 
-    // All branches have explicit conditions (normalized during graph building)
     // Evaluate branches in reverse order (last matching wins)
-    // For single-branch rules, the condition will be true, so it will always match
+    // Branches are in original order, so reversing gives last-wins semantics
     let mut non_matched_branches: Vec<NonMatchedBranch> = Vec::new();
 
     // Helper: calculate clause index for proof/response structure

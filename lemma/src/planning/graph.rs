@@ -118,7 +118,7 @@ impl Graph {
 
 #[derive(Debug, Clone)]
 pub struct RuleNode {
-    /// Normalized branches with explicit conditions (last-wins semantics applied).
+    /// Branches in original order (evaluator reverses for last-wins semantics).
     /// All branches have explicit conditions - no Option<Expression> needed.
     /// Expressions are already converted (FactReference -> FactPath, RuleReference -> RulePath).
     pub branches: Vec<Branch>,
@@ -142,104 +142,6 @@ struct GraphBuilder<'a> {
 ///
 /// For each branch at index i, computes the OR of all conditions from branches i+1 onwards.
 /// This ensures strict mutual exclusion: each branch excludes ALL later branches.
-fn build_suffix_or_conditions(
-    branches: &[(Option<Expression>, Expression)],
-) -> Vec<Option<Expression>> {
-    let mut suffix_or: Vec<Option<Expression>> = vec![None; branches.len()];
-
-    for i in 0..branches.len() {
-        let mut acc: Option<Expression> = None;
-
-        for j in (i + 1)..branches.len() {
-            if let Some(cond) = &branches[j].0 {
-            let cond_source = cond.source.clone();
-            acc = Some(match acc {
-                    None => cond.clone(),
-                Some(prev) => Expression::new(
-                        ExpressionKind::LogicalOr(Arc::new(cond.clone()), Arc::new(prev)),
-                    cond_source,
-                ),
-            });
-            }
-        }
-
-        suffix_or[i] = acc;
-    }
-
-    suffix_or
-}
-
-/// Normalize rule branches by applying last-wins semantics
-///
-/// Makes branch conditions explicit: each branch's condition excludes all later branches.
-/// Rule references (RulePath) remain as-is - they're not expanded here.
-fn normalize_rule_branches(
-    branches: &[(Option<Expression>, Expression)],
-    source: &Option<Source>,
-) -> Vec<Branch> {
-    todo!("Remove normalization");
-    let suffix_or = build_suffix_or_conditions(branches);
-    let mut normalized = Vec::new();
-
-    for (idx, (condition, result)) in branches.iter().enumerate() {
-        // Base condition: original condition or true for default branch
-        let base_condition = condition.clone().unwrap_or_else(|| {
-            Expression::new(
-                ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)),
-                source.clone(),
-            )
-        });
-
-        // Apply last-wins with De Morgan's law applied directly
-        // Instead of: base_condition ∧ ¬(cond_1 ∨ cond_2 ∨ ...)
-        // Create: base_condition ∧ ¬cond_1 ∧ ¬cond_2 ∧ ...
-        let normalized_condition = if let Some(later_or) = &suffix_or[idx] {
-            let mut result = base_condition;
-            
-            // Flatten OR and negate each term
-            let later_conditions = flatten_or_list(later_or);
-            for cond in later_conditions {
-                let negated = Expression::new(
-                    ExpressionKind::LogicalNegation(Arc::new(cond), NegationType::Not),
-                        source.clone(),
-                );
-                // Don't expand here - let the main equation building pipeline handle expansion
-                result = Expression::new(
-                    ExpressionKind::LogicalAnd(Arc::new(result), Arc::new(negated)),
-                source.clone(),
-                );
-            }
-            result
-        } else {
-            base_condition // Last branch - no later branches to exclude
-        };
-
-        // Simplify to eliminate redundant negations
-        // Pattern: (fact == X) ∧ ¬(fact == Y) where X ≠ Y → (fact == X)
-        let normalized_condition = simplification::reduce(normalized_condition);
-
-        normalized.push(Branch {
-            condition: normalized_condition,
-            optimized_condition: None,
-            result: result.clone(),
-            source: source.clone(),
-        });
-    }
-
-    normalized
-}
-
-/// Flatten OR expression into a list of terms
-fn flatten_or_list(expr: &Expression) -> Vec<Expression> {
-    match &expr.kind {
-        ExpressionKind::LogicalOr(left, right) => {
-            let mut result = flatten_or_list(left);
-            result.extend(flatten_or_list(right));
-            result
-        }
-        _ => vec![expr.clone()],
-    }
-}
 
 impl Graph {
     pub fn build(
@@ -644,11 +546,24 @@ impl<'a> GraphBuilder<'a> {
 
         let source = rule.source.clone();
 
-        // Normalize branches (apply last-wins semantics)
-        let normalized_branches = normalize_rule_branches(&raw_branches, &source);
+        // Convert branches directly (evaluator handles last-wins by reversing order)
+        let branches: Vec<Branch> = raw_branches
+            .iter()
+            .map(|(condition, result)| Branch {
+                condition: condition.clone().unwrap_or_else(|| {
+                    Expression::new(
+                        ExpressionKind::Literal(LiteralValue::Boolean(BooleanValue::True)),
+                        source.clone(),
+                    )
+                }),
+                optimized_condition: None,
+                result: result.clone(),
+                source: source.clone(),
+            })
+            .collect();
 
         let rule_node = RuleNode {
-            branches: normalized_branches,
+            branches,
             source,
             depends_on_rules,
             rule_type: None,
@@ -903,9 +818,6 @@ fn compute_all_rule_types(
             continue;
         }
 
-        // All branches have explicit conditions after normalization
-        // Branch 0's condition excludes all later branches (NOT(cond_1) AND NOT(cond_2) AND ...)
-        // Branch 1+'s conditions are cond_i AND NOT(cond_{i+1}) AND ...
         let default_result = &branches[0].result;
         let default_type = compute_expression_type(default_result, graph, &computed_types, errors);
 

@@ -51,9 +51,7 @@ pub struct ExecutableRule {
     pub name: String,
 
     /// Branches evaluated in reverse order (last matching wins)
-    /// All branches have explicit conditions (normalized during graph building).
-    /// Branch 0: condition is NOT(cond_1) AND NOT(cond_2) AND ... (excludes all later branches)
-    /// Branch 1+: condition is cond_i AND NOT(cond_{i+1}) AND ... (excludes later branches)
+    /// Branches are in original order (evaluator reverses for last-wins semantics).
     /// The evaluation is done in reverse order with the first matching branch returning the result.
     pub branches: Vec<Branch>,
 
@@ -109,7 +107,7 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
             "bug: rule from topological sort not in graph - validation should have caught this",
         );
 
-        // Branches are already normalized during graph building (in add_rule)
+        // Branches are in original order (evaluator handles last-wins)
         // Just clone them - they're already in the correct format
         let branches = rule_node.branches.clone();
 
@@ -761,7 +759,7 @@ mod tests {
 
         assert_eq!(deserialized.rules.len(), 1);
         assert_eq!(deserialized.rules[0].branches.len(), 3);
-        // All branches now have explicit conditions (normalized)
+        // All branches have explicit conditions
         assert!(matches!(
             deserialized.rules[0].branches[0].condition.kind,
             ExpressionKind::Literal(LiteralValue::Boolean(_))
