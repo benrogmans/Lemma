@@ -3,7 +3,7 @@
 //! Handles conversions between different units of measurement.
 //! Returns OperationResult with Veto for errors instead of Result.
 
-use super::OperationResult;
+use crate::evaluation::OperationResult;
 use crate::{ConversionTarget, LiteralValue, NumericUnit};
 use rust_decimal::Decimal;
 

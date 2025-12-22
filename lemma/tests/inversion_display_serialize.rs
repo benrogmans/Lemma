@@ -7,11 +7,7 @@ fn lit_bool(b: bool) -> lemma::LiteralValue {
 }
 
 fn expr_lit(l: lemma::LiteralValue) -> lemma::Expression {
-    lemma::Expression::new(
-        lemma::ExpressionKind::Literal(l),
-        None,
-        lemma::ExpressionId::new(0),
-    )
+    lemma::Expression::new(lemma::ExpressionKind::Literal(l), None)
 }
 
 #[test]

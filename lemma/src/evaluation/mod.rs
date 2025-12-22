@@ -4,17 +4,14 @@
 //! The execution plan is self-contained with all rules flattened into branches.
 //! The evaluator executes rules linearly without recursion or tree traversal.
 
-pub mod datetime;
 pub mod expression;
 pub mod operations;
 pub mod proof;
 pub mod response;
-pub mod units;
 
 use crate::planning::ExecutionPlan;
 use crate::{
-    ExpressionId, FactPath, FactReference, FactValue, LemmaFact, LemmaResult, LiteralValue,
-    RulePath,
+    Expression, FactPath, FactReference, FactValue, LemmaFact, LemmaResult, LiteralValue, RulePath,
 };
 use indexmap::IndexMap;
 pub use operations::{ComputationKind, OperationKind, OperationRecord, OperationResult};
@@ -28,7 +25,7 @@ pub struct EvaluationContext {
     rule_proofs: HashMap<RulePath, crate::evaluation::proof::Proof>,
     operations: Vec<crate::OperationRecord>,
     sources: HashMap<String, String>,
-    proof_nodes: HashMap<ExpressionId, crate::evaluation::proof::ProofNode>,
+    proof_nodes: HashMap<Expression, crate::evaluation::proof::ProofNode>,
 }
 
 impl EvaluationContext {
@@ -50,26 +47,16 @@ impl EvaluationContext {
         })
     }
 
-    fn push_operation(&mut self, kind: OperationKind, expression_id: crate::ExpressionId) {
-        self.operations.push(OperationRecord {
-            expression_id,
-            kind,
-        });
+    fn push_operation(&mut self, kind: OperationKind) {
+        self.operations.push(OperationRecord { kind });
     }
 
-    fn set_proof_node(
-        &mut self,
-        expression_id: crate::ExpressionId,
-        node: crate::evaluation::proof::ProofNode,
-    ) {
-        self.proof_nodes.insert(expression_id, node);
+    fn set_proof_node(&mut self, expr: &Expression, node: crate::evaluation::proof::ProofNode) {
+        self.proof_nodes.insert(expr.clone(), node);
     }
 
-    fn get_proof_node(
-        &self,
-        expression_id: &crate::ExpressionId,
-    ) -> Option<&crate::evaluation::proof::ProofNode> {
-        self.proof_nodes.get(expression_id)
+    fn get_proof_node(&self, expr: &Expression) -> Option<&crate::evaluation::proof::ProofNode> {
+        self.proof_nodes.get(expr)
     }
 
     fn get_rule_proof(&self, rule_path: &RulePath) -> Option<&crate::evaluation::proof::Proof> {
@@ -112,7 +99,7 @@ impl Evaluator {
             context.operations.clear();
             context.proof_nodes.clear();
 
-            let (result, proof) = expression::evaluate_rule(exec_rule, &mut context);
+            let (result, proof) = expression::evaluate_rule(exec_rule, &mut context)?;
 
             context
                 .rule_results

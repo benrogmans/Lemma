@@ -379,7 +379,7 @@ fn test_veto_expression() {
 
 #[test]
 fn test_expression_get_source_text_with_location() {
-    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue, Source, Span};
+    use crate::{Expression, ExpressionKind, LiteralValue, Source, Span};
     use std::collections::HashMap;
 
     let source = "fact value = 42";
@@ -396,7 +396,6 @@ fn test_expression_get_source_text_with_location() {
     let expr = Expression::new(
         ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
         source_location,
-        ExpressionId::new(0),
     );
 
     assert_eq!(expr.get_source_text(&sources), Some("42".to_string()));
@@ -404,7 +403,7 @@ fn test_expression_get_source_text_with_location() {
 
 #[test]
 fn test_expression_get_source_text_no_location() {
-    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue};
+    use crate::{Expression, ExpressionKind, LiteralValue};
     use std::collections::HashMap;
 
     let mut sources = HashMap::new();
@@ -413,7 +412,6 @@ fn test_expression_get_source_text_no_location() {
     let expr = Expression::new(
         ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
         None,
-        ExpressionId::new(0),
     );
 
     assert_eq!(expr.get_source_text(&sources), None);
@@ -421,7 +419,7 @@ fn test_expression_get_source_text_no_location() {
 
 #[test]
 fn test_expression_get_source_text_source_not_found() {
-    use crate::{Expression, ExpressionId, ExpressionKind, LiteralValue, Source, Span};
+    use crate::{Expression, ExpressionKind, LiteralValue, Source, Span};
     use std::collections::HashMap;
 
     let sources = HashMap::new();
@@ -435,7 +433,6 @@ fn test_expression_get_source_text_source_not_found() {
     let expr = Expression::new(
         ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
         source_location,
-        ExpressionId::new(0),
     );
 
     assert_eq!(expr.get_source_text(&sources), None);

@@ -3,7 +3,7 @@
 //! Handles arithmetic and comparisons with dates and datetimes.
 //! Returns OperationResult with Veto for errors instead of Result.
 
-use super::operations::OperationResult;
+use crate::evaluation::OperationResult;
 use crate::{
     ArithmeticComputation, ComparisonComputation, DateTimeValue, LiteralValue, TimeValue,
     TimezoneValue,

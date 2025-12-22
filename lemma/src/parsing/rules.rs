@@ -1,4 +1,4 @@
-use super::ast::{ExpressionIdGenerator, Span};
+use super::ast::{DepthTracker, Span};
 use super::Rule;
 use crate::error::LemmaError;
 use crate::semantic::*;
@@ -7,7 +7,7 @@ use pest::iterators::Pair;
 
 pub(crate) fn parse_rule_definition(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut DepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<LemmaRule, LemmaError> {
@@ -20,7 +20,10 @@ pub(crate) fn parse_rule_definition(
             Rule::rule_name => rule_name = Some(inner_pair.as_str().to_string()),
             Rule::rule_expression => {
                 rule_expression = Some(parse_rule_expression(
-                    inner_pair, id_gen, source_id, doc_name,
+                    inner_pair,
+                    depth_tracker,
+                    source_id,
+                    doc_name,
                 )?)
             }
             _ => {}
@@ -48,7 +51,7 @@ pub(crate) fn parse_rule_definition(
 
 fn parse_rule_expression(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut DepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<(Expression, Vec<UnlessClause>), LemmaError> {
@@ -59,12 +62,15 @@ fn parse_rule_expression(
         match inner_pair.as_rule() {
             Rule::expression_group => {
                 expression = Some(crate::parsing::expressions::parse_or_expression(
-                    inner_pair, id_gen, source_id, doc_name,
+                    inner_pair,
+                    depth_tracker,
+                    source_id,
+                    doc_name,
                 )?);
             }
             Rule::unless_statement => {
                 let unless_clause =
-                    parse_unless_statement(inner_pair, id_gen, source_id, doc_name)?;
+                    parse_unless_statement(inner_pair, depth_tracker, source_id, doc_name)?;
                 unless_clauses.push(unless_clause);
             }
             _ => {}
@@ -79,7 +85,7 @@ fn parse_rule_expression(
 
 fn parse_unless_statement(
     pair: Pair<Rule>,
-    id_gen: &mut ExpressionIdGenerator,
+    depth_tracker: &mut DepthTracker,
     source_id: &str,
     doc_name: &str,
 ) -> Result<UnlessClause, LemmaError> {
@@ -92,11 +98,17 @@ fn parse_unless_statement(
             Rule::expression_group => {
                 if condition.is_none() {
                     condition = Some(crate::parsing::expressions::parse_or_expression(
-                        inner_pair, id_gen, source_id, doc_name,
+                        inner_pair,
+                        depth_tracker,
+                        source_id,
+                        doc_name,
                     )?);
                 } else {
                     result = Some(crate::parsing::expressions::parse_or_expression(
-                        inner_pair, id_gen, source_id, doc_name,
+                        inner_pair,
+                        depth_tracker,
+                        source_id,
+                        doc_name,
                     )?);
                 }
             }
@@ -120,7 +132,6 @@ fn parse_unless_statement(
                         veto_span,
                         doc_name.to_string(),
                     )),
-                    id_gen.next_id(),
                 ));
             }
             _ => {}

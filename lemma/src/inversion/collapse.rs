@@ -388,11 +388,7 @@ fn extract_comparison_constraint(
             && !is_var_directly_on_left
             && solver::can_algebraically_solve(lhs, &unknown, &fact_matcher)
         {
-            let target_expr = Expression::new(
-                ExpressionKind::Literal(target_lit.clone()),
-                None,
-                crate::parsing::ast::ExpressionId::new(0),
-            );
+            let target_expr = Expression::new(ExpressionKind::Literal(target_lit.clone()), None);
             if let Ok(solved) = solver::algebraic_solve(lhs, &unknown, &target_expr, &fact_matcher)
             {
                 let folded = expansion::try_constant_fold(&solved).unwrap_or(solved);
@@ -408,11 +404,7 @@ fn extract_comparison_constraint(
             && !is_var_directly_on_right
             && solver::can_algebraically_solve(rhs, &unknown, &fact_matcher)
         {
-            let target_expr = Expression::new(
-                ExpressionKind::Literal(target_lit.clone()),
-                None,
-                crate::parsing::ast::ExpressionId::new(0),
-            );
+            let target_expr = Expression::new(ExpressionKind::Literal(target_lit.clone()), None);
             if let Ok(solved) = solver::algebraic_solve(rhs, &unknown, &target_expr, &fact_matcher)
             {
                 let folded = expansion::try_constant_fold(&solved).unwrap_or(solved);

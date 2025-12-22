@@ -1,10 +1,10 @@
 use crate::error::LemmaError;
-use crate::parsing::ast::ExpressionId;
 use crate::parsing::source::Source;
 use chrono::{Datelike, Timelike};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 /// A Lemma document containing facts, rules
@@ -46,22 +46,23 @@ pub struct LemmaRule {
     pub source_location: Option<Source>,
 }
 
-/// An expression that can be evaluated, with source location and unique ID
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+/// An expression that can be evaluated, with source location
+///
+/// Expressions use semantic equality and hashing - two expressions with the same
+/// structure (kind) are equal/hash-equal regardless of source location.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Expression {
     pub kind: ExpressionKind,
     pub source_location: Option<Source>,
-    pub id: ExpressionId,
 }
 
 impl Expression {
-    /// Create a new expression with kind, source location, and ID
+    /// Create a new expression with kind and source location
     #[must_use]
-    pub fn new(kind: ExpressionKind, source_location: Option<Source>, id: ExpressionId) -> Self {
+    pub fn new(kind: ExpressionKind, source_location: Option<Source>) -> Self {
         Self {
             kind,
             source_location,
-            id,
         }
     }
 
@@ -104,6 +105,27 @@ impl Expression {
             | ExpressionKind::RulePath(_) => {}
         }
     }
+
+    /// Compute semantic hash - hashes the expression structure, ignoring source location
+    fn semantic_hash<H: Hasher>(&self, state: &mut H) {
+        self.kind.semantic_hash(state);
+    }
+}
+
+/// Semantic equality - compares expressions by structure only, ignoring source location
+impl PartialEq for Expression {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+
+impl Eq for Expression {}
+
+/// Semantic hashing - hashes expression structure only, ignoring source location
+impl Hash for Expression {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.semantic_hash(state);
+    }
 }
 
 /// The kind/type of expression
@@ -124,6 +146,49 @@ pub enum ExpressionKind {
     FactPath(FactPath),
     /// Resolved rule path (used after planning, converted from RuleReference)
     RulePath(RulePath),
+}
+
+impl ExpressionKind {
+    /// Compute semantic hash for expression kinds
+    fn semantic_hash<H: Hasher>(&self, state: &mut H) {
+        // Hash discriminant first
+        std::mem::discriminant(self).hash(state);
+
+        match self {
+            ExpressionKind::Literal(lit) => lit.semantic_hash(state),
+            ExpressionKind::FactReference(fr) => fr.hash(state),
+            ExpressionKind::RuleReference(rr) => rr.hash(state),
+            ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
+                left.semantic_hash(state);
+                right.semantic_hash(state);
+            }
+            ExpressionKind::Arithmetic(left, op, right) => {
+                left.semantic_hash(state);
+                op.hash(state);
+                right.semantic_hash(state);
+            }
+            ExpressionKind::Comparison(left, op, right) => {
+                left.semantic_hash(state);
+                op.hash(state);
+                right.semantic_hash(state);
+            }
+            ExpressionKind::UnitConversion(expr, target) => {
+                expr.semantic_hash(state);
+                target.hash(state);
+            }
+            ExpressionKind::LogicalNegation(expr, neg_type) => {
+                expr.semantic_hash(state);
+                neg_type.hash(state);
+            }
+            ExpressionKind::MathematicalComputation(op, expr) => {
+                op.hash(state);
+                expr.semantic_hash(state);
+            }
+            ExpressionKind::Veto(veto) => veto.semantic_hash(state),
+            ExpressionKind::FactPath(fp) => fp.hash(state),
+            ExpressionKind::RulePath(rp) => rp.hash(state),
+        }
+    }
 }
 
 /// Reference to a fact
@@ -411,6 +476,12 @@ pub enum LogicalComputation {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VetoExpression {
     pub message: Option<String>,
+}
+
+impl VetoExpression {
+    fn semantic_hash<H: Hasher>(&self, state: &mut H) {
+        self.message.hash(state);
+    }
 }
 
 /// Mathematical computations
@@ -814,6 +885,44 @@ impl LiteralValue {
                 NumericUnit::Frequency(_, _) => LemmaType::Frequency,
                 NumericUnit::Data(_, _) => LemmaType::Data,
             },
+        }
+    }
+
+    /// Compute semantic hash for literal values
+    /// Uses string representation for Decimal to avoid Hash trait requirement
+    fn semantic_hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            LiteralValue::Number(d) | LiteralValue::Percentage(d) => {
+                d.to_string().hash(state);
+            }
+            LiteralValue::Text(s) | LiteralValue::Regex(s) => s.hash(state),
+            LiteralValue::Boolean(b) => std::mem::discriminant(b).hash(state),
+            LiteralValue::Date(dt) => {
+                dt.year.hash(state);
+                dt.month.hash(state);
+                dt.day.hash(state);
+                dt.hour.hash(state);
+                dt.minute.hash(state);
+                dt.second.hash(state);
+                if let Some(tz) = &dt.timezone {
+                    tz.offset_hours.hash(state);
+                    tz.offset_minutes.hash(state);
+                }
+            }
+            LiteralValue::Time(t) => {
+                t.hour.hash(state);
+                t.minute.hash(state);
+                t.second.hash(state);
+                if let Some(tz) = &t.timezone {
+                    tz.offset_hours.hash(state);
+                    tz.offset_minutes.hash(state);
+                }
+            }
+            LiteralValue::Unit(unit) => {
+                std::mem::discriminant(unit).hash(state);
+                unit.value().to_string().hash(state);
+            }
         }
     }
 }

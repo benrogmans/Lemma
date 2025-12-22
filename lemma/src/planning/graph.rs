@@ -619,7 +619,6 @@ impl<'a> GraphBuilder<'a> {
                 };
 
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::FactPath(fact_path),
                     source_location: expr.source_location.clone(),
                 })
@@ -641,7 +640,6 @@ impl<'a> GraphBuilder<'a> {
                 depends_on_rules.insert(rule_path.clone());
 
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::RulePath(rule_path),
                     source_location: expr.source_location.clone(),
                 })
@@ -658,7 +656,6 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::LogicalAnd(Box::new(l), Box::new(r)),
                     source_location: expr.source_location.clone(),
                 })
@@ -675,7 +672,6 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::LogicalOr(Box::new(l), Box::new(r)),
                     source_location: expr.source_location.clone(),
                 })
@@ -692,7 +688,6 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::Arithmetic(Box::new(l), op.clone(), Box::new(r)),
                     source_location: expr.source_location.clone(),
                 })
@@ -709,7 +704,6 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::Comparison(Box::new(l), op.clone(), Box::new(r)),
                     source_location: expr.source_location.clone(),
                 })
@@ -725,7 +719,6 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::UnitConversion(Box::new(converted_value), target.clone()),
                     source_location: expr.source_location.clone(),
                 })
@@ -741,7 +734,6 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::LogicalNegation(
                         Box::new(converted_operand),
                         neg_type.clone(),
@@ -760,7 +752,6 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    id: expr.id,
                     kind: ExpressionKind::MathematicalComputation(
                         op.clone(),
                         Box::new(converted_operand),
@@ -1250,7 +1241,7 @@ fn validate_document_interfaces(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parsing::ast::ExpressionId;
+
     use crate::semantic::{FactReference, LiteralValue, RuleReference};
 
     fn create_test_doc(name: &str) -> LemmaDoc {
@@ -1270,7 +1261,6 @@ mod tests {
 
     fn create_literal_expr(value: LiteralValue) -> Expression {
         Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::Literal(value),
             source_location: None,
         }
@@ -1299,7 +1289,6 @@ mod tests {
         doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(25.into())));
 
         let age_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::FactReference(FactReference {
                 segments: Vec::new(),
                 fact: "age".to_string(),
@@ -1372,7 +1361,6 @@ mod tests {
         let mut doc = create_test_doc("test");
 
         let missing_fact_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::FactReference(FactReference {
                 segments: Vec::new(),
                 fact: "nonexistent".to_string(),
@@ -1426,7 +1414,6 @@ mod tests {
         doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(25.into())));
 
         let age_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::FactReference(FactReference {
                 segments: Vec::new(),
                 fact: "age".to_string(),
@@ -1459,7 +1446,6 @@ mod tests {
         let mut doc = create_test_doc("test");
 
         let rule1_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::FactReference(FactReference {
                 segments: Vec::new(),
                 fact: "age".to_string(),
@@ -1476,7 +1462,6 @@ mod tests {
         doc = doc.add_rule(rule1);
 
         let rule2_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::RuleReference(RuleReference {
                 segments: Vec::new(),
                 rule: "rule1".to_string(),
@@ -1520,7 +1505,6 @@ mod tests {
         doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(30.into())));
 
         let missing_fact_expr = Expression {
-            id: ExpressionId::new(0),
             kind: ExpressionKind::FactReference(FactReference {
                 segments: Vec::new(),
                 fact: "nonexistent".to_string(),

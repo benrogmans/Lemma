@@ -427,9 +427,8 @@ mod tests {
     }
 
     fn create_literal_expr(value: LiteralValue) -> Expression {
-        use crate::parsing::ast::ExpressionId;
         use crate::semantic::ExpressionKind;
-        Expression::new(ExpressionKind::Literal(value), None, ExpressionId::new(0))
+        Expression::new(ExpressionKind::Literal(value), None)
     }
 
     #[test]
@@ -476,7 +475,6 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_plan_with_rules() {
-        use crate::parsing::ast::ExpressionId;
         use crate::semantic::ExpressionKind;
 
         let mut plan = ExecutionPlan {
@@ -508,13 +506,11 @@ mod tests {
                         Box::new(Expression::new(
                             ExpressionKind::FactPath(age_path.clone()),
                             None,
-                            ExpressionId::new(1),
                         )),
                         crate::ComparisonComputation::GreaterThanOrEqual,
                         Box::new(create_literal_expr(LiteralValue::Number(18.into()))),
                     ),
                     None,
-                    ExpressionId::new(2),
                 )),
                 result: create_literal_expr(LiteralValue::Boolean(crate::BooleanValue::True)),
                 source: None,
@@ -666,7 +662,6 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_plan_with_multiple_branches() {
-        use crate::parsing::ast::ExpressionId;
         use crate::semantic::ExpressionKind;
 
         let mut plan = ExecutionPlan {
@@ -704,13 +699,11 @@ mod tests {
                             Box::new(Expression::new(
                                 ExpressionKind::FactPath(points_path.clone()),
                                 None,
-                                ExpressionId::new(1),
                             )),
                             crate::ComparisonComputation::GreaterThanOrEqual,
                             Box::new(create_literal_expr(LiteralValue::Number(100.into()))),
                         ),
                         None,
-                        ExpressionId::new(2),
                     )),
                     result: create_literal_expr(LiteralValue::Text("silver".to_string())),
                     source: None,
@@ -721,13 +714,11 @@ mod tests {
                             Box::new(Expression::new(
                                 ExpressionKind::FactPath(points_path.clone()),
                                 None,
-                                ExpressionId::new(3),
                             )),
                             crate::ComparisonComputation::GreaterThanOrEqual,
                             Box::new(create_literal_expr(LiteralValue::Number(500.into()))),
                         ),
                         None,
-                        ExpressionId::new(4),
                     )),
                     result: create_literal_expr(LiteralValue::Text("gold".to_string())),
                     source: None,
@@ -773,7 +764,6 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_plan_with_arithmetic_expressions() {
-        use crate::parsing::ast::ExpressionId;
         use crate::semantic::ExpressionKind;
 
         let mut plan = ExecutionPlan {
@@ -806,13 +796,11 @@ mod tests {
                         Box::new(Expression::new(
                             ExpressionKind::FactPath(x_path.clone()),
                             None,
-                            ExpressionId::new(1),
                         )),
                         crate::ArithmeticComputation::Multiply,
                         Box::new(create_literal_expr(LiteralValue::Number(2.into()))),
                     ),
                     None,
-                    ExpressionId::new(2),
                 ),
                 source: None,
             }],
@@ -848,7 +836,6 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_round_trip_equality() {
-        use crate::parsing::ast::ExpressionId;
         use crate::semantic::ExpressionKind;
 
         let mut plan = ExecutionPlan {
@@ -884,13 +871,11 @@ mod tests {
                         Box::new(Expression::new(
                             ExpressionKind::FactPath(age_path.clone()),
                             None,
-                            ExpressionId::new(1),
                         )),
                         crate::ComparisonComputation::GreaterThanOrEqual,
                         Box::new(create_literal_expr(LiteralValue::Number(18.into()))),
                     ),
                     None,
-                    ExpressionId::new(2),
                 )),
                 result: create_literal_expr(LiteralValue::Boolean(crate::BooleanValue::True)),
                 source: None,

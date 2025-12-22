@@ -46,6 +46,7 @@
 //! Lemma has a rich type system including units (mass, length, time, money)
 //! with automatic conversions.
 
+pub mod computation;
 pub mod engine;
 pub mod error;
 pub mod evaluation;
@@ -71,7 +72,7 @@ pub use inversion::{
 };
 pub use limits::ResourceLimits;
 pub use parsing::parse;
-pub use parsing::{ExpressionId, ExpressionIdGenerator, Source, Span};
+pub use parsing::{DepthTracker, Source, Span};
 pub use semantic::*;
 
 /// Result type for Lemma operations

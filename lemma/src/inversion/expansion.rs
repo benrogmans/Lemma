@@ -46,7 +46,6 @@ pub fn substitute_fact_with_expr(
                 Box::new(substitute_fact_with_expr(r, fact_path, replacement)),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
         ExpressionKind::Comparison(l, op, r) => Expression::new(
             ExpressionKind::Comparison(
@@ -55,7 +54,6 @@ pub fn substitute_fact_with_expr(
                 Box::new(substitute_fact_with_expr(r, fact_path, replacement)),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
         ExpressionKind::LogicalAnd(l, r) => Expression::new(
             ExpressionKind::LogicalAnd(
@@ -63,7 +61,6 @@ pub fn substitute_fact_with_expr(
                 Box::new(substitute_fact_with_expr(r, fact_path, replacement)),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
         ExpressionKind::LogicalOr(l, r) => Expression::new(
             ExpressionKind::LogicalOr(
@@ -71,7 +68,6 @@ pub fn substitute_fact_with_expr(
                 Box::new(substitute_fact_with_expr(r, fact_path, replacement)),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
         ExpressionKind::LogicalNegation(inner, nt) => Expression::new(
             ExpressionKind::LogicalNegation(
@@ -79,7 +75,6 @@ pub fn substitute_fact_with_expr(
                 nt.clone(),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
         ExpressionKind::UnitConversion(inner, tgt) => Expression::new(
             ExpressionKind::UnitConversion(
@@ -87,7 +82,6 @@ pub fn substitute_fact_with_expr(
                 tgt.clone(),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
         ExpressionKind::MathematicalComputation(op, inner) => Expression::new(
             ExpressionKind::MathematicalComputation(
@@ -95,7 +89,6 @@ pub fn substitute_fact_with_expr(
                 Box::new(substitute_fact_with_expr(inner, fact_path, replacement)),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
         _ => expr.clone(),
     }
@@ -124,7 +117,6 @@ fn hydrate_expression(
                     return Expression::new(
                         ExpressionKind::Literal(value.clone()),
                         expr.source_location.clone(),
-                        expr.id,
                     );
                 }
             }
@@ -158,7 +150,6 @@ fn hydrate_expression(
                 Box::new(hydrate_expression(r, plan, provided_facts)),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
 
         ExpressionKind::Comparison(l, op, r) => Expression::new(
@@ -168,7 +159,6 @@ fn hydrate_expression(
                 Box::new(hydrate_expression(r, plan, provided_facts)),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
 
         ExpressionKind::LogicalAnd(l, r) => Expression::new(
@@ -177,7 +167,6 @@ fn hydrate_expression(
                 Box::new(hydrate_expression(r, plan, provided_facts)),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
 
         ExpressionKind::LogicalOr(l, r) => Expression::new(
@@ -186,7 +175,6 @@ fn hydrate_expression(
                 Box::new(hydrate_expression(r, plan, provided_facts)),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
 
         ExpressionKind::LogicalNegation(inner, nt) => Expression::new(
@@ -195,7 +183,6 @@ fn hydrate_expression(
                 nt.clone(),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
 
         ExpressionKind::UnitConversion(val, tgt) => Expression::new(
@@ -204,7 +191,6 @@ fn hydrate_expression(
                 tgt.clone(),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
 
         ExpressionKind::MathematicalComputation(op, inner) => Expression::new(
@@ -213,7 +199,6 @@ fn hydrate_expression(
                 Box::new(hydrate_expression(inner, plan, provided_facts)),
             ),
             expr.source_location.clone(),
-            expr.id,
         ),
     }
 }
@@ -223,11 +208,7 @@ fn hydrate_expression(
 /// Simplifies arithmetic, boolean, and comparison operations when all operands are literals.
 pub fn try_constant_fold(expr: &Expression) -> Option<Expression> {
     fn make_literal(val: LiteralValue, expr: &Expression) -> Expression {
-        Expression::new(
-            ExpressionKind::Literal(val),
-            expr.source_location.clone(),
-            expr.id,
-        )
+        Expression::new(ExpressionKind::Literal(val), expr.source_location.clone())
     }
 
     match &expr.kind {
@@ -246,7 +227,6 @@ pub fn try_constant_fold(expr: &Expression) -> Option<Expression> {
             Some(Expression::new(
                 ExpressionKind::Arithmetic(Box::new(l2), op.clone(), Box::new(r2)),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         ExpressionKind::Comparison(l, op, r) => {
@@ -264,7 +244,6 @@ pub fn try_constant_fold(expr: &Expression) -> Option<Expression> {
             Some(Expression::new(
                 ExpressionKind::Comparison(Box::new(l2), op.clone(), Box::new(r2)),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         ExpressionKind::LogicalAnd(l, r) => {
@@ -307,7 +286,6 @@ pub fn try_constant_fold(expr: &Expression) -> Option<Expression> {
             Some(Expression::new(
                 ExpressionKind::LogicalAnd(Box::new(l2), Box::new(r2)),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         ExpressionKind::LogicalOr(l, r) => {
@@ -350,7 +328,6 @@ pub fn try_constant_fold(expr: &Expression) -> Option<Expression> {
             Some(Expression::new(
                 ExpressionKind::LogicalOr(Box::new(l2), Box::new(r2)),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         ExpressionKind::LogicalNegation(inner, nt) => {
@@ -361,7 +338,6 @@ pub fn try_constant_fold(expr: &Expression) -> Option<Expression> {
             Some(Expression::new(
                 ExpressionKind::LogicalNegation(Box::new(i2), nt.clone()),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         _ => None,
@@ -507,7 +483,6 @@ fn expand_expression_recursive(expr: Expression, plan: &ExecutionPlan) -> LemmaR
             Ok(Expression::new(
                 ExpressionKind::Arithmetic(Box::new(expanded_l), op.clone(), Box::new(expanded_r)),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         ExpressionKind::Comparison(l, op, r) => {
@@ -516,7 +491,6 @@ fn expand_expression_recursive(expr: Expression, plan: &ExecutionPlan) -> LemmaR
             Ok(Expression::new(
                 ExpressionKind::Comparison(Box::new(expanded_l), op.clone(), Box::new(expanded_r)),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         ExpressionKind::LogicalAnd(l, r) => {
@@ -525,7 +499,6 @@ fn expand_expression_recursive(expr: Expression, plan: &ExecutionPlan) -> LemmaR
             Ok(Expression::new(
                 ExpressionKind::LogicalAnd(Box::new(expanded_l), Box::new(expanded_r)),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         ExpressionKind::LogicalOr(l, r) => {
@@ -534,7 +507,6 @@ fn expand_expression_recursive(expr: Expression, plan: &ExecutionPlan) -> LemmaR
             Ok(Expression::new(
                 ExpressionKind::LogicalOr(Box::new(expanded_l), Box::new(expanded_r)),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         ExpressionKind::LogicalNegation(inner, nt) => {
@@ -542,7 +514,6 @@ fn expand_expression_recursive(expr: Expression, plan: &ExecutionPlan) -> LemmaR
             Ok(Expression::new(
                 ExpressionKind::LogicalNegation(Box::new(expanded_inner), nt.clone()),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         ExpressionKind::UnitConversion(inner, tgt) => {
@@ -550,7 +521,6 @@ fn expand_expression_recursive(expr: Expression, plan: &ExecutionPlan) -> LemmaR
             Ok(Expression::new(
                 ExpressionKind::UnitConversion(Box::new(expanded_inner), tgt.clone()),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         ExpressionKind::MathematicalComputation(op, inner) => {
@@ -558,7 +528,6 @@ fn expand_expression_recursive(expr: Expression, plan: &ExecutionPlan) -> LemmaR
             Ok(Expression::new(
                 ExpressionKind::MathematicalComputation(op.clone(), Box::new(expanded_inner)),
                 expr.source_location.clone(),
-                expr.id,
             ))
         }
         _ => Ok(expr), // Literal, FactPath, Veto - no expansion needed
@@ -722,7 +691,7 @@ pub fn expand_and_hydrate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parsing::ast::ExpressionId;
+
     use crate::planning::Branch;
     use crate::semantic::{FactValue, LemmaFact, TypeAnnotation};
     use crate::{ArithmeticComputation, ComparisonComputation};
@@ -789,7 +758,6 @@ mod tests {
                         Box::new(Expression::new(
                             ExpressionKind::FactPath(points_path.clone()),
                             None,
-                            ExpressionId::new(0),
                         )),
                         ComparisonComputation::GreaterThanOrEqual,
                         Box::new(literal_expr(LiteralValue::Number(
@@ -797,7 +765,6 @@ mod tests {
                         ))),
                     ),
                     None,
-                    ExpressionId::new(0),
                 )),
                 result: literal_expr(LiteralValue::Text("silver".to_string())),
                 source: None,
@@ -808,7 +775,6 @@ mod tests {
                         Box::new(Expression::new(
                             ExpressionKind::FactPath(points_path.clone()),
                             None,
-                            ExpressionId::new(0),
                         )),
                         ComparisonComputation::GreaterThanOrEqual,
                         Box::new(literal_expr(LiteralValue::Number(
@@ -816,7 +782,6 @@ mod tests {
                         ))),
                     ),
                     None,
-                    ExpressionId::new(0),
                 )),
                 result: literal_expr(LiteralValue::Text("gold".to_string())),
                 source: None,
@@ -854,7 +819,6 @@ mod tests {
                         Box::new(Expression::new(
                             ExpressionKind::FactPath(x_path.clone()),
                             None,
-                            ExpressionId::new(0),
                         )),
                         ArithmeticComputation::Multiply,
                         Box::new(literal_expr(LiteralValue::Number(
@@ -862,7 +826,6 @@ mod tests {
                         ))),
                     ),
                     None,
-                    ExpressionId::new(0),
                 ),
                 source: None,
             }],
@@ -880,7 +843,6 @@ mod tests {
                         Box::new(Expression::new(
                             ExpressionKind::RulePath(rule_a_path.clone()),
                             None,
-                            ExpressionId::new(0),
                         )),
                         ArithmeticComputation::Add,
                         Box::new(literal_expr(LiteralValue::Number(
@@ -888,7 +850,6 @@ mod tests {
                         ))),
                     ),
                     None,
-                    ExpressionId::new(0),
                 ),
                 source: None,
             }],
@@ -906,7 +867,6 @@ mod tests {
                         Box::new(Expression::new(
                             ExpressionKind::RulePath(rule_b_path.clone()),
                             None,
-                            ExpressionId::new(0),
                         )),
                         ArithmeticComputation::Multiply,
                         Box::new(literal_expr(LiteralValue::Number(
@@ -914,7 +874,6 @@ mod tests {
                         ))),
                     ),
                     None,
-                    ExpressionId::new(0),
                 ),
                 source: None,
             }],
@@ -1004,11 +963,7 @@ mod tests {
     fn test_expand_and_hydrate_simple() {
         let plan = create_simple_rule_plan();
         let rule_path = RulePath::local("tier".to_string());
-        let expr = Expression::new(
-            ExpressionKind::RulePath(rule_path),
-            None,
-            ExpressionId::new(0),
-        );
+        let expr = Expression::new(ExpressionKind::RulePath(rule_path), None);
         let provided_facts = HashSet::new();
 
         let result = expand_and_hydrate(&expr, &plan, &provided_facts);
@@ -1053,7 +1008,6 @@ mod tests {
                         Box::new(Expression::new(
                             ExpressionKind::FactPath(points_path.clone()),
                             None,
-                            ExpressionId::new(0),
                         )),
                         ComparisonComputation::GreaterThanOrEqual,
                         Box::new(literal_expr(LiteralValue::Number(
@@ -1061,7 +1015,6 @@ mod tests {
                         ))),
                     ),
                     None,
-                    ExpressionId::new(0),
                 )),
                 result: literal_expr(LiteralValue::Text("silver".to_string())),
                 source: None,
@@ -1077,11 +1030,7 @@ mod tests {
         };
         plan.rules.push(rule);
 
-        let expr = Expression::new(
-            ExpressionKind::RulePath(rule_path),
-            None,
-            ExpressionId::new(0),
-        );
+        let expr = Expression::new(ExpressionKind::RulePath(rule_path), None);
         let mut provided_facts = HashSet::new();
         provided_facts.insert(points_path);
 

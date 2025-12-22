@@ -5,13 +5,11 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 
 fn dummy_rule(name: &str) -> LemmaRule {
-    use crate::ExpressionId;
     LemmaRule {
         name: name.to_string(),
         expression: Expression {
             kind: ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)),
             source_location: None,
-            id: ExpressionId::new(0),
         },
         unless_clauses: vec![],
         source_location: None,

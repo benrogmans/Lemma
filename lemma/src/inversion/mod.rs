@@ -15,7 +15,6 @@ pub use collapse::{shape_to_domains, Bound, Domain};
 pub use shape::{BranchOutcome, InversionResponse, Shape, ShapeBranch, Solution};
 pub use target::{Target, TargetOp};
 
-use crate::parsing::ast::ExpressionId;
 use crate::planning::{ExecutableRule, ExecutionPlan};
 use crate::{
     Expression, ExpressionKind, FactPath, LemmaError, LemmaResult, LiteralValue, RulePath,
@@ -68,25 +67,17 @@ fn expressions_semantically_equal(a: &Expression, b: &Expression) -> bool {
 
 /// Create a literal expression
 pub(crate) fn literal_expr(val: LiteralValue) -> Expression {
-    Expression::new(ExpressionKind::Literal(val), None, ExpressionId::new(0))
+    Expression::new(ExpressionKind::Literal(val), None)
 }
 
 /// Create a logical AND expression
 pub(crate) fn logical_and(a: Expression, b: Expression) -> Expression {
-    Expression::new(
-        ExpressionKind::LogicalAnd(Box::new(a), Box::new(b)),
-        None,
-        ExpressionId::new(0),
-    )
+    Expression::new(ExpressionKind::LogicalAnd(Box::new(a), Box::new(b)), None)
 }
 
 /// Create a logical OR expression
 pub(crate) fn logical_or(a: Expression, b: Expression) -> Expression {
-    Expression::new(
-        ExpressionKind::LogicalOr(Box::new(a), Box::new(b)),
-        None,
-        ExpressionId::new(0),
-    )
+    Expression::new(ExpressionKind::LogicalOr(Box::new(a), Box::new(b)), None)
 }
 
 /// Create a logical NOT expression
@@ -94,7 +85,6 @@ pub(crate) fn logical_not(a: Expression) -> Expression {
     Expression::new(
         ExpressionKind::LogicalNegation(Box::new(a), crate::NegationType::Not),
         None,
-        ExpressionId::new(0),
     )
 }
 
@@ -355,7 +345,6 @@ fn filter_branch(
                                         Box::new((**rhs).clone()),
                                     ),
                                     None,
-                                    ExpressionId::new(0),
                                 );
 
                                 let veto_conditions =
@@ -466,7 +455,6 @@ fn build_value_target_guard(expr: &Expression, target: &Target) -> Expression {
     Expression::new(
         ExpressionKind::Comparison(Box::new(expr.clone()), op, Box::new(rhs)),
         None,
-        ExpressionId::new(0),
     )
 }
 

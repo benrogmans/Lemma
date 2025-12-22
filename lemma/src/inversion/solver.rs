@@ -4,7 +4,6 @@
 //! - Algebraic equation solving for single unknowns
 //! - Boolean expression simplification using BDDs
 
-use crate::parsing::ast::ExpressionId;
 use crate::{Expression, ExpressionKind, FactPath, LiteralValue};
 
 use super::expansion;
@@ -139,7 +138,6 @@ pub fn algebraic_solve(
             Ok(Expression::new(
                 ExpressionKind::UnitConversion(Box::new(solved_inner), target_unit.clone()),
                 None,
-                ExpressionId::new(0),
             ))
         }
         ExpressionKind::MathematicalComputation(op, inner) => {
@@ -155,7 +153,6 @@ pub fn algebraic_solve(
                         Box::new(target.clone()),
                     ),
                     None,
-                    ExpressionId::new(0),
                 ),
                 MathematicalComputation::Log => Expression::new(
                     ExpressionKind::MathematicalComputation(
@@ -163,7 +160,6 @@ pub fn algebraic_solve(
                         Box::new(target.clone()),
                     ),
                     None,
-                    ExpressionId::new(0),
                 ),
                 _ => {
                     return Err(SolveError::UnsupportedOperation(format!(
@@ -188,7 +184,6 @@ pub fn algebraic_solve(
                             Box::new((**r).clone()),
                         ),
                         None,
-                        ExpressionId::new(0),
                     ),
                     crate::ArithmeticComputation::Subtract => Expression::new(
                         ExpressionKind::Arithmetic(
@@ -197,7 +192,6 @@ pub fn algebraic_solve(
                             Box::new((**r).clone()),
                         ),
                         None,
-                        ExpressionId::new(0),
                     ),
                     crate::ArithmeticComputation::Multiply => Expression::new(
                         ExpressionKind::Arithmetic(
@@ -206,7 +200,6 @@ pub fn algebraic_solve(
                             Box::new((**r).clone()),
                         ),
                         None,
-                        ExpressionId::new(0),
                     ),
                     crate::ArithmeticComputation::Divide => Expression::new(
                         ExpressionKind::Arithmetic(
@@ -215,7 +208,6 @@ pub fn algebraic_solve(
                             Box::new((**r).clone()),
                         ),
                         None,
-                        ExpressionId::new(0),
                     ),
                     crate::ArithmeticComputation::Power => {
                         let one = Expression::new(
@@ -223,7 +215,6 @@ pub fn algebraic_solve(
                                 rust_decimal::Decimal::ONE,
                             )),
                             None,
-                            ExpressionId::new(0),
                         );
                         let inv_exp = Expression::new(
                             ExpressionKind::Arithmetic(
@@ -232,7 +223,6 @@ pub fn algebraic_solve(
                                 Box::new((**r).clone()),
                             ),
                             None,
-                            ExpressionId::new(0),
                         );
                         Expression::new(
                             ExpressionKind::Arithmetic(
@@ -241,7 +231,6 @@ pub fn algebraic_solve(
                                 Box::new(inv_exp),
                             ),
                             None,
-                            ExpressionId::new(0),
                         )
                     }
                     _ => {
@@ -261,7 +250,6 @@ pub fn algebraic_solve(
                             Box::new((**l).clone()),
                         ),
                         None,
-                        ExpressionId::new(0),
                     ),
                     crate::ArithmeticComputation::Subtract => Expression::new(
                         ExpressionKind::Arithmetic(
@@ -270,7 +258,6 @@ pub fn algebraic_solve(
                             Box::new(target.clone()),
                         ),
                         None,
-                        ExpressionId::new(0),
                     ),
                     crate::ArithmeticComputation::Multiply => Expression::new(
                         ExpressionKind::Arithmetic(
@@ -279,7 +266,6 @@ pub fn algebraic_solve(
                             Box::new((**l).clone()),
                         ),
                         None,
-                        ExpressionId::new(0),
                     ),
                     crate::ArithmeticComputation::Divide => Expression::new(
                         ExpressionKind::Arithmetic(
@@ -288,7 +274,6 @@ pub fn algebraic_solve(
                             Box::new(target.clone()),
                         ),
                         None,
-                        ExpressionId::new(0),
                     ),
                     crate::ArithmeticComputation::Power => {
                         let num = Expression::new(
@@ -297,7 +282,6 @@ pub fn algebraic_solve(
                                 Box::new(target.clone()),
                             ),
                             None,
-                            ExpressionId::new(0),
                         );
                         let den = Expression::new(
                             ExpressionKind::MathematicalComputation(
@@ -305,7 +289,6 @@ pub fn algebraic_solve(
                                 Box::new((**l).clone()),
                             ),
                             None,
-                            ExpressionId::new(0),
                         );
                         Expression::new(
                             ExpressionKind::Arithmetic(
@@ -314,7 +297,6 @@ pub fn algebraic_solve(
                                 Box::new(den),
                             ),
                             None,
-                            ExpressionId::new(0),
                         )
                     }
                     _ => {
@@ -490,13 +472,11 @@ fn from_bool_expr(be: &boolean_expression::Expr<usize>, atoms: &[Expression]) ->
         Expr::Const(b) => Expression::new(
             ExpressionKind::Literal(LiteralValue::Boolean((*b).into())),
             None,
-            ExpressionId::new(0),
         ),
         Expr::Terminal(i) => atoms.get(*i).cloned().unwrap_or_else(|| {
             Expression::new(
                 ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)),
                 None,
-                ExpressionId::new(0),
             )
         }),
         Expr::Not(inner) => {
@@ -504,7 +484,6 @@ fn from_bool_expr(be: &boolean_expression::Expr<usize>, atoms: &[Expression]) ->
             Expression::new(
                 ExpressionKind::LogicalNegation(Box::new(inner_expr), crate::NegationType::Not),
                 None,
-                ExpressionId::new(0),
             )
         }
         Expr::And(l, r) => {
@@ -513,7 +492,6 @@ fn from_bool_expr(be: &boolean_expression::Expr<usize>, atoms: &[Expression]) ->
             Expression::new(
                 ExpressionKind::LogicalAnd(Box::new(l_expr), Box::new(r_expr)),
                 None,
-                ExpressionId::new(0),
             )
         }
         Expr::Or(l, r) => {
@@ -522,7 +500,6 @@ fn from_bool_expr(be: &boolean_expression::Expr<usize>, atoms: &[Expression]) ->
             Expression::new(
                 ExpressionKind::LogicalOr(Box::new(l_expr), Box::new(r_expr)),
                 None,
-                ExpressionId::new(0),
             )
         }
     }
@@ -538,15 +515,11 @@ mod tests {
     }
 
     fn literal_expr(val: LiteralValue) -> Expression {
-        Expression::new(ExpressionKind::Literal(val), None, ExpressionId::new(0))
+        Expression::new(ExpressionKind::Literal(val), None)
     }
 
     fn fact_expr(name: &str) -> Expression {
-        Expression::new(
-            ExpressionKind::FactPath(fact_path(name)),
-            None,
-            ExpressionId::new(0),
-        )
+        Expression::new(ExpressionKind::FactPath(fact_path(name)), None)
     }
 
     fn fact_matcher(fp: &FactPath, doc: &str, name: &str) -> bool {
@@ -571,7 +544,6 @@ mod tests {
                 ))),
             ),
             None,
-            ExpressionId::new(0),
         );
 
         let count = count_unknown_occurrences(&expr, &unknown, &|fp, d, n| fact_matcher(fp, d, n));
@@ -588,7 +560,6 @@ mod tests {
                 Box::new(fact_expr("x")),
             ),
             None,
-            ExpressionId::new(0),
         );
 
         let count = count_unknown_occurrences(&expr, &unknown, &|fp, d, n| fact_matcher(fp, d, n));
@@ -607,7 +578,6 @@ mod tests {
                 ))),
             ),
             None,
-            ExpressionId::new(0),
         );
 
         let count = count_unknown_occurrences(&expr, &unknown, &|fp, d, n| fact_matcher(fp, d, n));
@@ -626,7 +596,6 @@ mod tests {
                 ))),
             ),
             None,
-            ExpressionId::new(0),
         );
 
         assert!(can_algebraically_solve(&expr, &unknown, &|fp, d, n| {
@@ -644,7 +613,6 @@ mod tests {
                 Box::new(fact_expr("quantity")),
             ),
             None,
-            ExpressionId::new(0),
         );
 
         let fact_matcher_impl = |fp: &FactPath, _doc: &str, name: &str| -> bool {
@@ -673,7 +641,6 @@ mod tests {
                 Box::new(fact_expr("price")),
             ),
             None,
-            ExpressionId::new(0),
         );
 
         assert!(!can_algebraically_solve(&expr, &unknown, &|fp, d, n| {
@@ -693,7 +660,6 @@ mod tests {
                 ))),
             ),
             None,
-            ExpressionId::new(0),
         );
         let target = literal_expr(LiteralValue::Number(rust_decimal::Decimal::from(50)));
 
@@ -723,7 +689,6 @@ mod tests {
                         ))),
                     ),
                     None,
-                    ExpressionId::new(0),
                 )),
                 ArithmeticComputation::Multiply,
                 Box::new(literal_expr(LiteralValue::Number(
@@ -731,7 +696,6 @@ mod tests {
                 ))),
             ),
             None,
-            ExpressionId::new(0),
         );
         let target = literal_expr(LiteralValue::Number(rust_decimal::Decimal::from(800)));
 
@@ -761,7 +725,6 @@ mod tests {
                         ))),
                     ),
                     None,
-                    ExpressionId::new(0),
                 )),
                 ArithmeticComputation::Subtract,
                 Box::new(literal_expr(LiteralValue::Number(
@@ -769,7 +732,6 @@ mod tests {
                 ))),
             ),
             None,
-            ExpressionId::new(0),
         );
         let target = literal_expr(LiteralValue::Number(rust_decimal::Decimal::from(17)));
 
@@ -797,7 +759,6 @@ mod tests {
                 ))),
             ),
             None,
-            ExpressionId::new(0),
         );
         let expr = Expression::new(
             ExpressionKind::UnitConversion(
@@ -805,7 +766,6 @@ mod tests {
                 ConversionTarget::Mass(MassUnit::Kilogram),
             ),
             None,
-            ExpressionId::new(0),
         );
         let target = literal_expr(LiteralValue::Number(rust_decimal::Decimal::from(100)));
 
@@ -847,7 +807,6 @@ mod tests {
                 Box::new(fact_expr("price")),
             ),
             None,
-            ExpressionId::new(0),
         );
         let target = literal_expr(LiteralValue::Number(rust_decimal::Decimal::from(50)));
 
@@ -867,7 +826,6 @@ mod tests {
         let expr = Expression::new(
             ExpressionKind::RulePath(crate::RulePath::local("rule".to_string())),
             None,
-            ExpressionId::new(0),
         );
         let target = literal_expr(LiteralValue::Number(rust_decimal::Decimal::from(50)));
 

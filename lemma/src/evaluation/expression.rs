@@ -9,15 +9,56 @@ use super::operations::{
 use super::proof::{ProofNode, ValueSource};
 use crate::planning::ExecutableRule;
 use crate::{
-    BooleanValue, Expression, ExpressionId, ExpressionKind, LiteralValue, MathematicalComputation,
+    BooleanValue, Expression, ExpressionKind, LemmaResult, LiteralValue, MathematicalComputation,
 };
 use std::collections::HashMap;
+
+/// Get a proof node, returning error if not found (indicates engine bug)
+fn get_proof_node_required(
+    context: &crate::evaluation::EvaluationContext,
+    expr: &Expression,
+    operand_name: &str,
+) -> LemmaResult<ProofNode> {
+    context.get_proof_node(expr).cloned().ok_or_else(|| {
+        crate::LemmaError::Engine(format!(
+            "bug: {} was evaluated but has no proof node",
+            operand_name
+        ))
+    })
+}
+
+/// Get operand result, returning error if not found (indicates engine bug)
+fn get_operand_result(
+    results: &HashMap<Expression, OperationResult>,
+    expr: &Expression,
+    operand_name: &str,
+) -> LemmaResult<OperationResult> {
+    results.get(expr).cloned().ok_or_else(|| {
+        crate::LemmaError::Engine(format!(
+            "bug: {} operand was marked ready but result is missing",
+            operand_name
+        ))
+    })
+}
+
+/// Propagate veto proof from operand to current expression
+fn propagate_veto_proof(
+    context: &mut crate::evaluation::EvaluationContext,
+    current: &Expression,
+    vetoed_operand: &Expression,
+    veto_result: OperationResult,
+    operand_name: &str,
+) -> LemmaResult<OperationResult> {
+    let proof = get_proof_node_required(context, vetoed_operand, operand_name)?;
+    context.set_proof_node(current, proof);
+    Ok(veto_result)
+}
 
 /// Evaluate a rule to produce its final result and proof
 pub fn evaluate_rule(
     exec_rule: &ExecutableRule,
     context: &mut crate::evaluation::EvaluationContext,
-) -> (OperationResult, crate::evaluation::proof::Proof) {
+) -> LemmaResult<(OperationResult, crate::evaluation::proof::Proof)> {
     use crate::evaluation::proof::{Branch, NonMatchedBranch};
 
     // If rule has no unless clauses, just evaluate the default expression
@@ -35,26 +76,20 @@ pub fn evaluate_rule(
             let condition_expr = condition.get_source_text(&context.sources);
             let result_expr = branch.result.get_source_text(&context.sources);
 
-            let condition_result = evaluate_expression(condition, context);
-            let condition_proof = context
-                .get_proof_node(&condition.id)
-                .cloned()
-                .expect("bug: condition was evaluated but has no proof node");
+            let condition_result = evaluate_expression(condition, context)?;
+            let condition_proof = get_proof_node_required(context, condition, "condition")?;
 
             let matched = match condition_result {
                 OperationResult::Veto(ref msg) => {
                     // Condition vetoed - this becomes the result
                     let unless_clause_index = branch_index - 1;
-                    context.push_operation(
-                        OperationKind::RuleBranchEvaluated {
-                            index: Some(unless_clause_index),
-                            matched: true,
-                            condition_expr,
-                            result_expr,
-                            result_value: Some(OperationResult::Veto(msg.clone())),
-                        },
-                        condition.id,
-                    );
+                    context.push_operation(OperationKind::RuleBranchEvaluated {
+                        index: Some(unless_clause_index),
+                        matched: true,
+                        condition_expr,
+                        result_expr,
+                        result_value: Some(OperationResult::Veto(msg.clone())),
+                    });
 
                     // Build Branches node with this as the matched branch
                     let matched_branch = Branch {
@@ -79,7 +114,7 @@ pub fn evaluate_rule(
                         result: OperationResult::Veto(msg.clone()),
                         tree: branches_node,
                     };
-                    return (OperationResult::Veto(msg.clone()), proof);
+                    return Ok((OperationResult::Veto(msg.clone()), proof));
                 }
                 OperationResult::Value(LiteralValue::Boolean(b)) => b,
                 _ => {
@@ -95,7 +130,7 @@ pub fn evaluate_rule(
                             source_location: exec_rule.source.clone(),
                         },
                     };
-                    return (veto, proof);
+                    return Ok((veto, proof));
                 }
             };
 
@@ -103,23 +138,17 @@ pub fn evaluate_rule(
 
             if bool::from(matched) {
                 // This unless clause matched - evaluate its result
-                let result = evaluate_expression(&branch.result, context);
+                let result = evaluate_expression(&branch.result, context)?;
 
-                context.push_operation(
-                    OperationKind::RuleBranchEvaluated {
-                        index: Some(unless_clause_index),
-                        matched: true,
-                        condition_expr,
-                        result_expr,
-                        result_value: Some(result.clone()),
-                    },
-                    branch.result.id,
-                );
+                context.push_operation(OperationKind::RuleBranchEvaluated {
+                    index: Some(unless_clause_index),
+                    matched: true,
+                    condition_expr,
+                    result_expr,
+                    result_value: Some(result.clone()),
+                });
 
-                let result_proof = context
-                    .get_proof_node(&branch.result.id)
-                    .cloned()
-                    .expect("bug: result expression was evaluated but has no proof node");
+                let result_proof = get_proof_node_required(context, &branch.result, "result")?;
 
                 // Build Branches node with this as the matched branch
                 let matched_branch = Branch {
@@ -141,19 +170,16 @@ pub fn evaluate_rule(
                     result: result.clone(),
                     tree: branches_node,
                 };
-                return (result, proof);
+                return Ok((result, proof));
             } else {
                 // Branch didn't match - record it as non-matched
-                context.push_operation(
-                    OperationKind::RuleBranchEvaluated {
-                        index: Some(unless_clause_index),
-                        matched: false,
-                        condition_expr,
-                        result_expr,
-                        result_value: None,
-                    },
-                    condition.id,
-                );
+                context.push_operation(OperationKind::RuleBranchEvaluated {
+                    index: Some(unless_clause_index),
+                    matched: false,
+                    condition_expr,
+                    result_expr,
+                    result_value: None,
+                });
 
                 non_matched_branches.push(NonMatchedBranch {
                     condition: Box::new(condition_proof),
@@ -168,23 +194,18 @@ pub fn evaluate_rule(
     // No unless clause matched - evaluate default expression (first branch)
     let default_branch = &exec_rule.branches[0];
     let default_expr = default_branch.result.get_source_text(&context.sources);
-    let default_result = evaluate_expression(&default_branch.result, context);
+    let default_result = evaluate_expression(&default_branch.result, context)?;
 
-    context.push_operation(
-        OperationKind::RuleBranchEvaluated {
-            index: None,
-            matched: true,
-            condition_expr: None,
-            result_expr: default_expr,
-            result_value: Some(default_result.clone()),
-        },
-        default_branch.result.id,
-    );
+    context.push_operation(OperationKind::RuleBranchEvaluated {
+        index: None,
+        matched: true,
+        condition_expr: None,
+        result_expr: default_expr,
+        result_value: Some(default_result.clone()),
+    });
 
-    let default_result_proof = context
-        .get_proof_node(&default_branch.result.id)
-        .cloned()
-        .expect("bug: default result was evaluated but has no proof node");
+    let default_result_proof =
+        get_proof_node_required(context, &default_branch.result, "default result")?;
 
     // Default branch has no condition
     let matched_branch = Branch {
@@ -207,33 +228,28 @@ pub fn evaluate_rule(
         tree: branches_node,
     };
 
-    (default_result, proof)
+    Ok((default_result, proof))
 }
 
 /// Evaluate a rule that has no unless clauses (simple case)
 fn evaluate_rule_without_unless(
     exec_rule: &ExecutableRule,
     context: &mut crate::evaluation::EvaluationContext,
-) -> (OperationResult, crate::evaluation::proof::Proof) {
+) -> LemmaResult<(OperationResult, crate::evaluation::proof::Proof)> {
     let default_branch = &exec_rule.branches[0];
     let default_expr = default_branch.result.get_source_text(&context.sources);
-    let default_result = evaluate_expression(&default_branch.result, context);
+    let default_result = evaluate_expression(&default_branch.result, context)?;
 
-    context.push_operation(
-        OperationKind::RuleBranchEvaluated {
-            index: None,
-            matched: true,
-            condition_expr: None,
-            result_expr: default_expr,
-            result_value: Some(default_result.clone()),
-        },
-        default_branch.result.id,
-    );
+    context.push_operation(OperationKind::RuleBranchEvaluated {
+        index: None,
+        matched: true,
+        condition_expr: None,
+        result_expr: default_expr,
+        result_value: Some(default_result.clone()),
+    });
 
-    let root_proof_node = context
-        .get_proof_node(&default_branch.result.id)
-        .cloned()
-        .expect("bug: default branch result was evaluated but has no proof node");
+    let root_proof_node =
+        get_proof_node_required(context, &default_branch.result, "default result")?;
 
     let proof = crate::evaluation::proof::Proof {
         rule_path: exec_rule.path.clone(),
@@ -242,7 +258,7 @@ fn evaluate_rule_without_unless(
         tree: root_proof_node,
     };
 
-    (default_result, proof)
+    Ok((default_result, proof))
 }
 
 /// Evaluate an expression iteratively without recursion
@@ -250,16 +266,16 @@ fn evaluate_rule_without_unless(
 fn evaluate_expression(
     expr: &Expression,
     context: &mut crate::evaluation::EvaluationContext,
-) -> OperationResult {
+) -> LemmaResult<OperationResult> {
     // First, collect all expressions in the tree
-    let mut all_exprs: HashMap<ExpressionId, &Expression> = HashMap::new();
+    let mut all_exprs: HashMap<Expression, ()> = HashMap::new();
     let mut work_list: Vec<&Expression> = vec![expr];
 
     while let Some(e) = work_list.pop() {
-        if all_exprs.contains_key(&e.id) {
+        if all_exprs.contains_key(e) {
             continue;
         }
-        all_exprs.insert(e.id, e);
+        all_exprs.insert(e.clone(), ());
 
         // Add dependencies to work list
         match &e.kind {
@@ -280,96 +296,73 @@ fn evaluate_expression(
     }
 
     // Now evaluate expressions in dependency order
-    let mut results: HashMap<ExpressionId, OperationResult> = HashMap::new();
-    let mut remaining: Vec<ExpressionId> = all_exprs.keys().cloned().collect();
+    let mut results: HashMap<Expression, OperationResult> = HashMap::new();
+    let mut remaining: Vec<Expression> = all_exprs.keys().cloned().collect();
 
     while !remaining.is_empty() {
         let mut progress = false;
         let mut to_remove = Vec::new();
 
-        for &expr_id in &remaining {
-            let current = match all_exprs.get(&expr_id) {
-                Some(c) => c,
-                None => {
-                    // This shouldn't happen, but handle gracefully
-                    continue;
-                }
-            };
-
+        for current in &remaining {
             // Check if all dependencies are ready
             let deps_ready = match &current.kind {
                 ExpressionKind::Arithmetic(left, _, right)
                 | ExpressionKind::Comparison(left, _, right)
                 | ExpressionKind::LogicalAnd(left, right)
                 | ExpressionKind::LogicalOr(left, right) => {
-                    results.contains_key(&left.id) && results.contains_key(&right.id)
+                    results.contains_key(left.as_ref()) && results.contains_key(right.as_ref())
                 }
                 ExpressionKind::LogicalNegation(operand, _)
                 | ExpressionKind::UnitConversion(operand, _)
                 | ExpressionKind::MathematicalComputation(_, operand) => {
-                    results.contains_key(&operand.id)
+                    results.contains_key(operand.as_ref())
                 }
                 _ => true,
             };
 
             if deps_ready {
-                to_remove.push(expr_id);
+                to_remove.push(current.clone());
                 progress = true;
             }
         }
 
         if !progress {
-            // Circular dependency or missing dependency - evaluate what we can
-            for &expr_id in &remaining {
-                to_remove.push(expr_id);
-            }
+            return Err(crate::LemmaError::Engine(
+                "bug: circular dependency or missing dependency in expression tree".to_string(),
+            ));
         }
 
         // Evaluate expressions that are ready
-        for expr_id in &to_remove {
-            let current = match all_exprs.get(expr_id) {
-                Some(c) => c,
-                None => {
-                    // This shouldn't happen, but handle gracefully
-                    results.insert(
-                        *expr_id,
-                        OperationResult::Veto(Some(
-                            "Expression not found in evaluation tree".to_string(),
-                        )),
-                    );
-                    continue;
-                }
-            };
-
-            // Evaluate the expression
-            let result = evaluate_single_expression(current, &results, context);
-            results.insert(*expr_id, result);
+        for current in &to_remove {
+            let result = evaluate_single_expression(current, &results, context)?;
+            results.insert(current.clone(), result);
         }
 
-        remaining.retain(|id| !to_remove.contains(id));
+        for key in &to_remove {
+            remaining.retain(|k| k != key);
+        }
     }
 
-    results
-        .get(&expr.id)
-        .cloned()
-        .expect("bug: expression was processed but has no result")
+    results.get(expr).cloned().ok_or_else(|| {
+        crate::LemmaError::Engine("bug: expression was processed but has no result".to_string())
+    })
 }
 
 /// Evaluate a single expression given its dependencies are already evaluated
 fn evaluate_single_expression(
     current: &Expression,
-    results: &HashMap<ExpressionId, OperationResult>,
+    results: &HashMap<Expression, OperationResult>,
     context: &mut crate::evaluation::EvaluationContext,
-) -> OperationResult {
-    let result = match &current.kind {
+) -> LemmaResult<OperationResult> {
+    match &current.kind {
         ExpressionKind::Literal(lit) => {
             let proof_node = ProofNode::Value {
                 value: lit.clone(),
                 source: ValueSource::Literal,
                 source_location: current.source_location.clone(),
             };
-            context.set_proof_node(current.id, proof_node);
-            OperationResult::Value(lit.clone())
+            context.set_proof_node(current, proof_node);
+            Ok(OperationResult::Value(lit.clone()))
         }
 
         ExpressionKind::FactPath(fact_path) => {
@@ -377,13 +370,10 @@ fn evaluate_single_expression(
             let value = context.get_fact(fact_path).cloned();
             match value {
                 Some(v) => {
-                    context.push_operation(
-                        OperationKind::FactUsed {
-                            fact_ref: fact_path_clone.clone(),
-                            value: v.clone(),
-                        },
-                        current.id,
-                    );
+                    context.push_operation(OperationKind::FactUsed {
+                        fact_ref: fact_path_clone.clone(),
+                        value: v.clone(),
+                    });
                     let proof_node = ProofNode::Value {
                         value: v.clone(),
                         source: ValueSource::Fact {
@@ -391,16 +381,19 @@ fn evaluate_single_expression(
                         },
                         source_location: current.source_location.clone(),
                     };
-                    context.set_proof_node(current.id, proof_node);
-                    OperationResult::Value(v)
+                    context.set_proof_node(current, proof_node);
+                    Ok(OperationResult::Value(v))
                 }
                 None => {
                     let proof_node = ProofNode::Veto {
                         message: Some(format!("Missing fact: {}", fact_path)),
                         source_location: current.source_location.clone(),
                     };
-                    context.set_proof_node(current.id, proof_node);
-                    OperationResult::Veto(Some(format!("Missing fact: {}", fact_path)))
+                    context.set_proof_node(current, proof_node);
+                    Ok(OperationResult::Veto(Some(format!(
+                        "Missing fact: {}",
+                        fact_path
+                    ))))
                 }
             }
         }
@@ -410,30 +403,24 @@ fn evaluate_single_expression(
             let result = context.rule_results.get(rule_path).cloned();
             match result {
                 Some(r) => {
-                    context.push_operation(
-                        OperationKind::RuleUsed {
-                            rule_path: rule_path_clone.clone(),
-                            result: r.clone(),
-                        },
-                        current.id,
-                    );
+                    context.push_operation(OperationKind::RuleUsed {
+                        rule_path: rule_path_clone.clone(),
+                        result: r.clone(),
+                    });
 
-                    // Get the full proof tree from the referenced rule (evaluated earlier due to topological order)
+                    // Get the full proof tree from the referenced rule
                     let expansion = match context.get_rule_proof(rule_path) {
                         Some(existing_proof) => existing_proof.tree.clone(),
-                        None => {
-                            // Fallback to a simple value node if proof not found
-                            ProofNode::Value {
-                                value: match &r {
-                                    OperationResult::Value(v) => v.clone(),
-                                    OperationResult::Veto(_) => {
-                                        LiteralValue::Boolean(BooleanValue::False)
-                                    }
-                                },
-                                source: ValueSource::Computed,
-                                source_location: current.source_location.clone(),
-                            }
-                        }
+                        None => ProofNode::Value {
+                            value: match &r {
+                                OperationResult::Value(v) => v.clone(),
+                                OperationResult::Veto(_) => {
+                                    LiteralValue::Boolean(BooleanValue::False)
+                                }
+                            },
+                            source: ValueSource::Computed,
+                            source_location: current.source_location.clone(),
+                        },
                     };
 
                     let proof_node = ProofNode::RuleReference {
@@ -442,8 +429,8 @@ fn evaluate_single_expression(
                         source_location: current.source_location.clone(),
                         expansion: Box::new(expansion),
                     };
-                    context.set_proof_node(current.id, proof_node);
-                    r
+                    context.set_proof_node(current, proof_node);
+                    Ok(r)
                 }
                 None => {
                     let proof_node = ProofNode::Veto {
@@ -453,375 +440,248 @@ fn evaluate_single_expression(
                         )),
                         source_location: current.source_location.clone(),
                     };
-                    context.set_proof_node(current.id, proof_node);
-                    OperationResult::Veto(Some(format!(
+                    context.set_proof_node(current, proof_node);
+                    Ok(OperationResult::Veto(Some(format!(
                         "Rule {} not found or not yet computed",
                         rule_path.rule
-                    )))
+                    ))))
                 }
             }
         }
 
         ExpressionKind::Arithmetic(left, op, right) => {
-            let left_result = match results.get(&left.id) {
-                Some(r) => r.clone(),
-                None => {
-                    return OperationResult::Veto(Some("Missing left operand result".to_string()))
-                }
-            };
-            let right_result = match results.get(&right.id) {
-                Some(r) => r.clone(),
-                None => {
-                    return OperationResult::Veto(Some("Missing right operand result".to_string()))
-                }
-            };
+            let left_result = get_operand_result(results, left, "left")?;
+            let right_result = get_operand_result(results, right, "right")?;
 
             if let OperationResult::Veto(_) = left_result {
-                let proof = context
-                    .get_proof_node(&left.id)
-                    .cloned()
-                    .expect("bug: left operand was evaluated but has no proof node");
-                context.set_proof_node(current.id, proof);
-                left_result
-            } else if let OperationResult::Veto(_) = right_result {
-                let proof = context
-                    .get_proof_node(&right.id)
-                    .cloned()
-                    .expect("bug: right operand was evaluated but has no proof node");
-                context.set_proof_node(current.id, proof);
-                right_result
-            } else {
-                let left_val = match left_result.value() {
-                    Some(v) => v,
-                    None => {
-                        return OperationResult::Veto(Some("Left operand is vetoed".to_string()))
-                    }
-                };
-                let right_val = match right_result.value() {
-                    Some(v) => v,
-                    None => {
-                        return OperationResult::Veto(Some("Right operand is vetoed".to_string()))
-                    }
-                };
-                let result = arithmetic_operation(left_val, op, right_val);
-
-                let left_proof = context
-                    .get_proof_node(&left.id)
-                    .cloned()
-                    .expect("bug: left operand was evaluated but has no proof node");
-                let right_proof = context
-                    .get_proof_node(&right.id)
-                    .cloned()
-                    .expect("bug: right operand was evaluated but has no proof node");
-
-                if let OperationResult::Value(ref val) = result {
-                    let expr_text = current.get_source_text(&context.sources);
-                    let original_expr = expr_text.clone().unwrap_or_default();
-                    let substituted_expr = format!("{} {} {}", left_val, op.symbol(), right_val);
-                    context.push_operation(
-                        OperationKind::Computation {
-                            kind: ComputationKind::Arithmetic(op.clone()),
-                            inputs: vec![left_val.clone(), right_val.clone()],
-                            result: val.clone(),
-                            expr: expr_text,
-                        },
-                        current.id,
-                    );
-                    let proof_node = ProofNode::Computation {
-                        kind: ComputationKind::Arithmetic(op.clone()),
-                        original_expression: original_expr,
-                        expression: substituted_expr,
-                        result: val.clone(),
-                        source_location: current.source_location.clone(),
-                        operands: vec![left_proof, right_proof],
-                    };
-                    context.set_proof_node(current.id, proof_node);
-                } else if let OperationResult::Veto(_) = result {
-                    let proof_node = left_proof;
-                    context.set_proof_node(current.id, proof_node);
-                }
-                result
+                return propagate_veto_proof(context, current, left, left_result, "left operand");
             }
+            if let OperationResult::Veto(_) = right_result {
+                return propagate_veto_proof(
+                    context,
+                    current,
+                    right,
+                    right_result,
+                    "right operand",
+                );
+            }
+
+            let left_val = left_result.value().ok_or_else(|| {
+                crate::LemmaError::Engine("Left operand result has no value".to_string())
+            })?;
+            let right_val = right_result.value().ok_or_else(|| {
+                crate::LemmaError::Engine("Right operand result has no value".to_string())
+            })?;
+            let result = arithmetic_operation(left_val, op, right_val);
+
+            let left_proof = get_proof_node_required(context, left, "left operand")?;
+            let right_proof = get_proof_node_required(context, right, "right operand")?;
+
+            if let OperationResult::Value(ref val) = result {
+                let expr_text = current.get_source_text(&context.sources);
+                let original_expr = expr_text.clone().unwrap_or_default();
+                let substituted_expr = format!("{} {} {}", left_val, op.symbol(), right_val);
+                context.push_operation(OperationKind::Computation {
+                    kind: ComputationKind::Arithmetic(op.clone()),
+                    inputs: vec![left_val.clone(), right_val.clone()],
+                    result: val.clone(),
+                    expr: expr_text,
+                });
+                let proof_node = ProofNode::Computation {
+                    kind: ComputationKind::Arithmetic(op.clone()),
+                    original_expression: original_expr,
+                    expression: substituted_expr,
+                    result: val.clone(),
+                    source_location: current.source_location.clone(),
+                    operands: vec![left_proof, right_proof],
+                };
+                context.set_proof_node(current, proof_node);
+            } else if let OperationResult::Veto(_) = result {
+                context.set_proof_node(current, left_proof);
+            }
+            Ok(result)
         }
 
         ExpressionKind::Comparison(left, op, right) => {
-            let left_result = match results.get(&left.id) {
-                Some(r) => r.clone(),
-                None => {
-                    return OperationResult::Veto(Some("Missing left operand result".to_string()))
-                }
-            };
-            let right_result = match results.get(&right.id) {
-                Some(r) => r.clone(),
-                None => {
-                    return OperationResult::Veto(Some("Missing right operand result".to_string()))
-                }
-            };
+            let left_result = get_operand_result(results, left, "left")?;
+            let right_result = get_operand_result(results, right, "right")?;
 
             if let OperationResult::Veto(_) = left_result {
-                let proof = context
-                    .get_proof_node(&left.id)
-                    .cloned()
-                    .expect("bug: left operand was evaluated but has no proof node");
-                context.set_proof_node(current.id, proof);
-                left_result
-            } else if let OperationResult::Veto(_) = right_result {
-                let proof = context
-                    .get_proof_node(&right.id)
-                    .cloned()
-                    .expect("bug: right operand was evaluated but has no proof node");
-                context.set_proof_node(current.id, proof);
-                right_result
-            } else {
-                let left_val = match left_result.value() {
-                    Some(v) => v,
-                    None => {
-                        return OperationResult::Veto(Some("Left operand is vetoed".to_string()))
-                    }
-                };
-                let right_val = match right_result.value() {
-                    Some(v) => v,
-                    None => {
-                        return OperationResult::Veto(Some("Right operand is vetoed".to_string()))
-                    }
-                };
-                let result = comparison_operation(left_val, op, right_val);
-
-                let left_proof = context
-                    .get_proof_node(&left.id)
-                    .cloned()
-                    .expect("bug: left operand was evaluated but has no proof node");
-                let right_proof = context
-                    .get_proof_node(&right.id)
-                    .cloned()
-                    .expect("bug: right operand was evaluated but has no proof node");
-
-                if let OperationResult::Value(ref val) = result {
-                    let expr_text = current.get_source_text(&context.sources);
-                    let original_expr = expr_text.clone().unwrap_or_default();
-                    let substituted_expr = format!("{} {} {}", left_val, op.symbol(), right_val);
-                    context.push_operation(
-                        OperationKind::Computation {
-                            kind: ComputationKind::Comparison(op.clone()),
-                            inputs: vec![left_val.clone(), right_val.clone()],
-                            result: val.clone(),
-                            expr: expr_text,
-                        },
-                        current.id,
-                    );
-                    let proof_node = ProofNode::Computation {
-                        kind: ComputationKind::Comparison(op.clone()),
-                        original_expression: original_expr,
-                        expression: substituted_expr,
-                        result: val.clone(),
-                        source_location: current.source_location.clone(),
-                        operands: vec![left_proof, right_proof],
-                    };
-                    context.set_proof_node(current.id, proof_node);
-                } else if let OperationResult::Veto(_) = result {
-                    let proof_node = left_proof;
-                    context.set_proof_node(current.id, proof_node);
-                }
-                result
+                return propagate_veto_proof(context, current, left, left_result, "left operand");
             }
+            if let OperationResult::Veto(_) = right_result {
+                return propagate_veto_proof(
+                    context,
+                    current,
+                    right,
+                    right_result,
+                    "right operand",
+                );
+            }
+
+            let left_val = left_result.value().ok_or_else(|| {
+                crate::LemmaError::Engine("Left operand result has no value".to_string())
+            })?;
+            let right_val = right_result.value().ok_or_else(|| {
+                crate::LemmaError::Engine("Right operand result has no value".to_string())
+            })?;
+            let result = comparison_operation(left_val, op, right_val);
+
+            let left_proof = get_proof_node_required(context, left, "left operand")?;
+            let right_proof = get_proof_node_required(context, right, "right operand")?;
+
+            if let OperationResult::Value(ref val) = result {
+                let expr_text = current.get_source_text(&context.sources);
+                let original_expr = expr_text.clone().unwrap_or_default();
+                let substituted_expr = format!("{} {} {}", left_val, op.symbol(), right_val);
+                context.push_operation(OperationKind::Computation {
+                    kind: ComputationKind::Comparison(op.clone()),
+                    inputs: vec![left_val.clone(), right_val.clone()],
+                    result: val.clone(),
+                    expr: expr_text,
+                });
+                let proof_node = ProofNode::Computation {
+                    kind: ComputationKind::Comparison(op.clone()),
+                    original_expression: original_expr,
+                    expression: substituted_expr,
+                    result: val.clone(),
+                    source_location: current.source_location.clone(),
+                    operands: vec![left_proof, right_proof],
+                };
+                context.set_proof_node(current, proof_node);
+            } else if let OperationResult::Veto(_) = result {
+                context.set_proof_node(current, left_proof);
+            }
+            Ok(result)
         }
 
         ExpressionKind::LogicalAnd(left, right) => {
-            let left_result = match results.get(&left.id) {
-                Some(r) => r.clone(),
+            let left_result = get_operand_result(results, left, "left")?;
+            if let OperationResult::Veto(_) = left_result {
+                return propagate_veto_proof(context, current, left, left_result, "left operand");
+            }
+
+            let left_bool = match left_result.value() {
+                Some(LiteralValue::Boolean(b)) => b,
+                Some(_) => {
+                    return Ok(OperationResult::Veto(Some(
+                        "Logical AND requires boolean operands".to_string(),
+                    )));
+                }
                 None => {
-                    return OperationResult::Veto(Some("Missing left operand result".to_string()))
+                    return Ok(OperationResult::Veto(Some(
+                        "Left operand is vetoed".to_string(),
+                    )));
                 }
             };
-            if let OperationResult::Veto(_) = left_result {
-                let proof = context
-                    .get_proof_node(&left.id)
-                    .cloned()
-                    .expect("bug: left operand was evaluated but has no proof node");
-                context.set_proof_node(current.id, proof);
-                left_result
-            } else {
-                let left_bool = match left_result.value() {
-                    Some(LiteralValue::Boolean(b)) => b,
-                    Some(_) => {
-                        return OperationResult::Veto(Some(
-                            "Logical AND requires boolean operands".to_string(),
-                        ));
-                    }
-                    None => {
-                        return OperationResult::Veto(Some("Left operand is vetoed".to_string()))
-                    }
-                };
 
-                if !bool::from(left_bool) {
-                    let left_proof = context
-                        .get_proof_node(&left.id)
-                        .cloned()
-                        .expect("bug: left operand was evaluated but has no proof node");
-                    context.set_proof_node(current.id, left_proof);
-                    OperationResult::Value(LiteralValue::Boolean(BooleanValue::False))
-                } else {
-                    let right_result = match results.get(&right.id) {
-                        Some(r) => r.clone(),
-                        None => {
-                            return OperationResult::Veto(Some(
-                                "Missing right operand result".to_string(),
-                            ))
-                        }
-                    };
-                    let right_proof = context
-                        .get_proof_node(&right.id)
-                        .cloned()
-                        .expect("bug: right operand was evaluated but has no proof node");
-                    context.set_proof_node(current.id, right_proof);
-                    right_result
-                }
+            if !bool::from(left_bool) {
+                let left_proof = get_proof_node_required(context, left, "left operand")?;
+                context.set_proof_node(current, left_proof);
+                Ok(OperationResult::Value(LiteralValue::Boolean(
+                    BooleanValue::False,
+                )))
+            } else {
+                let right_result = get_operand_result(results, right, "right")?;
+                let right_proof = get_proof_node_required(context, right, "right operand")?;
+                context.set_proof_node(current, right_proof);
+                Ok(right_result)
             }
         }
 
         ExpressionKind::LogicalOr(left, right) => {
-            let left_result = match results.get(&left.id) {
-                Some(r) => r.clone(),
+            let left_result = get_operand_result(results, left, "left")?;
+            if let OperationResult::Veto(_) = left_result {
+                return propagate_veto_proof(context, current, left, left_result, "left operand");
+            }
+
+            let left_bool = match left_result.value() {
+                Some(LiteralValue::Boolean(b)) => b,
+                Some(_) => {
+                    return Ok(OperationResult::Veto(Some(
+                        "Logical OR requires boolean operands".to_string(),
+                    )));
+                }
                 None => {
-                    return OperationResult::Veto(Some("Missing left operand result".to_string()))
+                    return Ok(OperationResult::Veto(Some(
+                        "Left operand is vetoed".to_string(),
+                    )));
                 }
             };
-            if let OperationResult::Veto(_) = left_result {
-                let proof = context
-                    .get_proof_node(&left.id)
-                    .cloned()
-                    .expect("bug: left operand was evaluated but has no proof node");
-                context.set_proof_node(current.id, proof);
-                left_result
-            } else {
-                let left_bool = match left_result.value() {
-                    Some(LiteralValue::Boolean(b)) => b,
-                    Some(_) => {
-                        return OperationResult::Veto(Some(
-                            "Logical OR requires boolean operands".to_string(),
-                        ));
-                    }
-                    None => {
-                        return OperationResult::Veto(Some("Left operand is vetoed".to_string()))
-                    }
-                };
 
-                if bool::from(left_bool) {
-                    let left_proof = context
-                        .get_proof_node(&left.id)
-                        .cloned()
-                        .expect("bug: left operand was evaluated but has no proof node");
-                    context.set_proof_node(current.id, left_proof);
-                    OperationResult::Value(LiteralValue::Boolean(BooleanValue::True))
-                } else {
-                    let right_result = match results.get(&right.id) {
-                        Some(r) => r.clone(),
-                        None => {
-                            return OperationResult::Veto(Some(
-                                "Missing right operand result".to_string(),
-                            ))
-                        }
-                    };
-                    let right_proof = context
-                        .get_proof_node(&right.id)
-                        .cloned()
-                        .expect("bug: right operand was evaluated but has no proof node");
-                    context.set_proof_node(current.id, right_proof);
-                    right_result
-                }
+            if bool::from(left_bool) {
+                let left_proof = get_proof_node_required(context, left, "left operand")?;
+                context.set_proof_node(current, left_proof);
+                Ok(OperationResult::Value(LiteralValue::Boolean(
+                    BooleanValue::True,
+                )))
+            } else {
+                let right_result = get_operand_result(results, right, "right")?;
+                let right_proof = get_proof_node_required(context, right, "right operand")?;
+                context.set_proof_node(current, right_proof);
+                Ok(right_result)
             }
         }
 
         ExpressionKind::LogicalNegation(operand, _) => {
-            let result = match results.get(&operand.id) {
-                Some(r) => r.clone(),
-                None => return OperationResult::Veto(Some("Missing operand result".to_string())),
-            };
+            let result = get_operand_result(results, operand, "operand")?;
             if let OperationResult::Veto(_) = result {
-                let proof = context
-                    .get_proof_node(&operand.id)
-                    .cloned()
-                    .expect("bug: operand was evaluated but has no proof node");
-                context.set_proof_node(current.id, proof);
-                result
-            } else {
-                let value = match result.value() {
-                    Some(v) => v,
-                    None => return OperationResult::Veto(Some("Operand is vetoed".to_string())),
-                };
-                let operand_proof = context
-                    .get_proof_node(&operand.id)
-                    .cloned()
-                    .expect("bug: operand was evaluated but has no proof node");
-                match value {
-                    LiteralValue::Boolean(b) => {
-                        let result_bool = !bool::from(b);
-                        context.set_proof_node(current.id, operand_proof);
-                        OperationResult::Value(LiteralValue::Boolean(if result_bool {
+                return propagate_veto_proof(context, current, operand, result, "operand");
+            }
+
+            let value = match result.value() {
+                Some(v) => v,
+                None => return Ok(OperationResult::Veto(Some("Operand is vetoed".to_string()))),
+            };
+            let operand_proof = get_proof_node_required(context, operand, "operand")?;
+            match value {
+                LiteralValue::Boolean(b) => {
+                    let result_bool = !bool::from(b);
+                    context.set_proof_node(current, operand_proof);
+                    Ok(OperationResult::Value(LiteralValue::Boolean(
+                        if result_bool {
                             BooleanValue::True
                         } else {
                             BooleanValue::False
-                        }))
-                    }
-                    _ => OperationResult::Veto(Some(
-                        "Logical NOT requires boolean operand".to_string(),
-                    )),
+                        },
+                    )))
                 }
+                _ => Ok(OperationResult::Veto(Some(
+                    "Logical NOT requires boolean operand".to_string(),
+                ))),
             }
         }
 
         ExpressionKind::UnitConversion(value_expr, target) => {
-            let result = match results.get(&value_expr.id) {
-                Some(r) => r.clone(),
-                None => return OperationResult::Veto(Some("Missing operand result".to_string())),
-            };
+            let result = get_operand_result(results, value_expr, "operand")?;
             if let OperationResult::Veto(_) = result {
-                let proof = context
-                    .get_proof_node(&value_expr.id)
-                    .cloned()
-                    .expect("bug: operand was evaluated but has no proof node");
-                context.set_proof_node(current.id, proof);
-                result
-            } else {
-                let value = match result.value() {
-                    Some(v) => v,
-                    None => return OperationResult::Veto(Some("Operand is vetoed".to_string())),
-                };
-                let operand_proof = context
-                    .get_proof_node(&value_expr.id)
-                    .cloned()
-                    .expect("bug: operand was evaluated but has no proof node");
-                let conversion_result = super::units::convert_unit(value, target);
-                context.set_proof_node(current.id, operand_proof);
-                conversion_result
+                return propagate_veto_proof(context, current, value_expr, result, "operand");
             }
+
+            let value = match result.value() {
+                Some(v) => v,
+                None => return Ok(OperationResult::Veto(Some("Operand is vetoed".to_string()))),
+            };
+            let operand_proof = get_proof_node_required(context, value_expr, "operand")?;
+            let conversion_result = crate::computation::convert_unit(value, target);
+            context.set_proof_node(current, operand_proof);
+            Ok(conversion_result)
         }
 
         ExpressionKind::MathematicalComputation(op, operand) => {
-            let result = match results.get(&operand.id) {
-                Some(r) => r.clone(),
-                None => return OperationResult::Veto(Some("Missing operand result".to_string())),
-            };
+            let result = get_operand_result(results, operand, "operand")?;
             if let OperationResult::Veto(_) = result {
-                let proof = context
-                    .get_proof_node(&operand.id)
-                    .cloned()
-                    .expect("bug: operand was evaluated but has no proof node");
-                context.set_proof_node(current.id, proof);
-                result
-            } else {
-                let value = match result.value() {
-                    Some(v) => v,
-                    None => return OperationResult::Veto(Some("Operand is vetoed".to_string())),
-                };
-                let operand_proof = context
-                    .get_proof_node(&operand.id)
-                    .cloned()
-                    .expect("bug: operand was evaluated but has no proof node");
-                let math_result = evaluate_mathematical_operator(op, value, current.id, context);
-                context.set_proof_node(current.id, operand_proof);
-                math_result
+                return propagate_veto_proof(context, current, operand, result, "operand");
             }
+
+            let value = match result.value() {
+                Some(v) => v,
+                None => return Ok(OperationResult::Veto(Some("Operand is vetoed".to_string()))),
+            };
+            let operand_proof = get_proof_node_required(context, operand, "operand")?;
+            let math_result = evaluate_mathematical_operator(op, value, context);
+            context.set_proof_node(current, operand_proof);
+            Ok(math_result)
         }
 
         ExpressionKind::Veto(veto_expr) => {
@@ -829,28 +689,26 @@ fn evaluate_single_expression(
                 message: veto_expr.message.clone(),
                 source_location: current.source_location.clone(),
             };
-            context.set_proof_node(current.id, proof_node);
-            OperationResult::Veto(veto_expr.message.clone())
+            context.set_proof_node(current, proof_node);
+            Ok(OperationResult::Veto(veto_expr.message.clone()))
         }
 
         ExpressionKind::FactReference(_) | ExpressionKind::RuleReference(_) => {
             let proof_node = ProofNode::Veto {
-                    message: Some("FactReference and RuleReference should be resolved to FactPath/RulePath during planning".to_string()),
-                    source_location: current.source_location.clone(),
-                };
-            context.set_proof_node(current.id, proof_node);
-            OperationResult::Veto(Some(
-                    "FactReference and RuleReference should be resolved to FactPath/RulePath during planning".to_string(),
-                ))
+                message: Some("FactReference and RuleReference should be resolved to FactPath/RulePath during planning".to_string()),
+                source_location: current.source_location.clone(),
+            };
+            context.set_proof_node(current, proof_node);
+            Ok(OperationResult::Veto(Some(
+                "FactReference and RuleReference should be resolved to FactPath/RulePath during planning".to_string(),
+            )))
         }
-    };
-    result
+    }
 }
 
 fn evaluate_mathematical_operator(
     op: &MathematicalComputation,
     value: &LiteralValue,
-    expression_id: ExpressionId,
     context: &mut crate::evaluation::EvaluationContext,
 ) -> OperationResult {
     match value {
@@ -899,15 +757,12 @@ fn evaluate_mathematical_operator(
             };
 
             let result_value = LiteralValue::Number(decimal_result);
-            context.push_operation(
-                OperationKind::Computation {
-                    kind: ComputationKind::Mathematical(op.clone()),
-                    inputs: vec![value.clone()],
-                    result: result_value.clone(),
-                    expr: None,
-                },
-                expression_id,
-            );
+            context.push_operation(OperationKind::Computation {
+                kind: ComputationKind::Mathematical(op.clone()),
+                inputs: vec![value.clone()],
+                result: result_value.clone(),
+                expr: None,
+            });
             OperationResult::Value(result_value)
         }
         _ => OperationResult::Veto(Some(
