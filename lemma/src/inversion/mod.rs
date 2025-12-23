@@ -123,7 +123,6 @@ pub fn invert(
     let suffix_or = build_suffix_or_conditions(&branches_with_options);
 
     let mut branches_out = Vec::new();
-    let mut available_outcomes = Vec::new();
 
     for (idx, (raw_condition, raw_result)) in expanded_branches.iter().enumerate() {
         let mut effective_condition = raw_condition.clone();
@@ -141,21 +140,6 @@ pub fn invert(
                 BranchOutcome::Value(expanded_and_hydrated_result)
             }
         };
-
-        if !is_boolean_false(&expanded_and_hydrated_condition) {
-            let outcome_desc = match &outcome {
-                BranchOutcome::Value(expr) => {
-                    if let ExpressionKind::Literal(lit) = &expr.kind {
-                        format!("value {}", lit)
-                    } else {
-                        "computed value".to_owned()
-                    }
-                }
-                BranchOutcome::Veto(Some(msg)) => format!("veto '{}'", msg),
-                BranchOutcome::Veto(None) => "veto".to_owned(),
-            };
-            available_outcomes.push(outcome_desc);
-        }
 
         if let Some(branch) = filter_branch(
             expanded_and_hydrated_condition,

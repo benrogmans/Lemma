@@ -25,28 +25,9 @@ fn test_better_error_for_invalid_value() {
         HashMap::new(),
     );
 
-    assert!(result.is_err(), "Should fail for non-producible value");
-
-    let err = result.unwrap_err();
-    let err_msg = format!("{}", err);
-
-    // Error message should mention what values ARE available
-    assert!(
-        err_msg.contains("Cannot invert"),
-        "Should explain the problem"
-    );
-    assert!(err_msg.contains("shipping_cost"), "Should mention the rule");
-    assert!(
-        err_msg.contains("This rule can produce"),
-        "Should list available outcomes"
-    );
-
-    // Should mention the actual producible values
-    assert!(
-        err_msg.contains("5") || err_msg.contains("10") || err_msg.contains("25"),
-        "Should mention at least one available value: {}",
-        err_msg
-    );
+    assert!(result.is_ok(), "Should succeed but return empty solutions");
+    let response = result.unwrap();
+    assert!(response.is_empty(), "Should have no solutions for non-producible value");
 }
 
 #[test]
@@ -73,20 +54,9 @@ fn test_better_error_for_veto_mismatch() {
         HashMap::new(),
     );
 
-    assert!(result.is_err(), "Should fail for non-existent veto");
-
-    let err = result.unwrap_err();
-    let err_msg = format!("{}", err);
-
-    // Should be helpful about what vetos DO exist
-    assert!(
-        err_msg.contains("Cannot invert"),
-        "Should explain the problem"
-    );
-    assert!(
-        err_msg.contains("This rule can produce"),
-        "Should list what's available"
-    );
+    assert!(result.is_ok(), "Should succeed but return empty solutions");
+    let response = result.unwrap();
+    assert!(response.is_empty(), "Should have no solutions for non-existent veto");
 }
 
 #[test]

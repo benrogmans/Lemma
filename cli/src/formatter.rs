@@ -140,7 +140,7 @@ impl Formatter {
         target: Option<&LiteralValue>,
     ) -> String {
         let mut output = String::new();
-        if response.has_solutions() {
+        if !response.is_empty() {
             output.push_str("Solutions\n");
             for (i, solution) in response.iter().enumerate() {
                 let mut sorted_facts: Vec<_> = solution.iter().collect();

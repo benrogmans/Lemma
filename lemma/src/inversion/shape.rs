@@ -176,8 +176,8 @@ impl InversionResponse {
     }
 
     /// Check if solutions list is empty
-    pub fn has_solutions(&self) -> bool {
-        !self.solutions.is_empty()
+    pub fn is_empty(&self) -> bool {
+        self.solutions.is_empty()
     }
 
     /// Iterate over solutions

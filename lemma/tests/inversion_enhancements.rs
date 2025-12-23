@@ -58,20 +58,7 @@ fn test_enhanced_error_message_lists_values() {
         HashMap::new(),
     );
 
-    assert!(result.is_err(), "Should fail for non-existent value");
-
-    let err = result.unwrap_err();
-    let err_msg = format!("{}", err);
-
-    // Error should list what values ARE producible
-    assert!(
-        err_msg.contains("This rule can produce"),
-        "Should list available outcomes: {}",
-        err_msg
-    );
-    assert!(
-        err_msg.contains("10") || err_msg.contains("20") || err_msg.contains("30"),
-        "Should mention at least one actual value: {}",
-        err_msg
-    );
+    assert!(result.is_ok(), "Should succeed but return empty solutions");
+    let response = result.unwrap();
+    assert!(response.is_empty(), "Should have no solutions for non-existent value");
 }

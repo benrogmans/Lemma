@@ -176,9 +176,11 @@ fn veto_query_no_veto_clauses_should_error() {
         std::collections::HashMap::new(),
     );
 
+    assert!(result.is_ok(), "Should succeed but return empty solutions");
+    let response = result.unwrap();
     assert!(
-        result.is_err(),
-        "should fail when querying veto on rule with no veto clauses"
+        response.is_empty(),
+        "should return empty solutions when querying veto on rule with no veto clauses"
     );
 }
 

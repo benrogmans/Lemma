@@ -63,14 +63,13 @@ fn demonstrate_no_solution_for_value_7() {
     );
 
     println!("\n=== Inversion: another == 7 ===");
-    match result {
-        Ok(_) => {
-            panic!("expected inversion to fail for another == 7");
-        }
-        Err(err) => {
-            println!("Expected failure: {}", err);
-        }
-    }
+    assert!(result.is_ok(), "Should succeed but return empty solutions");
+    let response = result.unwrap();
+    assert!(
+        response.is_empty(),
+        "Should have no solutions for another == 7"
+    );
+    println!("No solutions found (as expected)");
     println!("===============================\n");
 }
 

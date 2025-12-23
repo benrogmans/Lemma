@@ -274,11 +274,6 @@ pub fn shape_to_domains(
             continue;
         }
 
-        // Filter out solutions with all Unconstrained domains
-        if !domains.is_empty() && domains.values().all(|d| matches!(d, Domain::Unconstrained)) {
-            continue;
-        }
-
         // Always include provided facts with their values
         for fact_path in provided_facts {
             if let Some(value) = plan.get_fact_value(fact_path) {
