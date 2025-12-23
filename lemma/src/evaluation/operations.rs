@@ -4,8 +4,8 @@
 //! Returns OperationResult with Veto for runtime errors instead of Result.
 
 use crate::{
-    ArithmeticComputation, ComparisonComputation, ExpressionId, FactPath, LiteralValue,
-    LogicalComputation, MathematicalComputation, RulePath,
+    ArithmeticComputation, ComparisonComputation, FactPath, LiteralValue, LogicalComputation,
+    MathematicalComputation, RulePath,
 };
 use rust_decimal::Decimal;
 use serde::Serialize;
@@ -46,7 +46,6 @@ pub enum ComputationKind {
 /// A record of a single operation during evaluation
 #[derive(Debug, Clone, Serialize)]
 pub struct OperationRecord {
-    pub expression_id: ExpressionId,
     #[serde(flatten)]
     pub kind: OperationKind,
 }
@@ -149,25 +148,25 @@ pub fn arithmetic_operation(
         },
 
         (LiteralValue::Date(_), _) | (_, LiteralValue::Date(_)) => {
-            super::datetime::datetime_arithmetic(left, op, right)
+            crate::computation::datetime::datetime_arithmetic(left, op, right)
         }
 
         (LiteralValue::Time(_), _) | (_, LiteralValue::Time(_)) => {
-            super::datetime::time_arithmetic(left, op, right)
+            crate::computation::datetime::time_arithmetic(left, op, right)
         }
 
         // Same category unit operations (e.g., Length + Length)
         // Convert to base units for correct arithmetic, then back to left unit type
         (LiteralValue::Unit(l), LiteralValue::Unit(r)) if l.same_category(r) => {
-            let left_base = super::units::to_base_unit_value(l);
-            let right_base = super::units::to_base_unit_value(r);
+            let left_base = crate::computation::units::to_base_unit_value(l);
+            let right_base = crate::computation::units::to_base_unit_value(r);
 
             match op {
                 ArithmeticComputation::Add => {
                     // Add in base units, then convert back to left's unit
                     let result_base = left_base + right_base;
                     let left_value = l.value();
-                    let left_base_value = super::units::to_base_unit_value(l);
+                    let left_base_value = crate::computation::units::to_base_unit_value(l);
                     // Conversion factor: left_value / left_base_value
                     // result_in_left_unit = result_base * (left_value / left_base_value)
                     let result_value = if left_base_value == Decimal::ZERO {
@@ -180,7 +179,7 @@ pub fn arithmetic_operation(
                 ArithmeticComputation::Subtract => {
                     let result_base = left_base - right_base;
                     let left_value = l.value();
-                    let left_base_value = super::units::to_base_unit_value(l);
+                    let left_base_value = crate::computation::units::to_base_unit_value(l);
                     let result_value = if left_base_value == Decimal::ZERO {
                         result_base
                     } else {
@@ -340,14 +339,14 @@ pub fn comparison_operation(
         }
 
         (LiteralValue::Date(_), LiteralValue::Date(_)) => {
-            super::datetime::datetime_comparison(left, op, right)
+            crate::computation::datetime::datetime_comparison(left, op, right)
         }
 
         // Unit types with the same category can be compared
         // Convert both to base units first to ensure correct comparison
         (LiteralValue::Unit(l), LiteralValue::Unit(r)) if l.same_category(r) => {
-            let left_base = super::units::to_base_unit_value(l);
-            let right_base = super::units::to_base_unit_value(r);
+            let left_base = crate::computation::units::to_base_unit_value(l);
+            let right_base = crate::computation::units::to_base_unit_value(r);
             OperationResult::Value(LiteralValue::Boolean(
                 compare_decimals(left_base, op, &right_base).into(),
             ))
@@ -389,4 +388,3 @@ fn compare_decimals(left: Decimal, op: &ComparisonComputation, right: &Decimal) 
 fn type_name(value: &LiteralValue) -> String {
     value.to_type().to_string()
 }
-

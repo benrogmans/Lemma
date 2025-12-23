@@ -111,7 +111,6 @@ enum Commands {
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
     },
-
 }
 
 fn main() {
@@ -125,7 +124,13 @@ fn main() {
             target,
             interactive,
             ..
-        } => run_command(workdir, doc_name.as_ref(), facts, target.as_ref(), *interactive),
+        } => run_command(
+            workdir,
+            doc_name.as_ref(),
+            facts,
+            target.as_ref(),
+            *interactive,
+        ),
         Commands::Show { workdir, doc_name } => show_command(workdir, doc_name),
         Commands::List { root } => list_command(root),
         Commands::Server {
@@ -134,7 +139,6 @@ fn main() {
             port,
         } => server_command(workdir, host, *port),
         Commands::Mcp { workdir } => mcp_command(workdir),
-
     };
 
     if let Err(e) = result {
@@ -202,10 +206,12 @@ fn run_command(
     if let Some(target_str) = target_str {
         // Inversion mode - extract rule name from target flag
         let (target_rule, target_expr) = parse_target_rule(target_str)?;
-        
+
         // If rules were specified, they must match the target rule
         if !rules.is_empty() && rules.len() != 1 {
-            return Err(anyhow::anyhow!("--target requires exactly one rule to be specified"));
+            return Err(anyhow::anyhow!(
+                "--target requires exactly one rule to be specified"
+            ));
         }
         if !rules.is_empty() && rules[0] != target_rule {
             return Err(anyhow::anyhow!(
@@ -214,7 +220,7 @@ fn run_command(
                 rules[0]
             ));
         }
-        
+
         let rule_name = &target_rule;
         let target = parse_target(&target_expr)?;
         let target_value = target.outcome.as_ref().and_then(|o| match o {
@@ -223,7 +229,10 @@ fn run_command(
         });
         let response = engine.invert(&doc, rule_name, target, final_facts)?;
         let formatter = Formatter;
-        print!("{}", formatter.format_inversion_response(&response, rule_name, target_value.as_ref()));
+        print!(
+            "{}",
+            formatter.format_inversion_response(&response, rule_name, target_value.as_ref())
+        );
     } else {
         // Normal evaluation mode
         let response = engine.evaluate(&doc, rules, final_facts)?;
@@ -365,12 +374,11 @@ fn mcp_command(workdir: &Path) -> Result<()> {
     Ok(())
 }
 
-
 fn parse_target(target_str: &str) -> Result<lemma::Target> {
     use lemma::{OperationResult, Target, TargetOp};
 
     let trimmed = target_str.trim();
-    
+
     match trimmed {
         "any" => Ok(Target::any_value()),
         "veto" | "=veto" => Ok(Target::any_veto()),
@@ -414,7 +422,8 @@ fn parse_target(target_str: &str) -> Result<lemma::Target> {
 
 fn parse_literal_value(s: &str) -> Result<lemma::LiteralValue> {
     // Use Lemma's type parsing - try Number first, fallback to Text
-    lemma::LemmaType::Number.parse_value(s)
+    lemma::LemmaType::Number
+        .parse_value(s)
         .or_else(|_| lemma::LemmaType::Text.parse_value(s))
         .map_err(|e| anyhow::anyhow!("{}", e))
 }

@@ -282,10 +282,7 @@ pub fn shape_to_domains(
         // Always include provided facts with their values
         for fact_path in provided_facts {
             if let Some(value) = plan.get_fact_value(fact_path) {
-                domains.insert(
-                    fact_path.clone(),
-                    Domain::Enumeration(vec![value.clone()]),
-                );
+                domains.insert(fact_path.clone(), Domain::Enumeration(vec![value.clone()]));
             }
         }
 

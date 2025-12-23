@@ -242,13 +242,19 @@ fn veto_query_specific_message_age_driving() {
         .expect("veto inversion should succeed");
 
     // Should have exactly one solution: age < 16
-    assert_eq!(response.len(), 1, "expected one veto solution for 'Too young to drive'");
-    
+    assert_eq!(
+        response.len(),
+        1,
+        "expected one veto solution for 'Too young to drive'"
+    );
+
     // Check that the solution has age < 16
     let age_path = FactPath::local("age".to_string());
     let solution = &response.solutions[0];
-    let age_domain = solution.get(&age_path).expect("solution should contain age domain");
-    
+    let age_domain = solution
+        .get(&age_path)
+        .expect("solution should contain age domain");
+
     // The domain should represent age < 16
     // This should be Range { min: Unbounded, max: Exclusive(16) }
     match age_domain {
@@ -256,11 +262,13 @@ fn veto_query_specific_message_age_driving() {
             // Should be: min = Unbounded, max = Exclusive(16)
             assert!(
                 matches!(min, Bound::Unbounded),
-                "min should be Unbounded for age < 16, got {:?}", min
+                "min should be Unbounded for age < 16, got {:?}",
+                min
             );
             assert!(
                 matches!(max, Bound::Exclusive(v) if v == &LiteralValue::Number(rust_decimal::Decimal::new(16, 0))),
-                "max should be Exclusive(16) for age < 16, got {:?}", max
+                "max should be Exclusive(16) for age < 16, got {:?}",
+                max
             );
         }
         _ => {

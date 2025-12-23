@@ -22,8 +22,6 @@ struct RenderContext<'a> {
     rows: &'a mut Vec<Row>,
     expanded: &'a mut HashSet<String>,
     indent: &'a str,
-    rule_positions: &'a [(usize, String)],
-    current_position: usize,
 }
 
 pub struct Formatter;
@@ -135,18 +133,23 @@ impl Formatter {
         output
     }
 
-    pub fn format_inversion_response(&self, response: &InversionResponse, rule_name: &str, target: Option<&LiteralValue>) -> String {
+    pub fn format_inversion_response(
+        &self,
+        response: &InversionResponse,
+        rule_name: &str,
+        target: Option<&LiteralValue>,
+    ) -> String {
         let mut output = String::new();
         if response.has_solutions() {
             output.push_str("Solutions\n");
             for (i, solution) in response.iter().enumerate() {
                 let mut sorted_facts: Vec<_> = solution.iter().collect();
                 sorted_facts.sort_by_key(|(path, _)| path.to_string());
-                
+
                 let mut left_lines = Vec::new();
                 let mut value_lines = Vec::new();
                 let mut unit_lines = Vec::new();
-                
+
                 for (fact_ref, domain) in sorted_facts.iter() {
                     let (unit, value) = match domain {
                         lemma::Domain::Enumeration(vals) if vals.len() == 1 => {
@@ -194,19 +197,27 @@ impl Formatter {
                             } else {
                                 String::new()
                             };
-                            
+
                             let (l_bracket, r_bracket) = match (min, max) {
-                                (lemma::Bound::Inclusive(_), lemma::Bound::Inclusive(_)) => ('[', ']'),
-                                (lemma::Bound::Inclusive(_), lemma::Bound::Exclusive(_)) => ('[', ')'),
-                                (lemma::Bound::Exclusive(_), lemma::Bound::Inclusive(_)) => ('(', ']'),
-                                (lemma::Bound::Exclusive(_), lemma::Bound::Exclusive(_)) => ('(', ')'),
+                                (lemma::Bound::Inclusive(_), lemma::Bound::Inclusive(_)) => {
+                                    ('[', ']')
+                                }
+                                (lemma::Bound::Inclusive(_), lemma::Bound::Exclusive(_)) => {
+                                    ('[', ')')
+                                }
+                                (lemma::Bound::Exclusive(_), lemma::Bound::Inclusive(_)) => {
+                                    ('(', ']')
+                                }
+                                (lemma::Bound::Exclusive(_), lemma::Bound::Exclusive(_)) => {
+                                    ('(', ')')
+                                }
                                 (lemma::Bound::Unbounded, lemma::Bound::Inclusive(_)) => ('(', ']'),
                                 (lemma::Bound::Unbounded, lemma::Bound::Exclusive(_)) => ('(', ')'),
                                 (lemma::Bound::Inclusive(_), lemma::Bound::Unbounded) => ('[', ')'),
                                 (lemma::Bound::Exclusive(_), lemma::Bound::Unbounded) => ('(', ')'),
                                 (lemma::Bound::Unbounded, lemma::Bound::Unbounded) => ('(', ')'),
                             };
-                            
+
                             let min_str = match min {
                                 lemma::Bound::Unbounded => "-∞".to_string(),
                                 lemma::Bound::Inclusive(v) | lemma::Bound::Exclusive(v) => {
@@ -235,17 +246,18 @@ impl Formatter {
                                     }
                                 }
                             };
-                            let value_str = format!("{}{}, {}{}", l_bracket, min_str, max_str, r_bracket);
+                            let value_str =
+                                format!("{}{}, {}{}", l_bracket, min_str, max_str, r_bracket);
                             (unit_str, value_str)
                         }
                         _ => (String::new(), domain.to_string()),
                     };
-                    
+
                     left_lines.push(fact_ref.to_string());
                     value_lines.push(value);
                     unit_lines.push(unit);
                 }
-                
+
                 let has_units = !unit_lines.iter().all(|u| u.is_empty());
                 let (target_unit, target_value) = if let Some(target_val) = target {
                     self.split_literal(target_val)
@@ -254,25 +266,25 @@ impl Formatter {
                 };
                 let has_target_unit = !target_unit.is_empty();
                 let show_unit_column = has_units || has_target_unit;
-                
+
                 let mut table = Table::new();
                 table.load_preset(presets::UTF8_FULL);
                 table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
                 table.set_style(super_table::TableComponent::HorizontalLines, '─');
-                
+
                 let header = if response.len() > 1 {
                     format!("{}? ({})", rule_name, i + 1)
                 } else {
                     format!("{}?", rule_name)
                 };
-                
+
                 if show_unit_column {
                     table.add_row(vec![
                         Cell::new(header).set_alignment(CellAlignment::Left),
                         Cell::new(target_value).set_alignment(CellAlignment::Right),
                         Cell::new(target_unit).set_alignment(CellAlignment::Left),
                     ]);
-                    
+
                     if !left_lines.is_empty() {
                         table.add_row(vec![
                             Cell::new(left_lines.join("\n")).set_alignment(CellAlignment::Left),
@@ -280,19 +292,19 @@ impl Formatter {
                             Cell::new(unit_lines.join("\n")).set_alignment(CellAlignment::Left),
                         ]);
                     }
-                    
+
                     if let Some(last_column) = table.column_mut(2) {
                         use super_table::ColumnConstraint;
-                        last_column.set_constraint(ColumnConstraint::UpperBoundary(super_table::Width::Fixed(
-                            10,
-                        )));
+                        last_column.set_constraint(ColumnConstraint::UpperBoundary(
+                            super_table::Width::Fixed(10),
+                        ));
                     }
                 } else {
                     table.add_row(vec![
                         Cell::new(header).set_alignment(CellAlignment::Left),
                         Cell::new(target_value).set_alignment(CellAlignment::Right),
                     ]);
-                    
+
                     if !left_lines.is_empty() {
                         table.add_row(vec![
                             Cell::new(left_lines.join("\n")).set_alignment(CellAlignment::Left),
@@ -300,7 +312,7 @@ impl Formatter {
                         ]);
                     }
                 }
-                
+
                 output.push_str(&format!("{}\n", table));
             }
         } else {
@@ -442,12 +454,9 @@ impl Formatter {
     fn format_rule_result(&self, result: &RuleResult) -> String {
         let mut rows: Vec<Row> = Vec::new();
         let mut expanded: HashSet<String> = HashSet::new();
-        let mut rule_positions: Vec<(usize, String)> = Vec::new();
 
         if let Some(proof) = &result.proof {
-            self.collect_rule_positions(&proof.tree, 0, &mut rule_positions);
-            rule_positions.sort_by_key(|(pos, _)| *pos);
-            self.render_node(&proof.tree, "", &mut rows, &mut expanded, &rule_positions);
+            self.render_node(&proof.tree, "", &mut rows, &mut expanded);
         }
 
         let mut table = Table::new();
@@ -508,59 +517,17 @@ impl Formatter {
         table.to_string()
     }
 
-    fn collect_rule_positions(
-        &self,
-        node: &ProofNode,
-        position: usize,
-        positions: &mut Vec<(usize, String)>,
-    ) -> usize {
-        let mut pos = position;
-        match node {
-            ProofNode::RuleReference { rule_path, .. } => {
-                positions.push((pos, rule_path.to_string()));
-                pos += 1;
-            }
-            ProofNode::Computation { operands, .. } => {
-                for operand in operands {
-                    pos = self.collect_rule_positions(operand, pos, positions);
-                }
-            }
-            ProofNode::Branches { matched, non_matched, .. } => {
-                pos = self.collect_rule_positions(&matched.result, pos, positions);
-                if let Some(condition) = &matched.condition {
-                    pos = self.collect_rule_positions(condition, pos, positions);
-                }
-                for branch in non_matched {
-                    if let Some(result) = &branch.result {
-                        pos = self.collect_rule_positions(result, pos, positions);
-                    }
-                    pos = self.collect_rule_positions(&branch.condition, pos, positions);
-                }
-            }
-            ProofNode::Condition { operands, .. } => {
-                for operand in operands {
-                    pos = self.collect_rule_positions(operand, pos, positions);
-                }
-            }
-            _ => {}
-        }
-        pos
-    }
-
     fn render_node(
         &self,
         node: &ProofNode,
         indent: &str,
         rows: &mut Vec<Row>,
         expanded: &mut HashSet<String>,
-        rule_positions: &[(usize, String)],
     ) {
         let mut ctx = RenderContext {
             rows,
             expanded,
             indent,
-            rule_positions,
-            current_position: 0,
         };
         match node {
             ProofNode::Value { value, source, .. } => {
@@ -573,7 +540,6 @@ impl Formatter {
                 ..
             } => {
                 self.render_rule_reference(rule_path, result, expansion, Connector::Last, &mut ctx);
-                ctx.current_position += 1;
             }
             ProofNode::Computation {
                 expression,
@@ -612,14 +578,11 @@ impl Formatter {
         connector: Connector,
         rows: &mut Vec<Row>,
         expanded: &mut HashSet<String>,
-        rule_positions: &[(usize, String)],
     ) {
         let mut ctx = RenderContext {
             rows,
             expanded,
             indent,
-            rule_positions,
-            current_position: 0,
         };
         match node {
             ProofNode::Value { value, source, .. } => {
@@ -645,10 +608,9 @@ impl Formatter {
                 ..
             } => {
                 self.render_rule_reference(rule_path, result, expansion, connector, &mut ctx);
-                ctx.current_position += 1;
             }
             _ => {
-                self.render_node(node, indent, rows, expanded, rule_positions);
+                self.render_node(node, indent, rows, expanded);
             }
         }
     }
@@ -686,15 +648,9 @@ impl Formatter {
             value,
         });
 
-        let should_expand = if let Some((first_pos, _)) = ctx.rule_positions.iter().find(|(_, name)| name == &rule_key) {
-            ctx.current_position == *first_pos && ctx.expanded.insert(rule_key.clone())
-        } else {
-            ctx.expanded.insert(rule_key.clone())
-        };
-
-        if should_expand {
+        if ctx.expanded.insert(rule_key) {
             let child_indent = self.child_indent(ctx.indent, connector);
-            self.render_node(expansion, &child_indent, ctx.rows, ctx.expanded, ctx.rule_positions);
+            self.render_node(expansion, &child_indent, ctx.rows, ctx.expanded);
         }
     }
 
@@ -735,7 +691,6 @@ impl Formatter {
                 connector,
                 ctx.rows,
                 ctx.expanded,
-                ctx.rule_positions,
             );
         }
     }
@@ -792,48 +747,7 @@ impl Formatter {
                         } else {
                             ctx.indent.to_string()
                         };
-                        self.render_node(&branch.result, &result_indent, ctx.rows, ctx.expanded, ctx.rule_positions);
-                    }
-                    
-                    if let Some(condition) = &branch.condition {
-                        let condition_indent = if has_condition {
-                            format!("{}│  ", ctx.indent)
-                        } else {
-                            format!("{}   ", ctx.indent)
-                        };
-                        let nested_refs = self.collect_nested_rule_refs(&[condition.as_ref().clone()]);
-                        let nested_len = nested_refs.len();
-                        for (i, (rule_path, result, expansion)) in nested_refs.iter().enumerate() {
-                            let connector = if i == nested_len - 1 {
-                                Connector::Last
-                            } else {
-                                Connector::Branch
-                            };
-                            let rule_key = rule_path.to_string();
-                            let (unit, value) = self.split_result(result);
-                            ctx.rows.push(Row {
-                                left: format!(
-                                    "{}{} {}",
-                                    condition_indent,
-                                    self.connector_str(connector),
-                                    rule_path
-                                ),
-                                unit,
-                                value,
-                            });
-                            
-                            let should_expand = if let Some((first_pos, _)) = ctx.rule_positions.iter().find(|(_, name)| name == &rule_key) {
-                                ctx.current_position == *first_pos && ctx.expanded.insert(rule_key.clone())
-                            } else {
-                                ctx.expanded.insert(rule_key.clone())
-                            };
-                            
-                            if should_expand {
-                                let expand_indent = self.child_indent(&condition_indent, connector);
-                                self.render_node(expansion, &expand_indent, ctx.rows, ctx.expanded, ctx.rule_positions);
-                            }
-                            ctx.current_position += 1;
-                        }
+                        self.render_node(&branch.result, &result_indent, ctx.rows, ctx.expanded);
                     }
                 }
                 BranchItem::NonMatched(branch) => {
@@ -896,73 +810,7 @@ impl Formatter {
                 connector,
                 ctx.rows,
                 ctx.expanded,
-                ctx.rule_positions,
             );
-        }
-        
-        let nested_refs = self.collect_nested_rule_refs(operands);
-        let nested_len = nested_refs.len();
-        for (i, (rule_path, result, expansion)) in nested_refs.iter().enumerate() {
-            let connector = if i == nested_len - 1 {
-                Connector::Last
-            } else {
-                Connector::Branch
-            };
-            let rule_key = rule_path.to_string();
-            let (unit, value) = self.split_result(result);
-            ctx.rows.push(Row {
-                left: format!(
-                    "{}{} {}",
-                    child_indent,
-                    self.connector_str(connector),
-                    rule_path
-                ),
-                unit,
-                value,
-            });
-            
-            let should_expand = if let Some((first_pos, _)) = ctx.rule_positions.iter().find(|(_, name)| name == &rule_key) {
-                ctx.current_position == *first_pos && ctx.expanded.insert(rule_key.clone())
-            } else {
-                ctx.expanded.insert(rule_key.clone())
-            };
-            
-            if should_expand {
-                let expand_indent = self.child_indent(&child_indent, connector);
-                self.render_node(expansion, &expand_indent, ctx.rows, ctx.expanded, ctx.rule_positions);
-            }
-            ctx.current_position += 1;
-        }
-    }
-    
-    fn collect_nested_rule_refs(&self, operands: &[ProofNode]) -> Vec<(&lemma::RulePath, &OperationResult, &ProofNode)> {
-        let mut refs = Vec::new();
-        for operand in operands {
-            self.collect_rule_refs_from_node(operand, &mut refs);
-        }
-        refs
-    }
-    
-    fn collect_rule_refs_from_node<'a>(
-        &self,
-        node: &'a ProofNode,
-        refs: &mut Vec<(&'a lemma::RulePath, &'a OperationResult, &'a ProofNode)>,
-    ) {
-        match node {
-            ProofNode::RuleReference {
-                rule_path,
-                result,
-                expansion,
-                ..
-            } => {
-                refs.push((rule_path, result, expansion));
-            }
-            ProofNode::Computation { operands, .. } | ProofNode::Condition { operands, .. } => {
-                for operand in operands {
-                    self.collect_rule_refs_from_node(operand, refs);
-                }
-            }
-            _ => {}
         }
     }
 

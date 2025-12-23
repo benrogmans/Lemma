@@ -330,13 +330,18 @@ fn filter_branch(
                                         plan,
                                         provided_facts,
                                     )?;
-                                    let folded_guard = expansion::try_constant_fold(&hydrated_guard).unwrap_or(hydrated_guard);
-                                    
+                                    let folded_guard =
+                                        expansion::try_constant_fold(&hydrated_guard)
+                                            .unwrap_or(hydrated_guard);
+
                                     // If guard simplifies to false, filter out this branch
-                                    if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)) = &folded_guard.kind {
+                                    if let ExpressionKind::Literal(LiteralValue::Boolean(
+                                        crate::BooleanValue::False,
+                                    )) = &folded_guard.kind
+                                    {
                                         return Ok(None);
                                     }
-                                    
+
                                     let conjunction =
                                         logical_and(simplified_condition, folded_guard);
                                     let simplified_conjunction = solver::simplify_boolean(
@@ -360,13 +365,16 @@ fn filter_branch(
             }
 
             let hydrated_guard = expansion::expand_and_hydrate(&guard, plan, provided_facts)?;
-            let folded_guard = expansion::try_constant_fold(&hydrated_guard).unwrap_or(hydrated_guard);
-            
+            let folded_guard =
+                expansion::try_constant_fold(&hydrated_guard).unwrap_or(hydrated_guard);
+
             // If guard simplifies to false, filter out this branch
-            if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)) = &folded_guard.kind {
+            if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)) =
+                &folded_guard.kind
+            {
                 return Ok(None);
             }
-            
+
             let conjunction = logical_and(hydrated_condition, folded_guard);
             let simplified_conjunction =
                 solver::simplify_boolean(&conjunction, &expressions_semantically_equal)?;
