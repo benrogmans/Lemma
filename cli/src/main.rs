@@ -8,7 +8,6 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use formatter::Formatter;
 use lemma::Engine;
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -46,6 +45,16 @@ enum Commands {
         ///
         /// Examples: price=100, quantity=5, config.tax_rate=0.21
         facts: Vec<String>,
+        /// Invert a rule to find inputs that produce desired output
+        ///
+        /// Format: rule[=target] where target can be =value, >value, <value, >=value, <=value, or =veto
+        ///
+        /// Examples:
+        ///   --target total=100
+        ///   --target total>50
+        ///   --target can_drive=veto
+        #[arg(short = 't', long)]
+        target: Option<String>,
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
@@ -103,33 +112,6 @@ enum Commands {
         workdir: PathBuf,
     },
 
-    /// Invert a rule to find what inputs produce desired outputs
-    ///
-    /// Uses symbolic inversion to derive input constraints from rule definitions.
-    /// Returns domains (valid ranges/values) for each fact that satisfies the target.
-    Invert {
-        /// Document name
-        doc_name: String,
-        /// Rule name to invert
-        rule_name: String,
-        /// Target to invert for (default: any non-veto value)
-        ///
-        /// Examples:
-        ///   any                - any non-veto value (default)
-        ///   veto               - any veto
-        ///   100                - specific value
-        ///   \>50                - greater than 50
-        ///   \>=50               - greater than or equal to 50
-        ///   \<100               - less than 100
-        ///   \<=100              - less than or equal to 100
-        #[arg(short = 't', long, default_value = "any")]
-        target: String,
-        /// Facts to provide as given (format: name=value)
-        facts: Vec<String>,
-        /// Workspace root directory containing .lemma files
-        #[arg(short = 'd', long = "dir", default_value = ".")]
-        workdir: PathBuf,
-    },
 }
 
 fn main() {
@@ -140,9 +122,10 @@ fn main() {
             workdir,
             doc_name,
             facts,
+            target,
             interactive,
             ..
-        } => run_command(workdir, doc_name.as_ref(), facts, *interactive),
+        } => run_command(workdir, doc_name.as_ref(), facts, target.as_ref(), *interactive),
         Commands::Show { workdir, doc_name } => show_command(workdir, doc_name),
         Commands::List { root } => list_command(root),
         Commands::Server {
@@ -152,13 +135,6 @@ fn main() {
         } => server_command(workdir, host, *port),
         Commands::Mcp { workdir } => mcp_command(workdir),
 
-        Commands::Invert {
-            workdir,
-            doc_name,
-            rule_name,
-            target,
-            facts,
-        } => invert_command(workdir, doc_name, rule_name, target, facts),
     };
 
     if let Err(e) = result {
@@ -176,12 +152,13 @@ fn run_command(
     workdir: &Path,
     doc_name: Option<&String>,
     facts: &[String],
+    target: Option<&String>,
     interactive: bool,
 ) -> Result<()> {
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
-    let (doc, rules, final_facts) = if interactive || doc_name.is_none() {
+    let (doc, rules, final_facts, final_target) = if interactive || doc_name.is_none() {
         if doc_name.is_none() && !interactive {
             eprintln!("Error: No document specified\n");
             eprintln!("Usage: lemma run [DOC[:RULES]] [FACTS...] [OPTIONS]\n");
@@ -207,26 +184,68 @@ fn run_command(
 
         let cli_facts: std::collections::HashMap<String, String> = parse_fact_strings(facts);
 
-        let (d, r, interactive_facts) =
+        let (d, r, interactive_facts, interactive_target) =
             interactive::run_interactive(&engine, parsed_doc, parsed_rules, &cli_facts)?;
 
         let mut all_facts = cli_facts;
         all_facts.extend(interactive_facts);
-        (d, r.unwrap_or_default(), all_facts)
+        (d, r.unwrap_or_default(), all_facts, interactive_target)
     } else if let Some(name) = doc_name {
         let (doc, rules) = parse_doc_and_rules(name);
         let fact_overrides = parse_fact_strings(facts);
-        (doc, rules.unwrap_or_default(), fact_overrides)
+        (doc, rules.unwrap_or_default(), fact_overrides, None)
     } else {
         unreachable!()
     };
 
-    let response = engine.evaluate(&doc, rules, final_facts)?;
-
-    let formatter = Formatter;
-    print!("{}", formatter.format_response(&response));
+    let target_str = target.or(final_target.as_ref());
+    if let Some(target_str) = target_str {
+        // Inversion mode - extract rule name from target flag
+        let (target_rule, target_expr) = parse_target_rule(target_str)?;
+        
+        // If rules were specified, they must match the target rule
+        if !rules.is_empty() && rules.len() != 1 {
+            return Err(anyhow::anyhow!("--target requires exactly one rule to be specified"));
+        }
+        if !rules.is_empty() && rules[0] != target_rule {
+            return Err(anyhow::anyhow!(
+                "Target rule '{}' does not match specified rule '{}'",
+                target_rule,
+                rules[0]
+            ));
+        }
+        
+        let rule_name = &target_rule;
+        let target = parse_target(&target_expr)?;
+        let target_value = target.outcome.as_ref().and_then(|o| match o {
+            lemma::OperationResult::Value(v) => Some(v.clone()),
+            _ => None,
+        });
+        let response = engine.invert(&doc, rule_name, target, final_facts)?;
+        let formatter = Formatter;
+        print!("{}", formatter.format_inversion_response(&response, rule_name, target_value.as_ref()));
+    } else {
+        // Normal evaluation mode
+        let response = engine.evaluate(&doc, rules, final_facts)?;
+        let formatter = Formatter;
+        print!("{}", formatter.format_response(&response));
+    }
 
     Ok(())
+}
+
+fn parse_target_rule(target_str: &str) -> Result<(String, String)> {
+    // Parse "rule=target" or "rule>target" etc.
+    for op in ["<=", ">=", "=", ">", "<"] {
+        if let Some(pos) = target_str.find(op) {
+            return Ok((
+                target_str[..pos].trim().to_string(),
+                format!("{}{}", op, &target_str[pos + op.len()..]),
+            ));
+        }
+    }
+    // No operator, default to "any"
+    Ok((target_str.trim().to_string(), "any".to_string()))
 }
 
 /// Parse fact override strings in "key=value" format into a HashMap
@@ -346,44 +365,15 @@ fn mcp_command(workdir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn invert_command(
-    workdir: &Path,
-    doc_name: &str,
-    rule_name: &str,
-    target_str: &str,
-    facts: &[String],
-) -> Result<()> {
-    let mut engine = Engine::new();
-    load_workspace(&mut engine, workdir)?;
-
-    let target = parse_target(target_str)?;
-
-    let given: HashMap<String, String> = facts
-        .iter()
-        .filter_map(|f| {
-            let parts: Vec<&str> = f.splitn(2, '=').collect();
-            if parts.len() == 2 {
-                Some((parts[0].to_string(), parts[1].to_string()))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let response = engine.invert(doc_name, rule_name, target, given)?;
-
-    let formatter = Formatter;
-    print!("{}", formatter.format_inversion_response(&response));
-
-    Ok(())
-}
 
 fn parse_target(target_str: &str) -> Result<lemma::Target> {
     use lemma::{OperationResult, Target, TargetOp};
 
-    match target_str {
+    let trimmed = target_str.trim();
+    
+    match trimmed {
         "any" => Ok(Target::any_value()),
-        "veto" => Ok(Target::any_veto()),
+        "veto" | "=veto" => Ok(Target::any_veto()),
         s if s.starts_with(">=") => {
             let value_str = &s[2..];
             let value = parse_literal_value(value_str)?;
@@ -410,32 +400,23 @@ fn parse_target(target_str: &str) -> Result<lemma::Target> {
             let value = parse_literal_value(value_str)?;
             Ok(Target::with_op(TargetOp::Lt, OperationResult::Value(value)))
         }
+        s if s.starts_with("=") => {
+            let value_str = &s[1..];
+            let value = parse_literal_value(value_str)?;
+            Ok(Target::value(value))
+        }
         _ => {
-            let value = parse_literal_value(target_str)?;
+            let value = parse_literal_value(trimmed)?;
             Ok(Target::value(value))
         }
     }
 }
 
 fn parse_literal_value(s: &str) -> Result<lemma::LiteralValue> {
-    use lemma::LiteralValue;
-    use rust_decimal::Decimal;
-
-    if s == "true" {
-        Ok(LiteralValue::Boolean(lemma::BooleanValue::True))
-    } else if s == "false" {
-        Ok(LiteralValue::Boolean(lemma::BooleanValue::False))
-    } else if let Ok(num) = s.parse::<Decimal>() {
-        Ok(LiteralValue::Number(num))
-    } else if let Some(s_without_percent) = s.strip_suffix('%') {
-        if let Ok(num) = s_without_percent.parse::<Decimal>() {
-            Ok(LiteralValue::Percentage(num))
-        } else {
-            Err(anyhow::anyhow!("Invalid percentage: {}", s))
-        }
-    } else {
-        Ok(LiteralValue::Text(s.to_string()))
-    }
+    // Use Lemma's type parsing - try Number first, fallback to Text
+    lemma::LemmaType::Number.parse_value(s)
+        .or_else(|_| lemma::LemmaType::Text.parse_value(s))
+        .map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 /// Load all .lemma files from the workspace directory

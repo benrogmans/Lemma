@@ -216,3 +216,55 @@ fn veto_query_last_wins_semantics() {
         assert!(!solution.is_empty(), "expected domain constraints");
     }
 }
+
+#[test]
+fn veto_query_specific_message_age_driving() {
+    let code = r#"
+        doc test_inversion3
+        fact age = [number]
+
+        rule can_drive = true
+          unless age < 16 then veto "Too young to drive"
+          unless age >= 100 then veto "Too old to drive"
+    "#;
+
+    let mut engine = Engine::new();
+    engine.add_lemma_code(code, "test").unwrap();
+
+    // Test: What age values produce the veto "Too young to drive"?
+    let response = engine
+        .invert_strict(
+            "test_inversion3",
+            "can_drive",
+            Target::veto(Some("Too young to drive".to_string())),
+            std::collections::HashMap::new(),
+        )
+        .expect("veto inversion should succeed");
+
+    // Should have exactly one solution: age < 16
+    assert_eq!(response.len(), 1, "expected one veto solution for 'Too young to drive'");
+    
+    // Check that the solution has age < 16
+    let age_path = FactPath::local("age".to_string());
+    let solution = &response.solutions[0];
+    let age_domain = solution.get(&age_path).expect("solution should contain age domain");
+    
+    // The domain should represent age < 16
+    // This should be Range { min: Unbounded, max: Exclusive(16) }
+    match age_domain {
+        Domain::Range { min, max } => {
+            // Should be: min = Unbounded, max = Exclusive(16)
+            assert!(
+                matches!(min, Bound::Unbounded),
+                "min should be Unbounded for age < 16, got {:?}", min
+            );
+            assert!(
+                matches!(max, Bound::Exclusive(v) if v == &LiteralValue::Number(rust_decimal::Decimal::new(16, 0))),
+                "max should be Exclusive(16) for age < 16, got {:?}", max
+            );
+        }
+        _ => {
+            panic!("Expected Range domain for age < 16, got {:?}", age_domain);
+        }
+    }
+}

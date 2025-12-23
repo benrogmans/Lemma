@@ -254,7 +254,11 @@ fn extract_domains_for_all_variables(
 ///
 /// Converts symbolic expressions in Shape branches to concrete value sets (domains).
 /// Filters out branches with unsatisfiable conditions (detected as empty domains).
-pub fn shape_to_domains(shape: &Shape) -> LemmaResult<Vec<HashMap<FactPath, Domain>>> {
+pub fn shape_to_domains(
+    shape: &Shape,
+    plan: &crate::planning::ExecutionPlan,
+    provided_facts: &std::collections::HashSet<FactPath>,
+) -> LemmaResult<Vec<HashMap<FactPath, Domain>>> {
     let mut result = Vec::new();
 
     for branch in &shape.branches {
@@ -264,20 +268,28 @@ pub fn shape_to_domains(shape: &Shape) -> LemmaResult<Vec<HashMap<FactPath, Doma
             continue;
         }
 
-        let domains = extract_domains_for_all_variables(&branch.condition)?;
+        let mut domains = extract_domains_for_all_variables(&branch.condition)?;
 
         if domains.values().any(is_empty_domain) {
             continue;
         }
 
-        result.push(domains);
-    }
+        // Filter out solutions with all Unconstrained domains
+        if !domains.is_empty() && domains.values().all(|d| matches!(d, Domain::Unconstrained)) {
+            continue;
+        }
 
-    if result.is_empty() {
-        return Err(LemmaError::Engine(format!(
-            "No valid solutions: all {} branch constraint(s) are unsatisfiable",
-            shape.branches.len()
-        )));
+        // Always include provided facts with their values
+        for fact_path in provided_facts {
+            if let Some(value) = plan.get_fact_value(fact_path) {
+                domains.insert(
+                    fact_path.clone(),
+                    Domain::Enumeration(vec![value.clone()]),
+                );
+            }
+        }
+
+        result.push(domains);
     }
 
     Ok(result)

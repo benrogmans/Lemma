@@ -312,7 +312,7 @@ impl Engine {
         provided_facts: HashSet<crate::FactPath>,
     ) -> LemmaResult<crate::InversionResponse> {
         let shape = crate::inversion::invert(rule_name, target, &plan, &provided_facts)?;
-        let solutions = crate::inversion::shape_to_domains(&shape)?;
+        let solutions = crate::inversion::shape_to_domains(&shape, &plan, &provided_facts)?;
         Ok(crate::InversionResponse::new(shape, solutions))
     }
 }

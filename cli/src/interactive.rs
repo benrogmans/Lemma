@@ -4,7 +4,7 @@ use inquire::{DateSelect, MultiSelect, Select, Text};
 use lemma::{Engine, FactValue, LemmaType, TypeAnnotation};
 use std::collections::HashMap;
 
-pub type InteractiveResult = (String, Option<Vec<String>>, HashMap<String, String>);
+pub type InteractiveResult = (String, Option<Vec<String>>, HashMap<String, String>, Option<String>);
 
 pub fn run_interactive(
     engine: &Engine,
@@ -22,9 +22,10 @@ pub fn run_interactive(
         None => select_rules(engine, &doc)?,
     };
 
+    let target = prompt_target(engine, &doc, &rules)?;
     let facts = prompt_facts(engine, &doc, &rules, provided_facts)?;
 
-    Ok((doc, rules, facts))
+    Ok((doc, rules, facts, target))
 }
 
 fn select_document(engine: &Engine) -> Result<String> {
@@ -89,6 +90,67 @@ fn select_rules(engine: &Engine, doc_name: &str) -> Result<Option<Vec<String>>> 
     } else {
         Ok(Some(selected))
     }
+}
+
+fn prompt_target(
+    engine: &Engine,
+    doc_name: &str,
+    rule_names: &Option<Vec<String>>,
+) -> Result<Option<String>> {
+    use inquire::Confirm;
+    
+    let wants_inversion = Confirm::new("Do you want to invert a rule (find inputs for a target output)?")
+        .with_default(false)
+        .prompt()
+        .context("Failed to get inversion preference")?;
+    
+    if !wants_inversion {
+        return Ok(None);
+    }
+    
+    let available_rules = engine.get_document_rules(doc_name);
+    if available_rules.is_empty() {
+        return Ok(None);
+    }
+    
+    let rule_options: Vec<String> = if let Some(selected_rules) = rule_names {
+        if selected_rules.len() == 1 {
+            vec![selected_rules[0].clone()]
+        } else {
+            available_rules
+                .iter()
+                .map(|r| r.name.clone())
+                .collect()
+        }
+    } else {
+        available_rules
+            .iter()
+            .map(|r| r.name.clone())
+            .collect()
+    };
+    
+    if rule_options.is_empty() {
+        return Ok(None);
+    }
+    
+    let selected_rule = if rule_options.len() == 1 {
+        rule_options[0].clone()
+    } else {
+        Select::new("Select rule to invert:", rule_options)
+            .prompt()
+            .context("Failed to select rule")?
+    };
+    
+    let target_value = Text::new(&format!("Enter target for {} (e.g., =100, >50, <200, =veto):", selected_rule))
+        .with_help_message("Format: =value, >value, <value, >=value, <=value, or =veto")
+        .prompt()
+        .context("Failed to get target value")?;
+    
+    if target_value.trim().is_empty() {
+        return Ok(None);
+    }
+    
+    Ok(Some(format!("{}={}", selected_rule, target_value.trim())))
 }
 
 fn prompt_facts(

@@ -108,8 +108,6 @@ pub fn invert(
         LemmaError::Engine(format!("Rule not found: {}.{}", plan.doc_name, rule_name))
     })?;
 
-    let rule_path_string = executable_rule.path.to_string();
-
     let all_branches = build_inversion_branches(executable_rule);
 
     let mut expanded_branches = Vec::new();
@@ -168,14 +166,6 @@ pub fn invert(
         )? {
             branches_out.push(branch);
         }
-    }
-
-    if branches_out.is_empty() {
-        return Err(build_no_solution_error(
-            &rule_path_string,
-            &target,
-            &available_outcomes,
-        ));
     }
 
     let unified_branches = unify_branches(branches_out);
@@ -263,45 +253,6 @@ pub(crate) fn build_suffix_or_conditions(
     suffix_or
 }
 
-/// Build error message when no solution is found
-fn build_no_solution_error(
-    rule_path: &str,
-    target: &Target,
-    available_outcomes: &[String],
-) -> LemmaError {
-    let target_desc = match &target.outcome {
-        None => "any value".to_owned(),
-        Some(OperationResult::Value(v)) => format!("value {}", v),
-        Some(OperationResult::Veto(Some(msg))) => format!("veto '{}'", msg),
-        Some(OperationResult::Veto(None)) => "any veto".to_owned(),
-    };
-
-    let op_str = match target.op {
-        TargetOp::Eq => "=",
-        TargetOp::Neq => "!=",
-        TargetOp::Lt => "<",
-        TargetOp::Lte => "<=",
-        TargetOp::Gt => ">",
-        TargetOp::Gte => ">=",
-    };
-
-    let mut error_msg = format!(
-        "Cannot invert rule '{}' for target {} {}.\n",
-        rule_path, op_str, target_desc
-    );
-
-    if !available_outcomes.is_empty() {
-        error_msg.push_str("This rule can produce:\n");
-        for (i, outcome) in available_outcomes.iter().enumerate() {
-            error_msg.push_str(&format!("  {}: {}\n", i + 1, outcome));
-        }
-    } else {
-        error_msg.push_str("No branches in this rule can be satisfied with the given facts.");
-    }
-
-    LemmaError::Engine(error_msg)
-}
-
 /// Filter a branch based on the target outcome
 fn filter_branch(
     hydrated_condition: Expression,
@@ -379,8 +330,15 @@ fn filter_branch(
                                         plan,
                                         provided_facts,
                                     )?;
+                                    let folded_guard = expansion::try_constant_fold(&hydrated_guard).unwrap_or(hydrated_guard);
+                                    
+                                    // If guard simplifies to false, filter out this branch
+                                    if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)) = &folded_guard.kind {
+                                        return Ok(None);
+                                    }
+                                    
                                     let conjunction =
-                                        logical_and(simplified_condition, hydrated_guard);
+                                        logical_and(simplified_condition, folded_guard);
                                     let simplified_conjunction = solver::simplify_boolean(
                                         &conjunction,
                                         &expressions_semantically_equal,
@@ -402,7 +360,14 @@ fn filter_branch(
             }
 
             let hydrated_guard = expansion::expand_and_hydrate(&guard, plan, provided_facts)?;
-            let conjunction = logical_and(hydrated_condition, hydrated_guard);
+            let folded_guard = expansion::try_constant_fold(&hydrated_guard).unwrap_or(hydrated_guard);
+            
+            // If guard simplifies to false, filter out this branch
+            if let ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::False)) = &folded_guard.kind {
+                return Ok(None);
+            }
+            
+            let conjunction = logical_and(hydrated_condition, folded_guard);
             let simplified_conjunction =
                 solver::simplify_boolean(&conjunction, &expressions_semantically_equal)?;
 
