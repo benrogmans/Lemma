@@ -1,7 +1,7 @@
 use crate::evaluation::Evaluator;
 use crate::planning::plan;
 use crate::{parse, LemmaDoc, LemmaError, LemmaResult, ResourceLimits, Response};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Engine for evaluating Lemma rules
 ///
@@ -205,7 +205,7 @@ impl Engine {
         &self,
         doc_name: &str,
         rule_name: &str,
-        target: crate::Target,
+        target: &str,
         json: &[u8],
     ) -> LemmaResult<crate::InversionResponse> {
         let base_plan = self
@@ -235,23 +235,10 @@ impl Engine {
         &self,
         doc_name: &str,
         rule_name: &str,
-        target: crate::Target,
+        target: &str,
         values: HashMap<String, String>,
     ) -> LemmaResult<crate::InversionResponse> {
-        let base_plan = self
-            .execution_plans
-            .get(doc_name)
-            .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
-
-        // Resolve value keys to FactPaths for inversion
-        let provided_facts: HashSet<crate::FactPath> = values
-            .keys()
-            .filter_map(|k| base_plan.get_fact_by_path_str(k).map(|(fp, _)| fp.clone()))
-            .collect();
-
-        let plan = base_plan.clone().with_values(values, &self.limits)?;
-
-        self.invert_plan(plan, rule_name, target, provided_facts)
+        todo!()
     }
 
     /// Invert a rule to find input domains that produce a desired outcome.
@@ -271,23 +258,10 @@ impl Engine {
         &self,
         doc_name: &str,
         rule_name: &str,
-        target: crate::Target,
+        target: &str,
         values: HashMap<String, crate::LiteralValue>,
     ) -> LemmaResult<crate::InversionResponse> {
-        let base_plan = self
-            .execution_plans
-            .get(doc_name)
-            .ok_or_else(|| LemmaError::Engine(format!("Document '{}' not found", doc_name)))?;
-
-        // Resolve value keys to FactPaths for inversion
-        let provided_facts: HashSet<crate::FactPath> = values
-            .keys()
-            .filter_map(|k| base_plan.get_fact_by_path_str(k).map(|(fp, _)| fp.clone()))
-            .collect();
-
-        let plan = base_plan.clone().with_typed_values(values, &self.limits)?;
-
-        self.invert_plan(plan, rule_name, target, provided_facts)
+        todo!()
     }
 
     fn evaluate_plan(
@@ -304,15 +278,4 @@ impl Engine {
         Ok(response)
     }
 
-    fn invert_plan(
-        &self,
-        plan: crate::planning::ExecutionPlan,
-        rule_name: &str,
-        target: crate::Target,
-        provided_facts: HashSet<crate::FactPath>,
-    ) -> LemmaResult<crate::InversionResponse> {
-        let shape = crate::inversion::invert(rule_name, target, &plan, &provided_facts)?;
-        let solutions = crate::inversion::shape_to_domains(&shape, &plan, &provided_facts)?;
-        Ok(crate::InversionResponse::new(shape, solutions))
-    }
 }

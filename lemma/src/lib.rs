@@ -50,7 +50,6 @@ pub mod computation;
 pub mod engine;
 pub mod error;
 pub mod evaluation;
-pub mod inversion;
 pub mod limits;
 pub mod parsing;
 pub mod planning;
@@ -67,9 +66,6 @@ pub use evaluation::operations::{
 };
 pub use evaluation::proof;
 pub use evaluation::response::{Facts, Response, RuleResult};
-pub use inversion::{
-    Bound, BranchOutcome, Domain, InversionResponse, Shape, ShapeBranch, Solution, Target, TargetOp,
-};
 pub use limits::ResourceLimits;
 pub use parsing::parse;
 pub use parsing::{DepthTracker, Source, Span};

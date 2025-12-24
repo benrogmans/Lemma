@@ -1,28 +1,37 @@
-doc coffee_order
+type coffee_type
+unit espresso
+unit latte
+unit cappuccino
+unit mocha
+
+type coffee_size
+unit small
+unit medium
+unit large
+
 """
 Coffee Shop Pricing
 
 A simple example showing how facts and rules work together.
 Perfect for understanding the basics of Lemma.
 """
+doc coffee_order
 
-fact type = [text]
-fact size = [text]
+fact type = [coffee_type]
+fact size = [coffee_size]
 fact number_of_cups = [number]
 fact has_loyalty_card = [boolean]
 
-rule base_price = 0
-  unless type == "espresso"         then 2.50
-  unless type == "latte"            then 3.50
-  unless type == "cappuccino"       then 3.50
-  unless type == "mocha"            then 4.00
-  unless type != "espresso" and type != "latte" and type != "cappuccino" and type != "mocha" then veto "Unknown type of coffee"
+rule base_price = veto "Unknown type of coffee"  
+  unless type is espresso then 2.50
+  unless type is latte then 3.50
+  unless type is cappuccino then 3.50
+  unless type is mocha then 4.00
 
-rule size_multiplier = 100%
-  unless size == "small"    then 80%
-  unless size == "medium"   then 100%
-  unless size == "large"    then 120%
-  unless size != "small" and size != "medium" and size != "large" then veto "Unknown size"
+rule size_multiplier = veto "Unknown size of coffee"
+  unless size is small then 80%
+  unless size is medium then 100%
+  unless size is large then 120%
 
 rule price_per_cup = base_price? * size_multiplier?
 
