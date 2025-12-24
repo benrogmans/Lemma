@@ -7,13 +7,17 @@ title: User Types
 
 ## Overview
 
-Extend Lemma to support user-defined types within documents. Types define units with optional numeric values, enabling custom enumerations, priorities, statuses, and domain-specific measurements. Types are scoped to the workspace.
+Extend Lemma to support user-defined types within documents. Types define units with optional numeric values, enabling custom enumerations, priorities, statuses, and domain-specific measurements. Types are always defined within the scope of a doc. Types from other docs can be imported using `type x from doc y`, or accessed via document references using `doc_ref.type_name.unit_name` syntax.
+
+**Note**: `Duration` remains a core engine type (not user-defined) due to its special calendar-aware semantics for DateTime operations (e.g., `Year` and `Month` units require special handling).
 
 ## Design
 
-### Standard Library Types (Global)
+### Doc-Scoped Types
 
 ```lemma
+doc lemma_standard
+
 type mass
 unit gram = 1
 unit kilogram = gram * 1000
@@ -24,89 +28,137 @@ unit celsius = 1
 unit fahrenheit = celsius * 9/5 + 32
 unit kelvin = celsius + 273.15
 
-type currency
-"""
-No relationships between currencies (yet) - no conversions possible.
-"""
-unit eur = 1
-unit usd = 1
-unit gbp = 1
+doc finance
+
+fact ex_rate_eur = [number]
+
+type money
+unit usd = 1.00
+unit eur = usd * ex_rate_eur
 ```
 
-Loaded at engine initialization. Available everywhere without qualification.
+Types defined in a doc are local to that doc. Units can reference facts from the same doc. Units are unqualified within the doc.
 
-### User Types (Doc-Scoped)
+### Type Import
 
 ```lemma
-type order_status
-unit draft
+"""
+Coffee Shop Pricing
+
+A simple example showing how facts and rules work together.
+Perfect for understanding the basics of Lemma.
+"""
+doc coffee_order
+
+type coffee
+unit espresso
+unit latte
+unit cappuccino
+unit mocha
+
+type size
+unit small
+unit medium
+unit large
+
+type money from finance
+```
+
+Types from other docs can be imported using `type x from doc y` syntax. Imported types bring all their units into the current doc's scope.
+
+### Type Access Patterns
+
+Types can be accessed in two ways:
+
+1. **Import the type**: Units become available unqualified in the current scope
+2. **Access via document reference**: Use `doc_ref.type_name.unit_name` syntax
+
+```lemma
+doc order_workflow
+
+type status
 unit pending
 unit approved
+unit shipped
 
 type priority
-"""
-A generic priority type
-"""
-
 unit low = 1
 unit medium = 2
 unit high = 3
 
+fact status = [status]
 
-doc order_workflow
-
-fact status = [type @coolblue/order_status]
-fact urgency = [type priority]
-
-rule can_process = status is order_status.approved
-rule needs_escalation = urgency > 2
-```
-
-Types defined in a doc are local to that doc. Units are unqualified within the doc.
-
-### Cross-Doc Access
-
-```lemma
 doc shipment
-fact order = doc order_workflow
-fact order.status = approved
+type priority from order_workflow
 
-rule can_ship = order.status is order_status.approved
+fact order = doc order_workflow
+fact order.status = order.status.approved
+fact priority = [priority]
+
+rule can_ship = order.status is order.status.approved
+
+rule asap = priority > 2
+rule asap = priority > medium
 ```
 
-Access units from other docs using doc reference syntax: `type_name.unit_name`
+In this example:
+- `type priority from order_workflow` imports the type, so `medium` is available unqualified
+- `order.status.approved` accesses the `status` type from `order_workflow` via document reference
+- `order.status` is the fact reference, `order.status.approved` is the type unit access
+- Note that `order_workflow` has both `type status` and `fact status = [status]` - this is allowed since the fact is not a document reference
 
 ### Type Annotations
 
+Type annotations use the type name in brackets:
+
 ```lemma
+doc shipment
+
 type order_status
 unit draft
 unit approved
 
-doc order_workflow
-fact status = [order_status]
-
-doc shipment
 fact weight = [mass]
-fact order_status = [order_status]
+fact status = [order_status]
 ```
 
-Type annotations use the type name in brackets.
+### Name Collision Constraints
+
+To maintain unambiguous syntax, the following constraint applies within a single document:
+
+**A fact cannot use the same name as a type when it holds a document reference**: If a document has `type status`, it cannot have `fact status = doc ...`. However, `fact status = [status]` (a regular fact) is allowed.
+
+This ensures that `order.status.approved` is unambiguous:
+- `order.status` refers to the fact or document reference (statically validated)
+- `order.status.approved` refers to the type unit (statically validated)
+- The constraint prevents ambiguity when accessing types via document references
+- All references are validated at analysis time - missing references are errors
+
 
 ## Grammar Changes
 
 **File: `lemma/src/parser/lemma.pest`**
 
 ```pest
-document = { SOI ~ doc ~ doc_name ~ commentary? ~ (type_def | fact | rule)* ~ EOI }
+document = { SOI ~ doc ~ doc_name ~ commentary? ~ (type_def | type_import | fact | rule)* ~ EOI }
 doc = { "doc" }
 
 type_def = { "type" ~ identifier ~ unit+ }
+type_import = { "type" ~ identifier ~ "from" ~ doc_reference }
 unit = { "unit" ~ identifier ~ ("=" ~ expression)? }
 ```
 
-
 This means that all existing types, in semantic and all processing, need to be removed and replaced by a generic NumericUnit type. This is a major clean up.
+
+### Semantic Validation
+
+**File: `lemma/src/semantic.rs`**
+
+Add validation to enforce name collision constraints:
+
+Reject documents where a fact that holds a document reference uses the same name as a type (i.e., if `type status` exists, reject `fact status = doc ...`).
+
+This check ensures `doc_ref.type_name.unit_name` syntax remains unambiguous. Note that types and regular facts (non-document references) can share names.
 
 ## Expression Inversion
 
@@ -178,13 +230,13 @@ pound / 16          →  Value * 16
 
 Works for any expression where the base unit appears exactly once.
 
-## Standard Library
+## Systeme International d'unites
 
-**File: `lemma/src/stdlib/types.lemma`** (new)
-
-Define all current hardcoded units as type definitions. Load automatically on engine initialization.
+A document to be published on LemmaBase, publically.
 
 ```lemma
+doc lemma/si_units
+
 type mass
 unit kilogram = 1
 unit gram = kilogram * 0.001
@@ -201,12 +253,6 @@ type temperature
 unit celsius = 1
 unit fahrenheit = celsius * 9/5 + 32
 unit kelvin = celsius + 273.15
-
-type duration
-unit second = 1
-unit minute = second * 60
-unit hour = minute * 60
-unit day = hour * 24
 
 type volume
 unit liter = 1
@@ -245,4 +291,12 @@ type force
 unit newton = 1
 unit kilonewton = newton * 1000
 unit lbf = newton * 4.44822
+```
+Other docs can then use it as follows:
+
+```lemma
+doc shipping
+type mass from @lemma/si_units
+
+fact package_weight = [mass]
 ```
