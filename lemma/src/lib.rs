@@ -67,9 +67,7 @@ pub use evaluation::operations::{
 };
 pub use evaluation::proof;
 pub use evaluation::response::{Facts, Response, RuleResult};
-pub use inversion::{
-    Bound, BranchOutcome, Domain, InversionResponse, Shape, ShapeBranch, Solution, Target, TargetOp,
-};
+pub use inversion::{invert, Bound, Domain, InversionResponse, Solution, Target, TargetOp};
 pub use limits::ResourceLimits;
 pub use parsing::parse;
 pub use parsing::{DepthTracker, Source, Span};
@@ -77,6 +75,3 @@ pub use semantic::*;
 
 /// Result type for Lemma operations
 pub type LemmaResult<T> = Result<T, LemmaError>;
-
-#[cfg(test)]
-mod tests;

@@ -51,12 +51,19 @@ impl EvaluationContext {
         self.operations.push(OperationRecord { kind });
     }
 
-    fn set_proof_node(&mut self, expr: &Expression, node: crate::evaluation::proof::ProofNode) {
-        self.proof_nodes.insert(expr.clone(), node);
+    fn set_proof_node(
+        &mut self,
+        expression: &Expression,
+        node: crate::evaluation::proof::ProofNode,
+    ) {
+        self.proof_nodes.insert(expression.clone(), node);
     }
 
-    fn get_proof_node(&self, expr: &Expression) -> Option<&crate::evaluation::proof::ProofNode> {
-        self.proof_nodes.get(expr)
+    fn get_proof_node(
+        &self,
+        expression: &Expression,
+    ) -> Option<&crate::evaluation::proof::ProofNode> {
+        self.proof_nodes.get(expression)
     }
 
     fn get_rule_proof(&self, rule_path: &RulePath) -> Option<&crate::evaluation::proof::Proof> {
@@ -146,6 +153,7 @@ impl Evaluator {
                 facts: vec![],
                 operations: rule_operations,
                 proof: Some(proof),
+                rule_type: exec_rule.rule_type.clone(),
             });
         }
 

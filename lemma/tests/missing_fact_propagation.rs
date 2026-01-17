@@ -128,7 +128,7 @@ fn test_multiple_missing_facts_reported_together() {
 doc test_doc
 fact price = [number]
 fact quantity = [number]
-fact discount = [percentage]
+fact discount = [percent]
 rule total = price * quantity - discount
 "#;
 
@@ -211,8 +211,12 @@ rule message = "Order processed"
         .find(|r| r.rule.name == "message")
         .expect("message rule should be in results");
     match &message_rule.result {
-        lemma::OperationResult::Value(lemma::LiteralValue::Text(text)) => {
-            assert_eq!(text, "Order processed");
+        lemma::OperationResult::Value(lit) => {
+            if let lemma::Value::Text(text) = &lit.value {
+                assert_eq!(text, "Order processed");
+            } else {
+                panic!("Expected text result");
+            }
         }
         _ => panic!(
             "message rule should evaluate successfully, but got: {:?}",
@@ -231,7 +235,7 @@ fn test_cross_document_missing_facts() {
 doc private_rules
 fact base_price = [number]
 fact quantity = [number]
-fact tax_rate = [percentage]
+fact tax_rate = [percent]
 rule subtotal = base_price * quantity
 rule total = subtotal? + (subtotal? * tax_rate)
 "#;

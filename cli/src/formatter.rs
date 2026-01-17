@@ -1,7 +1,6 @@
 use lemma::evaluation::proof::{NonMatchedBranch, ProofNode, ValueSource};
 use lemma::{
-    InversionResponse, LemmaDoc, LemmaFact, LemmaRule, LiteralValue, NumericUnit, OperationResult,
-    Response, RuleResult,
+    LemmaDoc, LemmaFact, LemmaRule, LiteralValue, OperationResult, Response, RuleResult, Value,
 };
 use std::collections::HashSet;
 use super_table::{presets, Cell, CellAlignment, Table};
@@ -133,23 +132,6 @@ impl Formatter {
         output
     }
 
-    pub fn format_inversion_response(&self, response: &InversionResponse) -> String {
-        let mut output = String::new();
-        if response.is_empty() {
-            output.push_str("No response found.\n");
-        } else {
-            output.push_str(&format!("Found {} solution(s):\n\n", response.len()));
-            for (i, solution) in response.iter().enumerate() {
-                output.push_str(&format!("Solution {}:\n", i + 1));
-                for (fact_ref, domain) in solution {
-                    output.push_str(&format!("  {} = {:?}\n", fact_ref, domain));
-                }
-                output.push('\n');
-            }
-        }
-        output
-    }
-
     fn format_facts_tree(&self, facts_groups: &[lemma::Facts], doc_name: &str) -> String {
         let mut output = String::new();
 
@@ -205,7 +187,7 @@ impl Formatter {
             let value_str = match &fact.value {
                 lemma::FactValue::Literal(lit) => self.format_literal(lit),
                 lemma::FactValue::DocumentReference(_) => fact.value.to_string(),
-                lemma::FactValue::TypeAnnotation(_) => String::new(),
+                lemma::FactValue::TypeDeclaration { .. } => String::new(),
             };
 
             left_lines.push(format!("{} {}", connector, fact.reference.fact));
@@ -260,7 +242,7 @@ impl Formatter {
             let value_str = match &fact.value {
                 lemma::FactValue::Literal(lit) => self.format_literal(lit),
                 lemma::FactValue::DocumentReference(_) => fact.value.to_string(),
-                lemma::FactValue::TypeAnnotation(_) => String::new(),
+                lemma::FactValue::TypeDeclaration { .. } => String::new(),
             };
 
             left_lines.push(format!(
@@ -274,11 +256,8 @@ impl Formatter {
     }
 
     fn format_literal(&self, lit: &LiteralValue) -> String {
-        const CYAN: &str = "\x1b[36m";
-        const RESET: &str = "\x1b[0m";
-
-        match lit {
-            LiteralValue::Text(s) => format!("{}{}{}", CYAN, s, RESET),
+        match &lit.value {
+            Value::Text(s) => s.clone(),
             _ => lit.to_string(),
         }
     }
@@ -332,7 +311,7 @@ impl Formatter {
         if let Some(source) = &result.rule.source_location {
             let location = format!(
                 "Source: {}:{}:{}",
-                source.source_id, source.span.line, source.span.col
+                source.attribute, source.span.line, source.span.col
             );
             table.add_row(vec![Cell::new(self.gray(&location))
                 .set_alignment(CellAlignment::Left)
@@ -682,33 +661,35 @@ impl Formatter {
     }
 
     fn split_literal(&self, lit: &LiteralValue) -> (String, String) {
-        match lit {
-            LiteralValue::Number(n) => (String::new(), format_decimal(n)),
-            LiteralValue::Percentage(p) => ("%".to_string(), format_decimal(p)),
-            LiteralValue::Unit(unit) => self.split_unit(unit),
-            LiteralValue::Text(s) => (String::new(), s.clone()),
-            LiteralValue::Boolean(b) => (String::new(), b.to_string()),
-            LiteralValue::Date(d) => (String::new(), d.to_string()),
-            LiteralValue::Time(t) => (String::new(), t.to_string()),
-            LiteralValue::Regex(r) => (String::new(), r.clone()),
+        match &lit.value {
+            Value::Number(n) => (String::new(), format_decimal(n)),
+            Value::Scale(n, unit_opt) => {
+                if let Some(unit) = unit_opt {
+                    (unit.clone(), format_decimal(n))
+                } else {
+                    (String::new(), format_decimal(n))
+                }
+            }
+            Value::Ratio(r, unit_opt) => {
+                if let Some(unit) = unit_opt {
+                    if unit == "percent" {
+                        (
+                            "%".to_string(),
+                            format_decimal(&(*r * rust_decimal::Decimal::from(100))),
+                        )
+                    } else {
+                        (unit.clone(), format_decimal(r))
+                    }
+                } else {
+                    (String::new(), format_decimal(r))
+                }
+            }
+            Value::Text(s) => (String::new(), s.clone()),
+            Value::Boolean(b) => (String::new(), b.to_string()),
+            Value::Date(d) => (String::new(), d.to_string()),
+            Value::Time(t) => (String::new(), t.to_string()),
+            Value::Duration(value, unit) => (unit.to_string(), format_decimal(value)),
         }
-    }
-
-    fn split_unit(&self, unit: &NumericUnit) -> (String, String) {
-        let (value, unit_str) = match unit {
-            NumericUnit::Mass(v, u) => (*v, u.to_string()),
-            NumericUnit::Length(v, u) => (*v, u.to_string()),
-            NumericUnit::Volume(v, u) => (*v, u.to_string()),
-            NumericUnit::Duration(v, u) => (*v, u.to_string()),
-            NumericUnit::Temperature(v, u) => (*v, u.to_string()),
-            NumericUnit::Power(v, u) => (*v, u.to_string()),
-            NumericUnit::Force(v, u) => (*v, u.to_string()),
-            NumericUnit::Pressure(v, u) => (*v, u.to_string()),
-            NumericUnit::Energy(v, u) => (*v, u.to_string()),
-            NumericUnit::Frequency(v, u) => (*v, u.to_string()),
-            NumericUnit::Data(v, u) => (*v, u.to_string()),
-        };
-        (unit_str, format_decimal(&value))
     }
 
     fn extract_condition_text(&self, node: &ProofNode) -> String {
@@ -739,7 +720,8 @@ impl Formatter {
 }
 
 fn format_decimal(d: &rust_decimal::Decimal) -> String {
-    let normalized = d.normalize();
+    let rounded = d.round_dp(2);
+    let normalized = rounded.normalize();
     if normalized.fract().is_zero() {
         normalized.trunc().to_string()
     } else {

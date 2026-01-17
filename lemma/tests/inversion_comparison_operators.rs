@@ -31,9 +31,9 @@ fn premium_greater_than_or_equal() {
         .expect("should invert");
 
     println!("\n=== Ages where premium >= 80 ===");
-    for (i, solution) in solutions.iter().enumerate() {
+    for (i, domains) in solutions.domains.iter().enumerate() {
         println!("Solution {}:", i + 1);
-        for (fact, domain) in solution.iter() {
+        for (fact, domain) in domains.iter() {
             println!("  {}: {:?}", fact, domain);
         }
     }
@@ -72,8 +72,9 @@ fn discount_greater_than_threshold() {
             "discount",
             Target::with_op(
                 TargetOp::Gt,
-                OperationResult::Value(LiteralValue::Percentage(
-                    Decimal::from_str_exact("5").unwrap(),
+                OperationResult::Value(LiteralValue::ratio(
+                    Decimal::from_str_exact("0.05").unwrap(), // 5% = 0.05 as ratio
+                    Some("percent".to_string()),
                 )),
             ),
             HashMap::new(),
@@ -81,9 +82,9 @@ fn discount_greater_than_threshold() {
         .expect("should invert");
 
     println!("\n=== Quantities where discount > 5% ===");
-    let quantity_path = FactPath::from_path(vec!["pricing".to_string(), "quantity".to_string()]);
-    for (i, solution) in solutions.iter().enumerate() {
-        if let Some(domain) = solution.get(&quantity_path) {
+    let quantity_path = FactPath::local("quantity".to_string());
+    for (i, domains) in solutions.domains.iter().enumerate() {
+        if let Some(domain) = domains.get(&quantity_path) {
             println!("Solution {}: {:?}", i + 1, domain);
         }
     }
@@ -126,9 +127,9 @@ fn price_less_than_budget() {
         .expect("should invert");
 
     println!("\n=== Price/quantity combinations where total < 100 ===");
-    for (i, solution) in solutions.iter().enumerate() {
+    for (i, domains) in solutions.domains.iter().enumerate() {
         println!("Solution {}:", i + 1);
-        for (fact, domain) in solution.iter() {
+        for (fact, domain) in domains.iter() {
             println!("  {}: {:?}", fact, domain);
         }
     }
@@ -167,9 +168,9 @@ fn temperature_in_comfortable_range() {
         .expect("should invert");
 
     println!("\n=== Temperatures where comfort_level >= 2 ===");
-    let temp_path = FactPath::from_path(vec!["climate".to_string(), "temp".to_string()]);
-    for (i, solution) in solutions.iter().enumerate() {
-        if let Some(domain) = solution.get(&temp_path) {
+    let temp_path = FactPath::local("temp".to_string());
+    for (i, domains) in solutions.domains.iter().enumerate() {
+        if let Some(domain) = domains.get(&temp_path) {
             println!("Solution {}: {:?}", i + 1, domain);
         }
     }
@@ -210,9 +211,9 @@ fn get_valid_domain_with_threshold() {
         .expect("should invert");
 
     println!("\n=== Order totals eligible for free shipping (cost <= 0) ===");
-    let total_path = FactPath::from_path(vec!["shipping".to_string(), "order_total".to_string()]);
-    for (i, solution) in solutions.iter().enumerate() {
-        if let Some(domain) = solution.get(&total_path) {
+    let total_path = FactPath::local("order_total".to_string());
+    for (i, domains) in solutions.domains.iter().enumerate() {
+        if let Some(domain) = domains.get(&total_path) {
             println!("Solution {}: {:?}", i + 1, domain);
         }
     }

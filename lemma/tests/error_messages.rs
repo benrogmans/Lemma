@@ -22,7 +22,8 @@ fn test_duplicate_fact_definition_error() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(
                 msg.to_lowercase().contains("duplicate") && msg.to_lowercase().contains("fact"),
                 "Error should mention duplicate fact, got: {}",
@@ -54,7 +55,8 @@ fn test_duplicate_rule_definition_error() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(
                 msg.to_lowercase().contains("duplicate") && msg.to_lowercase().contains("rule"),
                 "Error should mention duplicate rule, got: {}",
@@ -86,7 +88,8 @@ fn test_duplicate_fact_shows_name() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(
                 msg.contains("Duplicate"),
                 "Error should mention duplicate, got: {}",
@@ -115,13 +118,13 @@ fn test_parse_error_with_span() {
         fact name = "Unclosed string
         fact age = 25
     "#,
-        Some("test.lemma".to_string()),
+        "test.lemma",
         &lemma::ResourceLimits::default(),
     );
 
     match result {
         Err(LemmaError::Parse(details)) => {
-            assert_eq!(details.source_location.source_id, "test.lemma");
+            assert_eq!(details.source_location.attribute, "test.lemma");
             assert_eq!(details.source_location.doc_name, "<parse-error>");
         }
         Err(e) => panic!("Expected Parse error, got: {e:?}"),
@@ -136,7 +139,7 @@ fn test_parse_error_malformed_input() {
         doc test
         this is not valid lemma syntax @#$%
     "#,
-        Some("test.lemma".to_string()),
+        "test.lemma",
         &lemma::ResourceLimits::default(),
     );
 
@@ -252,7 +255,8 @@ fn test_transpile_error_self_referencing_rule() {
     );
 
     match result {
-        Err(LemmaError::CircularDependency(msg)) => {
+        Err(LemmaError::CircularDependency { details, .. }) => {
+            let msg = &details.message;
             assert!(
                 msg.to_lowercase().contains("circular") || msg.to_lowercase().contains("itself")
             );
@@ -282,7 +286,8 @@ fn test_validation_error_type_mismatch_text_in_arithmetic() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(
                 msg.to_lowercase().contains("type")
                     || msg.to_lowercase().contains("arithmetic")
@@ -311,7 +316,8 @@ fn test_validation_error_boolean_in_arithmetic() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(
                 msg.to_lowercase().contains("arithmetic")
                     || msg.to_lowercase().contains("type")
@@ -343,7 +349,8 @@ fn test_duplicate_error_contains_fact_name() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("price"), "Error should mention fact name");
         }
@@ -366,7 +373,8 @@ fn test_duplicate_error_is_reported() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("x"), "Error should mention fact name");
         }
@@ -392,7 +400,8 @@ fn test_duplicate_in_second_doc_is_caught() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("b"), "Error should mention fact name");
         }
@@ -419,7 +428,8 @@ fn test_error_display_contains_duplicate_info() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("value"), "Error should mention fact name");
         }
@@ -487,7 +497,8 @@ fn test_circular_dependency_has_helpful_suggestion() {
     );
 
     match result {
-        Err(LemmaError::CircularDependency(msg)) => {
+        Err(LemmaError::CircularDependency { details, .. }) => {
+            let msg = &details.message;
             assert!(
                 msg.to_lowercase().contains("circular") || msg.to_lowercase().contains("cycle")
             );
@@ -515,7 +526,8 @@ fact line4 = 4"#;
     let result = engine.add_lemma_code(lemma_code, "test.lemma");
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(
                 msg.contains("line4"),
@@ -578,7 +590,8 @@ fn test_duplicate_detected_from_database_source() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("amount"), "Error should mention fact name");
         }
@@ -601,7 +614,8 @@ fn test_duplicate_detected_from_api_source() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("rate"), "Error should mention rule name");
         }
@@ -624,7 +638,8 @@ fn test_duplicate_detected_from_runtime_source() {
     );
 
     match result {
-        Err(LemmaError::Engine(msg)) => {
+        Err(LemmaError::Engine(details)) => {
+            let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("x"), "Error should mention fact name");
         }

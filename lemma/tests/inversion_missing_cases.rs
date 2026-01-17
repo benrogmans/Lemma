@@ -1,6 +1,4 @@
-#![cfg(feature = "inversion")]
-
-use lemma::{Engine, LiteralValue, Target, TargetOp};
+use lemma::{Engine, FactPath, LiteralValue, Target, TargetOp};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -31,14 +29,16 @@ fn target_operator_greater_than() {
         )
         .expect("should invert successfully");
 
-    // Should have at least one solution solution
+    // Should have at least one solution
     assert!(!solutions.is_empty(), "should have solutions");
 
     // Should track base_price in domain
+    let base_price_path = FactPath::local("base_price".to_string());
     assert!(
-        solutions.iter().any(|r| r
-            .keys()
-            .any(|k| k == &lemma::FactPath::new(vec![], "base_price".to_string()))),
+        solutions
+            .domains
+            .iter()
+            .any(|d| d.contains_key(&base_price_path)),
         "base_price should be in domains"
     );
 }
@@ -70,11 +70,12 @@ fn target_operator_less_than_or_equal() {
         )
         .expect("should invert successfully");
 
+    let monthly_cost_path = FactPath::local("monthly_cost".to_string());
     assert!(
         solutions
+            .domains
             .iter()
-            .flat_map(|r| r.keys())
-            .any(|v| v == &lemma::FactPath::new(vec![], "monthly_cost".to_string())),
+            .any(|d| d.contains_key(&monthly_cost_path)),
         "monthly_cost should be a free variable"
     );
 }
@@ -106,11 +107,12 @@ fn target_operator_greater_than_or_equal() {
         )
         .expect("should invert successfully");
 
+    let base_salary_path = FactPath::local("base_salary".to_string());
     assert!(
         solutions
+            .domains
             .iter()
-            .flat_map(|r| r.keys())
-            .any(|v| v == &lemma::FactPath::new(vec![], "base_salary".to_string())),
+            .any(|d| d.contains_key(&base_salary_path)),
         "base_salary should be a free variable"
     );
 }
@@ -141,14 +143,15 @@ fn boolean_not_operator() {
         )
         .expect("should invert successfully");
 
-    // Should have solution solutions
+    // Should have solutions
     assert!(!solutions.is_empty(), "should have solutions");
 
     // Should track boolean variables in domains
     assert!(
-        solutions.iter().any(|r| r
-            .keys()
-            .any(|k| { k.fact.contains("is_suspended") || k.fact.contains("has_membership") })),
+        solutions.domains.iter().any(|d| {
+            d.keys()
+                .any(|k| k.fact.contains("is_suspended") || k.fact.contains("has_membership"))
+        }),
         "should track boolean condition variables"
     );
 }
@@ -185,13 +188,13 @@ fn cross_document_simple() {
         .expect("should invert successfully");
 
     // Should solve algebraically: order_total = 85 / 0.85 = 100
-    // With the new Shape structure, check if order_total is referenced
+    let order_total_path = FactPath::local("order_total".to_string());
     assert!(
-        solutions.iter().all(|r| r.is_empty())
+        solutions.domains.iter().all(|d| d.is_empty())
             || solutions
+                .domains
                 .iter()
-                .flat_map(|r| r.keys())
-                .any(|v| v == &lemma::FactPath::new(vec![], "order_total".to_string())),
+                .any(|d| d.contains_key(&order_total_path)),
         "order_total should be referenced or fully solved"
     );
 }
@@ -229,16 +232,15 @@ fn cross_document_rule_references() {
         .invert_strict(
             "order",
             "is_vip",
-            Target::value(LiteralValue::Boolean(lemma::BooleanValue::True)),
+            Target::value(LiteralValue::boolean(lemma::BooleanValue::True)),
             given,
         )
         .expect("should invert successfully");
 
     // Should identify customer_lifetime_value in domains
+    let clv_path = FactPath::local("customer_lifetime_value".to_string());
     assert!(
-        solutions.iter().any(|r| r
-            .keys()
-            .any(|k| k == &lemma::FactPath::new(vec![], "customer_lifetime_value".to_string()))),
+        solutions.domains.iter().any(|d| d.contains_key(&clv_path)),
         "customer_lifetime_value should be in domains"
     );
 }
@@ -251,36 +253,36 @@ fn cross_document_multi_level() {
         fact base_rate = 0.10
     "#;
 
-    let solutional_doc = r#"
-        doc solutional
+    let regional_doc = r#"
+        doc regional
         fact global_config = doc global
-        fact solutional_multiplier = 1.5
+        fact regional_multiplier = 1.5
 
-        rule effective_rate = global_config.base_rate * solutional_multiplier
+        rule effective_rate = global_config.base_rate * regional_multiplier
     "#;
 
     let transaction_doc = r#"
         doc transaction
-        fact solutional = doc solutional
+        fact regional = doc regional
         fact amount = [number]
 
-        rule fee = amount * solutional.effective_rate?
+        rule fee = amount * regional.effective_rate?
     "#;
 
     let mut engine = Engine::new();
     engine.add_lemma_code(global_doc, "global").unwrap();
-    engine.add_lemma_code(solutional_doc, "solutional").unwrap();
+    engine.add_lemma_code(regional_doc, "regional").unwrap();
     engine
         .add_lemma_code(transaction_doc, "transaction")
         .unwrap();
 
     let mut given = HashMap::new();
     given.insert(
-        "solutional.global_config.base_rate".to_string(),
+        "regional.global_config.base_rate".to_string(),
         LiteralValue::number(Decimal::from_str_exact("0.10").unwrap()),
     );
     given.insert(
-        "solutional.solutional_multiplier".to_string(),
+        "regional.regional_multiplier".to_string(),
         LiteralValue::number(Decimal::from_str_exact("1.5").unwrap()),
     );
 
@@ -295,12 +297,13 @@ fn cross_document_multi_level() {
         .expect("should invert successfully");
 
     // Should solve: amount = 15 / 0.15 = 100
-    // Check if amount is in domains or solutions are empty (fully solved)
+    let amount_path = FactPath::local("amount".to_string());
     assert!(
-        solutions.iter().all(|r| r.is_empty())
-            || solutions.iter().any(|r| r
-                .keys()
-                .any(|k| k == &lemma::FactPath::new(vec![], "amount".to_string()))),
+        solutions.domains.iter().all(|d| d.is_empty())
+            || solutions
+                .domains
+                .iter()
+                .any(|d| d.contains_key(&amount_path)),
         "amount should be in domains or fully solved"
     );
 }
@@ -345,14 +348,13 @@ fn cross_document_piecewise() {
         .expect("should invert successfully");
 
     // Should identify tier as the free variable (or solve it exactly)
-    // Successfully inverted - good!
     assert!(!solutions.is_empty(), "should have branches");
     // Either tier is free, or it was fully solved (no free vars means solved)
     let has_tier = solutions
+        .domains
         .iter()
-        .flat_map(|r| r.keys())
-        .any(|v| v.fact.contains("tier"));
-    let fully_solved = solutions.iter().all(|r| r.is_empty());
+        .any(|d| d.keys().any(|v| v.fact.contains("tier")));
+    let fully_solved = solutions.domains.iter().all(|d| d.is_empty());
     assert!(
         has_tier || fully_solved,
         "tier should be involved or fully solved"
@@ -383,12 +385,12 @@ fn complex_boolean_not_and_combination() {
         .invert_strict("shipping", "can_ship", Target::any_veto(), HashMap::new())
         .expect("should invert successfully");
 
-    // Should have solution solutions
+    // Should have solutions
     assert!(!solutions.is_empty(), "should have solutions");
 
     // Should track all boolean variables in domains
     assert!(
-        solutions.iter().any(|r| r.keys().any(|k| {
+        solutions.domains.iter().any(|d| d.keys().any(|k| {
             k.fact.contains("is_domestic")
                 || k.fact.contains("has_po_box")
                 || k.fact.contains("is_oversized")
@@ -416,16 +418,18 @@ fn target_operator_not_equal() {
         "is_complete",
         Target::with_op(
             TargetOp::Neq,
-            lemma::OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True)),
+            lemma::OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::True)),
         ),
         HashMap::new(),
     );
 
     let solutions = result.expect("Neq should be supported");
+    let status_path = FactPath::local("status".to_string());
     assert!(
-        solutions.iter().any(|r| r
-            .keys()
-            .any(|k| k == &lemma::FactPath::new(vec![], "status".to_string()))),
+        solutions
+            .domains
+            .iter()
+            .any(|d| d.contains_key(&status_path)),
         "status should be in domains"
     );
 }

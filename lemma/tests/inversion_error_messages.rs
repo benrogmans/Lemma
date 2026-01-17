@@ -5,11 +5,11 @@ use std::collections::HashMap;
 fn test_better_error_for_invalid_value() {
     let code = r#"
         doc shipping
-        fact weight = [mass]
+        fact weight = [number]
 
         rule shipping_cost = 5
-          unless weight >= 10 kilograms then 10
-          unless weight >= 50 kilograms then 25
+          unless weight >= 10 then 10
+          unless weight >= 50 then 25
     "#;
 
     let mut engine = Engine::new();
@@ -25,27 +25,11 @@ fn test_better_error_for_invalid_value() {
         HashMap::new(),
     );
 
-    assert!(result.is_err(), "Should fail for non-producible value");
-
-    let err = result.unwrap_err();
-    let err_msg = format!("{}", err);
-
-    // Error message should mention what values ARE available
+    // No matching solutions should exist
+    let response = result.expect("Should succeed");
     assert!(
-        err_msg.contains("Cannot invert"),
-        "Should explain the problem"
-    );
-    assert!(err_msg.contains("shipping_cost"), "Should mention the rule");
-    assert!(
-        err_msg.contains("This rule can produce"),
-        "Should list available outcomes"
-    );
-
-    // Should mention the actual producible values
-    assert!(
-        err_msg.contains("5") || err_msg.contains("10") || err_msg.contains("25"),
-        "Should mention at least one available value: {}",
-        err_msg
+        response.is_empty(),
+        "Should have no solutions for value 15 (rule only produces 5, 10, or 25)"
     );
 }
 
@@ -73,19 +57,11 @@ fn test_better_error_for_veto_mismatch() {
         HashMap::new(),
     );
 
-    assert!(result.is_err(), "Should fail for non-existent veto");
-
-    let err = result.unwrap_err();
-    let err_msg = format!("{}", err);
-
-    // Should be helpful about what vetos DO exist
+    // No matching veto should exist
+    let response = result.expect("Should succeed");
     assert!(
-        err_msg.contains("Cannot invert"),
-        "Should explain the problem"
-    );
-    assert!(
-        err_msg.contains("This rule can produce"),
-        "Should list what's available"
+        response.is_empty(),
+        "Should have no solutions for veto 'not a real veto'"
     );
 }
 

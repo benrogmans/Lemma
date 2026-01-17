@@ -29,8 +29,12 @@ rule discount = 0
 
     // Since quantity=25 is >= 10, we should get 10
     match &discount_result.result {
-        lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
-            assert_eq!(*n, Decimal::from_str("10").unwrap())
+        lemma::OperationResult::Value(lit) => {
+            if let lemma::Value::Number(n) = &lit.value {
+                assert_eq!(*n, Decimal::from_str("10").unwrap());
+            } else {
+                panic!("Expected number result");
+            }
         }
         _ => panic!("Expected number result"),
     }
@@ -60,7 +64,13 @@ rule can_drive = age >= 18 and has_license
     println!("Boolean Response: {:?}", result);
 
     match &result.result {
-        lemma::OperationResult::Value(lemma::LiteralValue::Boolean(b)) => assert!(bool::from(b)),
+        lemma::OperationResult::Value(lit) => {
+            if let lemma::Value::Boolean(b) = &lit.value {
+                assert!(bool::from(b));
+            } else {
+                panic!("Expected boolean result, got {:?}", result.result);
+            }
+        }
         _ => panic!("Expected boolean result, got {:?}", result.result),
     }
 }
@@ -89,8 +99,12 @@ rule result = base * multiplier
     println!("Arithmetic Response: {:?}", result);
 
     match &result.result {
-        lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
-            assert_eq!(*n, Decimal::from_str("200").unwrap())
+        lemma::OperationResult::Value(lit) => {
+            if let lemma::Value::Number(n) = &lit.value {
+                assert_eq!(*n, Decimal::from_str("200").unwrap());
+            } else {
+                panic!("Expected number result, got {:?}", result.result);
+            }
         }
         _ => panic!("Expected number result, got {:?}", result.result),
     }
@@ -122,8 +136,12 @@ rule final_price = 100 - discount?
     println!("Rule Reference Response: {:?}", result);
 
     match &result.result {
-        lemma::OperationResult::Value(lemma::LiteralValue::Number(n)) => {
-            assert_eq!(*n, Decimal::from_str("90").unwrap())
+        lemma::OperationResult::Value(lit) => {
+            if let lemma::Value::Number(n) = &lit.value {
+                assert_eq!(*n, Decimal::from_str("90").unwrap());
+            } else {
+                panic!("Expected number result, got {:?}", result.result);
+            }
         }
         _ => panic!("Expected number result, got {:?}", result.result),
     }

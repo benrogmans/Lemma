@@ -29,11 +29,11 @@ fn bdd_unification_simplifies_to_single_atom() {
         )
         .expect("invert should succeed");
 
-    // Should have solution solutions
+    // Should have solutions
     assert!(!solutions.is_empty(), "Expected at least one solution");
 
     // Should track discount_code in domains
-    let var_count = solutions.iter().flat_map(|r| r.keys()).count();
+    let var_count: usize = solutions.domains.iter().map(|d| d.len()).sum();
     assert!(var_count >= 1, "Expected variables in domains");
 
     // Test validates that BDD simplification works during inversion

@@ -40,23 +40,6 @@ rule result = 10
 }
 
 #[test]
-fn test_conversion_to_valid_unit() {
-    let code = r#"
-doc test
-fact distance = 1000
-rule km = distance in kilometers
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(
-        result.is_ok(),
-        "Valid unit conversion should pass: {:?}",
-        result
-    );
-}
-
-#[test]
 fn test_percentage_literal_type() {
     let code = r#"
 doc test
@@ -111,40 +94,21 @@ rule is_valid_range = end > start
 }
 
 #[test]
-fn test_all_unit_types_in_conversions() {
-    let test_cases = vec![
-        ("(value * 100) in kilograms", "Mass"),
-        ("(value * 50) in meters", "Length"),
-        ("(value * 200) in liters", "Volume"),
-        ("(value * 60) in seconds", "Duration"),
-        ("(value * 25) in celsius", "Temperature"),
-        ("(value * 1000) in watts", "Power"),
-        ("(value * 100) in newtons", "Force"),
-        ("(value * 101325) in pascals", "Pressure"),
-        ("(value * 1000) in joules", "Energy"),
-        ("(value * 60) in hertz", "Frequency"),
-        ("(value * 1024) in bytes", "Data"),
-    ];
-
-    for (conversion, unit_name) in test_cases {
-        let code = format!(
-            r#"
+fn test_duration_conversion() {
+    // Duration is the only remaining built-in unit type
+    let code = r#"
 doc test
-fact value = 1
-rule converted = {}
-"#,
-            conversion
-        );
+fact value = 60
+rule converted = (value * 60) in seconds
+"#;
 
-        let mut engine = Engine::new();
-        let result = engine.add_lemma_code(&code, "test.lemma");
-        assert!(
-            result.is_ok(),
-            "{} conversion should work: {:?}",
-            unit_name,
-            result
-        );
-    }
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(
+        result.is_ok(),
+        "Duration conversion should work: {:?}",
+        result
+    );
 }
 
 #[test]
@@ -152,7 +116,7 @@ fn test_percentage_conversion_from_number() {
     let code = r#"
 doc test
 fact ratio = 0.25
-rule as_percentage = ratio in percentage
+rule as_percentage = ratio in percent
 "#;
 
     let mut engine = Engine::new();
@@ -226,24 +190,6 @@ rule value = 2024-01-01
         err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
         "Error message should contain type mismatch info: {}",
         err_msg
-    );
-}
-
-#[test]
-fn test_same_category_units_allowed_in_rule() {
-    let code = r#"
-doc test
-fact weight = 1000 grams
-rule adjusted = weight
-  unless weight > 500 grams then 2 kilograms
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(
-        result.is_ok(),
-        "Same category units should be allowed: {:?}",
-        result
     );
 }
 
@@ -327,22 +273,6 @@ rule value = 10
 }
 
 #[test]
-fn test_conversion_changes_type() {
-    let code = r#"
-doc test
-fact meters = 100
-rule as_km = meters in kilometers
-rule back_to_number = as_km
-  unless as_km > 0 kilometers then 0
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    // as_km is Length type, so mixing with number should fail
-    assert!(result.is_err(), "Conversion should create distinct type");
-}
-
-#[test]
 fn test_rule_reference_type_propagation() {
     let code = r#"
 doc test
@@ -397,41 +327,6 @@ rule result = time1 and time2
 }
 
 #[test]
-fn test_regex_type_validation() {
-    let code = r#"
-doc test
-fact pattern = /[a-z]+/
-fact text = "hello"
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(
-        result.is_ok(),
-        "Regex type should be validated correctly: {:?}",
-        result
-    );
-}
-
-#[test]
-fn test_regex_cannot_use_in_logical_operators() {
-    let code = r#"
-doc test
-fact pattern1 = /[a-z]+/
-fact pattern2 = /[0-9]+/
-rule result = pattern1 and pattern2
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(
-        result.is_err(),
-        "Should reject regex values in logical operators"
-    );
-    assert!(result.unwrap_err().to_string().contains("boolean"));
-}
-
-#[test]
 fn test_mixed_time_and_number_not_allowed() {
     let code = r#"
 doc test
@@ -446,26 +341,6 @@ rule value = 14:30:00
         result.is_err(),
         "Should reject mixing time and number types"
     );
-    let err_msg = result.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
-        "Error message should contain type mismatch info: {}",
-        err_msg
-    );
-}
-
-#[test]
-fn test_mixed_regex_and_text_not_allowed() {
-    let code = r#"
-doc test
-fact use_pattern = true
-rule value = /[a-z]+/
-  unless use_pattern then "plain text"
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(result.is_err(), "Should reject mixing regex and text types");
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),

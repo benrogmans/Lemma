@@ -64,76 +64,12 @@ impl WasmEngine {
         target_json: &str,
         provided_values_json: &str,
     ) -> String {
-        let target = match parse_target(target_json) {
-            Ok(t) => t,
-            Err(e) => return to_json_error_string(&format!("Invalid target: {}", e)),
-        };
-
-        let json_bytes =
-            if provided_values_json.trim().is_empty() || provided_values_json.trim() == "{}" {
-                b"{}"
-            } else {
-                provided_values_json.as_bytes()
-            };
-
-        match self
-            .engine
-            .invert_json(doc_name, rule_name, target, json_bytes)
-        {
-            Ok(inversion_response) => {
-                let response_json =
-                    serde_json::to_value(&inversion_response).unwrap_or_else(|_| json!({}));
-                to_json_response(json!({
-                    "success": true,
-                    "response": response_json
-                }))
-            }
-            Err(e) => to_json_error(&e),
-        }
+        return to_json_error_string("Inversion not implemented");
     }
 }
 
-fn parse_target(target_json: &str) -> Result<crate::Target, String> {
-    use crate::{OperationResult, Target, TargetOp};
-    use serde_json::Value;
-
-    let target: Value = serde_json::from_str(target_json)
-        .map_err(|e| format!("Failed to parse target JSON: {}", e))?;
-
-    if target.is_null() || target.as_str() == Some("any") {
-        return Ok(Target::any_value());
-    }
-
-    if target.as_str() == Some("veto") {
-        return Ok(Target::any_veto());
-    }
-
-    if let Some(obj) = target.as_object() {
-        let op_str = obj
-            .get("op")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Target object must have 'op' field".to_string())?;
-
-        let value_json = obj
-            .get("value")
-            .ok_or_else(|| "Target object must have 'value' field".to_string())?;
-
-        let value = json_to_literal_value(value_json)?;
-
-        let op = match op_str {
-            "eq" | "=" => TargetOp::Eq,
-            "gt" | ">" => TargetOp::Gt,
-            "gte" | ">=" => TargetOp::Gte,
-            "lt" | "<" => TargetOp::Lt,
-            "lte" | "<=" => TargetOp::Lte,
-            _ => return Err(format!("Unknown operator: {}", op_str)),
-        };
-
-        return Ok(Target::with_op(op, OperationResult::Value(value)));
-    }
-
-    let value = json_to_literal_value(&target)?;
-    Ok(Target::value(value))
+fn parse_target(_target_json: &str) -> Result<(), String> {
+    Err("Inversion not implemented".to_string())
 }
 
 fn json_to_literal_value(value: &serde_json::Value) -> Result<crate::LiteralValue, String> {
@@ -141,20 +77,21 @@ fn json_to_literal_value(value: &serde_json::Value) -> Result<crate::LiteralValu
     use rust_decimal::Decimal;
 
     match value {
-        serde_json::Value::Bool(b) => Ok(LiteralValue::Boolean((*b).into())),
+        serde_json::Value::Bool(b) => Ok(LiteralValue::boolean((*b).into())),
         serde_json::Value::Number(n) => {
             let decimal = Decimal::from_str_exact(&n.to_string())
                 .map_err(|e| format!("Invalid number: {}", e))?;
-            Ok(LiteralValue::Number(decimal))
+            Ok(LiteralValue::number(decimal))
         }
         serde_json::Value::String(s) => {
             if s.ends_with('%') {
                 let num_str = &s[..s.len() - 1];
                 let decimal = Decimal::from_str_exact(num_str)
-                    .map_err(|e| format!("Invalid percentage: {}", e))?;
-                Ok(LiteralValue::Percentage(decimal))
+                    .map_err(|e| format!("Invalid percent: {}", e))?;
+                // Convert percent (e.g., 50) to ratio (0.50)
+                Ok(LiteralValue::ratio(decimal / Decimal::from(100)))
             } else {
-                Ok(LiteralValue::Text(s.clone()))
+                Ok(LiteralValue::text(s.clone()))
             }
         }
         _ => Err(format!("Unsupported value type: {:?}", value)),
@@ -183,9 +120,11 @@ fn format_error(error: &LemmaError) -> String {
         LemmaError::Parse(details) => format!("Parse Error: {}", details.message),
         LemmaError::Semantic(details) => format!("Semantic Error: {}", details.message),
         LemmaError::Runtime(details) => format!("Runtime Error: {}", details.message),
-        LemmaError::Engine(msg) => format!("Engine Error: {msg}"),
-        LemmaError::MissingFact(fact_ref) => format!("Missing Fact: {fact_ref}"),
-        LemmaError::CircularDependency(msg) => format!("Circular Dependency: {msg}"),
+        LemmaError::Engine(details) => format!("Engine Error: {}", details.message),
+        LemmaError::MissingFact(details) => format!("Missing Fact: {}", details.message),
+        LemmaError::CircularDependency { details, .. } => {
+            format!("Circular Dependency: {}", details.message)
+        }
         LemmaError::ResourceLimitExceeded {
             limit_name,
             limit_value,

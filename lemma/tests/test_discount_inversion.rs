@@ -4,10 +4,11 @@ use std::collections::HashMap;
 
 #[test]
 fn discount_multiple_paths_to_same_value() {
+    // Use type annotations [text] to make facts free variables for inversion
     let code = r#"
         doc shop
-        fact discount_code = "SAVE20"
-        fact member_level = "gold"
+        fact discount_code = [text]
+        fact member_level = [text]
 
         rule discount = 0.20
           unless discount_code is "SAVE30" then 0.30
@@ -22,32 +23,32 @@ fn discount_multiple_paths_to_same_value() {
         .invert_strict(
             "shop",
             "discount",
-            Target::value(LiteralValue::Number(
+            Target::value(LiteralValue::number(
                 Decimal::from_str_exact("0.30").unwrap(),
             )),
             HashMap::new(),
         )
         .expect("invert should succeed");
 
-    // Should have solution solutions
-    assert!(
-        !solutions.is_empty(),
-        "Expected at least one solution solution"
-    );
+    // Should have solutions
+    assert!(!solutions.is_empty(), "Expected at least one solution");
 
     // Should track discount_code and member_level in domains
     let all_keys: Vec<String> = solutions
+        .domains
         .iter()
-        .flat_map(|r| r.keys())
+        .flat_map(|d| d.keys())
         .map(|k| k.to_string())
         .collect();
 
     assert!(
         all_keys.iter().any(|k| k.contains("discount_code")),
-        "discount_code should be in domains"
+        "discount_code should be in domains: {:?}",
+        all_keys
     );
     assert!(
         all_keys.iter().any(|k| k.contains("member_level")),
-        "member_level should be in domains"
+        "member_level should be in domains: {:?}",
+        all_keys
     );
 }

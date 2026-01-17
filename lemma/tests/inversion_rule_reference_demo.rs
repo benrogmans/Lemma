@@ -29,7 +29,7 @@ fn demonstrate_rule_reference_with_vetos() {
 
     println!("\n=== Inversion Result ===");
     println!("Query: another == 3");
-    println!("Free variables: {:?}", solutions.free_variables);
+    println!("Free variables: {:?}", solutions.undetermined_facts);
     println!("========================\n");
 
     // Expect a solution solution
@@ -62,16 +62,12 @@ fn demonstrate_no_solution_for_value_7() {
         HashMap::new(),
     );
 
-    println!("\n=== Inversion: another == 7 ===");
-    match result {
-        Ok(_) => {
-            panic!("expected inversion to fail for another == 7");
-        }
-        Err(err) => {
-            println!("Expected failure: {}", err);
-        }
-    }
-    println!("===============================\n");
+    // No solution should exist because x=7 violates the constraint (x must be in [0,3])
+    let response = result.expect("Should succeed");
+    assert!(
+        response.is_empty(),
+        "Should have no solutions because x=7 is not achievable (must be in [0,3] range)"
+    );
 }
 
 #[test]
@@ -105,11 +101,11 @@ fn demonstrate_inversion_with_given_x() {
 
     println!("\n=== Inversion with x=3 ===");
     println!("Query: another == 3, given x = 3");
-    println!("Free variables: {:?}", solutions.free_variables);
+    println!("Free variables: {:?}", solutions.undetermined_facts);
     println!("==========================\n");
 
     // With x given, there should be no free variables
-    assert!(solutions.free_variables.is_empty());
+    assert!(solutions.undetermined_facts.is_empty());
 }
 
 #[test]
@@ -140,7 +136,7 @@ fn demonstrate_veto_query() {
 
     println!("\n=== Veto Query ===");
     println!("Query: when does another veto with 'way too much'?");
-    println!("Free variables: {:?}", solutions.free_variables);
+    println!("Free variables: {:?}", solutions.undetermined_facts);
     println!("==================\n");
 
     // Should show that x > 5 triggers this veto
@@ -174,7 +170,7 @@ fn demonstrate_any_veto_query() {
 
     println!("\n=== Any Veto Query ===");
     println!("Query: when does another produce any veto?");
-    println!("Free variables: {:?}", solutions.free_variables);
+    println!("Free variables: {:?}", solutions.undetermined_facts);
     println!("======================\n");
 
     // Should show all veto conditions: x < 0, x > 3, x > 5

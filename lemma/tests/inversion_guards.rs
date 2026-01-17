@@ -4,11 +4,11 @@ use lemma::{Engine, LiteralValue, Target, TargetOp};
 fn piecewise_value_guard_pruning_equality() {
     let code = r#"
         doc shipping
-        fact weight = [mass]
+        fact weight = [number]
 
         rule shipping_cost = 5
-             unless weight >= 10 kilograms then 10
-             unless weight >= 50 kilograms then 25
+             unless weight >= 10 then 10
+             unless weight >= 50 then 25
     "#;
 
     let mut engine = Engine::new();
@@ -23,7 +23,7 @@ fn piecewise_value_guard_pruning_equality() {
         )
         .expect("invert should succeed");
 
-    // Should have solution solutions
+    // Should have solutions
     assert!(!solutions.is_empty(), "Expected at least one solution");
 
     // Test validates that guard conditions filter branches correctly
@@ -34,11 +34,11 @@ fn piecewise_value_guard_pruning_equality() {
 fn piecewise_value_guard_pruning_inequality() {
     let code = r#"
         doc shipping
-        fact weight = [mass]
+        fact weight = [number]
 
         rule shipping_cost = 5
-             unless weight >= 10 kilograms then 10
-             unless weight >= 50 kilograms then 25
+             unless weight >= 10 then 10
+             unless weight >= 50 then 25
     "#;
 
     let mut engine = Engine::new();
@@ -56,6 +56,6 @@ fn piecewise_value_guard_pruning_inequality() {
         )
         .expect("invert should succeed");
 
-    // Should have solution solutions (both 10 and 25 satisfy > 5)
+    // Should have solutions (both 10 and 25 satisfy > 5)
     assert!(!solutions.is_empty(), "Expected at least one solution");
 }

@@ -1,9 +1,10 @@
 //! Target specification for inversion queries
 
 use crate::{LiteralValue, OperationResult};
+use serde::Serialize;
 
 /// Desired outcome for an inversion query
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Target {
     /// The comparison operator
     pub op: TargetOp,
@@ -14,7 +15,7 @@ pub struct Target {
 }
 
 /// Comparison operators for targets
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum TargetOp {
     /// Equal to (=)
     Eq,
@@ -66,5 +67,26 @@ impl Target {
             op,
             outcome: Some(outcome),
         }
+    }
+
+    /// Format target for display
+    pub fn format(&self) -> String {
+        let op_str = match self.op {
+            TargetOp::Eq => "=",
+            TargetOp::Neq => "!=",
+            TargetOp::Lt => "<",
+            TargetOp::Lte => "<=",
+            TargetOp::Gt => ">",
+            TargetOp::Gte => ">=",
+        };
+
+        let value_str = match &self.outcome {
+            None => "any".to_string(),
+            Some(OperationResult::Value(v)) => v.to_string(),
+            Some(OperationResult::Veto(Some(msg))) => format!("veto({})", msg),
+            Some(OperationResult::Veto(None)) => "veto".to_string(),
+        };
+
+        format!("{} {}", op_str, value_str)
     }
 }
