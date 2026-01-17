@@ -1,16 +1,10 @@
-//! Operation types and result tracking for evaluation
-//!
-//! Contains OperationResult for rule/expression results, ComputationKind for
-//! categorizing operations, and OperationRecord for tracking evaluation steps.
+//! Operation types and result handling for evaluation
 
 use crate::{
     ArithmeticComputation, ComparisonComputation, FactPath, LiteralValue, LogicalComputation,
     MathematicalComputation, RulePath,
 };
 use serde::Serialize;
-
-// Re-export computation functions from the computation module
-pub use crate::computation::{arithmetic_operation, comparison_operation};
 
 /// Result of an operation (evaluating a rule or expression)
 #[derive(Debug, Clone, PartialEq, Serialize)]

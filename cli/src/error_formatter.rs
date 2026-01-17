@@ -27,19 +27,19 @@ pub fn format_error(error: &LemmaError) -> String {
                 details.message,
                 details.source_location.doc_name,
                 doc_line,
-                details.source_location.source_id,
+                details.source_location.attribute,
                 details.source_location.span.line
             );
 
             let mut report = Report::build(
                 ReportKind::Error,
-                &details.source_location.source_id,
+                &details.source_location.attribute,
                 details.source_location.span.start,
             )
             .with_message(enhanced_message)
             .with_label(
                 Label::new((
-                    &details.source_location.source_id,
+                    &details.source_location.attribute,
                     details.source_location.span.start..details.source_location.span.end,
                 ))
                 .with_message("")
@@ -52,7 +52,7 @@ pub fn format_error(error: &LemmaError) -> String {
 
             match report.finish().write(
                 (
-                    &details.source_location.source_id,
+                    &details.source_location.attribute,
                     Source::from(details.source_text.as_ref()),
                 ),
                 &mut output,
@@ -64,9 +64,11 @@ pub fn format_error(error: &LemmaError) -> String {
                 }
             }
         }
-        LemmaError::Engine(msg) => format!("Engine error: {msg}"),
-        LemmaError::MissingFact(fact_ref) => format!("Missing fact: {fact_ref}"),
-        LemmaError::CircularDependency(msg) => format!("Circular dependency: {msg}"),
+        LemmaError::Engine(details) => format!("Engine error: {}", details.message),
+        LemmaError::MissingFact(details) => format!("Missing fact: {}", details.message),
+        LemmaError::CircularDependency { details, .. } => {
+            format!("Circular dependency: {}", details.message)
+        }
         LemmaError::ResourceLimitExceeded {
             limit_name,
             limit_value,

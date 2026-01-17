@@ -2,6 +2,8 @@
 //!
 //! Ensures all example files in cli/tests/integrations/examples/ are valid and can be evaluated
 
+use lemma::planning::plan;
+use lemma::semantic::{FactPath, PathSegment};
 use lemma::Engine;
 use std::collections::HashMap;
 
@@ -132,19 +134,19 @@ fn test_04_unit_conversions() {
     assert!(response
         .results
         .values()
-        .any(|r| r.rule.name == "package_weight_lbs"));
+        .any(|r| r.rule.name == "duration_hours"));
     assert!(response
         .results
         .values()
-        .any(|r| r.rule.name == "distance_miles"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "temperature_f"));
+        .any(|r| r.rule.name == "duration_seconds"));
     assert!(response
         .results
         .values()
         .any(|r| r.rule.name == "is_overweight"));
+    assert!(response
+        .results
+        .values()
+        .any(|r| r.rule.name == "is_quick_processing"));
 }
 
 #[test]
@@ -200,7 +202,7 @@ fn test_07_shipping_policy() {
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("order_total".to_string(), "75.00".to_string());
-    facts.insert("item_weight".to_string(), "8 kilograms".to_string());
+    facts.insert("item_weight".to_string(), "8".to_string());
     facts.insert("destination_country".to_string(), "US".to_string());
     facts.insert("destination_state".to_string(), "CA".to_string());
     facts.insert("is_po_box".to_string(), "false".to_string());
@@ -480,4 +482,127 @@ fn test_all_examples_parse() {
             docs
         );
     }
+}
+
+#[test]
+fn test_fact_override_with_custom_type() {
+    // Test that fact overrides correctly resolve types from the document where they're defined
+    // doc one
+    // type money = number
+    // fact x = [money]
+    // doc two
+    // fact one = doc one
+    // fact one.x = 7
+    // rule getx = one.x // one.x == 7 of type money
+
+    let code = r#"
+doc one
+type money = number
+fact x = [money]
+
+doc two
+fact one = doc one
+fact one.x = 7
+rule getx = one.x
+"#;
+
+    let mut engine = Engine::new();
+    engine.add_lemma_code(code, "test.lemma").unwrap();
+
+    let response = engine
+        .evaluate("two", vec!["getx".to_string()], HashMap::new())
+        .expect("Evaluation failed");
+
+    assert_eq!(response.doc_name, "two");
+    assert_eq!(response.results.len(), 1);
+
+    let getx_result = response.results.get("getx").expect("getx result not found");
+
+    // Verify the value is correct
+    match &getx_result.result {
+        lemma::OperationResult::Value(lit) => {
+            if let lemma::Value::Number(n) = &lit.value {
+                assert_eq!(*n, 7.into(), "getx should return 7");
+            } else {
+                panic!("Expected number result, got {:?}", getx_result.result);
+            }
+        }
+        _ => panic!("Expected number result, got {:?}", getx_result.result),
+    }
+
+    // Verify that one.x has the correct type (money, which is a number)
+    // The type should be resolved from doc one where money is defined
+    // but the fact override is defined in doc two
+    // If type resolution failed (e.g., couldn't find 'money' type), we would have gotten
+    // an error during planning/validation. So the fact that evaluation succeeded means
+    // the type was correctly resolved to 'money' from doc one.
+
+    // Check that the fact one.x exists in the response with the correct value
+    let one_x_fact = response
+        .facts
+        .iter()
+        .flat_map(|f| &f.facts)
+        .find(|f| f.reference.segments == vec!["one".to_string()] && f.reference.fact == "x");
+
+    assert!(one_x_fact.is_some(), "fact one.x should exist in response");
+    match &one_x_fact.unwrap().value {
+        lemma::FactValue::Literal(lit) => {
+            if let lemma::Value::Number(n) = &lit.value {
+                assert_eq!(*n, 7.into(), "one.x should have value 7");
+            } else {
+                panic!(
+                    "one.x should be a literal number, got {:?}",
+                    one_x_fact.unwrap().value
+                );
+            }
+        }
+        _ => panic!(
+            "one.x should be a literal number, got {:?}",
+            one_x_fact.unwrap().value
+        ),
+    }
+
+    // The key test: one.x is defined in doc two but references type 'money' from doc one
+    // Our find_fact_document function should correctly identify that one.x belongs to doc two
+    // and then resolve_type_by_name should find 'money' in doc one (searching all documents)
+    // This verifies that document context is correctly determined for fact overrides
+
+    // Verify the type is actually 'money' by checking the execution plan
+    use lemma::parse;
+    use lemma::ResourceLimits;
+    let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+    let doc_two = docs.iter().find(|d| d.name == "two").unwrap();
+
+    let execution_plan = plan(doc_two, &docs, HashMap::new()).expect("Should build execution plan");
+
+    // Find the fact one.x in the execution plan
+    let one_x_path = FactPath {
+        segments: vec![PathSegment {
+            fact: "one".to_string(),
+            doc: "one".to_string(),
+        }],
+        fact: "x".to_string(),
+    };
+
+    // Verify that one.x has type 'money' (resolved from doc one)
+    let one_x_type = execution_plan.fact_types.get(&one_x_path);
+    assert!(
+        one_x_type.is_some(),
+        "one.x should have a resolved type in fact_types"
+    );
+    let resolved_type = one_x_type.unwrap();
+
+    // The type should be 'money' (a custom type based on number)
+    assert_eq!(
+        resolved_type.name(),
+        "money",
+        "one.x should have type 'money', not 'number'. Got: {}",
+        resolved_type.name()
+    );
+
+    // Verify it's a number-based type (money extends number)
+    assert!(
+        resolved_type.is_number(),
+        "money type should be based on number"
+    );
 }

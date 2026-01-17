@@ -1,9 +1,8 @@
 //! Type-aware comparison operations
-//!
-//! Pure functions for comparisons on different types: Number, Text, Boolean, Unit, etc.
 
 use crate::evaluation::OperationResult;
-use crate::{ComparisonComputation, LiteralValue};
+use crate::semantic::standard_boolean;
+use crate::{ComparisonComputation, LiteralValue, Value};
 use rust_decimal::Decimal;
 
 /// Perform type-aware comparison, returning OperationResult (Veto on error)
@@ -12,60 +11,61 @@ pub fn comparison_operation(
     op: &ComparisonComputation,
     right: &LiteralValue,
 ) -> OperationResult {
-    match (left, right) {
-        (LiteralValue::Number(l), LiteralValue::Number(r)) => {
-            OperationResult::Value(LiteralValue::Boolean(compare_decimals(*l, op, r).into()))
+    match (&left.value, &right.value) {
+        (Value::Number(l), Value::Number(r)) => {
+            OperationResult::Value(LiteralValue::boolean(compare_decimals(*l, op, r).into()))
         }
 
-        (LiteralValue::Boolean(l), LiteralValue::Boolean(r)) => match op {
+        (Value::Boolean(l), Value::Boolean(r)) => match op {
             ComparisonComputation::Equal | ComparisonComputation::Is => {
-                OperationResult::Value(LiteralValue::Boolean((l == r).into()))
+                OperationResult::Value(LiteralValue::boolean((l == r).into()))
             }
             ComparisonComputation::NotEqual | ComparisonComputation::IsNot => {
-                OperationResult::Value(LiteralValue::Boolean((l != r).into()))
+                OperationResult::Value(LiteralValue {
+                    value: Value::Boolean((l != r).into()),
+                    lemma_type: standard_boolean().clone(),
+                })
             }
             _ => OperationResult::Veto(Some("Can only use == and != with booleans".to_string())),
         },
 
-        (LiteralValue::Text(l), LiteralValue::Text(r)) => match op {
+        (Value::Text(l), Value::Text(r)) => match op {
             ComparisonComputation::Equal | ComparisonComputation::Is => {
-                OperationResult::Value(LiteralValue::Boolean((l == r).into()))
+                OperationResult::Value(LiteralValue::boolean((l == r).into()))
             }
             ComparisonComputation::NotEqual | ComparisonComputation::IsNot => {
-                OperationResult::Value(LiteralValue::Boolean((l != r).into()))
+                OperationResult::Value(LiteralValue {
+                    value: Value::Boolean((l != r).into()),
+                    lemma_type: standard_boolean().clone(),
+                })
             }
             _ => OperationResult::Veto(Some("Can only use == and != with text".to_string())),
         },
 
-        (LiteralValue::Percentage(l), LiteralValue::Percentage(r)) => {
-            OperationResult::Value(LiteralValue::Boolean(compare_decimals(*l, op, r).into()))
+        (Value::Ratio(l, _), Value::Ratio(r, _)) => {
+            OperationResult::Value(LiteralValue::boolean(compare_decimals(*l, op, r).into()))
+        }
+        (Value::Scale(l, _), Value::Scale(r, _)) => {
+            OperationResult::Value(LiteralValue::boolean(compare_decimals(*l, op, r).into()))
         }
 
-        (LiteralValue::Date(_), LiteralValue::Date(_)) => {
-            super::datetime::datetime_comparison(left, op, right)
-        }
+        (Value::Date(_), Value::Date(_)) => super::datetime::datetime_comparison(left, op, right),
 
-        // Unit types with the same category can be compared
-        // Convert both to base units first to ensure correct comparison
-        (LiteralValue::Unit(l), LiteralValue::Unit(r)) if l.same_category(r) => {
-            let left_base = super::units::to_base_unit_value(l);
-            let right_base = super::units::to_base_unit_value(r);
-            OperationResult::Value(LiteralValue::Boolean(
-                compare_decimals(left_base, op, &right_base).into(),
+        // Duration comparison
+        (Value::Duration(l, lu), Value::Duration(r, ru)) => {
+            let left_seconds = super::units::duration_to_seconds(*l, lu);
+            let right_seconds = super::units::duration_to_seconds(*r, ru);
+            OperationResult::Value(LiteralValue::boolean(
+                compare_decimals(left_seconds, op, &right_seconds).into(),
             ))
         }
 
-        // Comparing unit to number extracts the unit's value for comparison
-        (LiteralValue::Unit(u), LiteralValue::Number(n)) => OperationResult::Value(
-            LiteralValue::Boolean(compare_decimals(u.value(), op, n).into()),
+        // Duration with number
+        (Value::Duration(value, _), Value::Number(n)) => OperationResult::Value(
+            LiteralValue::boolean(compare_decimals(*value, op, n).into()),
         ),
-        (LiteralValue::Number(n), LiteralValue::Unit(u)) => OperationResult::Value(
-            LiteralValue::Boolean(compare_decimals(*n, op, &u.value()).into()),
-        ),
-
-        // Different category units: compare numeric values
-        (LiteralValue::Unit(l), LiteralValue::Unit(r)) => OperationResult::Value(
-            LiteralValue::Boolean(compare_decimals(l.value(), op, &r.value()).into()),
+        (Value::Number(n), Value::Duration(value, _)) => OperationResult::Value(
+            LiteralValue::boolean(compare_decimals(*n, op, value).into()),
         ),
 
         _ => OperationResult::Veto(Some(format!(
@@ -89,5 +89,5 @@ fn compare_decimals(left: Decimal, op: &ComparisonComputation, right: &Decimal) 
 }
 
 fn type_name(value: &LiteralValue) -> String {
-    value.to_type().to_string()
+    value.get_type().name().to_string()
 }

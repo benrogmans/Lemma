@@ -3,7 +3,7 @@ use crate::parsing::ast::Span;
 use std::sync::Arc;
 
 fn create_test_error(
-    variant: fn(String, Span, String, Arc<str>, String, usize) -> LemmaError,
+    variant: fn(String, Span, String, Arc<str>, String, usize, Option<String>) -> LemmaError,
 ) -> LemmaError {
     let source_text = "fact amount = 100";
     let span = Span {
@@ -19,6 +19,7 @@ fn create_test_error(
         Arc::from(source_text),
         "test_doc".to_string(),
         1,
+        None,
     )
 }
 
@@ -67,17 +68,28 @@ fn test_error_creation_and_display() {
     assert!(semantic_error_with_suggestion_display.contains("Incompatible types"));
     assert!(semantic_error_with_suggestion_display.contains("Try converting one of the types."));
 
-    let engine_error = LemmaError::Engine("Something went wrong".to_string());
-    assert_eq!(
-        format!("{engine_error}"),
-        "Engine error: Something went wrong"
+    let engine_error = LemmaError::engine(
+        "Something went wrong",
+        Span { start: 0, end: 0, line: 1, col: 0 },
+        "<test>",
+        Arc::from(""),
+        "<test>",
+        1,
+        None::<String>,
     );
+    assert!(format!("{engine_error}").contains("Engine error: Something went wrong"));
 
-    let circular_dependency_error = LemmaError::CircularDependency("a -> b -> a".to_string());
-    assert_eq!(
-        format!("{circular_dependency_error}"),
-        "Circular dependency: a -> b -> a"
+    let circular_dependency_error = LemmaError::circular_dependency(
+        "a -> b -> a",
+        Span { start: 0, end: 0, line: 1, col: 0 },
+        "<test>",
+        Arc::from(""),
+        "<test>",
+        1,
+        vec![],
+        None::<String>,
     );
+    assert!(format!("{circular_dependency_error}").contains("Circular dependency: a -> b -> a"));
 
     let multiple_errors =
         LemmaError::MultipleErrors(vec![parse_error, semantic_error, engine_error]);

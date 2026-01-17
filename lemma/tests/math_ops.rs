@@ -17,8 +17,22 @@ fn run(code: &str, rule: &str) -> LemmaResult<String> {
 
 fn run_num(code: &str, rule: &str) -> LemmaResult<Decimal> {
     let s = run(code, rule)?;
-    s.parse::<Decimal>()
-        .map_err(|e| LemmaError::Engine(format!("Failed to parse '{s}' as Decimal: {e}")))
+    s.parse::<Decimal>().map_err(|e| {
+        LemmaError::engine(
+            format!("Failed to parse '{s}' as Decimal: {e}"),
+            lemma::parsing::ast::Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "<unknown>",
+            std::sync::Arc::from(s),
+            "<unknown>",
+            1,
+            None::<String>,
+        )
+    })
 }
 
 fn dec(s: &str) -> Decimal {
@@ -61,7 +75,7 @@ fn test_exp_and_power() -> LemmaResult<()> {
 fn test_abs_floor_ceil_round() -> LemmaResult<()> {
     let code = r#"
     doc test
-    rule a = abs(-3.5)
+    rule a = abs -3.5
     rule b = floor 3.9
     rule c = ceil 3.1
     rule d = round 3.5
@@ -129,7 +143,7 @@ fn test_trig_at_zero() -> LemmaResult<()> {
 fn test_nested_math_ops() -> LemmaResult<()> {
     let code = r#"
     doc test
-    rule a = round(abs(-3.6))
+    rule a = round (abs -3.6)
     rule b = ceil (sqrt 2)
     rule c = floor (exp 1)
     "#;
@@ -150,7 +164,7 @@ fn test_sqrt_negative_and_log_domain_errors() {
         .add_lemma_code(
             r#"
         doc test
-        rule bad_sqrt = sqrt(-1)
+        rule bad_sqrt = sqrt -1
         rule bad_log0 = log 0
         rule bad_log_neg = log -5
     "#,

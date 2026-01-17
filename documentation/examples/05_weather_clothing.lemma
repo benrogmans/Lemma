@@ -6,6 +6,11 @@ Shows how rules can make decisions based on conditions.
 Simple logic that's easy to understand.
 """
 
+type temperature = scale
+  -> unit celsius 1.0
+  -> minimum -70
+  -> maximum 70
+
 fact temperature = [temperature]
 fact is_raining = [boolean]
 fact wind_speed = [number]
@@ -36,4 +41,3 @@ rule recommendation = "Enjoy your day!"
   unless comfort_level? == "cold" then "Dress warmly and stay indoors if possible"
   unless comfort_level? == "hot" then "Stay hydrated and seek shade"
   unless comfort_level? == "uncomfortable" then "Consider postponing outdoor activities"
-

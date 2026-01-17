@@ -1,187 +1,362 @@
 //! Type-aware arithmetic operations
-//!
-//! Pure functions for arithmetic on different types: Number, Money, Percentage, Duration, etc.
 
 use crate::evaluation::OperationResult;
-use crate::{ArithmeticComputation, LiteralValue};
+use crate::semantic::standard_number;
+use crate::{ArithmeticComputation, LiteralValue, Value};
 use rust_decimal::Decimal;
 
-const PERCENT_DENOMINATOR: i32 = 100;
-
-/// Perform type-aware arithmetic operation, returning OperationResult (Veto on error)
+/// Perform type-aware arithmetic operation, returning OperationResult (Veto for runtime errors)
 pub fn arithmetic_operation(
     left: &LiteralValue,
     op: &ArithmeticComputation,
     right: &LiteralValue,
 ) -> OperationResult {
-    match (left, right) {
-        (LiteralValue::Number(l), LiteralValue::Number(r)) => match number_arithmetic(*l, op, *r) {
-            Ok(result) => OperationResult::Value(LiteralValue::Number(result)),
+    match (&left.value, &right.value) {
+        (Value::Number(l), Value::Number(r)) => match number_arithmetic(*l, op, *r) {
+            Ok(result) => OperationResult::Value(LiteralValue::number_with_type(
+                result,
+                left.lemma_type.clone(),
+            )),
             Err(msg) => OperationResult::Veto(Some(msg)),
         },
 
-        (LiteralValue::Percentage(l), LiteralValue::Number(r)) => match op {
-            ArithmeticComputation::Multiply => OperationResult::Value(LiteralValue::Number(
-                l * r / Decimal::from(PERCENT_DENOMINATOR),
-            )),
-            ArithmeticComputation::Divide => {
-                if *r == Decimal::ZERO {
-                    return OperationResult::Veto(Some("Division by zero".to_string()));
-                }
-                OperationResult::Value(LiteralValue::Percentage(l / r))
-            }
-            _ => OperationResult::Veto(Some(format!(
-                "Operation {:?} not supported for percentage and number",
-                op
-            ))),
-        },
-
-        (LiteralValue::Number(n), LiteralValue::Percentage(p)) => match op {
-            ArithmeticComputation::Multiply => OperationResult::Value(LiteralValue::Number(
-                n * p / Decimal::from(PERCENT_DENOMINATOR),
-            )),
-            ArithmeticComputation::Add => OperationResult::Value(LiteralValue::Number(
-                n + (n * p / Decimal::from(PERCENT_DENOMINATOR)),
-            )),
-            ArithmeticComputation::Subtract => OperationResult::Value(LiteralValue::Number(
-                n - (n * p / Decimal::from(PERCENT_DENOMINATOR)),
-            )),
-            _ => OperationResult::Veto(Some(format!(
-                "Operation {:?} not supported for number and percentage",
-                op
-            ))),
-        },
-
-        (LiteralValue::Percentage(l), LiteralValue::Percentage(r)) => match op {
-            ArithmeticComputation::Add => OperationResult::Value(LiteralValue::Percentage(l + r)),
-            ArithmeticComputation::Subtract => {
-                OperationResult::Value(LiteralValue::Percentage(l - r))
-            }
-            ArithmeticComputation::Multiply => OperationResult::Value(LiteralValue::Percentage(
-                l * r / Decimal::from(PERCENT_DENOMINATOR),
-            )),
-            ArithmeticComputation::Divide => {
-                if *r == Decimal::ZERO {
-                    return OperationResult::Veto(Some("Division by zero".to_string()));
-                }
-                OperationResult::Value(LiteralValue::Number(l / r))
-            }
-            _ => OperationResult::Veto(Some(format!(
-                "Operation {:?} not supported for percentage and percentage",
-                op
-            ))),
-        },
-
-        (LiteralValue::Date(_), _) | (_, LiteralValue::Date(_)) => {
+        (Value::Date(_), _) | (_, Value::Date(_)) => {
             super::datetime::datetime_arithmetic(left, op, right)
         }
 
-        (LiteralValue::Time(_), _) | (_, LiteralValue::Time(_)) => {
+        (Value::Time(_), _) | (_, Value::Time(_)) => {
             super::datetime::time_arithmetic(left, op, right)
         }
 
-        // Same category unit operations (e.g., Length + Length)
-        // Convert to base units for correct arithmetic, then back to left unit type
-        (LiteralValue::Unit(l), LiteralValue::Unit(r)) if l.same_category(r) => {
-            let left_base = super::units::to_base_unit_value(l);
-            let right_base = super::units::to_base_unit_value(r);
-
+        // Duration arithmetic
+        (Value::Duration(l, lu), Value::Duration(r, ru)) => {
+            let left_seconds = super::units::duration_to_seconds(*l, lu);
+            let right_seconds = super::units::duration_to_seconds(*r, ru);
             match op {
                 ArithmeticComputation::Add => {
-                    // Add in base units, then convert back to left's unit
-                    let result_base = left_base + right_base;
-                    let left_value = l.value();
-                    let left_base_value = super::units::to_base_unit_value(l);
-                    // Conversion factor: left_value / left_base_value
-                    // result_in_left_unit = result_base * (left_value / left_base_value)
-                    let result_value = if left_base_value == Decimal::ZERO {
-                        result_base
-                    } else {
-                        result_base * left_value / left_base_value
-                    };
-                    OperationResult::Value(LiteralValue::Unit(l.with_value(result_value)))
+                    let result_seconds = left_seconds + right_seconds;
+                    let result_value = super::units::seconds_to_duration(result_seconds, lu);
+                    OperationResult::Value(LiteralValue::duration_with_type(
+                        result_value,
+                        lu.clone(),
+                        left.lemma_type.clone(),
+                    ))
                 }
                 ArithmeticComputation::Subtract => {
-                    let result_base = left_base - right_base;
-                    let left_value = l.value();
-                    let left_base_value = super::units::to_base_unit_value(l);
-                    let result_value = if left_base_value == Decimal::ZERO {
-                        result_base
-                    } else {
-                        result_base * left_value / left_base_value
-                    };
-                    OperationResult::Value(LiteralValue::Unit(l.with_value(result_value)))
-                }
-                ArithmeticComputation::Multiply => {
-                    OperationResult::Value(LiteralValue::Number(left_base * right_base))
-                }
-                ArithmeticComputation::Divide => {
-                    if right_base == Decimal::ZERO {
-                        return OperationResult::Veto(Some("Division by zero".to_string()));
-                    }
-                    OperationResult::Value(LiteralValue::Number(left_base / right_base))
+                    let result_seconds = left_seconds - right_seconds;
+                    let result_value = super::units::seconds_to_duration(result_seconds, lu);
+                    OperationResult::Value(LiteralValue::duration_with_type(
+                        result_value,
+                        lu.clone(),
+                        left.lemma_type.clone(),
+                    ))
                 }
                 _ => OperationResult::Veto(Some(format!(
-                    "Operation {:?} not supported for same-category units",
+                    "Operation {:?} not supported for durations",
                     op
                 ))),
             }
         }
 
-        // Different category unit operations produce dimensionless numbers
-        (LiteralValue::Unit(l), LiteralValue::Unit(r)) => match op {
-            ArithmeticComputation::Multiply => {
-                OperationResult::Value(LiteralValue::Number(l.value() * r.value()))
-            }
-            ArithmeticComputation::Divide => {
-                if r.value() == Decimal::ZERO {
-                    return OperationResult::Veto(Some("Division by zero".to_string()));
-                }
-                OperationResult::Value(LiteralValue::Number(l.value() / r.value()))
-            }
-            _ => OperationResult::Veto(Some(format!(
-                "Cannot add/subtract different unit categories: {:?} and {:?}",
-                type_name(left),
-                type_name(right)
-            ))),
-        },
-
-        // Number and Unit operations
-        (LiteralValue::Number(n), LiteralValue::Unit(u)) => match op {
-            ArithmeticComputation::Multiply => {
-                OperationResult::Value(LiteralValue::Unit(u.with_value(*n * u.value())))
-            }
-            ArithmeticComputation::Divide => {
-                if u.value() == Decimal::ZERO {
-                    return OperationResult::Veto(Some("Division by zero".to_string()));
-                }
-                OperationResult::Value(LiteralValue::Number(*n / u.value()))
-            }
-            _ => OperationResult::Veto(Some(format!(
-                "Operation {:?} not supported for number and unit",
-                op
-            ))),
-        },
-
-        (LiteralValue::Unit(u), LiteralValue::Number(n)) => match op {
-            ArithmeticComputation::Multiply => {
-                OperationResult::Value(LiteralValue::Unit(u.with_value(u.value() * *n)))
-            }
+        // Duration with number
+        (Value::Duration(value, unit), Value::Number(n)) => match op {
+            ArithmeticComputation::Multiply => OperationResult::Value(
+                LiteralValue::duration_with_type(value * n, unit.clone(), left.lemma_type.clone()),
+            ),
             ArithmeticComputation::Divide => {
                 if *n == Decimal::ZERO {
                     return OperationResult::Veto(Some("Division by zero".to_string()));
                 }
-                OperationResult::Value(LiteralValue::Unit(u.with_value(u.value() / *n)))
+                OperationResult::Value(LiteralValue::duration_with_type(
+                    value / n,
+                    unit.clone(),
+                    left.lemma_type.clone(),
+                ))
             }
-            ArithmeticComputation::Add | ArithmeticComputation::Subtract => OperationResult::Veto(
-                Some("Cannot add/subtract number and unit directly".to_string()),
-            ),
             _ => OperationResult::Veto(Some(format!(
-                "Operation {:?} not supported for unit and number",
+                "Operation {:?} not supported for duration and number",
                 op
             ))),
         },
 
+        (Value::Number(n), Value::Duration(value, unit)) => match op {
+            ArithmeticComputation::Multiply => OperationResult::Value(
+                LiteralValue::duration_with_type(n * value, unit.clone(), left.lemma_type.clone()),
+            ),
+            _ => OperationResult::Veto(Some(format!(
+                "Operation {:?} not supported for number and duration",
+                op
+            ))),
+        },
+
+        // Ratio operations
+        // Ratio op Number → Number (ratio semantics: ratio + number = number * (1 + ratio))
+        (Value::Ratio(r, _), Value::Number(n)) if right.get_type().is_number() => {
+            match op {
+                ArithmeticComputation::Add => {
+                    // ratio + number = number * (1 + ratio)
+                    let result = *n * (Decimal::ONE + *r);
+                    OperationResult::Value(LiteralValue::number_with_type(
+                        result,
+                        standard_number().clone(),
+                    ))
+                }
+                ArithmeticComputation::Subtract => {
+                    // ratio - number = number * (1 - ratio)
+                    let result = *n * (Decimal::ONE - *r);
+                    OperationResult::Value(LiteralValue::number_with_type(
+                        result,
+                        standard_number().clone(),
+                    ))
+                }
+                ArithmeticComputation::Multiply => match number_arithmetic(*r, op, *n) {
+                    Ok(result) => OperationResult::Value(LiteralValue::number_with_type(
+                        result,
+                        standard_number().clone(),
+                    )),
+                    Err(msg) => OperationResult::Veto(Some(msg)),
+                },
+                ArithmeticComputation::Divide => {
+                    if *n == Decimal::ZERO {
+                        return OperationResult::Veto(Some("Division by zero".to_string()));
+                    }
+                    match number_arithmetic(*r, op, *n) {
+                        Ok(result) => OperationResult::Value(LiteralValue::number_with_type(
+                            result,
+                            standard_number().clone(),
+                        )),
+                        Err(msg) => OperationResult::Veto(Some(msg)),
+                    }
+                }
+                _ => OperationResult::Veto(Some(format!(
+                    "Operation {:?} not supported for ratio and number",
+                    op
+                ))),
+            }
+        }
+        // Number op Ratio → Number (ratio semantics: number + ratio = number * (1 + ratio))
+        (Value::Number(n), Value::Ratio(r, _)) if left.get_type().is_number() => {
+            match op {
+                ArithmeticComputation::Add => {
+                    // number + ratio = number * (1 + ratio)
+                    let result = *n * (Decimal::ONE + *r);
+                    OperationResult::Value(LiteralValue::number_with_type(
+                        result,
+                        standard_number().clone(),
+                    ))
+                }
+                ArithmeticComputation::Subtract => {
+                    // number - ratio = number * (1 - ratio)
+                    let result = *n * (Decimal::ONE - *r);
+                    OperationResult::Value(LiteralValue::number_with_type(
+                        result,
+                        standard_number().clone(),
+                    ))
+                }
+                ArithmeticComputation::Multiply => match number_arithmetic(*n, op, *r) {
+                    Ok(result) => OperationResult::Value(LiteralValue::number_with_type(
+                        result,
+                        standard_number().clone(),
+                    )),
+                    Err(msg) => OperationResult::Veto(Some(msg)),
+                },
+                ArithmeticComputation::Divide => {
+                    if *r == Decimal::ZERO {
+                        return OperationResult::Veto(Some("Division by zero".to_string()));
+                    }
+                    match number_arithmetic(*n, op, *r) {
+                        Ok(result) => OperationResult::Value(LiteralValue::number_with_type(
+                            result,
+                            standard_number().clone(),
+                        )),
+                        Err(msg) => OperationResult::Veto(Some(msg)),
+                    }
+                }
+                _ => OperationResult::Veto(Some(format!(
+                    "Operation {:?} not supported for number and ratio",
+                    op
+                ))),
+            }
+        }
+        // Ratio op Ratio → Ratio
+        (Value::Ratio(l, lu), Value::Ratio(r, ru)) => {
+            // Preserve unit from left operand, or right if left is None
+            let preserved_unit = lu.clone().or_else(|| ru.clone());
+            match number_arithmetic(*l, op, *r) {
+                Ok(result) => OperationResult::Value(LiteralValue::ratio_with_type(
+                    result,
+                    preserved_unit,
+                    left.lemma_type.clone(),
+                )),
+                Err(msg) => OperationResult::Veto(Some(msg)),
+            }
+        }
+        // Scale operations with Scale
+        (Value::Scale(l_val, l_unit), Value::Scale(r_val, r_unit)) => {
+            // Units must match for addition/subtraction
+            if l_unit != r_unit
+                && (matches!(
+                    op,
+                    ArithmeticComputation::Add | ArithmeticComputation::Subtract
+                ))
+            {
+                return OperationResult::Veto(Some(format!(
+                    "Cannot {} values with different units: {:?} and {:?}",
+                    match op {
+                        ArithmeticComputation::Add => "add",
+                        ArithmeticComputation::Subtract => "subtract",
+                        _ => unreachable!(),
+                    },
+                    l_unit,
+                    r_unit
+                )));
+            }
+            // Preserve unit from left
+            let preserved_unit = l_unit.clone();
+            match number_arithmetic(*l_val, op, *r_val) {
+                Ok(result) => OperationResult::Value(LiteralValue::scale_with_type(
+                    result,
+                    preserved_unit,
+                    left.lemma_type.clone(),
+                )),
+                Err(msg) => OperationResult::Veto(Some(msg)),
+            }
+        }
+        // Ratio op Scale → Scale (inherits Scale type and unit)
+        (Value::Ratio(ratio_val, _), Value::Scale(scale_val, scale_unit)) => {
+            match op {
+                ArithmeticComputation::Multiply => {
+                    match number_arithmetic(*ratio_val, op, *scale_val) {
+                        Ok(result) => OperationResult::Value(LiteralValue::scale_with_type(
+                            result,
+                            scale_unit.clone(),
+                            right.lemma_type.clone(),
+                        )),
+                        Err(msg) => OperationResult::Veto(Some(msg)),
+                    }
+                }
+                ArithmeticComputation::Divide => {
+                    if *scale_val == Decimal::ZERO {
+                        return OperationResult::Veto(Some("Division by zero".to_string()));
+                    }
+                    match number_arithmetic(*ratio_val, op, *scale_val) {
+                        Ok(result) => OperationResult::Value(LiteralValue::scale_with_type(
+                            result,
+                            scale_unit.clone(),
+                            right.lemma_type.clone(),
+                        )),
+                        Err(msg) => OperationResult::Veto(Some(msg)),
+                    }
+                }
+                ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                    // Scale +/- Ratio applies ratio semantics: scale +/- (scale * ratio) = scale * (1 +/- ratio)
+                    let ratio_amount = *scale_val * *ratio_val;
+                    let result = match op {
+                        ArithmeticComputation::Add => *scale_val + ratio_amount,
+                        ArithmeticComputation::Subtract => *scale_val - ratio_amount,
+                        _ => unreachable!(),
+                    };
+                    OperationResult::Value(LiteralValue::scale_with_type(
+                        result,
+                        scale_unit.clone(), // Preserve Scale unit
+                        right.lemma_type.clone(),
+                    ))
+                }
+                _ => OperationResult::Veto(Some(format!(
+                    "Operation {:?} not supported for ratio and scale",
+                    op
+                ))),
+            }
+        }
+        // Scale op Ratio → Scale (inherits Scale type and unit)
+        (Value::Scale(scale_val, scale_unit), Value::Ratio(ratio_val, _)) => {
+            match op {
+                ArithmeticComputation::Multiply => {
+                    match number_arithmetic(*scale_val, op, *ratio_val) {
+                        Ok(result) => OperationResult::Value(LiteralValue::scale_with_type(
+                            result,
+                            scale_unit.clone(),
+                            left.lemma_type.clone(),
+                        )),
+                        Err(msg) => OperationResult::Veto(Some(msg)),
+                    }
+                }
+                ArithmeticComputation::Divide => {
+                    if *ratio_val == Decimal::ZERO {
+                        return OperationResult::Veto(Some("Division by zero".to_string()));
+                    }
+                    match number_arithmetic(*scale_val, op, *ratio_val) {
+                        Ok(result) => OperationResult::Value(LiteralValue::scale_with_type(
+                            result,
+                            scale_unit.clone(),
+                            left.lemma_type.clone(), // Inherit Scale type
+                        )),
+                        Err(msg) => OperationResult::Veto(Some(msg)),
+                    }
+                }
+                ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                    // Scale +/- Ratio applies ratio semantics: scale +/- (scale * ratio) = scale * (1 +/- ratio)
+                    let ratio_amount = *scale_val * *ratio_val;
+                    let result = match op {
+                        ArithmeticComputation::Add => *scale_val + ratio_amount,
+                        ArithmeticComputation::Subtract => *scale_val - ratio_amount,
+                        _ => unreachable!(),
+                    };
+                    OperationResult::Value(LiteralValue::scale_with_type(
+                        result,
+                        scale_unit.clone(), // Preserve Scale unit
+                        left.lemma_type.clone(),
+                    ))
+                }
+                _ => OperationResult::Veto(Some(format!(
+                    "Operation {:?} not supported for scale and ratio",
+                    op
+                ))),
+            }
+        }
+
+        // Scale op Number → Scale (preserves unit)
+        (Value::Scale(scale_val, scale_unit), Value::Number(n)) => {
+            match number_arithmetic(*scale_val, op, *n) {
+                Ok(result) => OperationResult::Value(LiteralValue::scale_with_type(
+                    result,
+                    scale_unit.clone(),
+                    left.lemma_type.clone(),
+                )),
+                Err(msg) => OperationResult::Veto(Some(msg)),
+            }
+        }
+        // Number op Scale → Scale (preserves unit)
+        (Value::Number(n), Value::Scale(scale_val, scale_unit)) => {
+            match number_arithmetic(*n, op, *scale_val) {
+                Ok(result) => OperationResult::Value(LiteralValue::scale_with_type(
+                    result,
+                    scale_unit.clone(),
+                    right.lemma_type.clone(),
+                )),
+                Err(msg) => OperationResult::Veto(Some(msg)),
+            }
+        }
+        // Scale op Duration - not supported
+        (Value::Scale(_scale_val, _scale_unit), Value::Duration(_d_val, _d_unit)) => match op {
+            ArithmeticComputation::Multiply => {
+                OperationResult::Veto(Some("Cannot multiply scale and duration".to_string()))
+            }
+            _ => OperationResult::Veto(Some(format!(
+                "Operation {:?} not supported for scale and duration",
+                op
+            ))),
+        },
+        // Duration op Scale - not supported
+        (Value::Duration(_d_val, _d_unit), Value::Scale(_scale_val, _scale_unit)) => match op {
+            ArithmeticComputation::Multiply => {
+                OperationResult::Veto(Some("Cannot multiply duration and scale".to_string()))
+            }
+            _ => OperationResult::Veto(Some(format!(
+                "Operation {:?} not supported for duration and scale",
+                op
+            ))),
+        },
         _ => OperationResult::Veto(Some(format!(
             "Arithmetic operation {:?} not supported for types {:?} and {:?}",
             op,
@@ -229,5 +404,5 @@ fn number_arithmetic(
 }
 
 fn type_name(value: &LiteralValue) -> String {
-    value.to_type().to_string()
+    value.get_type().name().to_string()
 }

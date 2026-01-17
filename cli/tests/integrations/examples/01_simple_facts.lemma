@@ -24,14 +24,12 @@ fact currency_rate = 1.18
 fact percentage_complete = 87.5%
 fact tax_rate = 22%
 
-fact weight = 68.5 kilograms
-fact height = 175 centimeters
-fact distance_to_office = 12.5 kilometers
+fact weight = 68.5
+fact height = 175
+fact distance_to_office = 12.5
 
-fact max_file_size = 10 megabytes
+fact max_file_size = 10
 fact processing_time = 2.5 hours
-
-fact email_pattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
 
 fact unknown_date = [date]
 fact pending_amount = [number]

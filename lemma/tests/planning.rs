@@ -15,12 +15,7 @@ fact name = "John"
 fact age = 25
 rule is_adult = age >= 18"#;
 
-    let docs = parse(
-        input,
-        Some("test.lemma".to_string()),
-        &lemma::ResourceLimits::default(),
-    )
-    .unwrap();
+    let docs = parse(input, "test.lemma", &lemma::ResourceLimits::default()).unwrap();
 
     let mut sources = HashMap::new();
     sources.insert("test.lemma".to_string(), input.to_string());
@@ -41,12 +36,7 @@ fn test_duplicate_facts() {
 fact name = "John"
 fact name = "Jane""#;
 
-    let docs = parse(
-        input,
-        Some("test.lemma".to_string()),
-        &lemma::ResourceLimits::default(),
-    )
-    .unwrap();
+    let docs = parse(input, "test.lemma", &lemma::ResourceLimits::default()).unwrap();
 
     let mut sources = HashMap::new();
     sources.insert("test.lemma".to_string(), input.to_string());
@@ -78,12 +68,7 @@ fact age = 25
 rule is_adult = age >= 18
 rule is_adult = age >= 21"#;
 
-    let docs = parse(
-        input,
-        Some("test.lemma".to_string()),
-        &lemma::ResourceLimits::default(),
-    )
-    .unwrap();
+    let docs = parse(input, "test.lemma", &lemma::ResourceLimits::default()).unwrap();
 
     let mut sources = HashMap::new();
     sources.insert("test.lemma".to_string(), input.to_string());
@@ -114,12 +99,7 @@ fn test_circular_dependency() {
 rule a = b?
 rule b = a?"#;
 
-    let docs = parse(
-        input,
-        Some("test.lemma".to_string()),
-        &lemma::ResourceLimits::default(),
-    )
-    .unwrap();
+    let docs = parse(input, "test.lemma", &lemma::ResourceLimits::default()).unwrap();
 
     let mut sources = HashMap::new();
     sources.insert("test.lemma".to_string(), input.to_string());
@@ -148,12 +128,7 @@ rule is_adult = age >= 18
 rule test1 = age?
 rule test2 = is_adult"#;
 
-    let docs = parse(
-        input,
-        Some("test.lemma".to_string()),
-        &lemma::ResourceLimits::default(),
-    )
-    .unwrap();
+    let docs = parse(input, "test.lemma", &lemma::ResourceLimits::default()).unwrap();
 
     let mut sources = HashMap::new();
     sources.insert("test.lemma".to_string(), input.to_string());
@@ -187,12 +162,7 @@ doc company
 fact name = "Acme Corp"
 fact employee = doc person"#;
 
-    let docs = parse(
-        input,
-        Some("test.lemma".to_string()),
-        &lemma::ResourceLimits::default(),
-    )
-    .unwrap();
+    let docs = parse(input, "test.lemma", &lemma::ResourceLimits::default()).unwrap();
 
     let mut sources = HashMap::new();
     sources.insert("test.lemma".to_string(), input.to_string());
@@ -212,12 +182,7 @@ fn test_invalid_document_reference() {
 fact name = "John"
 fact contract = doc nonexistent"#;
 
-    let docs = parse(
-        input,
-        Some("test.lemma".to_string()),
-        &lemma::ResourceLimits::default(),
-    )
-    .unwrap();
+    let docs = parse(input, "test.lemma", &lemma::ResourceLimits::default()).unwrap();
 
     let mut sources = HashMap::new();
     sources.insert("test.lemma".to_string(), input.to_string());

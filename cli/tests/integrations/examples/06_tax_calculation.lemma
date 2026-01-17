@@ -6,10 +6,10 @@ A real-world example demonstrating progressive tax brackets.
 This shows how Lemma can encode complex business rules clearly.
 """
 
-fact income = 85000
+fact income = [number]
 fact filing_status = "single"
 fact state = "CA"
-fact deductions = 12000
+fact deductions = [number]
 
 rule taxable_income = income - deductions
   unless income < deductions then 0
@@ -47,7 +47,7 @@ rule state_tax = taxable_income? * state_tax_rate?
 
 rule total_tax = total_federal_tax? + state_tax?
 
-rule effective_tax_rate = total_tax? / income in percentage
+rule effective_tax_rate = total_tax? / income in percent
   unless income == 0 then 0%
 
 rule after_tax_income = income - total_tax?

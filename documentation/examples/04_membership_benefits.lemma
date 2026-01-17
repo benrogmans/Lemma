@@ -6,7 +6,11 @@ Defines the benefits for premium members.
 This document can be referenced by other documents.
 """
 
-rule discount_rate = 10%
+type discount_ratio = ratio
+  -> minimum 0
+  -> maximum 1
+
+rule discount_rate = 10 percent
 rule free_shipping_threshold = 50
 rule points_multiplier = 1.5
 rule monthly_bonus_points = 100
@@ -36,4 +40,3 @@ rule bonus_points = membership.monthly_bonus_points?
 rule total_points = base_points? + bonus_points?
 
 rule total_savings = discount? + shipping_cost?
-

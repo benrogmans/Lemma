@@ -17,7 +17,5 @@ pub fn from_msgpack(
     _msgpack: &[u8],
     _plan: &ExecutionPlan,
 ) -> Result<HashMap<String, LiteralValue>, LemmaError> {
-    Err(LemmaError::Engine(
-        "MsgPack serialization not yet implemented".to_string(),
-    ))
+    todo!("MsgPack serialization not yet implemented");
 }

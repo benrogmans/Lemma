@@ -85,7 +85,7 @@ rule is_adult = age >= 18
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))
+        OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::True))
     );
 }
 
@@ -202,17 +202,17 @@ rule can_drive = age >= 16
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::False))
+        OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::False))
     );
 }
 
 #[test]
-fn test_veto_with_unit_comparison() {
+fn test_veto_with_number_comparison() {
     let code = r#"
 doc weight_check
-fact package_weight = 100 kilograms
-rule can_ship = package_weight <= 50 kilograms
-    unless package_weight > 75 kilograms then veto "Package exceeds maximum weight limit"
+fact package_weight = 100
+rule can_ship = package_weight <= 50
+    unless package_weight > 75 then veto "Package exceeds maximum weight limit"
 "#;
 
     let mut engine = Engine::new();
@@ -434,7 +434,7 @@ rule double_value = value * 2
         .unwrap();
     assert_eq!(
         check_negative.result,
-        OperationResult::Value(LiteralValue::Boolean(lemma::BooleanValue::True))
+        OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::True))
     );
 
     let double_value = response

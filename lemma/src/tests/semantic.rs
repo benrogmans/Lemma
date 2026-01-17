@@ -31,17 +31,16 @@ fn test_comparison_operator_name() {
 }
 
 #[test]
-fn test_literal_value_to_type() {
+fn test_literal_value_to_standard_type() {
     let one = Decimal::from_str("1").unwrap();
 
+    assert_eq!(LiteralValue::text("".to_string()).lemma_type.name(), "text");
+    assert_eq!(LiteralValue::number(one).lemma_type.name(), "number");
     assert_eq!(
-        LiteralValue::Text("".to_string()).to_type(),
-        LemmaType::Text
-    );
-    assert_eq!(LiteralValue::Number(one).to_type(), LemmaType::Number);
-    assert_eq!(
-        LiteralValue::Boolean(crate::BooleanValue::True).to_type(),
-        LemmaType::Boolean
+        LiteralValue::boolean(crate::BooleanValue::True)
+            .lemma_type
+            .name(),
+        "boolean"
     );
 
     let dt = DateTimeValue {
@@ -53,104 +52,17 @@ fn test_literal_value_to_type() {
         second: 0,
         timezone: None,
     };
-    assert_eq!(LiteralValue::Date(dt).to_type(), LemmaType::Date);
+    assert_eq!(LiteralValue::date(dt).lemma_type.name(), "date");
     assert_eq!(
-        LiteralValue::Percentage(one).to_type(),
-        LemmaType::Percentage
-    );
-    assert_eq!(
-        LiteralValue::Regex("".to_string()).to_type(),
-        LemmaType::Regex
+        LiteralValue::ratio(one / rust_decimal::Decimal::from(100)).lemma_type.name(),
+        "ratio"
     );
     assert_eq!(
-        LiteralValue::Unit(NumericUnit::Mass(one, MassUnit::Kilogram)).to_type(),
-        LemmaType::Mass
+        LiteralValue::duration(one, DurationUnit::Second)
+            .lemma_type
+            .name(),
+        "duration"
     );
-    assert_eq!(
-        LiteralValue::Unit(NumericUnit::Length(one, LengthUnit::Meter)).to_type(),
-        LemmaType::Length
-    );
-    assert_eq!(
-        LiteralValue::Unit(NumericUnit::Volume(one, VolumeUnit::Liter)).to_type(),
-        LemmaType::Volume
-    );
-    assert_eq!(
-        LiteralValue::Unit(NumericUnit::Duration(one, DurationUnit::Second)).to_type(),
-        LemmaType::Duration
-    );
-    assert_eq!(
-        LiteralValue::Unit(NumericUnit::Temperature(one, TemperatureUnit::Celsius)).to_type(),
-        LemmaType::Temperature
-    );
-    assert_eq!(
-        LiteralValue::Unit(NumericUnit::Power(one, PowerUnit::Watt)).to_type(),
-        LemmaType::Power
-    );
-    assert_eq!(
-        LiteralValue::Unit(NumericUnit::Force(one, ForceUnit::Newton)).to_type(),
-        LemmaType::Force
-    );
-    assert_eq!(
-        LiteralValue::Unit(NumericUnit::Pressure(one, PressureUnit::Pascal)).to_type(),
-        LemmaType::Pressure
-    );
-    assert_eq!(
-        LiteralValue::Unit(NumericUnit::Energy(one, EnergyUnit::Joule)).to_type(),
-        LemmaType::Energy
-    );
-    assert_eq!(
-        LiteralValue::Unit(NumericUnit::Frequency(one, FrequencyUnit::Hertz)).to_type(),
-        LemmaType::Frequency
-    );
-    assert_eq!(
-        LiteralValue::Unit(NumericUnit::Data(one, DataUnit::Byte)).to_type(),
-        LemmaType::Data
-    );
-}
-
-#[test]
-fn test_numeric_unit_value() {
-    let ten = Decimal::from_str("10").unwrap();
-    let twenty = Decimal::from_str("20").unwrap();
-
-    assert_eq!(NumericUnit::Mass(ten, MassUnit::Kilogram).value(), ten);
-    assert_eq!(
-        NumericUnit::Length(twenty, LengthUnit::Meter).value(),
-        twenty
-    );
-    assert_eq!(
-        NumericUnit::Duration(twenty, DurationUnit::Second).value(),
-        twenty
-    );
-}
-
-#[test]
-fn test_numeric_unit_same_category() {
-    let ten = Decimal::from_str("10").unwrap();
-    let twenty = Decimal::from_str("20").unwrap();
-
-    let kg = NumericUnit::Mass(ten, MassUnit::Kilogram);
-    let lb = NumericUnit::Mass(twenty, MassUnit::Pound);
-    let meter = NumericUnit::Length(ten, LengthUnit::Meter);
-
-    assert!(kg.same_category(&lb), "Same mass units should match");
-    assert!(
-        !kg.same_category(&meter),
-        "Different unit types should not match"
-    );
-}
-
-#[test]
-fn test_numeric_unit_with_value() {
-    let ten = Decimal::from_str("10").unwrap();
-    let fifty = Decimal::from_str("50").unwrap();
-
-    let original = NumericUnit::Mass(ten, MassUnit::Kilogram);
-    let updated = original.with_value(fifty);
-
-    assert_eq!(updated.value(), fifty);
-    assert!(original.same_category(&updated));
-    assert_eq!(format!("{}", updated), "50 kilogram");
 }
 
 #[test]
@@ -179,70 +91,74 @@ fn test_comparison_operator_display() {
 }
 
 #[test]
-fn test_unit_display_formats() {
-    let one = Decimal::from_str("1").unwrap();
-
-    // Mass units
-    assert_eq!(format!("{}", MassUnit::Kilogram), "kilogram");
-    assert_eq!(format!("{}", MassUnit::Pound), "pound");
-    assert_eq!(
-        format!("{}", NumericUnit::Mass(one, MassUnit::Gram)),
-        "1 gram"
-    );
-
-    // Length units
-    assert_eq!(format!("{}", LengthUnit::Meter), "meter");
-    assert_eq!(format!("{}", LengthUnit::Mile), "mile");
-
-    // Volume units
-    assert_eq!(format!("{}", VolumeUnit::Liter), "liter");
-    assert_eq!(format!("{}", VolumeUnit::Gallon), "gallon");
-
-    // Duration units
+fn test_duration_unit_display() {
     assert_eq!(format!("{}", DurationUnit::Second), "second");
+    assert_eq!(format!("{}", DurationUnit::Minute), "minute");
     assert_eq!(format!("{}", DurationUnit::Hour), "hour");
-
-    // Temperature units
-    assert_eq!(format!("{}", TemperatureUnit::Celsius), "celsius");
-    assert_eq!(format!("{}", TemperatureUnit::Fahrenheit), "fahrenheit");
-
-    // Power units
-    assert_eq!(format!("{}", PowerUnit::Watt), "watt");
-    assert_eq!(format!("{}", PowerUnit::Kilowatt), "kilowatt");
-
-    // Other units
-    assert_eq!(format!("{}", ForceUnit::Newton), "newton");
-    assert_eq!(format!("{}", PressureUnit::Pascal), "pascal");
-    assert_eq!(format!("{}", EnergyUnit::Joule), "joule");
-    assert_eq!(format!("{}", FrequencyUnit::Hertz), "hertz");
-    assert_eq!(format!("{}", DataUnit::Byte), "byte");
-    assert_eq!(format!("{}", DataUnit::Gigabyte), "gigabyte");
+    assert_eq!(format!("{}", DurationUnit::Day), "day");
+    assert_eq!(format!("{}", DurationUnit::Week), "week");
+    assert_eq!(format!("{}", DurationUnit::Millisecond), "millisecond");
+    assert_eq!(format!("{}", DurationUnit::Microsecond), "microsecond");
 }
-
-#[test]
-fn test_money_unit_display() {}
 
 #[test]
 fn test_conversion_target_display() {
+        assert_eq!(format!("{}", ConversionTarget::Percentage), "percent");
     assert_eq!(
-        format!("{}", ConversionTarget::Mass(MassUnit::Kilogram)),
-        "kilogram"
+        format!("{}", ConversionTarget::Duration(DurationUnit::Hour)),
+        "hour"
     );
-    assert_eq!(
-        format!("{}", ConversionTarget::Length(LengthUnit::Meter)),
-        "meter"
-    );
-    assert_eq!(format!("{}", ConversionTarget::Percentage), "percentage");
 }
 
 #[test]
-fn test_lemma_type_display() {
-    assert_eq!(format!("{}", LemmaType::Text), "text");
-    assert_eq!(format!("{}", LemmaType::Number), "number");
-    assert_eq!(format!("{}", LemmaType::Date), "date");
-    assert_eq!(format!("{}", LemmaType::Boolean), "boolean");
-    assert_eq!(format!("{}", LemmaType::Percentage), "percentage");
-    assert_eq!(format!("{}", LemmaType::Mass), "mass");
+fn test_doc_type_display() {
+    assert_eq!(format!("{}", crate::semantic::standard_text()), "text");
+    assert_eq!(format!("{}", crate::semantic::standard_number()), "number");
+    assert_eq!(format!("{}", crate::semantic::standard_date()), "date");
+    assert_eq!(
+        format!("{}", crate::semantic::standard_boolean()),
+        "boolean"
+    );
+    assert_eq!(
+        format!("{}", crate::semantic::standard_ratio()),
+        "ratio"
+    );
+    assert_eq!(
+        format!("{}", crate::semantic::standard_duration()),
+        "duration"
+    );
+}
+
+#[test]
+fn test_type_constructor() {
+    let specs = TypeSpecification::number();
+    let lemma_type = LemmaType::new("dice".to_string(), specs);
+    assert_eq!(lemma_type.name(), "dice");
+}
+
+#[test]
+fn test_type_display() {
+    let specs = TypeSpecification::text();
+    let lemma_type = LemmaType::new("name".to_string(), specs);
+    assert_eq!(format!("{}", lemma_type), "name");
+}
+
+#[test]
+fn test_type_equality() {
+    let specs1 = TypeSpecification::number();
+    let specs2 = TypeSpecification::number();
+    let lemma_type1 = LemmaType::new("dice".to_string(), specs1);
+    let lemma_type2 = LemmaType::new("dice".to_string(), specs2);
+    assert_eq!(lemma_type1, lemma_type2);
+}
+
+#[test]
+fn test_type_serialization() {
+    let specs = TypeSpecification::number();
+    let lemma_type = LemmaType::new("dice".to_string(), specs);
+    let serialized = serde_json::to_string(&lemma_type).unwrap();
+    let deserialized: LemmaType = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(lemma_type, deserialized);
 }
 
 #[test]
@@ -250,19 +166,21 @@ fn test_literal_value_display_value() {
     let ten = Decimal::from_str("10").unwrap();
 
     assert_eq!(
-        LiteralValue::Text("hello".to_string()).display_value(),
+        LiteralValue::text("hello".to_string()).display_value(),
         "\"hello\""
     );
-    assert_eq!(LiteralValue::Number(ten).display_value(), "10");
+    assert_eq!(LiteralValue::number(ten).display_value(), "10");
     assert_eq!(
-        LiteralValue::Boolean(crate::BooleanValue::True).display_value(),
+        LiteralValue::boolean(crate::BooleanValue::True).display_value(),
         "true"
     );
     assert_eq!(
-        LiteralValue::Boolean(crate::BooleanValue::False).display_value(),
+        LiteralValue::boolean(crate::BooleanValue::False).display_value(),
         "false"
     );
-    assert_eq!(LiteralValue::Percentage(ten).display_value(), "10%");
+    // 10% stored as 0.10 ratio
+    let ten_percent_ratio = LiteralValue::ratio(rust_decimal::Decimal::from_str("0.10").unwrap());
+    assert_eq!(ten_percent_ratio.display_value(), "0.1");
 
     let time = TimeValue {
         hour: 14,
@@ -270,7 +188,7 @@ fn test_literal_value_display_value() {
         second: 0,
         timezone: None,
     };
-    let time_display = LiteralValue::Time(time).display_value();
+    let time_display = LiteralValue::time(time).display_value();
     assert!(time_display.contains("14"));
     assert!(time_display.contains("30"));
 }
@@ -283,7 +201,7 @@ fn test_literal_value_time_type() {
         second: 0,
         timezone: None,
     };
-    assert_eq!(LiteralValue::Time(time).to_type(), LemmaType::Date);
+    assert_eq!(LiteralValue::time(time).lemma_type.name(), "time");
 }
 
 #[test]
@@ -340,26 +258,7 @@ fn test_timezone_value() {
 }
 
 #[test]
-fn test_all_unit_categories() {
-    let v = Decimal::from_str("1").unwrap();
-
-    // Test that all unit types can be created
-    let _ = NumericUnit::Mass(v, MassUnit::Kilogram);
-    let _ = NumericUnit::Length(v, LengthUnit::Meter);
-    let _ = NumericUnit::Volume(v, VolumeUnit::Liter);
-    let _ = NumericUnit::Duration(v, DurationUnit::Second);
-    let _ = NumericUnit::Temperature(v, TemperatureUnit::Celsius);
-    let _ = NumericUnit::Power(v, PowerUnit::Watt);
-    let _ = NumericUnit::Force(v, ForceUnit::Newton);
-    let _ = NumericUnit::Pressure(v, PressureUnit::Pascal);
-    let _ = NumericUnit::Energy(v, EnergyUnit::Joule);
-    let _ = NumericUnit::Frequency(v, FrequencyUnit::Hertz);
-    let _ = NumericUnit::Data(v, DataUnit::Byte);
-}
-
-#[test]
 fn test_negation_types() {
-    // Ensure all negation types exist
     let _ = NegationType::Not;
 }
 
@@ -394,7 +293,7 @@ fn test_expression_get_source_text_with_location() {
     };
     let source_location = Some(Source::new("test.lemma", span, "test"));
     let expr = Expression::new(
-        ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
+        ExpressionKind::Literal(LiteralValue::number(rust_decimal::Decimal::new(42, 0))),
         source_location,
     );
 
@@ -410,7 +309,7 @@ fn test_expression_get_source_text_no_location() {
     sources.insert("test.lemma".to_string(), "fact value = 42".to_string());
 
     let expr = Expression::new(
-        ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
+        ExpressionKind::Literal(LiteralValue::number(rust_decimal::Decimal::new(42, 0))),
         None,
     );
 
@@ -431,7 +330,7 @@ fn test_expression_get_source_text_source_not_found() {
     };
     let source_location = Some(Source::new("missing.lemma", span, "test"));
     let expr = Expression::new(
-        ExpressionKind::Literal(LiteralValue::Number(rust_decimal::Decimal::new(42, 0))),
+        ExpressionKind::Literal(LiteralValue::number(rust_decimal::Decimal::new(42, 0))),
         source_location,
     );
 

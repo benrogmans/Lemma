@@ -19,7 +19,8 @@ fn test_inversion_simple_arithmetic() {
     "#;
     let engine = setup_engine(code);
 
-    // Invert: total = 100
+    // Invert: total = 100 with no facts provided
+    // Should return a solution with shape (price * quantity) = 100
     let result = engine.invert_strict(
         "pricing",
         "total",
@@ -33,18 +34,11 @@ fn test_inversion_simple_arithmetic() {
     // Should have at least one solution
     assert!(!response.is_empty(), "Should have at least one solution");
 
-    // Should have price and quantity as free variables in the domains
+    // When there are multiple unknowns, the solution should have a shape
     let first_solution = &response.solutions[0];
-    let fact_refs: Vec<&lemma::FactPath> = first_solution.keys().collect();
-
-    // Check that we have both price and quantity (or their qualified versions)
-    let has_price = fact_refs.iter().any(|v| v.fact.contains("price"));
-    let has_quantity = fact_refs.iter().any(|v| v.fact.contains("quantity"));
-
     assert!(
-        has_price || has_quantity,
-        "Should have constraints on price or quantity, found: {:?}",
-        fact_refs
+        first_solution.shape.is_some(),
+        "With multiple unknowns, solution should have a shape representing the constraint"
     );
 }
 
@@ -52,12 +46,12 @@ fn test_inversion_simple_arithmetic() {
 fn test_inversion_veto_query() {
     let code = r#"
         doc shipping
-        fact weight = [mass]
+        fact weight = [number]
         rule shipping_cost = 5
-          unless weight >= 10 kilograms then 10
-          unless weight >= 50 kilograms then 25
-          unless weight < 0 kilograms then veto "invalid"
-          unless weight > 100 kilograms then veto "too heavy"
+          unless weight >= 10 then 10
+          unless weight >= 50 then 25
+          unless weight < 0 then veto "invalid"
+          unless weight > 100 then veto "too heavy"
     "#;
     let engine = setup_engine(code);
 
@@ -83,8 +77,8 @@ fn test_inversion_veto_query() {
 
     // The veto "too heavy" should trigger when weight > 100
     // Check that we have a domain constraint on weight
-    let first_solution = &response.solutions[0];
-    let has_weight = first_solution.keys().any(|fp| fp.fact.contains("weight"));
+    let first_domains = &response.domains[0];
+    let has_weight = first_domains.keys().any(|fp| fp.fact.contains("weight"));
 
     assert!(has_weight, "Should have domain constraint on weight");
 }

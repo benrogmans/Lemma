@@ -7,7 +7,7 @@ use crate::parsing::ast::Span;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Source {
     /// Source file identifier (e.g., filename or "<input>")
-    pub source_id: String,
+    pub attribute: String,
 
     /// Span in source code (uses Lemma's existing `Span` type from `crate::ast::Span`)
     pub span: Span,
@@ -19,9 +19,9 @@ pub struct Source {
 impl Source {
     /// Create a new Source
     #[must_use]
-    pub fn new(source_id: impl Into<String>, span: Span, doc_name: impl Into<String>) -> Self {
+    pub fn new(attribute: impl Into<String>, span: Span, doc_name: impl Into<String>) -> Self {
         Self {
-            source_id: source_id.into(),
+            attribute: attribute.into(),
             span,
             doc_name: doc_name.into(),
         }
@@ -144,7 +144,7 @@ mod tests {
             col: 0,
         };
         let loc = Source::new("test.lemma", span, "test");
-        assert_eq!(loc.source_id, "test.lemma");
+        assert_eq!(loc.attribute, "test.lemma");
         assert_eq!(loc.doc_name, "test");
     }
 
@@ -157,7 +157,7 @@ mod tests {
             col: 0,
         };
         let loc = Source::new("test.lemma", span, "test");
-        assert_eq!(loc.source_id, "test.lemma");
+        assert_eq!(loc.attribute, "test.lemma");
         assert_eq!(loc.doc_name, "test");
     }
 }
