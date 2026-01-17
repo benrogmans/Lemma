@@ -1,3 +1,20 @@
+doc examples
+"""
+Money and basic enums for examples, using the new type system.
+"""
+
+type money = scale
+  -> minimum 0
+  -> decimals 2
+  -> unit eur 1.00
+  -> unit usd 1.10
+
+type priority = text
+  -> option "low"
+  -> option "medium"
+  -> option "high"
+
+
 doc coffee_order
 """
 Coffee Shop Pricing
@@ -6,32 +23,42 @@ A simple example showing how facts and rules work together.
 Perfect for understanding the basics of Lemma.
 """
 
-fact type = [text]
-fact size = [text]
-fact number_of_cups = [number]
+type coffee = text
+  -> option "espresso"
+  -> option "latte"
+  -> option "cappuccino"
+  -> option "mocha"
+
+type size = text
+  -> option "small"
+  -> option "medium"
+  -> option "large"
+
+fact price            = [money from examples]
+fact priority         = [priority from examples]
+fact product          = [coffee]
+fact size             = [size -> option "extra large"]
+fact number_of_cups   = [number -> maximum 10]
 fact has_loyalty_card = [boolean]
 
-rule base_price = 0
-  unless type == "espresso" then 2.50
-  unless type == "latte" then 3.50
-  unless type == "cappuccino" then 3.50
-  unless type == "mocha" then 4.00
-  unless type != "espresso" and type != "latte" and type != "cappuccino" and type != "mocha" then veto "Unknown type of coffee"
+rule base_price = veto "Unknown type of coffee"
+  unless product is "espresso"   then 2.50 usd
+  unless product is "latte"      then 3.50 usd
+  unless product is "cappuccino" then 3.50 usd
+  unless product is "mocha"      then 4.00 usd
 
-rule size_multiplier = 100%
-  unless size == "small" then 80%
-  unless size == "medium" then 100%
-  unless size == "large" then 120%
-  unless size != "small" and size != "medium" and size != "large" then veto "Unknown size"
+rule size_multiplier = veto "Unknown size of coffee"
+  unless size is "small"  then 0.80
+  unless size is "medium" then 1.00
+  unless size is "large"  then 1.20
 
 rule price_per_cup = base_price? * size_multiplier?
 
 rule subtotal = price_per_cup? * number_of_cups
 
-rule loyalty_discount = 0%
-  unless has_loyalty_card then 10%
+rule loyalty_discount = 0.0
+  unless has_loyalty_card then 0.10
 
 rule discount_amount = subtotal? * loyalty_discount?
 
 rule total = subtotal? - discount_amount?
-

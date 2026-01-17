@@ -75,7 +75,7 @@ rule top_calc = middle_ref.middle_calc?
         let missing: Vec<String> = r
             .facts
             .iter()
-            .filter(|f| matches!(f.value, lemma::FactValue::TypeAnnotation(_)))
+            .filter(|f| matches!(f.value, lemma::FactValue::TypeDeclaration { .. }))
             .map(|f| f.reference.to_string())
             .collect();
         println!("       missing: {:?}", missing);

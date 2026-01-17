@@ -8,7 +8,7 @@ fn dummy_rule(name: &str) -> LemmaRule {
     LemmaRule {
         name: name.to_string(),
         expression: Expression {
-            kind: ExpressionKind::Literal(LiteralValue::Boolean(crate::BooleanValue::True)),
+            kind: ExpressionKind::Literal(LiteralValue::boolean(crate::BooleanValue::True)),
             source_location: None,
         },
         unless_clauses: vec![],
@@ -27,6 +27,7 @@ fn test_response_serialization() {
             facts: vec![],
             operations: vec![],
             proof: None,
+            rule_type: crate::semantic::standard_number().clone(),
         },
     );
     let response = Response {
@@ -48,20 +49,22 @@ fn test_response_filter_rules() {
         "rule1".to_string(),
         RuleResult {
             rule: dummy_rule("rule1"),
-            result: OperationResult::Value(LiteralValue::Boolean(crate::BooleanValue::True)),
+            result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::True)),
             facts: vec![],
             operations: vec![],
             proof: None,
+            rule_type: crate::semantic::standard_boolean().clone(),
         },
     );
     results.insert(
         "rule2".to_string(),
         RuleResult {
             rule: dummy_rule("rule2"),
-            result: OperationResult::Value(LiteralValue::Boolean(crate::BooleanValue::False)),
+            result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::False)),
             facts: vec![],
             operations: vec![],
             proof: None,
+            rule_type: crate::semantic::standard_boolean().clone(),
         },
     );
     let mut response = Response {
@@ -80,10 +83,11 @@ fn test_response_filter_rules() {
 fn test_rule_result_types() {
     let success = RuleResult {
         rule: dummy_rule("rule1"),
-        result: OperationResult::Value(LiteralValue::Boolean(crate::BooleanValue::True)),
+        result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::True)),
         facts: vec![],
         operations: vec![],
         proof: None,
+        rule_type: crate::semantic::standard_boolean().clone(),
     };
     assert!(matches!(success.result, OperationResult::Value(_)));
 
@@ -92,19 +96,22 @@ fn test_rule_result_types() {
         result: OperationResult::Veto(Some("Missing fact: fact1".to_string())),
         facts: vec![crate::LemmaFact {
             reference: crate::FactReference::from_path(vec!["fact1".to_string()]),
-            value: crate::FactValue::TypeAnnotation(crate::TypeAnnotation::LemmaType(
-                crate::LemmaType::Number,
-            )),
+            value: crate::FactValue::TypeDeclaration {
+                base: "number".to_string(),
+                overrides: None,
+                from: None,
+            },
             source_location: None,
         }],
         operations: vec![],
         proof: None,
+        rule_type: crate::LemmaType::veto_type(),
     };
     assert_eq!(missing.facts.len(), 1);
     assert_eq!(missing.facts[0].reference.to_string(), "fact1");
     assert!(matches!(
         missing.facts[0].value,
-        crate::FactValue::TypeAnnotation(_)
+        crate::FactValue::TypeDeclaration { .. }
     ));
     assert!(matches!(missing.result, OperationResult::Veto(_)));
 
@@ -114,6 +121,7 @@ fn test_rule_result_types() {
         facts: vec![],
         operations: vec![],
         proof: None,
+        rule_type: crate::LemmaType::veto_type(),
     };
     assert_eq!(
         veto.result,

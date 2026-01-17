@@ -34,7 +34,6 @@ wasm-bindgen.workspace = true
 console_error_panic_hook.workspace = true
 
 [features]
-inversion = []
 planning_internal_tests = []
 
 [dev-dependencies]

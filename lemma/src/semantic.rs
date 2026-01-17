@@ -1,4 +1,5 @@
 use crate::error::LemmaError;
+use crate::parsing::ast::Span;
 use crate::parsing::source::Source;
 use chrono::{Datelike, Timelike};
 use rust_decimal::Decimal;
@@ -6,14 +7,16 @@ use serde::Serialize;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
+use std::sync::{Arc, OnceLock};
 
-/// A Lemma document containing facts, rules
+/// A Lemma document containing facts and rules
 #[derive(Debug, Clone, PartialEq)]
 pub struct LemmaDoc {
     pub name: String,
-    pub source: Option<String>,
+    pub attribute: Option<String>,
     pub start_line: usize,
     pub commentary: Option<String>,
+    pub types: Vec<TypeDef>,
     pub facts: Vec<LemmaFact>,
     pub rules: Vec<LemmaRule>,
 }
@@ -75,7 +78,7 @@ impl Expression {
     ) -> Option<String> {
         self.source_location.as_ref().and_then(|loc| {
             sources
-                .get(&loc.source_id)
+                .get(&loc.attribute)
                 .and_then(|source| loc.extract_text(source))
         })
     }
@@ -99,6 +102,8 @@ impl Expression {
                 inner.collect_fact_paths(facts);
             }
             ExpressionKind::Literal(_)
+            | ExpressionKind::Reference(_)
+            | ExpressionKind::UnresolvedUnitLiteral(_, _)
             | ExpressionKind::FactReference(_)
             | ExpressionKind::RuleReference(_)
             | ExpressionKind::Veto(_)
@@ -132,15 +137,21 @@ impl Hash for Expression {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ExpressionKind {
     Literal(LiteralValue),
+    /// Unresolved reference from parser (resolved during planning)
+    Reference(Reference),
+    /// Unresolved unit literal from parser (resolved during planning)
+    /// Contains (number, unit_name) - the unit name will be resolved to its type during semantic analysis
+    UnresolvedUnitLiteral(Decimal, String),
+    /// Resolved fact reference (converted from Reference during planning)
     FactReference(FactReference),
     RuleReference(RuleReference),
-    LogicalAnd(Box<Expression>, Box<Expression>),
-    LogicalOr(Box<Expression>, Box<Expression>),
-    Arithmetic(Box<Expression>, ArithmeticComputation, Box<Expression>),
-    Comparison(Box<Expression>, ComparisonComputation, Box<Expression>),
-    UnitConversion(Box<Expression>, ConversionTarget),
-    LogicalNegation(Box<Expression>, NegationType),
-    MathematicalComputation(MathematicalComputation, Box<Expression>),
+    LogicalAnd(Arc<Expression>, Arc<Expression>),
+    LogicalOr(Arc<Expression>, Arc<Expression>),
+    Arithmetic(Arc<Expression>, ArithmeticComputation, Arc<Expression>),
+    Comparison(Arc<Expression>, ComparisonComputation, Arc<Expression>),
+    UnitConversion(Arc<Expression>, ConversionTarget),
+    LogicalNegation(Arc<Expression>, NegationType),
+    MathematicalComputation(MathematicalComputation, Arc<Expression>),
     Veto(VetoExpression),
     /// Resolved fact path (used after planning, converted from FactReference)
     FactPath(FactPath),
@@ -156,6 +167,11 @@ impl ExpressionKind {
 
         match self {
             ExpressionKind::Literal(lit) => lit.semantic_hash(state),
+            ExpressionKind::Reference(r) => r.hash(state),
+            ExpressionKind::UnresolvedUnitLiteral(_, _) => {
+                // UnresolvedUnitLiteral should never be hashed - it should be resolved during planning
+                panic!("UnresolvedUnitLiteral found during hashing - this indicates a bug: unresolved units should be resolved during planning");
+            }
             ExpressionKind::FactReference(fr) => fr.hash(state),
             ExpressionKind::RuleReference(rr) => rr.hash(state),
             ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
@@ -191,7 +207,20 @@ impl ExpressionKind {
     }
 }
 
-/// Reference to a fact
+/// Unresolved reference from parser
+///
+/// During parsing, identifiers are captured as References.
+/// During planning, they are resolved to FactReference.
+/// Examples:
+/// - Local reference "age": segments=[], name="age"
+/// - Cross-document "employee.salary": segments=["employee"], name="salary"
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct Reference {
+    pub segments: Vec<String>,
+    pub name: String,
+}
+
+/// Reference to a fact (resolved from Reference during planning)
 ///
 /// Fact references use dot notation to traverse documents.
 /// Examples:
@@ -433,29 +462,37 @@ impl ComparisonComputation {
             ComparisonComputation::IsNot => "is not",
         }
     }
+
+    /// Check if this is an equality comparison (== or is)
+    #[must_use]
+    pub fn is_equal(&self) -> bool {
+        matches!(
+            self,
+            ComparisonComputation::Equal | ComparisonComputation::Is
+        )
+    }
+
+    /// Check if this is an inequality comparison (!= or is not)
+    #[must_use]
+    pub fn is_not_equal(&self) -> bool {
+        matches!(
+            self,
+            ComparisonComputation::NotEqual | ComparisonComputation::IsNot
+        )
+    }
 }
 
 /// The target unit for unit conversion expressions
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ConversionTarget {
-    Mass(MassUnit),
-    Length(LengthUnit),
-    Volume(VolumeUnit),
     Duration(DurationUnit),
-    Temperature(TemperatureUnit),
-    Power(PowerUnit),
-    Force(ForceUnit),
-    Pressure(PressureUnit),
-    Energy(EnergyUnit),
-    Frequency(FrequencyUnit),
-    Data(DataUnit),
     Percentage,
 }
 
 /// Types of logical negation
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum NegationType {
-    Not, // "not expression"
+    Not,
 }
 
 /// Logical computations
@@ -487,268 +524,33 @@ impl VetoExpression {
 /// Mathematical computations
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub enum MathematicalComputation {
-    Sqrt,  // Square root
-    Sin,   // Sine
-    Cos,   // Cosine
-    Tan,   // Tangent
-    Asin,  // Arc sine
-    Acos,  // Arc cosine
-    Atan,  // Arc tangent
-    Log,   // Natural logarithm
-    Exp,   // Exponential (e^x)
-    Abs,   // Absolute value
-    Floor, // Round down
-    Ceil,  // Round up
-    Round, // Round to nearest
+    Sqrt,
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Log,
+    Exp,
+    Abs,
+    Floor,
+    Ceil,
+    Round,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum FactValue {
     Literal(LiteralValue),
     DocumentReference(String),
-    TypeAnnotation(TypeAnnotation),
+    TypeDeclaration {
+        base: String,
+        overrides: Option<Vec<(String, Vec<String>)>>,
+        from: Option<String>,
+    },
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum TypeAnnotation {
-    LemmaType(LemmaType),
-}
-
-/// A type for type annotations (both literal types and document types)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum LemmaType {
-    Text,
-    Number,
-    Date,
-    Boolean,
-    Regex,
-    Percentage,
-    Mass,
-    Length,
-    Volume,
-    Duration,
-    Temperature,
-    Power,
-    Energy,
-    Force,
-    Pressure,
-    Frequency,
-    Data,
-}
-
-impl LemmaType {
-    pub fn is_numeric(&self) -> bool {
-        matches!(
-            self,
-            LemmaType::Number
-                | LemmaType::Percentage
-                | LemmaType::Mass
-                | LemmaType::Length
-                | LemmaType::Volume
-                | LemmaType::Duration
-                | LemmaType::Temperature
-                | LemmaType::Power
-                | LemmaType::Energy
-                | LemmaType::Force
-                | LemmaType::Pressure
-                | LemmaType::Frequency
-                | LemmaType::Data
-        )
-    }
-
-    pub fn is_temporal(&self) -> bool {
-        matches!(self, LemmaType::Date)
-    }
-
-    pub fn is_unit(&self) -> bool {
-        matches!(
-            self,
-            LemmaType::Mass
-                | LemmaType::Length
-                | LemmaType::Volume
-                | LemmaType::Duration
-                | LemmaType::Temperature
-                | LemmaType::Power
-                | LemmaType::Energy
-                | LemmaType::Force
-                | LemmaType::Pressure
-                | LemmaType::Frequency
-                | LemmaType::Data
-        )
-    }
-
-    /// Parse a raw string value into a LiteralValue according to this type.
-    /// This is the main entry point for type-aware parsing from user input.
-    pub fn parse_value(&self, raw: &str) -> Result<LiteralValue, LemmaError> {
-        match self {
-            LemmaType::Text => Self::parse_text(raw),
-            LemmaType::Number => Self::parse_number(raw),
-            LemmaType::Boolean => Self::parse_boolean(raw),
-            LemmaType::Percentage => Self::parse_percentage(raw),
-            LemmaType::Date => Self::parse_date(raw),
-            LemmaType::Regex => Self::parse_regex(raw),
-            LemmaType::Mass => Self::parse_unit_value(raw, LemmaType::Mass),
-            LemmaType::Length => Self::parse_unit_value(raw, LemmaType::Length),
-            LemmaType::Volume => Self::parse_unit_value(raw, LemmaType::Volume),
-            LemmaType::Duration => Self::parse_unit_value(raw, LemmaType::Duration),
-            LemmaType::Temperature => Self::parse_unit_value(raw, LemmaType::Temperature),
-            LemmaType::Power => Self::parse_unit_value(raw, LemmaType::Power),
-            LemmaType::Energy => Self::parse_unit_value(raw, LemmaType::Energy),
-            LemmaType::Force => Self::parse_unit_value(raw, LemmaType::Force),
-            LemmaType::Pressure => Self::parse_unit_value(raw, LemmaType::Pressure),
-            LemmaType::Frequency => Self::parse_unit_value(raw, LemmaType::Frequency),
-            LemmaType::Data => Self::parse_unit_value(raw, LemmaType::Data),
-        }
-    }
-
-    fn parse_text(raw: &str) -> Result<LiteralValue, LemmaError> {
-        Ok(LiteralValue::Text(raw.to_string()))
-    }
-
-    fn parse_number(raw: &str) -> Result<LiteralValue, LemmaError> {
-        let clean_number = raw.replace(['_', ','], "");
-        let decimal = Decimal::from_str(&clean_number).map_err(|_| {
-            LemmaError::Engine(format!(
-                "Invalid number: '{}'. Expected a valid decimal number (e.g., 42, 3.14, 1_000_000)",
-                raw
-            ))
-        })?;
-        Ok(LiteralValue::Number(decimal))
-    }
-
-    fn parse_boolean(raw: &str) -> Result<LiteralValue, LemmaError> {
-        let boolean_value: BooleanValue = raw.parse().map_err(|_| {
-            LemmaError::Engine(format!(
-                "Invalid boolean: '{}'. Expected one of: true, false, yes, no, accept, reject",
-                raw
-            ))
-        })?;
-        Ok(LiteralValue::Boolean(boolean_value))
-    }
-
-    fn parse_percentage(raw: &str) -> Result<LiteralValue, LemmaError> {
-        let trimmed = raw.trim();
-        let number_str = if trimmed.ends_with('%') {
-            trimmed.strip_suffix('%').unwrap_or(trimmed)
-        } else if trimmed.to_lowercase().ends_with("percent") {
-            trimmed.strip_suffix("percent").unwrap_or(trimmed).trim()
-        } else {
-            trimmed
-        };
-
-        let clean_number = number_str.replace(['_', ','], "");
-        let decimal = Decimal::from_str(&clean_number).map_err(|_| {
-            LemmaError::Engine(format!(
-                "Invalid percentage: '{}'. Expected a number optionally followed by % (e.g., 50, 50%, 50 percent)",
-                raw
-            ))
-        })?;
-        Ok(LiteralValue::Percentage(decimal))
-    }
-
-    fn parse_date(raw: &str) -> Result<LiteralValue, LemmaError> {
-        let datetime_str = raw.trim();
-
-        if let Ok(dt) = datetime_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
-            let offset = dt.offset().local_minus_utc();
-            return Ok(LiteralValue::Date(DateTimeValue {
-                year: dt.year(),
-                month: dt.month(),
-                day: dt.day(),
-                hour: dt.hour(),
-                minute: dt.minute(),
-                second: dt.second(),
-                timezone: Some(TimezoneValue {
-                    offset_hours: (offset / 3600) as i8,
-                    offset_minutes: ((offset % 3600) / 60) as u8,
-                }),
-            }));
-        }
-
-        if let Ok(dt) = datetime_str.parse::<chrono::NaiveDateTime>() {
-            return Ok(LiteralValue::Date(DateTimeValue {
-                year: dt.year(),
-                month: dt.month(),
-                day: dt.day(),
-                hour: dt.hour(),
-                minute: dt.minute(),
-                second: dt.second(),
-                timezone: None,
-            }));
-        }
-
-        if let Ok(d) = datetime_str.parse::<chrono::NaiveDate>() {
-            return Ok(LiteralValue::Date(DateTimeValue {
-                year: d.year(),
-                month: d.month(),
-                day: d.day(),
-                hour: 0,
-                minute: 0,
-                second: 0,
-                timezone: None,
-            }));
-        }
-
-        Err(LemmaError::Engine(format!(
-            "Invalid date/time format: '{}'. Expected one of: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, or YYYY-MM-DDTHH:MM:SSZ",
-            raw
-        )))
-    }
-
-    fn parse_regex(raw: &str) -> Result<LiteralValue, LemmaError> {
-        let trimmed = raw.trim();
-        let pattern = if trimmed.starts_with('/') && trimmed.ends_with('/') && trimmed.len() >= 2 {
-            &trimmed[1..trimmed.len() - 1]
-        } else {
-            trimmed
-        };
-
-        regex::Regex::new(pattern)
-            .map_err(|e| LemmaError::Engine(format!("Invalid regex pattern '{}': {}", raw, e)))?;
-
-        if trimmed.starts_with('/') && trimmed.ends_with('/') {
-            Ok(LiteralValue::Regex(trimmed.to_string()))
-        } else {
-            Ok(LiteralValue::Regex(format!("/{}/", pattern)))
-        }
-    }
-
-    fn parse_unit_value(raw: &str, expected_type: LemmaType) -> Result<LiteralValue, LemmaError> {
-        let trimmed = raw.trim();
-        let parts: Vec<&str> = trimmed.splitn(2, |c: char| c.is_whitespace()).collect();
-
-        if parts.len() != 2 {
-            return Err(LemmaError::Engine(format!(
-                "Invalid {} value: '{}'. Expected format: '<number> <unit>' (e.g., '100 kilogram')",
-                expected_type, raw
-            )));
-        }
-
-        let number_str = parts[0];
-        let unit_str = parts[1].trim();
-
-        let clean_number = number_str.replace(['_', ','], "");
-        let value = Decimal::from_str(&clean_number).map_err(|_| {
-            LemmaError::Engine(format!(
-                "Invalid number in {} value: '{}'. Expected a valid decimal number",
-                expected_type, number_str
-            ))
-        })?;
-
-        let literal = crate::parsing::units::resolve_unit(value, unit_str)?;
-
-        let actual_type = literal.to_type();
-        if actual_type != expected_type {
-            return Err(LemmaError::Engine(format!(
-                "Unit type mismatch: '{}' is a {} unit, but expected {}",
-                unit_str, actual_type, expected_type
-            )));
-        }
-
-        Ok(literal)
-    }
-}
-
+/// A type for type declarations
 /// Boolean value with original input preserved
 #[derive(
     Debug,
@@ -821,23 +623,176 @@ impl std::ops::Not for &BooleanValue {
     }
 }
 
-/// A literal value
+/// The actual value data (without type information)
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
-pub enum LiteralValue {
+pub enum Value {
     Number(Decimal),
+    Scale(Decimal, Option<String>), // value, optional unit name (e.g., "eur", "usd", "kilogram")
     Text(String),
-    Date(DateTimeValue), // Date with time and timezone information preserved
-    Time(TimeValue),     // Standalone time with optional timezone
+    Date(DateTimeValue),
+    Time(TimeValue),
     Boolean(BooleanValue),
-    Percentage(Decimal),
-    Unit(NumericUnit), // All physical units and money
-    Regex(String),     // e.g., "/pattern/"
+    Duration(Decimal, DurationUnit),
+    Ratio(Decimal, Option<String>), // value, optional unit name (e.g., "percent", "permille")
+}
+
+/// A literal value with its type
+///
+/// Every literal value knows its type - no distinction between standard and custom types.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+pub struct LiteralValue {
+    pub value: Value,
+    pub lemma_type: LemmaType,
 }
 
 impl LiteralValue {
     /// Create a Number literal value from any type that can convert to Decimal
+    /// Uses STANDARD_NUMBER as the type
     pub fn number<T: Into<Decimal>>(value: T) -> Self {
-        LiteralValue::Number(value.into())
+        LiteralValue {
+            value: Value::Number(value.into()),
+            lemma_type: standard_number().clone(),
+        }
+    }
+
+    /// Create a Number literal value with a custom type
+    pub fn number_with_type<T: Into<Decimal>>(value: T, lemma_type: LemmaType) -> Self {
+        LiteralValue {
+            value: Value::Number(value.into()),
+            lemma_type,
+        }
+    }
+
+    /// Create a Scale literal value
+    /// Uses the provided type (must be a Scale type)
+    pub fn scale<T: Into<Decimal>>(value: T, unit: Option<String>) -> Self {
+        LiteralValue {
+            value: Value::Scale(value.into(), unit),
+            lemma_type: crate::semantic::standard_scale().clone(),
+        }
+    }
+
+    /// Create a Scale literal value with a custom type
+    pub fn scale_with_type<T: Into<Decimal>>(
+        value: T,
+        unit: Option<String>,
+        lemma_type: LemmaType,
+    ) -> Self {
+        LiteralValue {
+            value: Value::Scale(value.into(), unit),
+            lemma_type,
+        }
+    }
+
+    /// Create a Text literal value
+    /// Uses STANDARD_TEXT as the type
+    pub fn text(value: String) -> Self {
+        LiteralValue {
+            value: Value::Text(value),
+            lemma_type: standard_text().clone(),
+        }
+    }
+
+    /// Create a Text literal value with a custom type
+    pub fn text_with_type(value: String, lemma_type: LemmaType) -> Self {
+        LiteralValue {
+            value: Value::Text(value),
+            lemma_type,
+        }
+    }
+
+    /// Create a Boolean literal value
+    /// Uses STANDARD_BOOLEAN as the type
+    pub fn boolean(value: BooleanValue) -> Self {
+        LiteralValue {
+            value: Value::Boolean(value),
+            lemma_type: standard_boolean().clone(),
+        }
+    }
+
+    /// Create a Boolean literal value with a custom type
+    pub fn boolean_with_type(value: BooleanValue, lemma_type: LemmaType) -> Self {
+        LiteralValue {
+            value: Value::Boolean(value),
+            lemma_type,
+        }
+    }
+
+    /// Create a Date literal value
+    /// Uses STANDARD_DATE as the type
+    pub fn date(value: DateTimeValue) -> Self {
+        LiteralValue {
+            value: Value::Date(value),
+            lemma_type: standard_date().clone(),
+        }
+    }
+
+    /// Create a Date literal value with a custom type
+    pub fn date_with_type(value: DateTimeValue, lemma_type: LemmaType) -> Self {
+        LiteralValue {
+            value: Value::Date(value),
+            lemma_type,
+        }
+    }
+
+    /// Create a Time literal value
+    /// Uses STANDARD_TIME as the type
+    pub fn time(value: TimeValue) -> Self {
+        LiteralValue {
+            value: Value::Time(value),
+            lemma_type: standard_time().clone(),
+        }
+    }
+
+    /// Create a Time literal value with a custom type
+    pub fn time_with_type(value: TimeValue, lemma_type: LemmaType) -> Self {
+        LiteralValue {
+            value: Value::Time(value),
+            lemma_type,
+        }
+    }
+
+    /// Create a Duration literal value
+    /// Uses STANDARD_DURATION as the type
+    pub fn duration(value: Decimal, unit: DurationUnit) -> Self {
+        LiteralValue {
+            value: Value::Duration(value, unit),
+            lemma_type: standard_duration().clone(),
+        }
+    }
+
+    /// Create a Duration literal value with a custom type
+    pub fn duration_with_type(value: Decimal, unit: DurationUnit, lemma_type: LemmaType) -> Self {
+        LiteralValue {
+            value: Value::Duration(value, unit),
+            lemma_type,
+        }
+    }
+
+    /// Create a Ratio literal value
+    /// Uses STANDARD_RATIO as the type
+    pub fn ratio<T: Into<Decimal>>(value: T, unit: Option<String>) -> Self {
+        LiteralValue {
+            value: Value::Ratio(value.into(), unit),
+            lemma_type: standard_ratio().clone(),
+        }
+    }
+
+    /// Create a Ratio literal value with a custom type
+    pub fn ratio_with_type<T: Into<Decimal>>(
+        value: T,
+        unit: Option<String>,
+        lemma_type: LemmaType,
+    ) -> Self {
+        LiteralValue {
+            value: Value::Ratio(value.into(), unit),
+            lemma_type,
+        }
+    }
+
+    /// Get the type of this literal value
+    pub fn get_type(&self) -> &LemmaType {
+        &self.lemma_type
     }
 
     /// Get the display value as a string (uses the Display implementation)
@@ -848,57 +803,29 @@ impl LiteralValue {
 
     /// Get the byte size of this literal value for resource limiting
     pub fn byte_size(&self) -> usize {
-        match self {
-            LiteralValue::Text(s) | LiteralValue::Regex(s) => s.len(),
-            LiteralValue::Number(d) | LiteralValue::Percentage(d) => {
-                // Decimal internal representation size
-                std::mem::size_of_val(d)
-            }
-            LiteralValue::Boolean(_) => std::mem::size_of::<bool>(),
-            LiteralValue::Date(_) => std::mem::size_of::<DateTimeValue>(),
-            LiteralValue::Time(_) => std::mem::size_of::<TimeValue>(),
-            LiteralValue::Unit(_) => std::mem::size_of::<NumericUnit>(),
-        }
-    }
-
-    /// Convert a LiteralValue to its corresponding LemmaType
-    #[must_use]
-    pub fn to_type(&self) -> LemmaType {
-        match self {
-            LiteralValue::Text(_) => LemmaType::Text,
-            LiteralValue::Number(_) => LemmaType::Number,
-            LiteralValue::Date(_) => LemmaType::Date,
-            LiteralValue::Time(_) => LemmaType::Date,
-            LiteralValue::Boolean(_) => LemmaType::Boolean,
-            LiteralValue::Percentage(_) => LemmaType::Percentage,
-            LiteralValue::Regex(_) => LemmaType::Regex,
-            LiteralValue::Unit(unit) => match unit {
-                NumericUnit::Mass(_, _) => LemmaType::Mass,
-                NumericUnit::Length(_, _) => LemmaType::Length,
-                NumericUnit::Volume(_, _) => LemmaType::Volume,
-                NumericUnit::Duration(_, _) => LemmaType::Duration,
-                NumericUnit::Temperature(_, _) => LemmaType::Temperature,
-                NumericUnit::Power(_, _) => LemmaType::Power,
-                NumericUnit::Force(_, _) => LemmaType::Force,
-                NumericUnit::Pressure(_, _) => LemmaType::Pressure,
-                NumericUnit::Energy(_, _) => LemmaType::Energy,
-                NumericUnit::Frequency(_, _) => LemmaType::Frequency,
-                NumericUnit::Data(_, _) => LemmaType::Data,
-            },
+        match &self.value {
+            Value::Text(s) => s.len(),
+            Value::Number(d) => std::mem::size_of_val(d),
+            Value::Scale(d, _) => std::mem::size_of_val(d),
+            Value::Boolean(_) => std::mem::size_of::<bool>(),
+            Value::Date(_) => std::mem::size_of::<DateTimeValue>(),
+            Value::Time(_) => std::mem::size_of::<TimeValue>(),
+            Value::Duration(value, _) => std::mem::size_of_val(value),
+            Value::Ratio(value, _) => std::mem::size_of_val(value),
         }
     }
 
     /// Compute semantic hash for literal values
     /// Uses string representation for Decimal to avoid Hash trait requirement
     fn semantic_hash<H: Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
-        match self {
-            LiteralValue::Number(d) | LiteralValue::Percentage(d) => {
+        std::mem::discriminant(&self.value).hash(state);
+        match &self.value {
+            Value::Number(d) | Value::Scale(d, _) | Value::Ratio(d, _) => {
                 d.to_string().hash(state);
             }
-            LiteralValue::Text(s) | LiteralValue::Regex(s) => s.hash(state),
-            LiteralValue::Boolean(b) => std::mem::discriminant(b).hash(state),
-            LiteralValue::Date(dt) => {
+            Value::Text(s) => s.hash(state),
+            Value::Boolean(b) => std::mem::discriminant(b).hash(state),
+            Value::Date(dt) => {
                 dt.year.hash(state);
                 dt.month.hash(state);
                 dt.day.hash(state);
@@ -910,7 +837,7 @@ impl LiteralValue {
                     tz.offset_minutes.hash(state);
                 }
             }
-            LiteralValue::Time(t) => {
+            Value::Time(t) => {
                 t.hour.hash(state);
                 t.minute.hash(state);
                 t.second.hash(state);
@@ -919,16 +846,16 @@ impl LiteralValue {
                     tz.offset_minutes.hash(state);
                 }
             }
-            LiteralValue::Unit(unit) => {
+            Value::Duration(value, unit) => {
+                value.to_string().hash(state);
                 std::mem::discriminant(unit).hash(state);
-                unit.value().to_string().hash(state);
             }
         }
     }
 }
 
 /// A time value
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, serde::Deserialize)]
 pub struct TimeValue {
     pub hour: u8,
     pub minute: u8,
@@ -937,14 +864,14 @@ pub struct TimeValue {
 }
 
 /// A timezone value
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub struct TimezoneValue {
     pub offset_hours: i8,
     pub offset_minutes: u8,
 }
 
 /// A datetime value that preserves timezone information
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub struct DateTimeValue {
     pub year: i32,
     pub month: u32,
@@ -971,91 +898,7 @@ macro_rules! impl_unit_serialize {
     };
 }
 
-impl_unit_serialize!(
-    MassUnit,
-    LengthUnit,
-    VolumeUnit,
-    DurationUnit,
-    TemperatureUnit,
-    PowerUnit,
-    ForceUnit,
-    PressureUnit,
-    EnergyUnit,
-    FrequencyUnit,
-    DataUnit
-);
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Deserialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-#[strum(serialize_all = "lowercase")]
-pub enum MassUnit {
-    Kilogram,
-    Gram,
-    Milligram,
-    Ton,
-    Pound,
-    Ounce,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Deserialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-#[strum(serialize_all = "lowercase")]
-pub enum LengthUnit {
-    Kilometer,
-    Mile,
-    #[strum(serialize = "nautical_mile")]
-    NauticalMile,
-    Meter,
-    Decimeter,
-    Centimeter,
-    Millimeter,
-    Yard,
-    Foot,
-    Inch,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Deserialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-#[strum(serialize_all = "lowercase")]
-pub enum VolumeUnit {
-    #[strum(serialize = "cubic_meter")]
-    CubicMeter,
-    #[strum(serialize = "cubic_centimeter")]
-    CubicCentimeter,
-    Liter,
-    Deciliter,
-    Centiliter,
-    Milliliter,
-    Gallon,
-    Quart,
-    Pint,
-    #[strum(serialize = "fluid_ounce")]
-    FluidOunce,
-}
+impl_unit_serialize!(DurationUnit);
 
 #[derive(
     Debug,
@@ -1080,249 +923,52 @@ pub enum DurationUnit {
     Microsecond,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Deserialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-#[strum(serialize_all = "lowercase")]
-pub enum TemperatureUnit {
-    Celsius,
-    Fahrenheit,
-    Kelvin,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Deserialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-#[strum(serialize_all = "lowercase")]
-pub enum PowerUnit {
-    Megawatt,
-    Kilowatt,
-    Watt,
-    Milliwatt,
-    Horsepower,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Deserialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-#[strum(serialize_all = "lowercase")]
-pub enum ForceUnit {
-    Newton,
-    Kilonewton,
-    Lbf,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Deserialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-#[strum(serialize_all = "lowercase")]
-pub enum PressureUnit {
-    Megapascal,
-    Kilopascal,
-    Pascal,
-    Atmosphere,
-    Bar,
-    Psi,
-    Torr,
-    Mmhg,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Deserialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-#[strum(serialize_all = "lowercase")]
-pub enum EnergyUnit {
-    Megajoule,
-    Kilojoule,
-    Joule,
-    Kilowatthour,
-    Watthour,
-    Kilocalorie,
-    Calorie,
-    Btu,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Deserialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-#[strum(serialize_all = "lowercase")]
-pub enum FrequencyUnit {
-    Hertz,
-    Kilohertz,
-    Megahertz,
-    Gigahertz,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Deserialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-#[strum(serialize_all = "lowercase")]
-pub enum DataUnit {
-    Petabyte,
-    Terabyte,
-    Gigabyte,
-    Megabyte,
-    Kilobyte,
-    Byte,
-    Tebibyte,
-    Gibibyte,
-    Mebibyte,
-    Kibibyte,
-}
-
-/// A unified type for all numeric units (physical quantities)
-///
-/// This provides consistent behavior for all unit types:
-/// - Comparisons always compare numeric values (ignoring units)
-/// - Same-unit arithmetic preserves the unit
-/// - Cross-unit arithmetic produces dimensionless numbers
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
-pub enum NumericUnit {
-    Mass(Decimal, MassUnit),
-    Length(Decimal, LengthUnit),
-    Volume(Decimal, VolumeUnit),
-    Duration(Decimal, DurationUnit),
-    Temperature(Decimal, TemperatureUnit),
-    Power(Decimal, PowerUnit),
-    Force(Decimal, ForceUnit),
-    Pressure(Decimal, PressureUnit),
-    Energy(Decimal, EnergyUnit),
-    Frequency(Decimal, FrequencyUnit),
-    Data(Decimal, DataUnit),
-}
-
-impl NumericUnit {
-    /// Extract the numeric value from any unit
+impl Reference {
     #[must_use]
-    pub fn value(&self) -> Decimal {
-        match self {
-            NumericUnit::Mass(v, _)
-            | NumericUnit::Length(v, _)
-            | NumericUnit::Volume(v, _)
-            | NumericUnit::Duration(v, _)
-            | NumericUnit::Temperature(v, _)
-            | NumericUnit::Power(v, _)
-            | NumericUnit::Force(v, _)
-            | NumericUnit::Pressure(v, _)
-            | NumericUnit::Energy(v, _)
-            | NumericUnit::Frequency(v, _)
-            | NumericUnit::Data(v, _) => *v,
+    pub fn new(segments: Vec<String>, name: String) -> Self {
+        Self { segments, name }
+    }
+
+    #[must_use]
+    pub fn local(name: String) -> Self {
+        Self {
+            segments: Vec::new(),
+            name,
         }
     }
 
-    /// Check if two units are the same category
-    pub fn same_category(&self, other: &NumericUnit) -> bool {
-        std::mem::discriminant(self) == std::mem::discriminant(other)
-    }
-
-    /// Create a new NumericUnit with the same unit type but different value
-    /// This is the key method that eliminates type enumeration in operations
     #[must_use]
-    pub fn with_value(&self, new_value: Decimal) -> NumericUnit {
-        match self {
-            NumericUnit::Mass(_, u) => NumericUnit::Mass(new_value, u.clone()),
-            NumericUnit::Length(_, u) => NumericUnit::Length(new_value, u.clone()),
-            NumericUnit::Volume(_, u) => NumericUnit::Volume(new_value, u.clone()),
-            NumericUnit::Duration(_, u) => NumericUnit::Duration(new_value, u.clone()),
-            NumericUnit::Temperature(_, u) => NumericUnit::Temperature(new_value, u.clone()),
-            NumericUnit::Power(_, u) => NumericUnit::Power(new_value, u.clone()),
-            NumericUnit::Force(_, u) => NumericUnit::Force(new_value, u.clone()),
-            NumericUnit::Pressure(_, u) => NumericUnit::Pressure(new_value, u.clone()),
-            NumericUnit::Energy(_, u) => NumericUnit::Energy(new_value, u.clone()),
-            NumericUnit::Frequency(_, u) => NumericUnit::Frequency(new_value, u.clone()),
-            NumericUnit::Data(_, u) => NumericUnit::Data(new_value, u.clone()),
+    pub fn from_path(path: Vec<String>) -> Self {
+        if path.is_empty() {
+            Self {
+                segments: Vec::new(),
+                name: String::new(),
+            }
+        } else {
+            let name = path.last().unwrap().clone();
+            let segments = path[..path.len() - 1].to_vec();
+            Self { segments, name }
         }
     }
-}
 
-fn format_decimal_with_unit(value: &Decimal, unit: &impl fmt::Display) -> String {
-    let normalized = value.normalize();
-    if normalized.fract().is_zero() {
-        let int_part = normalized.trunc().to_string();
-        let formatted = int_part
-            .chars()
-            .rev()
-            .enumerate()
-            .flat_map(|(i, c)| {
-                if i > 0 && i % 3 == 0 && c != '-' {
-                    vec![',', c]
-                } else {
-                    vec![c]
-                }
-            })
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect::<String>();
-        format!("{} {}", formatted, unit)
-    } else {
-        format!("{} {}", normalized, unit)
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        self.segments.is_empty()
     }
-}
 
-impl fmt::Display for NumericUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            NumericUnit::Mass(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
-            NumericUnit::Length(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
-            NumericUnit::Volume(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
-            NumericUnit::Duration(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
-            NumericUnit::Temperature(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
-            NumericUnit::Power(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
-            NumericUnit::Force(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
-            NumericUnit::Pressure(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
-            NumericUnit::Energy(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
-            NumericUnit::Frequency(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
-            NumericUnit::Data(v, u) => write!(f, "{}", format_decimal_with_unit(v, u)),
+    #[must_use]
+    pub fn full_path(&self) -> Vec<String> {
+        let mut path = self.segments.clone();
+        path.push(self.name.clone());
+        path
+    }
+
+    /// Convert to FactReference (used during planning resolution)
+    #[must_use]
+    pub fn to_fact_reference(&self) -> FactReference {
+        FactReference {
+            segments: self.segments.clone(),
+            fact: self.name.clone(),
         }
     }
 }
@@ -1401,17 +1047,18 @@ impl LemmaDoc {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            source: None,
+            attribute: None,
             start_line: 1,
             commentary: None,
+            types: Vec::new(),
             facts: Vec::new(),
             rules: Vec::new(),
         }
     }
 
     #[must_use]
-    pub fn with_source(mut self, source: String) -> Self {
-        self.source = Some(source);
+    pub fn with_attribute(mut self, attribute: String) -> Self {
+        self.attribute = Some(attribute);
         self
     }
 
@@ -1439,6 +1086,12 @@ impl LemmaDoc {
         self
     }
 
+    #[must_use]
+    pub fn add_type(mut self, type_def: TypeDef) -> Self {
+        self.types.push(type_def);
+        self
+    }
+
     /// Get the expected type for a fact by path
     /// Returns None if the fact is not found in this document or if the fact is a document reference
     pub fn get_fact_type(&self, fact_ref: &[String]) -> Option<LemmaType> {
@@ -1453,9 +1106,10 @@ impl LemmaDoc {
             .iter()
             .find(|fact| fact.reference == target_ref)
             .and_then(|fact| match &fact.value {
-                FactValue::Literal(lit) => Some(lit.to_type()),
-                FactValue::TypeAnnotation(TypeAnnotation::LemmaType(lemma_type)) => {
-                    Some(lemma_type.clone())
+                FactValue::Literal(lit) => Some(lit.get_type().clone()),
+                FactValue::TypeDeclaration { .. } => {
+                    // Type resolution happens during planning phase
+                    None
                 }
                 FactValue::DocumentReference(_) => None,
             })
@@ -1520,6 +1174,13 @@ impl fmt::Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             ExpressionKind::Literal(lit) => write!(f, "{}", lit),
+            ExpressionKind::Reference(r) => {
+                if r.segments.is_empty() {
+                    write!(f, "{}", r.name)
+                } else {
+                    write!(f, "{}.{}", r.segments.join("."), r.name)
+                }
+            }
             ExpressionKind::FactReference(fact_ref) => write!(f, "{}", fact_ref),
             ExpressionKind::FactPath(fact_path) => write!(f, "{}", fact_path),
             ExpressionKind::RuleReference(rule_ref) => write!(f, "{}", rule_ref),
@@ -1564,55 +1225,148 @@ impl fmt::Display for Expression {
                 Some(msg) => write!(f, "veto \"{}\"", msg),
                 None => write!(f, "veto"),
             },
+            ExpressionKind::UnresolvedUnitLiteral(number, unit_name) => {
+                write!(f, "{} {}", number, unit_name)
+            }
         }
     }
 }
 
 impl fmt::Display for LiteralValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LiteralValue::Number(n) => {
-                let normalized = n.normalize();
-                if normalized.fract().is_zero() {
-                    let int_part = normalized.trunc().to_string();
-                    let formatted = int_part
-                        .chars()
-                        .rev()
-                        .enumerate()
-                        .flat_map(|(i, c)| {
-                            if i > 0 && i % 3 == 0 && c != '-' {
-                                vec![',', c]
-                            } else {
-                                vec![c]
-                            }
-                        })
-                        .collect::<String>()
-                        .chars()
-                        .rev()
-                        .collect::<String>();
-                    write!(f, "{}", formatted)
+        match &self.value {
+            Value::Number(n) => {
+                // Get decimals from type specification if available
+                let decimals_opt = match &self.lemma_type.specifications {
+                    TypeSpecification::Number { decimals, .. } => *decimals,
+                    _ => None,
+                };
+
+                if let Some(decimals) = decimals_opt {
+                    // Format with fixed decimal places, always showing all decimals
+                    let rounded = n.round_dp(decimals as u32);
+                    let mut s = rounded.to_string();
+                    // Ensure we have the right number of decimal places
+                    if let Some(dot_pos) = s.find('.') {
+                        let current_decimals = s.len() - dot_pos - 1;
+                        if current_decimals < decimals as usize {
+                            // Pad with zeros
+                            s.push_str(&"0".repeat(decimals as usize - current_decimals));
+                        } else if current_decimals > decimals as usize {
+                            // This shouldn't happen due to round_dp, but handle it
+                            let truncate_pos = dot_pos + 1 + decimals as usize;
+                            s = s[..truncate_pos].to_string();
+                        }
+                    } else {
+                        // No decimal point, add it with zeros
+                        s.push('.');
+                        s.push_str(&"0".repeat(decimals as usize));
+                    }
+                    write!(f, "{}", s)
                 } else {
-                    write!(f, "{}", normalized)
+                    // No decimals specified: normalize (remove trailing zeros)
+                    let normalized = n.normalize();
+                    if normalized.fract().is_zero() {
+                        let int_part = normalized.trunc().to_string();
+                        let formatted = int_part
+                            .chars()
+                            .rev()
+                            .enumerate()
+                            .flat_map(|(i, c)| {
+                                if i > 0 && i % 3 == 0 && c != '-' {
+                                    vec![',', c]
+                                } else {
+                                    vec![c]
+                                }
+                            })
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect::<String>();
+                        write!(f, "{}", formatted)
+                    } else {
+                        write!(f, "{}", normalized)
+                    }
                 }
             }
-            LiteralValue::Text(s) => {
+            Value::Text(s) => {
                 let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
                 write!(f, "\"{}\"", escaped)
             }
-            LiteralValue::Date(dt) => write!(f, "{}", dt),
-            LiteralValue::Boolean(b) => write!(f, "{}", b),
-            LiteralValue::Percentage(p) => {
-                let rounded = p.round_dp(2);
-                if rounded.fract().is_zero() {
-                    write!(f, "{}%", rounded.trunc())
+            Value::Date(dt) => write!(f, "{}", dt),
+            Value::Boolean(b) => write!(f, "{}", b),
+            Value::Time(time) => {
+                write!(f, "time({}, {}, {})", time.hour, time.minute, time.second)
+            }
+            Value::Scale(n, unit_opt) => {
+                // Format the number part (same as Number)
+                let decimals_opt = match &self.lemma_type.specifications {
+                    TypeSpecification::Scale { decimals, .. } => *decimals,
+                    _ => None,
+                };
+
+                let number_str = if let Some(decimals) = decimals_opt {
+                    // Format with fixed decimal places
+                    let rounded = n.round_dp(decimals as u32);
+                    let mut s = rounded.to_string();
+                    if let Some(dot_pos) = s.find('.') {
+                        let current_decimals = s.len() - dot_pos - 1;
+                        if current_decimals < decimals as usize {
+                            s.push_str(&"0".repeat(decimals as usize - current_decimals));
+                        }
+                    } else {
+                        s.push('.');
+                        s.push_str(&"0".repeat(decimals as usize));
+                    }
+                    s
                 } else {
-                    write!(f, "{}%", rounded)
+                    // No decimals specified: normalize (remove trailing zeros)
+                    let normalized = n.normalize();
+                    if normalized.fract().is_zero() {
+                        normalized.trunc().to_string()
+                    } else {
+                        normalized.to_string()
+                    }
+                };
+
+                // Append unit if present
+                if let Some(unit) = unit_opt {
+                    write!(f, "{} {}", number_str, unit)
+                } else {
+                    write!(f, "{}", number_str)
                 }
             }
-            LiteralValue::Unit(unit) => write!(f, "{}", unit),
-            LiteralValue::Regex(s) => write!(f, "{}", s),
-            LiteralValue::Time(time) => {
-                write!(f, "time({}, {}, {})", time.hour, time.minute, time.second)
+            Value::Duration(value, unit) => write!(f, "{} {}", value, unit),
+            Value::Ratio(r, unit_opt) => {
+                // Use tracked unit if present
+                if let Some(unit) = unit_opt {
+                    if unit == "percent" {
+                        // Display as percent: convert ratio (0.50) to percent (50%)
+                        let percentage_value = *r * rust_decimal::Decimal::from(100);
+                        let rounded = percentage_value.round_dp(2);
+                        if rounded.fract().is_zero() {
+                            write!(f, "{}%", rounded.trunc())
+                        } else {
+                            write!(f, "{}%", rounded)
+                        }
+                    } else {
+                        // Display with unit
+                        let normalized = r.normalize();
+                        if normalized.fract().is_zero() {
+                            write!(f, "{} {}", normalized.trunc(), unit)
+                        } else {
+                            write!(f, "{} {}", normalized, unit)
+                        }
+                    }
+                } else {
+                    // Display as regular ratio (no unit)
+                    let normalized = r.normalize();
+                    if normalized.fract().is_zero() {
+                        write!(f, "{}", normalized.trunc())
+                    } else {
+                        write!(f, "{}", normalized)
+                    }
+                }
             }
         }
     }
@@ -1621,86 +1375,8 @@ impl fmt::Display for LiteralValue {
 impl fmt::Display for ConversionTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConversionTarget::Mass(unit) => write!(f, "{}", unit),
-            ConversionTarget::Length(unit) => write!(f, "{}", unit),
-            ConversionTarget::Volume(unit) => write!(f, "{}", unit),
             ConversionTarget::Duration(unit) => write!(f, "{}", unit),
-            ConversionTarget::Temperature(unit) => write!(f, "{}", unit),
-            ConversionTarget::Power(unit) => write!(f, "{}", unit),
-            ConversionTarget::Force(unit) => write!(f, "{}", unit),
-            ConversionTarget::Pressure(unit) => write!(f, "{}", unit),
-            ConversionTarget::Energy(unit) => write!(f, "{}", unit),
-            ConversionTarget::Frequency(unit) => write!(f, "{}", unit),
-            ConversionTarget::Data(unit) => write!(f, "{}", unit),
-            ConversionTarget::Percentage => write!(f, "percentage"),
-        }
-    }
-}
-
-impl fmt::Display for LemmaType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LemmaType::Text => write!(f, "text"),
-            LemmaType::Number => write!(f, "number"),
-            LemmaType::Date => write!(f, "date"),
-            LemmaType::Boolean => write!(f, "boolean"),
-            LemmaType::Regex => write!(f, "regex"),
-            LemmaType::Percentage => write!(f, "percentage"),
-            LemmaType::Mass => write!(f, "mass"),
-            LemmaType::Length => write!(f, "length"),
-            LemmaType::Volume => write!(f, "volume"),
-            LemmaType::Duration => write!(f, "duration"),
-            LemmaType::Temperature => write!(f, "temperature"),
-            LemmaType::Power => write!(f, "power"),
-            LemmaType::Force => write!(f, "force"),
-            LemmaType::Pressure => write!(f, "pressure"),
-            LemmaType::Energy => write!(f, "energy"),
-            LemmaType::Frequency => write!(f, "frequency"),
-            LemmaType::Data => write!(f, "data"),
-        }
-    }
-}
-
-impl fmt::Display for TypeAnnotation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TypeAnnotation::LemmaType(lemma_type) => write!(f, "{}", lemma_type),
-        }
-    }
-}
-
-impl LemmaType {
-    /// Get an example value string for this type, suitable for UI help text
-    #[must_use]
-    pub fn example_value(&self) -> &'static str {
-        match self {
-            LemmaType::Text => "\"hello world\"",
-            LemmaType::Number => "3.14",
-            LemmaType::Boolean => "true",
-            LemmaType::Date => "2023-12-25T14:30:00Z",
-            LemmaType::Duration => "90 minutes",
-            LemmaType::Mass => "5.5 kilograms",
-            LemmaType::Length => "10 meters",
-            LemmaType::Percentage => "50%",
-            LemmaType::Temperature => "25 celsius",
-            LemmaType::Regex => "/pattern/",
-            LemmaType::Volume => "1.2 liter",
-            LemmaType::Power => "100 watts",
-            LemmaType::Energy => "1000 joules",
-            LemmaType::Force => "10 newtons",
-            LemmaType::Pressure => "101325 pascals",
-            LemmaType::Frequency => "880 hertz",
-            LemmaType::Data => "800 megabytes",
-        }
-    }
-}
-
-impl TypeAnnotation {
-    /// Get an example value string for this type annotation, suitable for UI help text
-    #[must_use]
-    pub fn example_value(&self) -> &'static str {
-        match self {
-            TypeAnnotation::LemmaType(lemma_type) => lemma_type.example_value(),
+            ConversionTarget::Percentage => write!(f, "percent"),
         }
     }
 }
@@ -1709,7 +1385,35 @@ impl fmt::Display for FactValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FactValue::Literal(lit) => write!(f, "{}", lit),
-            FactValue::TypeAnnotation(type_ann) => write!(f, "[{}]", type_ann),
+            FactValue::TypeDeclaration {
+                base,
+                overrides,
+                from,
+            } => {
+                let base_str = if let Some(from_doc) = from {
+                    format!("{} from {}", base, from_doc)
+                } else {
+                    base.clone()
+                };
+
+                if let Some(ref overrides_vec) = overrides {
+                    let override_str = overrides_vec
+                        .iter()
+                        .map(|(cmd, args)| {
+                            let args_str = args.join(" ");
+                            if args_str.is_empty() {
+                                cmd.clone()
+                            } else {
+                                format!("{} {}", cmd, args_str)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" -> ");
+                    write!(f, "[{} -> {}]", base_str, override_str)
+                } else {
+                    write!(f, "[{}]", base_str)
+                }
+            }
             FactValue::DocumentReference(doc_name) => write!(f, "doc {}", doc_name),
         }
     }
@@ -1820,5 +1524,1586 @@ impl fmt::Display for RulePath {
             write!(f, "{}.", segment.fact)?;
         }
         write!(f, "{}?", self.rule)
+    }
+}
+
+/// A unit for Number and Ratio types
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+pub struct Unit {
+    pub name: String,
+    pub value: Decimal,
+}
+
+/// Type specifications that define the foundational types available in Lemma,
+/// including their default values and constraints.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+pub enum TypeSpecification {
+    Boolean {
+        help: Option<String>,
+        default: Option<bool>,
+    },
+    Scale {
+        minimum: Option<Decimal>,
+        maximum: Option<Decimal>,
+        decimals: Option<u8>,
+        precision: Option<Decimal>,
+        units: Vec<Unit>,
+        help: Option<String>,
+        default: Option<Decimal>,
+    },
+    Number {
+        minimum: Option<Decimal>,
+        maximum: Option<Decimal>,
+        decimals: Option<u8>,
+        precision: Option<Decimal>,
+        help: Option<String>,
+        default: Option<Decimal>,
+    },
+    Ratio {
+        minimum: Option<Decimal>,
+        maximum: Option<Decimal>,
+        units: Vec<Unit>,
+        help: Option<String>,
+        default: Option<Decimal>,
+    },
+    Text {
+        minimum: Option<usize>,
+        maximum: Option<usize>,
+        length: Option<usize>,
+        options: Vec<String>,
+        help: Option<String>,
+        default: Option<String>,
+    },
+    Date {
+        minimum: Option<DateTimeValue>,
+        maximum: Option<DateTimeValue>,
+        help: Option<String>,
+        default: Option<DateTimeValue>,
+    },
+    Time {
+        minimum: Option<TimeValue>,
+        maximum: Option<TimeValue>,
+        help: Option<String>,
+        default: Option<TimeValue>,
+    },
+    Duration {
+        help: Option<String>,
+        default: Option<(Decimal, DurationUnit)>,
+    },
+    Veto {
+        message: Option<String>,
+    },
+}
+
+impl TypeSpecification {
+    /// Create a Boolean type with no defaults
+    pub fn boolean() -> Self {
+        TypeSpecification::Boolean {
+            help: None,
+            default: None,
+        }
+    }
+
+    /// Create a Scale type with default specifications (can have units)
+    pub fn scale() -> Self {
+        TypeSpecification::Scale {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            precision: None,
+            units: vec![],
+            help: None,
+            default: None,
+        }
+    }
+
+    /// Create a Number type with default specifications (dimensionless, no units)
+    pub fn number() -> Self {
+        TypeSpecification::Number {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            precision: None,
+            help: None,
+            default: None,
+        }
+    }
+
+    /// Create a Ratio type with default units
+    /// Default units: percent = 100, permille = 1000
+    pub fn ratio() -> Self {
+        TypeSpecification::Ratio {
+            minimum: None,
+            maximum: None,
+            units: vec![
+                Unit {
+                    name: "percent".to_string(),
+                    value: Decimal::from(100),
+                },
+                Unit {
+                    name: "permille".to_string(),
+                    value: Decimal::from(1000),
+                },
+            ],
+            help: None,
+            default: None,
+        }
+    }
+
+    /// Create a Text type with default specifications
+    pub fn text() -> Self {
+        TypeSpecification::Text {
+            minimum: None,
+            maximum: None,
+            length: None,
+            options: vec![],
+            help: None,
+            default: None,
+        }
+    }
+
+    /// Create a Date type with default specifications
+    pub fn date() -> Self {
+        TypeSpecification::Date {
+            minimum: None,
+            maximum: None,
+            help: None,
+            default: None,
+        }
+    }
+
+    /// Create a Time type with default specifications
+    pub fn time() -> Self {
+        TypeSpecification::Time {
+            minimum: None,
+            maximum: None,
+            help: None,
+            default: None,
+        }
+    }
+
+    /// Create a Duration type with default specifications
+    pub fn duration() -> Self {
+        TypeSpecification::Duration {
+            help: None,
+            default: None,
+        }
+    }
+
+    /// Create a Veto type (internal use only - not user-declarable)
+    pub fn veto() -> Self {
+        TypeSpecification::Veto { message: None }
+    }
+
+    /// Apply a single override command to this specification
+    pub fn apply_override(mut self, command: &str, args: &[String]) -> Result<Self, String> {
+        match &mut self {
+            TypeSpecification::Boolean { help, default } => match command {
+                "help" => *help = args.first().cloned(),
+                "default" => {
+                    let d = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?
+                        .parse::<BooleanValue>()
+                        .map_err(|_| format!("invalid default value: {:?}", args.first()))?;
+                    *default = Some(d.into());
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid command '{}' for boolean type. Valid commands: help, default",
+                        command
+                    ));
+                }
+            },
+            TypeSpecification::Scale {
+                decimals,
+                minimum,
+                maximum,
+                precision,
+                units,
+                help,
+                default,
+            } => match command {
+                "decimals" => {
+                    let d = args
+                        .first()
+                        .ok_or_else(|| "decimals requires an argument".to_string())?
+                        .parse::<u8>()
+                        .map_err(|_| format!("invalid decimals value: {:?}", args.first()))?;
+                    *decimals = Some(d);
+                }
+                "unit" if args.len() >= 2 => {
+                    let unit_name = args[0].clone();
+                    // Check if unit name already exists in the current type
+                    if units.iter().any(|u| u.name == unit_name) {
+                        return Err(format!(
+                            "Duplicate unit name '{}' in type definition. Unit names must be unique within a type.",
+                            unit_name
+                        ));
+                    }
+                    let value = args[1]
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid unit value: {}", args[1]))?;
+                    units.push(Unit {
+                        name: unit_name,
+                        value,
+                    });
+                }
+                "minimum" => {
+                    let m = args
+                        .first()
+                        .ok_or_else(|| "minimum requires an argument".to_string())?
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid minimum value: {:?}", args.first()))?;
+                    *minimum = Some(m);
+                }
+                "maximum" => {
+                    let m = args
+                        .first()
+                        .ok_or_else(|| "maximum requires an argument".to_string())?
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid maximum value: {:?}", args.first()))?;
+                    *maximum = Some(m);
+                }
+                "precision" => {
+                    let p = args
+                        .first()
+                        .ok_or_else(|| "precision requires an argument".to_string())?
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid precision value: {:?}", args.first()))?;
+                    *precision = Some(p);
+                }
+                "help" => *help = args.first().cloned(),
+                "default" => {
+                    let d = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid default value: {:?}", args.first()))?;
+                    *default = Some(d);
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid command '{}' for scale type. Valid commands: unit, minimum, maximum, decimals, precision, help, default",
+                        command
+                    ));
+                }
+            },
+            TypeSpecification::Number {
+                decimals,
+                minimum,
+                maximum,
+                precision,
+                help,
+                default,
+            } => match command {
+                "decimals" => {
+                    let d = args
+                        .first()
+                        .ok_or_else(|| "decimals requires an argument".to_string())?
+                        .parse::<u8>()
+                        .map_err(|_| format!("invalid decimals value: {:?}", args.first()))?;
+                    *decimals = Some(d);
+                }
+                "unit" => {
+                    return Err(
+                        "Invalid command 'unit' for number type. Number types are dimensionless and cannot have units. Use 'scale' type instead.".to_string()
+                    );
+                }
+                "minimum" => {
+                    let m = args
+                        .first()
+                        .ok_or_else(|| "minimum requires an argument".to_string())?
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid minimum value: {:?}", args.first()))?;
+                    *minimum = Some(m);
+                }
+                "maximum" => {
+                    let m = args
+                        .first()
+                        .ok_or_else(|| "maximum requires an argument".to_string())?
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid maximum value: {:?}", args.first()))?;
+                    *maximum = Some(m);
+                }
+                "precision" => {
+                    let p = args
+                        .first()
+                        .ok_or_else(|| "precision requires an argument".to_string())?
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid precision value: {:?}", args.first()))?;
+                    *precision = Some(p);
+                }
+                "help" => *help = args.first().cloned(),
+                "default" => {
+                    let d = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid default value: {:?}", args.first()))?;
+                    *default = Some(d);
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid command '{}' for number type. Valid commands: minimum, maximum, decimals, precision, help, default",
+                        command
+                    ));
+                }
+            },
+            TypeSpecification::Ratio {
+                minimum,
+                maximum,
+                units,
+                help,
+                default,
+            } => match command {
+                "unit" if args.len() >= 2 => {
+                    let value = args[1]
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid unit value: {}", args[1]))?;
+                    units.push(Unit {
+                        name: args[0].clone(),
+                        value,
+                    });
+                }
+                "minimum" => {
+                    let m = args
+                        .first()
+                        .ok_or_else(|| "minimum requires an argument".to_string())?
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid minimum value: {:?}", args.first()))?;
+                    *minimum = Some(m);
+                }
+                "maximum" => {
+                    let m = args
+                        .first()
+                        .ok_or_else(|| "maximum requires an argument".to_string())?
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid maximum value: {:?}", args.first()))?;
+                    *maximum = Some(m);
+                }
+                "help" => *help = args.first().cloned(),
+                "default" => {
+                    let d = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid default value: {:?}", args.first()))?;
+                    *default = Some(d);
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid command '{}' for ratio type. Valid commands: unit, minimum, maximum, help, default",
+                        command
+                    ));
+                }
+            },
+            TypeSpecification::Text {
+                minimum,
+                maximum,
+                length,
+                options,
+                help,
+                ..
+            } => match command {
+                "option" if args.len() == 1 => {
+                    options.push(args[0].clone());
+                }
+                "options" => {
+                    *options = args.to_vec();
+                }
+                "minimum" => {
+                    let m = args
+                        .first()
+                        .ok_or_else(|| "minimum requires an argument".to_string())?
+                        .parse::<usize>()
+                        .map_err(|_| format!("invalid minimum value: {:?}", args.first()))?;
+                    *minimum = Some(m);
+                }
+                "maximum" => {
+                    let m = args
+                        .first()
+                        .ok_or_else(|| "maximum requires an argument".to_string())?
+                        .parse::<usize>()
+                        .map_err(|_| format!("invalid maximum value: {:?}", args.first()))?;
+                    *maximum = Some(m);
+                }
+                "length" => {
+                    let l = args
+                        .first()
+                        .ok_or_else(|| "length requires an argument".to_string())?
+                        .parse::<usize>()
+                        .map_err(|_| format!("invalid length value: {:?}", args.first()))?;
+                    *length = Some(l);
+                }
+                "help" => *help = args.first().cloned(),
+                _ => {
+                    return Err(format!(
+                        "Invalid command '{}' for text type. Valid commands: options, minimum, maximum, length, help, default",
+                        command
+                    ));
+                }
+            },
+            TypeSpecification::Date {
+                minimum,
+                maximum,
+                help,
+                default,
+            } => match command {
+                "minimum" => {
+                    let arg = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?;
+                    let Value::Date(date) = &standard_date()
+                        .parse_value(arg)
+                        .map_err(|_| format!("invalid default date value: {}", arg))?
+                        .value
+                    else {
+                        return Err(format!("invalid default date value: {}", arg));
+                    };
+                    *minimum = Some(date.clone());
+                }
+                "maximum" => {
+                    let arg = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?;
+                    let Value::Date(date) = standard_date()
+                        .parse_value(arg)
+                        .map_err(|_| format!("invalid default date value: {}", arg))?
+                        .value
+                    else {
+                        return Err(format!("invalid default date value: {}", arg));
+                    };
+                    *maximum = Some(date);
+                }
+                "help" => *help = args.first().cloned(),
+                "default" => {
+                    let arg = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?;
+                    let Value::Date(date) = standard_date()
+                        .parse_value(arg)
+                        .map_err(|_| format!("invalid default date value: {}", arg))?
+                        .value
+                    else {
+                        return Err(format!("invalid default date value: {}", arg));
+                    };
+                    *default = Some(date);
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid command '{}' for date type. Valid commands: minimum, maximum, help, default",
+                        command
+                    ));
+                }
+            },
+            TypeSpecification::Time {
+                minimum,
+                maximum,
+                help,
+                default,
+            } => match command {
+                "minimum" => {
+                    let arg = args
+                        .first()
+                        .ok_or_else(|| "minimum requires an argument".to_string())?;
+                    let Value::Time(time) = &standard_time()
+                        .parse_value(arg)
+                        .map_err(|_| format!("invalid minimum time value: {}", arg))?
+                        .value
+                    else {
+                        return Err(format!("invalid minimum time value: {}", arg));
+                    };
+                    *minimum = Some(time.clone());
+                }
+                "maximum" => {
+                    let arg = args
+                        .first()
+                        .ok_or_else(|| "maximum requires an argument".to_string())?;
+                    let Value::Time(time) = &standard_time()
+                        .parse_value(arg)
+                        .map_err(|_| format!("invalid maximum time value: {}", arg))?
+                        .value
+                    else {
+                        return Err(format!("invalid maximum time value: {}", arg));
+                    };
+                    *maximum = Some(time.clone());
+                }
+                "help" => *help = args.first().cloned(),
+                "default" => {
+                    let arg = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?;
+                    let Value::Time(time) = &standard_time()
+                        .parse_value(arg)
+                        .map_err(|_| format!("invalid default time value: {}", arg))?
+                        .value
+                    else {
+                        return Err(format!("invalid default time value: {}", arg));
+                    };
+                    *default = Some(time.clone());
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid command '{}' for time type. Valid commands: minimum, maximum, help, default",
+                        command
+                    ));
+                }
+            },
+            TypeSpecification::Duration { help, default } => match command {
+                "help" => *help = args.first().cloned(),
+                "default" if args.len() >= 2 => {
+                    let value = args[0]
+                        .parse::<Decimal>()
+                        .map_err(|_| format!("invalid duration value: {}", args[0]))?;
+                    let unit = args[1]
+                        .parse::<DurationUnit>()
+                        .map_err(|_| format!("invalid duration unit: {}", args[1]))?;
+                    *default = Some((value, unit));
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid command '{}' for duration type. Valid commands: help, default",
+                        command
+                    ));
+                }
+            },
+            TypeSpecification::Veto { .. } => {
+                return Err(format!(
+                    "Invalid command '{}' for veto type. Veto is not a user-declarable type and cannot have overrides",
+                    command
+                ));
+            }
+        }
+        Ok(self)
+    }
+}
+
+/// User-defined type as it appears in the source (AST)
+///
+/// Supports these variants:
+/// - Basic type: `type money = number`
+/// - Basic type extension: `type money = number -> decimals 2 -> unit EUR 1.00 -> unit USD 1.18`
+/// - From another custom type: `type currency from lemma`
+/// - Shorthand with overrides: `type currency from lemma -> maximum 1000`
+/// - Anonymous types: `fact age = [number -> minimum 0 -> maximum 120]`
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypeDef {
+    /// Regular named type definition
+    /// Example: `type money = number -> decimals 2`
+    Regular {
+        name: String,
+        parent: String,
+        overrides: Option<Vec<(String, Vec<String>)>>,
+    },
+    /// Imported type from another document
+    /// Example: `type currency from lemma` or `type currency from lemma -> maximum 1000`
+    Import {
+        name: String,
+        source_type: String,
+        from: String,
+        overrides: Option<Vec<(String, Vec<String>)>>,
+    },
+    /// Anonymous/inline type declaration
+    /// Example: `fact age = [number -> minimum 0 -> maximum 120]`
+    /// Example: `fact age = [age from lemma]`
+    /// Example: `fact age = [age from lemma -> minimum 18]`
+    Inline {
+        parent: String,
+        overrides: Option<Vec<(String, Vec<String>)>>,
+        fact_ref: FactReference,
+        from: Option<String>,
+    },
+}
+
+/// A fully resolved type used during evaluation
+///
+/// This combines the type specifications with all overrides already applied.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+pub struct LemmaType {
+    pub name: Option<String>,
+    pub specifications: TypeSpecification,
+}
+
+impl LemmaType {
+    /// Create a new LemmaType with the given name and specifications
+    pub fn new(name: String, specifications: TypeSpecification) -> Self {
+        Self {
+            name: Some(name),
+            specifications,
+        }
+    }
+
+    /// Create a new LemmaType without a name (for standard types and inline fact definitions)
+    pub fn without_name(specifications: TypeSpecification) -> Self {
+        Self {
+            name: None,
+            specifications,
+        }
+    }
+
+    /// Get the name of this type, deriving from specifications if name is None
+    pub fn name(&self) -> &str {
+        match &self.name {
+            Some(n) => n.as_str(),
+            None => match &self.specifications {
+                TypeSpecification::Boolean { .. } => "boolean",
+                TypeSpecification::Scale { .. } => "scale",
+                TypeSpecification::Number { .. } => "number",
+                TypeSpecification::Text { .. } => "text",
+                TypeSpecification::Date { .. } => "date",
+                TypeSpecification::Time { .. } => "time",
+                TypeSpecification::Duration { .. } => "duration",
+                TypeSpecification::Ratio { .. } => "ratio",
+                TypeSpecification::Veto { .. } => "veto",
+            },
+        }
+    }
+
+    /// Check if this type is boolean
+    pub fn is_boolean(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::Boolean { .. })
+    }
+
+    /// Check if this type is scale (has units)
+    pub fn is_scale(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::Scale { .. })
+    }
+
+    /// Check if this type is number (dimensionless)
+    pub fn is_number(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::Number { .. })
+    }
+
+    /// Check if this type is numeric (either scale or number)
+    pub fn is_numeric(&self) -> bool {
+        matches!(
+            &self.specifications,
+            TypeSpecification::Scale { .. } | TypeSpecification::Number { .. }
+        )
+    }
+
+    /// Check if this type is text
+    pub fn is_text(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::Text { .. })
+    }
+
+    /// Check if this type is date
+    pub fn is_date(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::Date { .. })
+    }
+
+    /// Check if this type is time
+    pub fn is_time(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::Time { .. })
+    }
+
+    /// Check if this type is duration
+    pub fn is_duration(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::Duration { .. })
+    }
+
+    /// Check if this type is ratio
+    pub fn is_ratio(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::Ratio { .. })
+    }
+
+    /// Check if this type is veto
+    pub fn is_veto(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::Veto { .. })
+    }
+
+    /// Create a Veto LemmaType (internal use only - not user-declarable)
+    pub fn veto_type() -> Self {
+        Self::without_name(TypeSpecification::veto())
+    }
+
+    /// Parse a raw string value into a LiteralValue according to this type
+    pub fn parse_value(&self, raw: &str) -> Result<LiteralValue, LemmaError> {
+        let value = match &self.specifications {
+            TypeSpecification::Boolean { .. } => Self::parse_boolean_value(raw)?,
+            TypeSpecification::Scale { .. } => Self::parse_scale_value(raw, self)?,
+            TypeSpecification::Number { .. } => Self::parse_number_value(raw)?,
+            TypeSpecification::Text { .. } => Self::parse_text_value(raw)?,
+            TypeSpecification::Date { .. } => Self::parse_date_value(raw)?,
+            TypeSpecification::Time { .. } => Self::parse_time_value(raw)?,
+            TypeSpecification::Duration { .. } => Self::parse_duration_value(raw)?,
+            TypeSpecification::Ratio { .. } => Self::parse_ratio_value(raw)?,
+            TypeSpecification::Veto { .. } => {
+                return Err(LemmaError::engine(
+                    "Cannot parse value for veto type - veto is not a user-declarable type",
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
+            }
+        };
+        // Create LiteralValue with the appropriate helper method based on value type
+        Ok(match &value {
+            Value::Number(n) => LiteralValue::number_with_type(*n, self.clone()),
+            Value::Scale(n, u) => LiteralValue::scale_with_type(*n, u.clone(), self.clone()),
+            Value::Text(s) => LiteralValue::text_with_type(s.clone(), self.clone()),
+            Value::Boolean(b) => LiteralValue::boolean_with_type(b.clone(), self.clone()),
+            Value::Date(d) => LiteralValue::date_with_type(d.clone(), self.clone()),
+            Value::Time(t) => LiteralValue::time_with_type(t.clone(), self.clone()),
+            Value::Duration(v, u) => LiteralValue::duration_with_type(*v, u.clone(), self.clone()),
+            Value::Ratio(r, u) => LiteralValue::ratio_with_type(*r, u.clone(), self.clone()),
+        })
+    }
+
+    fn parse_text_value(raw: &str) -> Result<Value, LemmaError> {
+        Ok(Value::Text(raw.to_string()))
+    }
+
+    fn parse_scale_value(raw: &str, lemma_type: &LemmaType) -> Result<Value, LemmaError> {
+        let trimmed = raw.trim();
+
+        // Parse number and optional unit from string
+        // Handles: "50", "50 celsius", "50celsius", "1,234.56 celsius", etc.
+
+        // First, try to find where the number part ends
+        // Numbers can contain: digits, decimal point, sign, underscore, comma
+        let mut number_end = 0;
+        let chars: Vec<char> = trimmed.chars().collect();
+        let mut has_decimal = false;
+
+        // Skip leading sign
+        let start = if chars.first().is_some_and(|c| *c == '+' || *c == '-') {
+            1
+        } else {
+            0
+        };
+
+        for (i, &ch) in chars.iter().enumerate().skip(start) {
+            match ch {
+                '0'..='9' => number_end = i + 1,
+                '.' if !has_decimal => {
+                    has_decimal = true;
+                    number_end = i + 1;
+                }
+                '_' | ',' => {
+                    // Thousand separators - continue scanning
+                    number_end = i + 1;
+                }
+                _ => {
+                    // Non-numeric character - number ends here
+                    break;
+                }
+            }
+        }
+
+        // Extract number and unit parts
+        let number_part = trimmed[..number_end].trim();
+        let unit_part = trimmed[number_end..].trim();
+
+        // Clean number part (remove separators for parsing)
+        let clean_number = number_part.replace(['_', ','], "");
+        let decimal = Decimal::from_str(&clean_number).map_err(|_| {
+            LemmaError::engine(
+                format!("Invalid scale string: '{}' is not a valid number", raw),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(raw),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        })?;
+
+        // Validate unit against type definition
+        let allowed_units = match &lemma_type.specifications {
+            TypeSpecification::Scale { units, .. } => units,
+            _ => unreachable!("parse_scale_value called with non-Scale type"),
+        };
+
+        let unit = if unit_part.is_empty() {
+            None
+        } else {
+            // Validate that the unit exists in the type definition
+            let unit_matched = allowed_units
+                .iter()
+                .find(|u| u.name.eq_ignore_ascii_case(unit_part));
+
+            if let Some(unit_def) = unit_matched {
+                Some(unit_def.name.clone())
+            } else {
+                let valid: Vec<String> = allowed_units.iter().map(|u| u.name.clone()).collect();
+                return Err(LemmaError::engine(
+                    format!(
+                        "Invalid unit '{}' for scale type. Valid units: {}",
+                        unit_part,
+                        valid.join(", ")
+                    ),
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(raw),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
+            }
+        };
+
+        Ok(Value::Scale(decimal, unit))
+    }
+
+    fn parse_number_value(raw: &str) -> Result<Value, LemmaError> {
+        let clean_number = raw.replace(['_', ','], "");
+        let decimal = Decimal::from_str(&clean_number).map_err(|_| {
+            LemmaError::engine(
+                format!("Invalid number: '{}'. Expected a valid decimal number (e.g., 42, 3.14, 1_000_000)", raw),
+                Span { start: 0, end: 0, line: 1, col: 0 },
+                "<unknown>",
+                Arc::from(raw),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        })?;
+        Ok(Value::Number(decimal))
+    }
+
+    fn parse_boolean_value(raw: &str) -> Result<Value, LemmaError> {
+        let boolean_value: BooleanValue = raw.parse().map_err(|_| {
+            LemmaError::engine(
+                format!(
+                    "Invalid boolean: '{}'. Expected one of: true, false, yes, no, accept, reject",
+                    raw
+                ),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(raw),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        })?;
+        Ok(Value::Boolean(boolean_value))
+    }
+
+    fn parse_date_value(raw: &str) -> Result<Value, LemmaError> {
+        let datetime_str = raw.trim();
+
+        if let Ok(dt) = datetime_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
+            let offset = dt.offset().local_minus_utc();
+            return Ok(Value::Date(DateTimeValue {
+                year: dt.year(),
+                month: dt.month(),
+                day: dt.day(),
+                hour: dt.hour(),
+                minute: dt.minute(),
+                second: dt.second(),
+                timezone: Some(TimezoneValue {
+                    offset_hours: (offset / 3600) as i8,
+                    offset_minutes: ((offset % 3600) / 60) as u8,
+                }),
+            }));
+        }
+
+        if let Ok(dt) = datetime_str.parse::<chrono::NaiveDateTime>() {
+            return Ok(Value::Date(DateTimeValue {
+                year: dt.year(),
+                month: dt.month(),
+                day: dt.day(),
+                hour: dt.hour(),
+                minute: dt.minute(),
+                second: dt.second(),
+                timezone: None,
+            }));
+        }
+
+        if let Ok(d) = datetime_str.parse::<chrono::NaiveDate>() {
+            return Ok(Value::Date(DateTimeValue {
+                year: d.year(),
+                month: d.month(),
+                day: d.day(),
+                hour: 0,
+                minute: 0,
+                second: 0,
+                timezone: None,
+            }));
+        }
+
+        Err(LemmaError::engine(
+            format!("Invalid date/time format: '{}'. Expected one of: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, or YYYY-MM-DDTHH:MM:SSZ", raw),
+            Span { start: 0, end: 0, line: 1, col: 0 },
+            "<unknown>",
+            Arc::from(raw),
+            "<unknown>",
+            1,
+            None::<String>,
+        ))
+    }
+
+    fn parse_time_value(raw: &str) -> Result<Value, LemmaError> {
+        let time_str = raw.trim();
+
+        // Try parsing with timezone (HH:MM:SSZ or HH:MM:SS+HH:MM)
+        if let Ok(dt) = time_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
+            let offset = dt.offset().local_minus_utc();
+            return Ok(Value::Time(TimeValue {
+                hour: dt.hour() as u8,
+                minute: dt.minute() as u8,
+                second: dt.second() as u8,
+                timezone: Some(TimezoneValue {
+                    offset_hours: (offset / 3600) as i8,
+                    offset_minutes: ((offset % 3600) / 60) as u8,
+                }),
+            }));
+        }
+
+        // Try parsing as NaiveTime (HH:MM:SS or HH:MM)
+        if let Ok(nt) = time_str.parse::<chrono::NaiveTime>() {
+            return Ok(Value::Time(TimeValue {
+                hour: nt.hour() as u8,
+                minute: nt.minute() as u8,
+                second: nt.second() as u8,
+                timezone: None,
+            }));
+        }
+
+        // Try parsing manually for formats like "14:30" or "14:30:00"
+        let parts: Vec<&str> = time_str.split(':').collect();
+        if parts.len() == 2 || parts.len() == 3 {
+            if let (Ok(hour_u32), Ok(minute_u32)) =
+                (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+            {
+                if hour_u32 < 24 && minute_u32 < 60 {
+                    let second_u32 = if parts.len() == 3 {
+                        parts[2].parse::<u32>().unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    if second_u32 < 60 {
+                        return Ok(Value::Time(TimeValue {
+                            hour: hour_u32 as u8,
+                            minute: minute_u32 as u8,
+                            second: second_u32 as u8,
+                            timezone: None,
+                        }));
+                    }
+                }
+            }
+        }
+
+        Err(LemmaError::engine(
+            format!(
+                "Invalid time format: '{}'. Expected: HH:MM or HH:MM:SS (e.g., 14:30 or 14:30:00)",
+                raw
+            ),
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "<unknown>",
+            Arc::from(raw),
+            "<unknown>",
+            1,
+            None::<String>,
+        ))
+    }
+
+    fn parse_duration_value(raw: &str) -> Result<Value, LemmaError> {
+        // Parse duration like "90 minutes" or "2 hours"
+        let parts: Vec<&str> = raw.split_whitespace().collect();
+        if parts.len() != 2 {
+            return Err(LemmaError::engine(
+                format!(
+                    "Invalid duration: '{}'. Expected format: NUMBER UNIT (e.g., '90 minutes')",
+                    raw
+                ),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(raw),
+                "<unknown>",
+                1,
+                None::<String>,
+            ));
+        }
+
+        let number_str = parts[0].replace(['_', ','], "");
+        let value = Decimal::from_str(&number_str).map_err(|_| {
+            LemmaError::engine(
+                format!("Invalid number in duration: '{}'", parts[0]),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(raw),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        })?;
+        let unit = parts[1];
+
+        // Parse duration unit
+        let unit_lower = unit.to_lowercase();
+        let duration_unit = match unit_lower.as_str() {
+            "year" | "years" => DurationUnit::Year,
+            "month" | "months" => DurationUnit::Month,
+            "week" | "weeks" => DurationUnit::Week,
+            "day" | "days" => DurationUnit::Day,
+            "hour" | "hours" => DurationUnit::Hour,
+            "minute" | "minutes" => DurationUnit::Minute,
+            "second" | "seconds" => DurationUnit::Second,
+            "millisecond" | "milliseconds" => DurationUnit::Millisecond,
+            "microsecond" | "microseconds" => DurationUnit::Microsecond,
+            _ => {
+                return Err(LemmaError::engine(
+                    format!("Unknown duration unit: '{}'. Expected one of: years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds", unit),
+                    Span { start: 0, end: 0, line: 1, col: 0 },
+                    "<unknown>",
+                    Arc::from(raw),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
+            }
+        };
+        Ok(Value::Duration(value, duration_unit))
+    }
+
+    fn parse_ratio_value(raw: &str) -> Result<Value, LemmaError> {
+        // Parse ratio as a decimal number
+        let clean_number = raw.replace(['_', ','], "");
+        let decimal = Decimal::from_str(&clean_number).map_err(|_| {
+            LemmaError::engine(
+                format!("Invalid ratio: '{}'. Expected a valid decimal number", raw),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(raw),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        })?;
+        Ok(Value::Ratio(decimal, None))
+    }
+}
+
+// Private statics for lazy initialization
+static STANDARD_BOOLEAN: OnceLock<LemmaType> = OnceLock::new();
+static STANDARD_SCALE: OnceLock<LemmaType> = OnceLock::new();
+static STANDARD_NUMBER: OnceLock<LemmaType> = OnceLock::new();
+static STANDARD_TEXT: OnceLock<LemmaType> = OnceLock::new();
+static STANDARD_DATE: OnceLock<LemmaType> = OnceLock::new();
+static STANDARD_TIME: OnceLock<LemmaType> = OnceLock::new();
+static STANDARD_DURATION: OnceLock<LemmaType> = OnceLock::new();
+static STANDARD_RATIO: OnceLock<LemmaType> = OnceLock::new();
+
+/// Get the standard boolean type
+pub fn standard_boolean() -> &'static LemmaType {
+    STANDARD_BOOLEAN.get_or_init(|| LemmaType {
+        name: None,
+        specifications: TypeSpecification::Boolean {
+            help: None,
+            default: None,
+        },
+    })
+}
+
+/// Get the standard scale type (can have units)
+pub fn standard_scale() -> &'static LemmaType {
+    STANDARD_SCALE.get_or_init(|| LemmaType {
+        name: None,
+        specifications: TypeSpecification::Scale {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            precision: None,
+            units: Vec::new(),
+            help: None,
+            default: None,
+        },
+    })
+}
+
+/// Get the standard number type (dimensionless, no units)
+pub fn standard_number() -> &'static LemmaType {
+    STANDARD_NUMBER.get_or_init(|| LemmaType {
+        name: None,
+        specifications: TypeSpecification::Number {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            precision: None,
+            help: None,
+            default: None,
+        },
+    })
+}
+
+/// Get the standard text type
+pub fn standard_text() -> &'static LemmaType {
+    STANDARD_TEXT.get_or_init(|| LemmaType {
+        name: None,
+        specifications: TypeSpecification::Text {
+            minimum: None,
+            maximum: None,
+            length: None,
+            options: Vec::new(),
+            help: None,
+            default: None,
+        },
+    })
+}
+
+/// Get the standard date type
+pub fn standard_date() -> &'static LemmaType {
+    STANDARD_DATE.get_or_init(|| LemmaType {
+        name: None,
+        specifications: TypeSpecification::Date {
+            minimum: None,
+            maximum: None,
+            help: None,
+            default: None,
+        },
+    })
+}
+
+/// Get the standard time type
+pub fn standard_time() -> &'static LemmaType {
+    STANDARD_TIME.get_or_init(|| LemmaType {
+        name: None,
+        specifications: TypeSpecification::Time {
+            minimum: None,
+            maximum: None,
+            help: None,
+            default: None,
+        },
+    })
+}
+
+/// Get the standard duration type
+pub fn standard_duration() -> &'static LemmaType {
+    STANDARD_DURATION.get_or_init(|| LemmaType {
+        name: None,
+        specifications: TypeSpecification::Duration {
+            help: None,
+            default: None,
+        },
+    })
+}
+
+/// Get the standard ratio type
+pub fn standard_ratio() -> &'static LemmaType {
+    STANDARD_RATIO.get_or_init(|| LemmaType {
+        name: None,
+        specifications: TypeSpecification::Ratio {
+            minimum: None,
+            maximum: None,
+            units: vec![
+                Unit {
+                    name: "percent".to_string(),
+                    value: Decimal::from(100),
+                },
+                Unit {
+                    name: "permille".to_string(),
+                    value: Decimal::from(1000),
+                },
+            ],
+            help: None,
+            default: None,
+        },
+    })
+}
+
+// Helper macros to initialize standard types
+
+impl LemmaType {
+    /// Get an example value string for this type, suitable for UI help text
+    pub fn example_value(&self) -> &'static str {
+        match &self.specifications {
+            TypeSpecification::Text { .. } => "\"hello world\"",
+            TypeSpecification::Scale { .. } => "3.14",
+            TypeSpecification::Number { .. } => "3.14",
+            TypeSpecification::Boolean { .. } => "true",
+            TypeSpecification::Date { .. } => "2023-12-25T14:30:00Z",
+            TypeSpecification::Veto { .. } => "veto",
+            TypeSpecification::Time { .. } => "14:30:00",
+            TypeSpecification::Duration { .. } => "90 minutes",
+            TypeSpecification::Ratio { .. } => "50%",
+        }
+    }
+}
+
+impl fmt::Display for LemmaType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_arithmetic_operation_name() {
+        assert_eq!(ArithmeticComputation::Add.name(), "addition");
+        assert_eq!(ArithmeticComputation::Subtract.name(), "subtraction");
+        assert_eq!(ArithmeticComputation::Multiply.name(), "multiplication");
+        assert_eq!(ArithmeticComputation::Divide.name(), "division");
+        assert_eq!(ArithmeticComputation::Modulo.name(), "modulo");
+        assert_eq!(ArithmeticComputation::Power.name(), "exponentiation");
+    }
+
+    #[test]
+    fn test_comparison_operator_name() {
+        assert_eq!(ComparisonComputation::GreaterThan.name(), "greater than");
+        assert_eq!(ComparisonComputation::LessThan.name(), "less than");
+        assert_eq!(
+            ComparisonComputation::GreaterThanOrEqual.name(),
+            "greater than or equal"
+        );
+        assert_eq!(
+            ComparisonComputation::LessThanOrEqual.name(),
+            "less than or equal"
+        );
+        assert_eq!(ComparisonComputation::Equal.name(), "equal");
+        assert_eq!(ComparisonComputation::NotEqual.name(), "not equal");
+        assert_eq!(ComparisonComputation::Is.name(), "is");
+        assert_eq!(ComparisonComputation::IsNot.name(), "is not");
+    }
+
+    #[test]
+    fn test_literal_value_to_standard_type() {
+        let one = Decimal::from_str("1").unwrap();
+
+        assert_eq!(LiteralValue::text("".to_string()).lemma_type.name(), "text");
+        assert_eq!(LiteralValue::number(one).lemma_type.name(), "number");
+        assert_eq!(
+            LiteralValue::boolean(BooleanValue::True).lemma_type.name(),
+            "boolean"
+        );
+
+        let dt = DateTimeValue {
+            year: 2024,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            timezone: None,
+        };
+        assert_eq!(LiteralValue::date(dt).lemma_type.name(), "date");
+        assert_eq!(
+            LiteralValue::ratio(one / Decimal::from(100), Some("percent".to_string()))
+                .lemma_type
+                .name(),
+            "ratio"
+        );
+        assert_eq!(
+            LiteralValue::duration(one, DurationUnit::Second)
+                .lemma_type
+                .name(),
+            "duration"
+        );
+    }
+
+    #[test]
+    fn test_arithmetic_operation_display() {
+        assert_eq!(format!("{}", ArithmeticComputation::Add), "+");
+        assert_eq!(format!("{}", ArithmeticComputation::Subtract), "-");
+        assert_eq!(format!("{}", ArithmeticComputation::Multiply), "*");
+        assert_eq!(format!("{}", ArithmeticComputation::Divide), "/");
+        assert_eq!(format!("{}", ArithmeticComputation::Modulo), "%");
+        assert_eq!(format!("{}", ArithmeticComputation::Power), "^");
+    }
+
+    #[test]
+    fn test_comparison_operator_display() {
+        assert_eq!(format!("{}", ComparisonComputation::GreaterThan), ">");
+        assert_eq!(format!("{}", ComparisonComputation::LessThan), "<");
+        assert_eq!(
+            format!("{}", ComparisonComputation::GreaterThanOrEqual),
+            ">="
+        );
+        assert_eq!(format!("{}", ComparisonComputation::LessThanOrEqual), "<=");
+        assert_eq!(format!("{}", ComparisonComputation::Equal), "==");
+        assert_eq!(format!("{}", ComparisonComputation::NotEqual), "!=");
+        assert_eq!(format!("{}", ComparisonComputation::Is), "is");
+        assert_eq!(format!("{}", ComparisonComputation::IsNot), "is not");
+    }
+
+    #[test]
+    fn test_duration_unit_display() {
+        assert_eq!(format!("{}", DurationUnit::Second), "second");
+        assert_eq!(format!("{}", DurationUnit::Minute), "minute");
+        assert_eq!(format!("{}", DurationUnit::Hour), "hour");
+        assert_eq!(format!("{}", DurationUnit::Day), "day");
+        assert_eq!(format!("{}", DurationUnit::Week), "week");
+        assert_eq!(format!("{}", DurationUnit::Millisecond), "millisecond");
+        assert_eq!(format!("{}", DurationUnit::Microsecond), "microsecond");
+    }
+
+    #[test]
+    fn test_conversion_target_display() {
+        assert_eq!(format!("{}", ConversionTarget::Percentage), "percent");
+        assert_eq!(
+            format!("{}", ConversionTarget::Duration(DurationUnit::Hour)),
+            "hour"
+        );
+    }
+
+    #[test]
+    fn test_doc_type_display() {
+        assert_eq!(format!("{}", standard_text()), "text");
+        assert_eq!(format!("{}", standard_number()), "number");
+        assert_eq!(format!("{}", standard_date()), "date");
+        assert_eq!(format!("{}", standard_boolean()), "boolean");
+        assert_eq!(format!("{}", standard_duration()), "duration");
+    }
+
+    #[test]
+    fn test_type_constructor() {
+        let specs = TypeSpecification::number();
+        let lemma_type = LemmaType::new("dice".to_string(), specs);
+        assert_eq!(lemma_type.name(), "dice");
+    }
+
+    #[test]
+    fn test_type_display() {
+        let specs = TypeSpecification::text();
+        let lemma_type = LemmaType::new("name".to_string(), specs);
+        assert_eq!(format!("{}", lemma_type), "name");
+    }
+
+    #[test]
+    fn test_type_equality() {
+        let specs1 = TypeSpecification::number();
+        let specs2 = TypeSpecification::number();
+        let lemma_type1 = LemmaType::new("dice".to_string(), specs1);
+        let lemma_type2 = LemmaType::new("dice".to_string(), specs2);
+        assert_eq!(lemma_type1, lemma_type2);
+    }
+
+    #[test]
+    fn test_type_serialization() {
+        let specs = TypeSpecification::number();
+        let lemma_type = LemmaType::new("dice".to_string(), specs);
+        let serialized = serde_json::to_string(&lemma_type).unwrap();
+        let deserialized: LemmaType = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(lemma_type, deserialized);
+    }
+
+    #[test]
+    fn test_literal_value_display_value() {
+        let ten = Decimal::from_str("10").unwrap();
+
+        assert_eq!(
+            LiteralValue::text("hello".to_string()).display_value(),
+            "\"hello\""
+        );
+        assert_eq!(LiteralValue::number(ten).display_value(), "10");
+        assert_eq!(
+            LiteralValue::boolean(BooleanValue::True).display_value(),
+            "true"
+        );
+        assert_eq!(
+            LiteralValue::boolean(BooleanValue::False).display_value(),
+            "false"
+        );
+        // 10% stored as 0.10 ratio with "percent" unit
+        let ten_percent_ratio = LiteralValue::ratio(
+            Decimal::from_str("0.10").unwrap(),
+            Some("percent".to_string()),
+        );
+        // ratio with "percent" unit should display as percent
+        assert_eq!(ten_percent_ratio.display_value(), "10%");
+
+        let time = TimeValue {
+            hour: 14,
+            minute: 30,
+            second: 0,
+            timezone: None,
+        };
+        let time_display = LiteralValue::time(time).display_value();
+        assert!(time_display.contains("14"));
+        assert!(time_display.contains("30"));
+    }
+
+    #[test]
+    fn test_literal_value_time_type() {
+        let time = TimeValue {
+            hour: 14,
+            minute: 30,
+            second: 0,
+            timezone: None,
+        };
+        assert_eq!(LiteralValue::time(time).lemma_type.name(), "time");
+    }
+
+    #[test]
+    fn test_datetime_value_display() {
+        let dt = DateTimeValue {
+            year: 2024,
+            month: 12,
+            day: 25,
+            hour: 14,
+            minute: 30,
+            second: 45,
+            timezone: Some(TimezoneValue {
+                offset_hours: 1,
+                offset_minutes: 0,
+            }),
+        };
+        let display = format!("{}", dt);
+        assert!(display.contains("2024"));
+        assert!(display.contains("12"));
+        assert!(display.contains("25"));
+    }
+
+    #[test]
+    fn test_time_value_display() {
+        let time = TimeValue {
+            hour: 14,
+            minute: 30,
+            second: 45,
+            timezone: Some(TimezoneValue {
+                offset_hours: -5,
+                offset_minutes: 30,
+            }),
+        };
+        let display = format!("{}", time);
+        assert!(display.contains("14"));
+        assert!(display.contains("30"));
+        assert!(display.contains("45"));
+    }
+
+    #[test]
+    fn test_timezone_value() {
+        let tz_positive = TimezoneValue {
+            offset_hours: 5,
+            offset_minutes: 30,
+        };
+        assert_eq!(tz_positive.offset_hours, 5);
+        assert_eq!(tz_positive.offset_minutes, 30);
+
+        let tz_negative = TimezoneValue {
+            offset_hours: -8,
+            offset_minutes: 0,
+        };
+        assert_eq!(tz_negative.offset_hours, -8);
+    }
+
+    #[test]
+    fn test_negation_types() {
+        let _ = NegationType::Not;
+    }
+
+    #[test]
+    fn test_veto_expression() {
+        let veto_with_message = VetoExpression {
+            message: Some("Must be over 18".to_string()),
+        };
+        assert_eq!(
+            veto_with_message.message,
+            Some("Must be over 18".to_string())
+        );
+
+        let veto_without_message = VetoExpression { message: None };
+        assert!(veto_without_message.message.is_none());
+    }
+
+    #[test]
+    fn test_expression_get_source_text_with_location() {
+        use crate::{Expression, ExpressionKind, LiteralValue, Source, Span};
+        use std::collections::HashMap;
+
+        let source = "fact value = 42";
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), source.to_string());
+
+        let span = Span {
+            start: 13,
+            end: 15,
+            line: 1,
+            col: 13,
+        };
+        let source_location = Some(Source::new("test.lemma", span, "test"));
+        let expr = Expression::new(
+            ExpressionKind::Literal(LiteralValue::number(rust_decimal::Decimal::new(42, 0))),
+            source_location,
+        );
+
+        assert_eq!(expr.get_source_text(&sources), Some("42".to_string()));
+    }
+
+    #[test]
+    fn test_expression_get_source_text_no_location() {
+        use crate::{Expression, ExpressionKind, LiteralValue};
+        use std::collections::HashMap;
+
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), "fact value = 42".to_string());
+
+        let expr = Expression::new(
+            ExpressionKind::Literal(LiteralValue::number(rust_decimal::Decimal::new(42, 0))),
+            None,
+        );
+
+        assert_eq!(expr.get_source_text(&sources), None);
+    }
+
+    #[test]
+    fn test_expression_get_source_text_source_not_found() {
+        use crate::{Expression, ExpressionKind, LiteralValue, Source, Span};
+        use std::collections::HashMap;
+
+        let sources = HashMap::new();
+        let span = Span {
+            start: 0,
+            end: 5,
+            line: 1,
+            col: 0,
+        };
+        let source_location = Some(Source::new("missing.lemma", span, "test"));
+        let expr = Expression::new(
+            ExpressionKind::Literal(LiteralValue::number(rust_decimal::Decimal::new(42, 0))),
+            source_location,
+        );
+
+        assert_eq!(expr.get_source_text(&sources), None);
     }
 }

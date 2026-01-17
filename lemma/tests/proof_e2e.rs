@@ -147,9 +147,13 @@ rule discount_percentage = 0%
         .expect("discount_percentage rule should exist");
 
     // Verify result - default should match since no unless clauses match
+    // 0% is stored as Ratio(0, Some("percent")) to indicate it's a percentage
     assert_eq!(
         discount_result.result,
-        OperationResult::Value(LiteralValue::Percentage(Decimal::from(0)))
+        OperationResult::Value(LiteralValue::ratio(
+            Decimal::from(0),
+            Some("percent".to_string())
+        ))
     );
 
     // Verify proof exists

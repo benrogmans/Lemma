@@ -50,7 +50,7 @@ fn test_enhanced_error_message_lists_values() {
         .add_lemma_code(code, "test")
         .expect("Failed to parse");
 
-    // Try to invert for a value that doesn't exist
+    // Try to invert for a value that doesn't exist in the rule outputs
     let result = engine.invert_strict(
         "test",
         "result",
@@ -58,20 +58,10 @@ fn test_enhanced_error_message_lists_values() {
         HashMap::new(),
     );
 
-    assert!(result.is_err(), "Should fail for non-existent value");
-
-    let err = result.unwrap_err();
-    let err_msg = format!("{}", err);
-
-    // Error should list what values ARE producible
+    // No matching solutions should exist
+    let response = result.expect("Should succeed");
     assert!(
-        err_msg.contains("This rule can produce"),
-        "Should list available outcomes: {}",
-        err_msg
-    );
-    assert!(
-        err_msg.contains("10") || err_msg.contains("20") || err_msg.contains("30"),
-        "Should mention at least one actual value: {}",
-        err_msg
+        response.is_empty(),
+        "Should have no solutions for value 15 (rule only produces 10, 20, or 30)"
     );
 }

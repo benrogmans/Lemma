@@ -6,7 +6,7 @@
 use crate::evaluation::OperationResult;
 use crate::{
     ArithmeticComputation, ComparisonComputation, DateTimeValue, LiteralValue, TimeValue,
-    TimezoneValue,
+    TimezoneValue, Value,
 };
 use chrono::{
     DateTime, Datelike, Duration as ChronoDuration, FixedOffset, NaiveDate, NaiveDateTime,
@@ -45,12 +45,8 @@ pub fn datetime_arithmetic(
     op: &ArithmeticComputation,
     right: &LiteralValue,
 ) -> OperationResult {
-    match (left, right, op) {
-        (
-            LiteralValue::Date(date),
-            LiteralValue::Unit(crate::NumericUnit::Duration(value, unit)),
-            ArithmeticComputation::Add,
-        ) => {
+    match (&left.value, &right.value, op) {
+        (Value::Date(date), Value::Duration(value, unit), ArithmeticComputation::Add) => {
             let dt = match datetime_value_to_chrono(date) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(Some(msg)),
@@ -84,7 +80,7 @@ pub fn datetime_arithmetic(
                     }
                 }
                 _ => {
-                    let seconds = crate::parsing::units::duration_to_seconds(*value, unit);
+                    let seconds = super::units::duration_to_seconds(*value, unit);
                     let duration = match seconds_to_chrono_duration(seconds) {
                         Ok(d) => d,
                         Err(msg) => return OperationResult::Veto(Some(msg)),
@@ -96,14 +92,13 @@ pub fn datetime_arithmetic(
                 }
             };
 
-            OperationResult::Value(LiteralValue::Date(chrono_to_datetime_value(new_dt)))
+            OperationResult::Value(LiteralValue::date_with_type(
+                chrono_to_datetime_value(new_dt),
+                left.lemma_type.clone(),
+            ))
         }
 
-        (
-            LiteralValue::Date(date),
-            LiteralValue::Unit(crate::NumericUnit::Duration(value, unit)),
-            ArithmeticComputation::Subtract,
-        ) => {
+        (Value::Date(date), Value::Duration(value, unit), ArithmeticComputation::Subtract) => {
             let dt = match datetime_value_to_chrono(date) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(Some(msg)),
@@ -137,7 +132,7 @@ pub fn datetime_arithmetic(
                     }
                 }
                 _ => {
-                    let seconds = crate::parsing::units::duration_to_seconds(*value, unit);
+                    let seconds = super::units::duration_to_seconds(*value, unit);
                     let duration = match seconds_to_chrono_duration(seconds) {
                         Ok(d) => d,
                         Err(msg) => return OperationResult::Veto(Some(msg)),
@@ -149,14 +144,13 @@ pub fn datetime_arithmetic(
                 }
             };
 
-            OperationResult::Value(LiteralValue::Date(chrono_to_datetime_value(new_dt)))
+            OperationResult::Value(LiteralValue::date_with_type(
+                chrono_to_datetime_value(new_dt),
+                left.lemma_type.clone(),
+            ))
         }
 
-        (
-            LiteralValue::Date(left_date),
-            LiteralValue::Date(right_date),
-            ArithmeticComputation::Subtract,
-        ) => {
+        (Value::Date(left_date), Value::Date(right_date), ArithmeticComputation::Subtract) => {
             let left_dt = match datetime_value_to_chrono(left_date) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(Some(msg)),
@@ -168,10 +162,59 @@ pub fn datetime_arithmetic(
             let duration = left_dt - right_dt;
 
             let seconds = Decimal::from(duration.num_seconds());
-            OperationResult::Value(LiteralValue::Unit(crate::NumericUnit::Duration(
-                seconds,
-                crate::DurationUnit::Second,
-            )))
+            OperationResult::Value(LiteralValue::duration(seconds, crate::DurationUnit::Second))
+        }
+
+        (Value::Date(date), Value::Time(time), ArithmeticComputation::Subtract) => {
+            // Date - Time: Create a datetime from the date's date components and the time's time components
+            // Then subtract to get the duration
+            let date_dt = match datetime_value_to_chrono(date) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            // Create a datetime using the date's date components and the time's time components
+            let naive_date = match NaiveDate::from_ymd_opt(date.year, date.month, date.day) {
+                Some(d) => d,
+                None => {
+                    return OperationResult::Veto(Some(format!(
+                        "Invalid date: {}-{}-{}",
+                        date.year, date.month, date.day
+                    )))
+                }
+            };
+            let naive_time = match NaiveTime::from_hms_opt(
+                time.hour as u32,
+                time.minute as u32,
+                time.second as u32,
+            ) {
+                Some(t) => t,
+                None => {
+                    return OperationResult::Veto(Some(format!(
+                        "Invalid time: {}:{}:{}",
+                        time.hour, time.minute, time.second
+                    )))
+                }
+            };
+            let naive_dt = NaiveDateTime::new(naive_date, naive_time);
+
+            // Use the date's timezone, or UTC if not specified
+            let offset = match create_timezone_offset(&date.timezone) {
+                Ok(o) => o,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let time_dt = match offset.from_local_datetime(&naive_dt).single() {
+                Some(dt) => dt,
+                None => {
+                    return OperationResult::Veto(Some(
+                        "Ambiguous or invalid datetime for timezone".to_string(),
+                    ))
+                }
+            };
+
+            let duration = date_dt - time_dt;
+            let seconds = Decimal::from(duration.num_seconds());
+            OperationResult::Value(LiteralValue::duration(seconds, crate::DurationUnit::Second))
         }
 
         _ => OperationResult::Veto(Some(format!(
@@ -236,8 +279,8 @@ pub fn datetime_comparison(
     op: &ComparisonComputation,
     right: &LiteralValue,
 ) -> OperationResult {
-    match (left, right) {
-        (LiteralValue::Date(l), LiteralValue::Date(r)) => {
+    match (&left.value, &right.value) {
+        (Value::Date(l), Value::Date(r)) => {
             let l_dt = match datetime_value_to_chrono(l) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(Some(msg)),
@@ -259,7 +302,7 @@ pub fn datetime_comparison(
                 ComparisonComputation::NotEqual | ComparisonComputation::IsNot => l_utc != r_utc,
             };
 
-            OperationResult::Value(LiteralValue::Boolean(result.into()))
+            OperationResult::Value(LiteralValue::boolean(result.into()))
         }
 
         _ => OperationResult::Veto(Some("Invalid datetime comparison operands".to_string())),
@@ -272,13 +315,9 @@ pub fn time_arithmetic(
     op: &ArithmeticComputation,
     right: &LiteralValue,
 ) -> OperationResult {
-    match (left, right, op) {
-        (
-            LiteralValue::Time(time),
-            LiteralValue::Unit(crate::NumericUnit::Duration(value, unit)),
-            ArithmeticComputation::Add,
-        ) => {
-            let seconds = crate::parsing::units::duration_to_seconds(*value, unit);
+    match (&left.value, &right.value, op) {
+        (Value::Time(time), Value::Duration(value, unit), ArithmeticComputation::Add) => {
+            let seconds = super::units::duration_to_seconds(*value, unit);
             let time_aware = match time_value_to_chrono_datetime(time) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(Some(msg)),
@@ -288,15 +327,14 @@ pub fn time_arithmetic(
                 Err(msg) => return OperationResult::Veto(Some(msg)),
             };
             let result_dt = time_aware + duration;
-            OperationResult::Value(LiteralValue::Time(chrono_datetime_to_time_value(result_dt)))
+            OperationResult::Value(LiteralValue::time_with_type(
+                chrono_datetime_to_time_value(result_dt),
+                left.lemma_type.clone(),
+            ))
         }
 
-        (
-            LiteralValue::Time(time),
-            LiteralValue::Unit(crate::NumericUnit::Duration(value, unit)),
-            ArithmeticComputation::Subtract,
-        ) => {
-            let seconds = crate::parsing::units::duration_to_seconds(*value, unit);
+        (Value::Time(time), Value::Duration(value, unit), ArithmeticComputation::Subtract) => {
+            let seconds = super::units::duration_to_seconds(*value, unit);
             let time_aware = match time_value_to_chrono_datetime(time) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(Some(msg)),
@@ -306,14 +344,13 @@ pub fn time_arithmetic(
                 Err(msg) => return OperationResult::Veto(Some(msg)),
             };
             let result_dt = time_aware - duration;
-            OperationResult::Value(LiteralValue::Time(chrono_datetime_to_time_value(result_dt)))
+            OperationResult::Value(LiteralValue::time_with_type(
+                chrono_datetime_to_time_value(result_dt),
+                left.lemma_type.clone(),
+            ))
         }
 
-        (
-            LiteralValue::Time(left_time),
-            LiteralValue::Time(right_time),
-            ArithmeticComputation::Subtract,
-        ) => {
+        (Value::Time(left_time), Value::Time(right_time), ArithmeticComputation::Subtract) => {
             let left_dt = match time_value_to_chrono_datetime(left_time) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(Some(msg)),
@@ -327,10 +364,59 @@ pub fn time_arithmetic(
             let diff_seconds = diff.num_seconds();
             let seconds = Decimal::from(diff_seconds);
 
-            OperationResult::Value(LiteralValue::Unit(crate::NumericUnit::Duration(
-                seconds,
-                crate::DurationUnit::Second,
-            )))
+            OperationResult::Value(LiteralValue::duration(seconds, crate::DurationUnit::Second))
+        }
+
+        (Value::Time(time), Value::Date(date), ArithmeticComputation::Subtract) => {
+            // Time - Date: Create a datetime from the date's date components and the time's time components
+            // Then subtract to get the duration
+            let time_dt = match time_value_to_chrono_datetime(time) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            // Create a datetime using the date's date components and the time's time components
+            let naive_date = match NaiveDate::from_ymd_opt(date.year, date.month, date.day) {
+                Some(d) => d,
+                None => {
+                    return OperationResult::Veto(Some(format!(
+                        "Invalid date: {}-{}-{}",
+                        date.year, date.month, date.day
+                    )))
+                }
+            };
+            let naive_time = match NaiveTime::from_hms_opt(
+                time.hour as u32,
+                time.minute as u32,
+                time.second as u32,
+            ) {
+                Some(t) => t,
+                None => {
+                    return OperationResult::Veto(Some(format!(
+                        "Invalid time: {}:{}:{}",
+                        time.hour, time.minute, time.second
+                    )))
+                }
+            };
+            let naive_dt = NaiveDateTime::new(naive_date, naive_time);
+
+            // Use the time's timezone, or UTC if not specified
+            let offset = match create_timezone_offset(&time.timezone) {
+                Ok(o) => o,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let date_dt = match offset.from_local_datetime(&naive_dt).single() {
+                Some(dt) => dt,
+                None => {
+                    return OperationResult::Veto(Some(
+                        "Ambiguous or invalid datetime for timezone".to_string(),
+                    ))
+                }
+            };
+
+            let duration = time_dt - date_dt;
+            let seconds = Decimal::from(duration.num_seconds());
+            OperationResult::Value(LiteralValue::duration(seconds, crate::DurationUnit::Second))
         }
 
         _ => OperationResult::Veto(Some(format!(

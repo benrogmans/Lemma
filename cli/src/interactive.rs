@@ -1,10 +1,15 @@
 use anyhow::{Context, Result};
 use inquire::validator::Validation;
 use inquire::{DateSelect, MultiSelect, Select, Text};
-use lemma::{Engine, FactValue, LemmaType, TypeAnnotation};
+use lemma::{Engine, FactValue, LemmaType};
 use std::collections::HashMap;
 
-pub type InteractiveResult = (String, Option<Vec<String>>, HashMap<String, String>);
+pub type InteractiveResult = (
+    String,
+    Option<Vec<String>>,
+    HashMap<String, String>,
+    Option<String>,
+);
 
 pub fn run_interactive(
     engine: &Engine,
@@ -22,9 +27,10 @@ pub fn run_interactive(
         None => select_rules(engine, &doc)?,
     };
 
+    let target = prompt_target(engine, &doc, &rules)?;
     let facts = prompt_facts(engine, &doc, &rules, provided_facts)?;
 
-    Ok((doc, rules, facts))
+    Ok((doc, rules, facts, target))
 }
 
 fn select_document(engine: &Engine) -> Result<String> {
@@ -91,6 +97,65 @@ fn select_rules(engine: &Engine, doc_name: &str) -> Result<Option<Vec<String>>> 
     }
 }
 
+fn prompt_target(
+    engine: &Engine,
+    doc_name: &str,
+    rule_names: &Option<Vec<String>>,
+) -> Result<Option<String>> {
+    use inquire::Confirm;
+
+    let wants_inversion =
+        Confirm::new("Do you want to invert a rule (find inputs for a target output)?")
+            .with_default(false)
+            .prompt()
+            .context("Failed to get inversion preference")?;
+
+    if !wants_inversion {
+        return Ok(None);
+    }
+
+    let available_rules = engine.get_document_rules(doc_name);
+    if available_rules.is_empty() {
+        return Ok(None);
+    }
+
+    let rule_options: Vec<String> = if let Some(selected_rules) = rule_names {
+        if selected_rules.len() == 1 {
+            vec![selected_rules[0].clone()]
+        } else {
+            available_rules.iter().map(|r| r.name.clone()).collect()
+        }
+    } else {
+        available_rules.iter().map(|r| r.name.clone()).collect()
+    };
+
+    if rule_options.is_empty() {
+        return Ok(None);
+    }
+
+    let selected_rule = if rule_options.len() == 1 {
+        rule_options[0].clone()
+    } else {
+        Select::new("Select rule to invert:", rule_options)
+            .prompt()
+            .context("Failed to select rule")?
+    };
+
+    let target_value = Text::new(&format!(
+        "Enter target for {} (e.g., =100, >50, <200, =veto):",
+        selected_rule
+    ))
+    .with_help_message("Format: =value, >value, <value, >=value, <=value, or =veto")
+    .prompt()
+    .context("Failed to get target value")?;
+
+    if target_value.trim().is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(format!("{}={}", selected_rule, target_value.trim())))
+}
+
 fn prompt_facts(
     engine: &Engine,
     doc_name: &str,
@@ -119,28 +184,73 @@ fn prompt_facts(
     for fact in promptable_facts {
         let fact_name = fact.reference.to_string();
 
-        let (type_ann, default_value) = match &fact.value {
-            FactValue::TypeAnnotation(type_ann) => (type_ann.clone(), None),
-            FactValue::Literal(lit) => {
-                let default = match lit {
-                    lemma::LiteralValue::Text(s) => s.clone(),
-                    _ => format!("{}", lit),
+        let (lemma_type, default_value): (LemmaType, Option<String>) = match &fact.value {
+            FactValue::TypeDeclaration {
+                base,
+                overrides,
+                from: _,
+            } => {
+                // For now, only handle standard types in interactive mode
+                // Custom types will need to be resolved through the Engine
+                let base_specs = match base.as_str() {
+                    "boolean" => lemma::TypeSpecification::boolean(),
+                    "scale" => lemma::TypeSpecification::scale(),
+                    "number" => lemma::TypeSpecification::number(),
+                    "text" => lemma::TypeSpecification::text(),
+                    "date" => lemma::TypeSpecification::date(),
+                    "time" => lemma::TypeSpecification::time(),
+                    "duration" => lemma::TypeSpecification::duration(),
+                    "ratio" => lemma::TypeSpecification::ratio(),
+                    "percent" => lemma::TypeSpecification::ratio(),
+                    _ => {
+                        // Custom type - skip for now (would need Engine to resolve)
+                        eprintln!("Warning: Custom type '{}' not yet supported in interactive mode, skipping", base);
+                        continue;
+                    }
                 };
-                (TypeAnnotation::LemmaType(lit.to_type()), Some(default))
+
+                // Apply overrides if any
+                let mut specs = base_specs;
+                if let Some(ref overrides_vec) = overrides {
+                    for (command, args) in overrides_vec {
+                        specs = specs.apply_override(command, args).map_err(|e| {
+                            anyhow::anyhow!(
+                                "Invalid command '{}' for type '{}': {}",
+                                command,
+                                base,
+                                e
+                            )
+                        })?;
+                    }
+                }
+
+                (LemmaType::without_name(specs), None)
+            }
+            FactValue::Literal(lit) => {
+                let lemma_type = lit.lemma_type.clone();
+                let default_value: Option<String> = None;
+                let type_str = lemma_type.to_string();
+                let input_value = match lemma_type.name() {
+                    "date" => prompt_date_fact(&fact_name, default_value.as_deref())?,
+                    "boolean" => prompt_boolean_fact(&fact_name, default_value.as_deref())?,
+                    _ => prompt_text_fact(
+                        &fact_name,
+                        &type_str,
+                        &lemma_type,
+                        default_value.as_deref(),
+                    )?,
+                };
+                facts.insert(fact_name, input_value);
+                continue;
             }
             FactValue::DocumentReference(_) => continue,
         };
 
-        let type_str = type_ann.to_string();
-
-        let input_value = match &type_ann {
-            TypeAnnotation::LemmaType(LemmaType::Date) => {
-                prompt_date_fact(&fact_name, default_value.as_deref())?
-            }
-            TypeAnnotation::LemmaType(LemmaType::Boolean) => {
-                prompt_boolean_fact(&fact_name, default_value.as_deref())?
-            }
-            _ => prompt_text_fact(&fact_name, &type_str, &type_ann, default_value.as_deref())?,
+        let type_str = lemma_type.to_string();
+        let input_value = match lemma_type.name() {
+            "date" => prompt_date_fact(&fact_name, default_value.as_deref())?,
+            "boolean" => prompt_boolean_fact(&fact_name, default_value.as_deref())?,
+            _ => prompt_text_fact(&fact_name, &type_str, &lemma_type, default_value.as_deref())?,
         };
 
         facts.insert(fact_name, input_value);
@@ -194,7 +304,7 @@ fn prompt_boolean_fact(fact_name: &str, default_value: Option<&str>) -> Result<S
 fn prompt_text_fact(
     fact_name: &str,
     type_str: &str,
-    type_ann: &TypeAnnotation,
+    lemma_type: &LemmaType,
     default_value: Option<&str>,
 ) -> Result<String> {
     let prompt_message = format!("{} [{}]", fact_name, type_str);
@@ -203,7 +313,7 @@ fn prompt_text_fact(
         Some(default) => {
             let help_message = format!(
                 "Press Enter to keep current value, or type a new value. Example: {}",
-                type_ann.example_value()
+                lemma_type.example_value()
             );
 
             Text::new(&prompt_message)
@@ -221,7 +331,7 @@ fn prompt_text_fact(
                 }
             };
 
-            let help_message = format!("Example: {}", type_ann.example_value());
+            let help_message = format!("Example: {}", lemma_type.example_value());
 
             Text::new(&prompt_message)
                 .with_help_message(&help_message)

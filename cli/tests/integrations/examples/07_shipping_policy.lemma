@@ -10,7 +10,7 @@ More specific conditions should come after more general ones.
 """
 
 fact order_total = [number]
-fact item_weight = [mass]
+fact item_weight = [number]
 fact destination_country = "US"
 fact destination_state = "CA"
 fact is_po_box = [boolean]
@@ -24,15 +24,15 @@ rule base_shipping_rate = 35.00
   unless destination_country is "BE" then 25.00
 
 rule weight_surcharge = 0
-  unless item_weight > 5 kilograms then 7.50
-  unless item_weight > 20 kilograms then veto "Item too heavy for standard shipping"
+  unless item_weight > 5 then 7.50
+  unless item_weight > 20 then veto "Item too heavy for standard shipping"
 
 rule po_box_fee = 0
   unless is_po_box then 5.00
 
 rule expedited_fee = 0
   unless is_expedited then 25.00
-  unless is_expedited and item_weight > 10 kilograms then 45.00
+  unless is_expedited and item_weight > 10 then 45.00
 
 rule hazardous_fee = 0
   unless is_hazardous then 50.00

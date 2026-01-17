@@ -92,7 +92,7 @@ rule estimated_delivery_days = 5
 
 rule savings_total = discount_amount? + loyalty_discount?
 
-rule savings_percent = (savings_total? / subtotal?) in percentage
+rule savings_percent = (savings_total? / subtotal?) in percent
 
 rule is_high_value = price_per_unit? > 50
 
@@ -190,7 +190,7 @@ rule estimated_total_days = processing_days? + order.estimated_delivery_days?
 
 rule discount_within_cap = order.savings_percent? <= config.max_discount_cap
 
-rule margin = ((order.grand_total? - order.subtotal?) / order.grand_total?) in percentage
+rule margin = ((order.grand_total? - order.subtotal?) / order.grand_total?) in percent
 
 rule is_profitable = margin? >= config.min_profitable_margin
 

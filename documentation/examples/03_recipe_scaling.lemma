@@ -2,9 +2,12 @@ doc recipe_scaling
 """
 Recipe Scaling
 
-Demonstrates calculations and unit conversions.
+Demonstrates calculations and scaling.
 Scale a recipe up or down based on servings needed.
 """
+
+type temperature = scale
+  -> unit fahrenheit 1.0
 
 fact original_servings = [number]
 fact desired_servings = [number]
@@ -32,4 +35,3 @@ rule oven_temperature = 350 fahrenheit
   unless recipe_name == "chocolate_cake" then 350 fahrenheit
   unless recipe_name == "bread" then 375 fahrenheit
   unless recipe_name != "chocolate_cake" and recipe_name != "bread" then veto "Unknown recipe name"
-

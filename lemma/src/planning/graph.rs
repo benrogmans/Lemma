@@ -1,11 +1,16 @@
+use crate::parsing::ast::Span;
 use crate::parsing::source::Source;
+use crate::planning::types::{ResolvedDocumentTypes, TypeRegistry};
 use crate::semantic::{
-    ArithmeticComputation, ConversionTarget, Expression, ExpressionKind, FactPath, FactValue,
-    LemmaDoc, LemmaFact, LemmaRule, LemmaType, PathSegment, RulePath, TypeAnnotation,
+    standard_boolean, standard_duration, standard_number, standard_ratio, ArithmeticComputation,
+    ConversionTarget, Expression, ExpressionKind, FactPath, FactReference, FactValue, LemmaDoc,
+    LemmaFact, LemmaRule, LemmaType, LiteralValue, PathSegment, RulePath, TypeDef,
+    TypeSpecification,
 };
 use crate::LemmaError;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct Graph {
@@ -13,6 +18,8 @@ pub(crate) struct Graph {
     rules: IndexMap<RulePath, RuleNode>,
     sources: HashMap<String, String>,
     execution_order: Vec<RulePath>,
+    all_docs: HashMap<String, LemmaDoc>, // Store all_docs for document traversal and context determination
+    resolved_types: HashMap<String, ResolvedDocumentTypes>,
 }
 
 impl Graph {
@@ -34,6 +41,148 @@ impl Graph {
 
     pub(crate) fn execution_order(&self) -> &[RulePath] {
         &self.execution_order
+    }
+
+    pub(crate) fn all_docs(&self) -> &HashMap<String, LemmaDoc> {
+        &self.all_docs
+    }
+
+    pub(crate) fn resolved_types(&self) -> &HashMap<String, ResolvedDocumentTypes> {
+        &self.resolved_types
+    }
+
+    /// Resolve a standard type by name (helper function)
+    fn resolve_standard_type(name: &str) -> Option<TypeSpecification> {
+        match name {
+            "boolean" => Some(TypeSpecification::boolean()),
+            "scale" => Some(TypeSpecification::scale()),
+            "number" => Some(TypeSpecification::number()),
+            "ratio" => Some(TypeSpecification::ratio()),
+            "text" => Some(TypeSpecification::text()),
+            "date" => Some(TypeSpecification::date()),
+            "time" => Some(TypeSpecification::time()),
+            "duration" => Some(TypeSpecification::duration()),
+            "percent" => Some(TypeSpecification::ratio()),
+            _ => None,
+        }
+    }
+
+    /// Resolve a TypeDeclaration to a LemmaType
+    ///
+    /// This resolves both type references (e.g., [money]) and inline type definitions
+    /// (e.g., [money -> minimal 100] or [number -> minimal 100]) to their final LemmaType.
+    ///
+    /// # Arguments
+    /// * `type_decl` - The TypeDeclaration to resolve
+    /// * `context_doc` - The document context where this type is being used
+    pub(crate) fn resolve_type_declaration(
+        &self,
+        type_decl: &FactValue,
+        context_doc: &str,
+    ) -> Result<LemmaType, LemmaError> {
+        let FactValue::TypeDeclaration {
+            base,
+            overrides,
+            from,
+        } = type_decl
+        else {
+            return Err(LemmaError::engine(
+                "Expected TypeDeclaration",
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(""),
+                context_doc,
+                1,
+                None::<String>,
+            ));
+        };
+
+        // Get resolved types for the source document
+        // If 'from' is specified, resolve from that document; otherwise use context_doc
+        let source_doc = from.as_deref().unwrap_or(context_doc);
+
+        // Try to resolve as a standard type first (number, boolean, etc.)
+        let base_lemma_type = if let Some(specs) = Self::resolve_standard_type(base) {
+            // Standard type - create LemmaType without name
+            LemmaType::without_name(specs)
+        } else {
+            // Custom type - look up in resolved types
+            let document_types = self.resolved_types.get(source_doc).ok_or_else(|| {
+                LemmaError::engine(
+                    format!("Resolved types not found for document '{}'", source_doc),
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(""),
+                    context_doc,
+                    1,
+                    None::<String>,
+                )
+            })?;
+
+            document_types
+                .named_types
+                .get(base)
+                .ok_or_else(|| {
+                    LemmaError::engine(
+                        format!("Unknown type: '{}'. Type must be defined before use.", base),
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<unknown>",
+                        Arc::from(""),
+                        context_doc,
+                        1,
+                        None::<String>,
+                    )
+                })?
+                .clone()
+        };
+
+        // Apply inline overrides if any
+        let mut specs = base_lemma_type.specifications;
+        if let Some(ref overrides_vec) = overrides {
+            for (command, args) in overrides_vec {
+                specs = specs.apply_override(command, args).map_err(|e| {
+                    LemmaError::engine(
+                        format!("Invalid command '{}' for type '{}': {}", command, base, e),
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<unknown>",
+                        Arc::from(""),
+                        context_doc,
+                        1,
+                        None::<String>,
+                    )
+                })?;
+            }
+        }
+
+        // Create final LemmaType
+        // For standard types, use without_name(); for custom types, preserve the name
+        let lemma_type = if let Some(name) = base_lemma_type.name {
+            LemmaType::new(name, specs)
+        } else {
+            LemmaType::without_name(specs)
+        };
+
+        Ok(lemma_type)
     }
 
     fn topological_sort(&self) -> Result<Vec<RulePath>, Vec<LemmaError>> {
@@ -88,14 +237,28 @@ impl Graph {
                 .filter(|rule| !result.contains(rule))
                 .cloned()
                 .collect();
-            return Err(vec![LemmaError::CircularDependency(format!(
-                "Circular dependency detected. Rules involved: {}",
-                missing
-                    .iter()
-                    .map(|rule| rule.rule.clone())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))]);
+            return Err(vec![LemmaError::circular_dependency(
+                format!(
+                    "Circular dependency detected. Rules involved: {}",
+                    missing
+                        .iter()
+                        .map(|rule| rule.rule.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                std::sync::Arc::from(""),
+                "<unknown>",
+                1,
+                vec![],
+                None::<String>,
+            )]);
         }
 
         Ok(result)
@@ -105,14 +268,15 @@ impl Graph {
 #[derive(Debug)]
 pub(crate) struct RuleNode {
     /// First branch has condition=None (default expression), subsequent branches are unless clauses.
-    /// Expressions are already converted (FactReference -> FactPath, RuleReference -> RulePath).
+    /// Expressions are already converted (Reference -> FactPath, RuleReference -> RulePath).
     pub branches: Vec<(Option<Expression>, Expression)>,
     pub source: Source,
 
     pub depends_on_rules: HashSet<RulePath>,
 
     /// Computed type of this rule's result (populated during validation)
-    pub rule_type: Option<LemmaType>,
+    /// Every rule MUST have a type (Lemma is strictly typed)
+    pub rule_type: LemmaType,
 }
 
 struct GraphBuilder<'a> {
@@ -120,6 +284,7 @@ struct GraphBuilder<'a> {
     rules: IndexMap<RulePath, RuleNode>,
     sources: HashMap<String, String>,
     all_docs: HashMap<String, &'a LemmaDoc>,
+    resolved_types: HashMap<String, ResolvedDocumentTypes>,
     errors: Vec<LemmaError>,
 }
 
@@ -129,15 +294,26 @@ impl Graph {
         all_docs: &[LemmaDoc],
         sources: HashMap<String, String>,
     ) -> Result<Graph, Vec<LemmaError>> {
+        // Create and populate TypeRegistry
+        let mut type_registry = TypeRegistry::new();
+        for doc in all_docs {
+            for type_def in &doc.types {
+                if let Err(e) = type_registry.register_type(&doc.name, type_def.clone()) {
+                    return Err(vec![e]);
+                }
+            }
+        }
+
         let mut builder = GraphBuilder {
             facts: IndexMap::new(),
             rules: IndexMap::new(),
             sources,
             all_docs: all_docs.iter().map(|doc| (doc.name.clone(), doc)).collect(),
+            resolved_types: HashMap::new(),
             errors: Vec::new(),
         };
 
-        builder.build_document(main_doc, Vec::new())?;
+        builder.build_document(main_doc, Vec::new(), &mut type_registry)?;
 
         if !builder.errors.is_empty() {
             return Err(builder.errors);
@@ -148,6 +324,11 @@ impl Graph {
             rules: builder.rules,
             sources: builder.sources,
             execution_order: Vec::new(),
+            all_docs: all_docs
+                .iter()
+                .map(|doc| (doc.name.clone(), doc.clone()))
+                .collect(),
+            resolved_types: builder.resolved_types,
         };
 
         // Validate and compute execution order
@@ -188,8 +369,9 @@ impl<'a> GraphBuilder<'a> {
         &mut self,
         doc: &'a LemmaDoc,
         current_segments: Vec<PathSegment>,
+        type_registry: &mut TypeRegistry,
     ) -> Result<(), Vec<LemmaError>> {
-        self.build_document_with_overrides(doc, current_segments, HashMap::new())
+        self.build_document_with_overrides(doc, current_segments, HashMap::new(), type_registry)
     }
 
     fn resolve_path_segments_with_overrides(
@@ -203,8 +385,20 @@ impl<'a> GraphBuilder<'a> {
             let fact_ref = match current_facts_map.get(segment) {
                 Some(f) => f,
                 None => {
-                    self.errors
-                        .push(LemmaError::Engine(format!("Fact '{}' not found", segment)));
+                    self.errors.push(LemmaError::engine(
+                        format!("Fact '{}' not found", segment),
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<unknown>",
+                        Arc::from(""),
+                        "<unknown>",
+                        1,
+                        None::<String>,
+                    ));
                     return None;
                 }
             };
@@ -221,10 +415,20 @@ impl<'a> GraphBuilder<'a> {
                 let next_doc = match self.all_docs.get(doc_name) {
                     Some(d) => d,
                     None => {
-                        self.errors.push(LemmaError::Engine(format!(
-                            "Document '{}' not found",
-                            doc_name
-                        )));
+                        self.errors.push(LemmaError::engine(
+                            format!("Document '{}' not found", doc_name),
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                            "<unknown>",
+                            Arc::from(""),
+                            "<unknown>",
+                            1,
+                            None::<String>,
+                        ));
                         return None;
                     }
                 };
@@ -238,10 +442,20 @@ impl<'a> GraphBuilder<'a> {
                     .map(|f| (f.reference.fact.clone(), f))
                     .collect();
             } else {
-                self.errors.push(LemmaError::Engine(format!(
-                    "Fact '{}' is not a document reference",
-                    segment
-                )));
+                self.errors.push(LemmaError::engine(
+                    format!("Fact '{}' is not a document reference", segment),
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
                 return None;
             }
         }
@@ -253,6 +467,8 @@ impl<'a> GraphBuilder<'a> {
         fact: &'a LemmaFact,
         current_segments: &[PathSegment],
         pending_overrides: &HashMap<String, Vec<(&'a LemmaFact, usize)>>,
+        current_doc: &'a LemmaDoc,
+        type_registry: &mut TypeRegistry,
     ) {
         // Skip override facts - they are applied when the original fact is processed
         // The override's value will be used instead of the original fact's value
@@ -268,18 +484,102 @@ impl<'a> GraphBuilder<'a> {
 
         // Check for duplicates
         if self.facts.contains_key(&fact_path) {
-            self.errors.push(LemmaError::Engine(format!(
-                "Duplicate fact '{}'",
-                fact_path.fact
-            )));
+            self.errors.push(LemmaError::engine(
+                format!("Duplicate fact '{}'", fact_path.fact),
+                fact.source_location
+                    .as_ref()
+                    .map(|s| s.span.clone())
+                    .unwrap_or(Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    }),
+                fact.source_location
+                    .as_ref()
+                    .map(|s| s.attribute.as_str())
+                    .unwrap_or("<unknown>"),
+                fact.source_location
+                    .as_ref()
+                    .map(|s| Arc::from(s.doc_name.as_str()))
+                    .unwrap_or_else(|| Arc::from("")),
+                fact.source_location
+                    .as_ref()
+                    .map(|s| s.doc_name.as_str())
+                    .unwrap_or("<unknown>"),
+                1,
+                None::<String>,
+            ));
             return;
         }
 
         let current_depth = current_segments.len();
 
         match &fact.value {
-            FactValue::Literal(_) | FactValue::TypeAnnotation(_) => {
-                // Check if there's an override for this literal/type fact
+            FactValue::Literal(_) => {
+                // Check if there's an override for this literal fact
+                let effective_value = if let Some(overrides) =
+                    pending_overrides.get(&fact.reference.fact)
+                {
+                    // An override applies when we've traversed all its segments from the entry point
+                    // entry_depth + segments.len() == current_depth
+                    if let Some((override_fact, _)) = overrides.iter().find(|(o, entry_depth)| {
+                        *entry_depth + o.reference.segments.len() == current_depth
+                            && o.reference.fact == fact.reference.fact
+                    }) {
+                        override_fact.value.clone()
+                    } else {
+                        fact.value.clone()
+                    }
+                } else {
+                    fact.value.clone()
+                };
+
+                let stored_fact = LemmaFact {
+                    reference: fact.reference.clone(),
+                    value: effective_value,
+                    source_location: fact.source_location.clone(),
+                };
+                self.facts.insert(fact_path, stored_fact);
+            }
+            FactValue::TypeDeclaration {
+                base,
+                overrides: inline_overrides,
+                from,
+            } => {
+                // Only register as anonymous type if we have 'from' OR 'overrides'
+                // If both are None, it's just a direct type reference [coffee], not an anonymous type
+                let is_anonymous_type = from.is_some() || inline_overrides.is_some();
+
+                if is_anonymous_type {
+                    // Register anonymous type in TypeRegistry
+                    // Create a TypeDef for this anonymous type
+                    let anonymous_type_def = TypeDef::Inline {
+                        parent: base.clone(),
+                        overrides: inline_overrides.clone(),
+                        fact_ref: fact.reference.clone(),
+                        from: from.clone(),
+                    };
+
+                    // Determine document context for registration
+                    let doc_name = if current_segments.is_empty() {
+                        current_doc.name.clone()
+                    } else {
+                        current_segments
+                            .last()
+                            .expect("Internal error: current_segments is not empty but last() returned None")
+                            .doc
+                            .clone()
+                    };
+
+                    // Register the anonymous type
+                    if let Err(e) = type_registry.register_type(&doc_name, anonymous_type_def) {
+                        self.errors.push(e);
+                    }
+                }
+                // If not an anonymous type, just store the fact - it will be resolved directly as a named type later
+
+                // Check if there's an override for this type fact
                 let effective_value = if let Some(overrides) =
                     pending_overrides.get(&fact.reference.fact)
                 {
@@ -329,10 +629,20 @@ impl<'a> GraphBuilder<'a> {
                 let nested_doc = match self.all_docs.get(&effective_doc_name) {
                     Some(d) => d,
                     None => {
-                        self.errors.push(LemmaError::Engine(format!(
-                            "Document '{}' not found",
-                            effective_doc_name
-                        )));
+                        self.errors.push(LemmaError::engine(
+                            format!("Document '{}' not found", effective_doc_name),
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                            "<unknown>",
+                            Arc::from(""),
+                            "<unknown>",
+                            1,
+                            None::<String>,
+                        ));
                         return;
                     }
                 };
@@ -378,6 +688,7 @@ impl<'a> GraphBuilder<'a> {
                     nested_doc,
                     nested_segments,
                     nested_overrides,
+                    type_registry,
                 );
             }
         }
@@ -388,6 +699,7 @@ impl<'a> GraphBuilder<'a> {
         doc: &'a LemmaDoc,
         current_segments: Vec<PathSegment>,
         override_map: HashMap<String, Vec<(&'a LemmaFact, usize)>>,
+        type_registry: &mut TypeRegistry,
     ) -> Result<(), Vec<LemmaError>> {
         // Merge overrides with additional pending overrides from this document
         // New overrides from this doc get entry_depth = current_segments.len()
@@ -445,9 +757,29 @@ impl<'a> GraphBuilder<'a> {
             .collect();
 
         for fact in &doc.facts {
-            self.add_fact_with_overrides(fact, &current_segments, &pending_overrides);
+            self.add_fact_with_overrides(
+                fact,
+                &current_segments,
+                &pending_overrides,
+                doc,
+                type_registry,
+            );
         }
 
+        // Resolve types for this document after all facts are registered
+        if !self.resolved_types.contains_key(&doc.name) {
+            match type_registry.resolve_types(&doc.name) {
+                Ok(document_types) => {
+                    self.resolved_types.insert(doc.name.clone(), document_types);
+                }
+                Err(e) => {
+                    self.errors.push(e);
+                    return Err(self.errors.clone());
+                }
+            }
+        }
+
+        // Process all rules (now has access to resolved types)
         for rule in &doc.rules {
             self.add_rule(
                 rule,
@@ -464,7 +796,7 @@ impl<'a> GraphBuilder<'a> {
     fn add_rule(
         &mut self,
         rule: &LemmaRule,
-        current_doc: &LemmaDoc,
+        current_doc: &'a LemmaDoc,
         facts_map: &HashMap<String, &'a LemmaFact>,
         current_segments: &[PathSegment],
         effective_doc_refs: &HashMap<String, String>,
@@ -475,10 +807,20 @@ impl<'a> GraphBuilder<'a> {
         };
 
         if self.rules.contains_key(&rule_path) {
-            self.errors.push(LemmaError::Engine(format!(
-                "Duplicate rule '{}'",
-                rule_path.rule
-            )));
+            self.errors.push(LemmaError::engine(
+                format!("Duplicate rule '{}'", rule_path.rule),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(""),
+                "<unknown>",
+                1,
+                None::<String>,
+            ));
             return;
         }
 
@@ -539,7 +881,7 @@ impl<'a> GraphBuilder<'a> {
                 )
             }),
             depends_on_rules,
-            rule_type: None,
+            rule_type: LemmaType::veto_type(), // Temporary placeholder - will be computed in compute_all_rule_types
         };
 
         self.rules.insert(rule_path, rule_node);
@@ -550,7 +892,7 @@ impl<'a> GraphBuilder<'a> {
         &mut self,
         left: &Expression,
         right: &Expression,
-        current_doc: &LemmaDoc,
+        current_doc: &'a LemmaDoc,
         facts_map: &HashMap<String, &'a LemmaFact>,
         current_segments: &[PathSegment],
         depends_on_rules: &mut HashSet<RulePath>,
@@ -578,13 +920,121 @@ impl<'a> GraphBuilder<'a> {
     fn convert_expression_and_extract_dependencies(
         &mut self,
         expr: &Expression,
-        current_doc: &LemmaDoc,
+        current_doc: &'a LemmaDoc,
         facts_map: &HashMap<String, &'a LemmaFact>,
         current_segments: &[PathSegment],
         depends_on_rules: &mut HashSet<RulePath>,
         effective_doc_refs: &HashMap<String, String>,
     ) -> Option<Expression> {
         match &expr.kind {
+            ExpressionKind::Reference(r) => {
+                // Convert Reference to FactReference and recurse
+                let fact_ref_expr = Expression {
+                    kind: ExpressionKind::FactReference(r.to_fact_reference()),
+                    source_location: expr.source_location.clone(),
+                };
+                self.convert_expression_and_extract_dependencies(
+                    &fact_ref_expr,
+                    current_doc,
+                    facts_map,
+                    current_segments,
+                    depends_on_rules,
+                    effective_doc_refs,
+                )
+            }
+            ExpressionKind::UnresolvedUnitLiteral(number, unit_name) => {
+                // Get resolved types for current document from self.resolved_types
+                // Types must be resolved by this point (after facts, before rules)
+                // Even empty documents get resolved types (with empty maps) - so get() should never fail
+                let document_types = self.resolved_types.get(&current_doc.name).unwrap_or_else(|| {
+                    panic!(
+                        "Internal error: resolved types not found for document '{}' - types should have been resolved before processing rules (even empty documents have resolved types with empty maps)",
+                        current_doc.name
+                    )
+                });
+
+                // Lookup unit in unit_index
+                let lemma_type = match document_types.unit_index.get(unit_name) {
+                    Some(lemma_type) => lemma_type.clone(),
+                    None => {
+                        self.errors.push(LemmaError::engine(
+                            format!(
+                                "Unknown unit '{}' in document '{}'",
+                                unit_name, current_doc.name
+                            ),
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                            "<unknown>",
+                            Arc::from(""),
+                            "<unknown>",
+                            1,
+                            None::<String>,
+                        ));
+                        return None;
+                    }
+                };
+
+                // Get unit value and convert to base units
+                match &lemma_type.specifications {
+                    TypeSpecification::Scale { units, .. } => {
+                        let unit = units
+                            .iter()
+                            .find(|unit| unit.name.eq_ignore_ascii_case(unit_name))
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "Internal error: unit_index returned type '{}' that doesn't have unit '{}'",
+                                    lemma_type.name.as_ref().unwrap_or(&"<anonymous>".to_string()),
+                                    unit_name
+                                )
+                            });
+
+                        let value_in_base_units = *number * unit.value;
+                        let literal_value = LiteralValue::scale_with_type(
+                            value_in_base_units,
+                            Some(unit_name.clone()), // Store the unit name with the value
+                            lemma_type.clone(),
+                        );
+                        Some(Expression {
+                            kind: ExpressionKind::Literal(literal_value),
+                            source_location: expr.source_location.clone(),
+                        })
+                    }
+                    TypeSpecification::Ratio { units, .. } => {
+                        let unit = units
+                            .iter()
+                            .find(|unit| unit.name.eq_ignore_ascii_case(unit_name))
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "Internal error: unit_index returned type '{}' that doesn't have unit '{}'",
+                                    lemma_type.name.as_ref().unwrap_or(&"<anonymous>".to_string()),
+                                    unit_name
+                                )
+                            });
+
+                        let value_in_base_units = *number * unit.value;
+                        let literal_value = LiteralValue::ratio_with_type(
+                            value_in_base_units,
+                            Some(unit_name.clone()), // Store the unit name with the value
+                            lemma_type.clone(),
+                        );
+                        Some(Expression {
+                            kind: ExpressionKind::Literal(literal_value),
+                            source_location: expr.source_location.clone(),
+                        })
+                    }
+                    _ => {
+                        panic!(
+                            "Internal error: unit_index returned non-Number/Ratio type '{}' for unit '{}'",
+                            lemma_type.name.as_ref().unwrap_or(&"<anonymous>".to_string()),
+                            unit_name
+                        );
+                    }
+                }
+            }
             ExpressionKind::FactReference(fact_ref) => {
                 let segments = self.resolve_path_segments_with_overrides(
                     &fact_ref.segments,
@@ -600,15 +1050,38 @@ impl<'a> GraphBuilder<'a> {
                     // Check if this is actually a rule name - provide helpful error message
                     let is_rule = current_doc.rules.iter().any(|r| r.name == fact_ref.fact);
                     if is_rule {
-                        self.errors.push(LemmaError::Engine(format!(
-                            "'{}' is a rule, not a fact. Use '{}?' to reference rules",
-                            fact_ref.fact, fact_ref.fact
-                        )));
+                        self.errors.push(LemmaError::engine(
+                            format!(
+                                "'{}' is a rule, not a fact. Use '{}?' to reference rules",
+                                fact_ref.fact, fact_ref.fact
+                            ),
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                            "<unknown>",
+                            Arc::from(""),
+                            "<unknown>",
+                            1,
+                            None::<String>,
+                        ));
                     } else {
-                        self.errors.push(LemmaError::Engine(format!(
-                            "Fact '{}' not found",
-                            fact_ref.fact
-                        )));
+                        self.errors.push(LemmaError::engine(
+                            format!("Fact '{}' not found", fact_ref.fact),
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                            "<unknown>",
+                            Arc::from(""),
+                            "<unknown>",
+                            1,
+                            None::<String>,
+                        ));
                     }
                     return None;
                 }
@@ -656,7 +1129,7 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    kind: ExpressionKind::LogicalAnd(Box::new(l), Box::new(r)),
+                    kind: ExpressionKind::LogicalAnd(Arc::new(l), Arc::new(r)),
                     source_location: expr.source_location.clone(),
                 })
             }
@@ -672,7 +1145,7 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    kind: ExpressionKind::LogicalOr(Box::new(l), Box::new(r)),
+                    kind: ExpressionKind::LogicalOr(Arc::new(l), Arc::new(r)),
                     source_location: expr.source_location.clone(),
                 })
             }
@@ -688,7 +1161,7 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    kind: ExpressionKind::Arithmetic(Box::new(l), op.clone(), Box::new(r)),
+                    kind: ExpressionKind::Arithmetic(Arc::new(l), op.clone(), Arc::new(r)),
                     source_location: expr.source_location.clone(),
                 })
             }
@@ -704,7 +1177,7 @@ impl<'a> GraphBuilder<'a> {
                     effective_doc_refs,
                 )?;
                 Some(Expression {
-                    kind: ExpressionKind::Comparison(Box::new(l), op.clone(), Box::new(r)),
+                    kind: ExpressionKind::Comparison(Arc::new(l), op.clone(), Arc::new(r)),
                     source_location: expr.source_location.clone(),
                 })
             }
@@ -718,8 +1191,9 @@ impl<'a> GraphBuilder<'a> {
                     depends_on_rules,
                     effective_doc_refs,
                 )?;
+
                 Some(Expression {
-                    kind: ExpressionKind::UnitConversion(Box::new(converted_value), target.clone()),
+                    kind: ExpressionKind::UnitConversion(Arc::new(converted_value), target.clone()),
                     source_location: expr.source_location.clone(),
                 })
             }
@@ -735,7 +1209,7 @@ impl<'a> GraphBuilder<'a> {
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::LogicalNegation(
-                        Box::new(converted_operand),
+                        Arc::new(converted_operand),
                         neg_type.clone(),
                     ),
                     source_location: expr.source_location.clone(),
@@ -754,7 +1228,7 @@ impl<'a> GraphBuilder<'a> {
                 Some(Expression {
                     kind: ExpressionKind::MathematicalComputation(
                         op.clone(),
-                        Box::new(converted_operand),
+                        Arc::new(converted_operand),
                     ),
                     source_location: expr.source_location.clone(),
                 })
@@ -766,7 +1240,9 @@ impl<'a> GraphBuilder<'a> {
                 Some(expr.clone())
             }
 
-            ExpressionKind::Literal(_) | ExpressionKind::Veto(_) => Some(expr.clone()),
+            ExpressionKind::Literal(_) => Some(expr.clone()),
+
+            ExpressionKind::Veto(_) => Some(expr.clone()),
         }
     }
 }
@@ -794,61 +1270,100 @@ fn compute_all_rule_types(
         let (_, default_result) = &branches[0];
         let default_type = compute_expression_type(default_result, graph, &computed_types, errors);
 
-        let mut all_branch_types: Vec<Option<LemmaType>> = vec![default_type.clone()];
+        // Collect all non-Veto types from branches
+        // Veto is a runtime exception, not a type that should affect the rule's type
+        // If a branch returns Veto, it's handled at runtime, but the rule type is the non-Veto type
+        let mut non_veto_type: Option<LemmaType> = None;
+        if !default_type.is_veto() {
+            non_veto_type = Some(default_type.clone());
+        }
 
         for (branch_index, (condition, result)) in branches.iter().enumerate().skip(1) {
             if let Some(condition_expression) = condition {
                 let condition_type =
                     compute_expression_type(condition_expression, graph, &computed_types, errors);
-                if let Some(cond_type) = condition_type {
-                    if cond_type != LemmaType::Boolean {
-                        errors.push(LemmaError::Engine(format!(
+                if !condition_type.is_boolean() {
+                    errors.push(LemmaError::engine(
+                        format!(
                             "Unless clause condition in rule '{}' must be boolean, got {:?}",
-                            rule_path.rule, cond_type
-                        )));
-                    }
+                            rule_path.rule, condition_type
+                        ),
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<unknown>",
+                        Arc::from(""),
+                        "<unknown>",
+                        1,
+                        None::<String>,
+                    ));
                 }
             }
 
             let result_type = compute_expression_type(result, graph, &computed_types, errors);
-            all_branch_types.push(result_type.clone());
+            if !result_type.is_veto() {
+                // If we haven't seen a non-Veto type yet, store it
+                // All non-Veto branches must have the same type (enforced by validate_branch_type_consistency)
+                if non_veto_type.is_none() {
+                    non_veto_type = Some(result_type.clone());
+                }
+            }
 
-            validate_branch_type_consistency(
-                rule_path,
-                branch_index,
-                &default_type,
-                &result_type,
-                errors,
-            );
+            if default_type != result_type && !default_type.is_veto() && !result_type.is_veto() {
+                let rule_node = graph.rules().get(rule_path).expect("Rule should exist");
+                let rule_source = &rule_node.source;
+                let default_expr = &branches[0].1;
+
+                let mut location_parts = vec![format!(
+                    "{}:{}:{}",
+                    rule_source.attribute, rule_source.span.line, rule_source.span.col
+                )];
+
+                if let Some(loc) = &default_expr.source_location {
+                    location_parts.push(format!(
+                        "default branch at {}:{}:{}",
+                        loc.attribute, loc.span.line, loc.span.col
+                    ));
+                }
+                if let Some(loc) = &result.source_location {
+                    location_parts.push(format!(
+                        "unless clause {} at {}:{}:{}",
+                        branch_index, loc.attribute, loc.span.line, loc.span.col
+                    ));
+                }
+
+                errors.push(LemmaError::semantic(
+                    format!("Type mismatch in rule '{}' in document '{}' ({}): default branch returns {}, but unless clause {} returns {}",
+                    rule_path.rule,
+                    rule_source.doc_name,
+                    location_parts.join(", "),
+                    default_type.name(),
+                    branch_index,
+                    result_type.name()),
+                    rule_source.span.clone(),
+                    rule_source.attribute.clone(),
+                    std::sync::Arc::from(""),
+                    rule_source.doc_name.clone(),
+                    1,
+                    None::<String>,
+                ));
+            }
         }
 
-        if let Some(rule_type) = default_type {
-            computed_types.insert(rule_path.clone(), rule_type);
-        } else if let Some(branch_type_value) = all_branch_types.iter().flatten().next() {
-            computed_types.insert(rule_path.clone(), branch_type_value.clone());
-        }
+        // Every rule MUST have a type (Lemma is strictly typed)
+        // If all branches return Veto, the rule type is Veto
+        // Otherwise, use the first non-Veto type (typically the default branch)
+        // All non-Veto branches must have the same type (enforced by validate_branch_type_consistency)
+        let rule_type = non_veto_type.unwrap_or_else(LemmaType::veto_type);
+        computed_types.insert(rule_path.clone(), rule_type);
     }
 
     for (rule_path, rule_type) in computed_types {
         if let Some(rule_node) = graph.rules_mut().get_mut(&rule_path) {
-            rule_node.rule_type = Some(rule_type);
-        }
-    }
-}
-
-fn validate_branch_type_consistency(
-    rule_path: &RulePath,
-    branch_index: usize,
-    default_type: &Option<LemmaType>,
-    branch_type: &Option<LemmaType>,
-    errors: &mut Vec<LemmaError>,
-) {
-    if let (Some(default), Some(branch)) = (default_type, branch_type) {
-        if default != branch {
-            errors.push(LemmaError::Engine(format!(
-                "Type mismatch in rule '{}': default branch returns {:?}, but unless clause {} returns {:?}",
-                rule_path.rule, default, branch_index, branch
-            )));
+            rule_node.rule_type = rule_type;
         }
     }
 }
@@ -858,140 +1373,347 @@ fn compute_expression_type(
     graph: &Graph,
     computed_rule_types: &HashMap<RulePath, LemmaType>,
     errors: &mut Vec<LemmaError>,
-) -> Option<LemmaType> {
+) -> LemmaType {
     match &expression.kind {
-        ExpressionKind::Literal(literal_value) => Some(literal_value.to_type()),
-        ExpressionKind::FactPath(fact_path) => compute_fact_type(fact_path, graph, errors),
-        ExpressionKind::RulePath(rule_path) => computed_rule_types.get(rule_path).cloned(),
+        ExpressionKind::Literal(literal_value) => literal_value.get_type().clone(),
+        ExpressionKind::FactPath(fact_path) => {
+            compute_fact_type(fact_path, graph, computed_rule_types, errors)
+        }
+        ExpressionKind::RulePath(rule_path) => {
+            computed_rule_types.get(rule_path).cloned().unwrap_or_else(|| {
+                errors.push(LemmaError::engine(
+                    format!("Rule '{}' referenced before its type was computed - this indicates a bug in topological ordering", rule_path.rule),
+                    Span { start: 0, end: 0, line: 1, col: 0 },
+                    "<unknown>",
+                    Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
+                LemmaType::veto_type()
+            })
+        }
         ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
             let left_type = compute_expression_type(left, graph, computed_rule_types, errors);
             let right_type = compute_expression_type(right, graph, computed_rule_types, errors);
-            validate_logical_operands(left_type.as_ref(), right_type.as_ref(), errors);
-            Some(LemmaType::Boolean)
+            validate_logical_operands(&left_type, &right_type, errors);
+            standard_boolean().clone()
         }
         ExpressionKind::LogicalNegation(operand, _) => {
             let operand_type = compute_expression_type(operand, graph, computed_rule_types, errors);
-            validate_logical_operand(operand_type.as_ref(), errors);
-            Some(LemmaType::Boolean)
+            validate_logical_operand(&operand_type, errors);
+            standard_boolean().clone()
         }
         ExpressionKind::Comparison(left, _, right) => {
             let left_type = compute_expression_type(left, graph, computed_rule_types, errors);
             let right_type = compute_expression_type(right, graph, computed_rule_types, errors);
-            validate_comparison_types(left_type.as_ref(), right_type.as_ref(), errors);
-            Some(LemmaType::Boolean)
+            validate_comparison_types(&left_type, &right_type, errors);
+            standard_boolean().clone()
         }
         ExpressionKind::Arithmetic(left, operator, right) => {
             let left_type = compute_expression_type(left, graph, computed_rule_types, errors);
             let right_type = compute_expression_type(right, graph, computed_rule_types, errors);
-            validate_arithmetic_types(left_type.as_ref(), right_type.as_ref(), operator, errors);
+            validate_arithmetic_types(&left_type, &right_type, operator, errors);
             compute_arithmetic_result_type(left_type, right_type, operator)
         }
         ExpressionKind::UnitConversion(source_expression, target) => {
             let source_type =
                 compute_expression_type(source_expression, graph, computed_rule_types, errors);
-            validate_unit_conversion_types(source_type.as_ref(), target, errors);
-            Some(conversion_target_to_type(target))
+            validate_unit_conversion_types(&source_type, target, errors);
+            conversion_target_to_type(target)
         }
         ExpressionKind::MathematicalComputation(_, operand) => {
             let operand_type = compute_expression_type(operand, graph, computed_rule_types, errors);
-            validate_mathematical_operand(operand_type.as_ref(), errors);
-            Some(LemmaType::Number)
+            validate_mathematical_operand(&operand_type, errors);
+            standard_number().clone()
         }
-        ExpressionKind::Veto(_) => None,
-        ExpressionKind::FactReference(_) | ExpressionKind::RuleReference(_) => {
-            errors.push(LemmaError::Engine(
-                "Internal error: FactReference/RuleReference should be converted during graph building".to_string()
-            ));
-            None
+        ExpressionKind::Veto(_) => LemmaType::veto_type(),
+        ExpressionKind::Reference(_)
+        | ExpressionKind::FactReference(_)
+        | ExpressionKind::RuleReference(_) => {
+            panic!("Internal error: Reference/FactReference/RuleReference should be converted during graph building");
+        }
+        ExpressionKind::UnresolvedUnitLiteral(_, _) => {
+            panic!(
+                "UnresolvedUnitLiteral found during type computation - this is a bug: unresolved units should be resolved during graph building in convert_expression_and_extract_dependencies"
+            );
         }
     }
 }
 
 fn validate_logical_operands(
-    left_type: Option<&LemmaType>,
-    right_type: Option<&LemmaType>,
+    left_type: &LemmaType,
+    right_type: &LemmaType,
     errors: &mut Vec<LemmaError>,
 ) {
-    if let Some(left) = left_type {
-        if *left != LemmaType::Boolean {
-            errors.push(LemmaError::Engine(format!(
+    if !left_type.is_boolean() {
+        errors.push(LemmaError::engine(
+            format!(
                 "Logical operation requires boolean operands, got {:?} for left operand",
-                left
-            )));
-        }
+                left_type
+            ),
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "<unknown>",
+            Arc::from(""),
+            "<unknown>",
+            1,
+            None::<String>,
+        ));
     }
-    if let Some(right) = right_type {
-        if *right != LemmaType::Boolean {
-            errors.push(LemmaError::Engine(format!(
+    if !right_type.is_boolean() {
+        errors.push(LemmaError::engine(
+            format!(
                 "Logical operation requires boolean operands, got {:?} for right operand",
-                right
-            )));
-        }
+                right_type
+            ),
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "<unknown>",
+            Arc::from(""),
+            "<unknown>",
+            1,
+            None::<String>,
+        ));
     }
 }
 
-fn validate_logical_operand(operand_type: Option<&LemmaType>, errors: &mut Vec<LemmaError>) {
-    if let Some(operand) = operand_type {
-        if *operand != LemmaType::Boolean {
-            errors.push(LemmaError::Engine(format!(
+fn validate_logical_operand(operand_type: &LemmaType, errors: &mut Vec<LemmaError>) {
+    if !operand_type.is_boolean() {
+        errors.push(LemmaError::engine(
+            format!(
                 "Logical negation requires boolean operand, got {:?}",
-                operand
-            )));
-        }
+                operand_type
+            ),
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "<unknown>",
+            Arc::from(""),
+            "<unknown>",
+            1,
+            None::<String>,
+        ));
     }
 }
 
 fn validate_comparison_types(
-    left_type: Option<&LemmaType>,
-    right_type: Option<&LemmaType>,
+    left_type: &LemmaType,
+    right_type: &LemmaType,
     errors: &mut Vec<LemmaError>,
 ) {
-    if let (Some(left), Some(right)) = (left_type, right_type) {
-        if left == right {
-            return;
-        }
-        if left.is_numeric() && right.is_numeric() {
-            return;
-        }
-        errors.push(LemmaError::Engine(format!(
-            "Cannot compare {:?} with {:?}",
-            left, right
-        )));
+    if left_type == right_type {
+        return;
     }
+
+    // CRITICAL: If both operands are different Scale types, reject ALL comparisons
+    if left_type.is_scale() && right_type.is_scale() && left_type.name != right_type.name {
+        errors.push(LemmaError::engine(
+            format!("Cannot compare different scale types: {} and {}. Operations between different scale types produce ambiguous result units.", left_type.name(), right_type.name()),
+            Span { start: 0, end: 0, line: 1, col: 0 },
+            "<unknown>",
+            Arc::from(""),
+            "<unknown>",
+            1,
+            None::<String>,
+        ));
+        return;
+    }
+
+    // Allow comparison between compatible numeric types (Scale, Number, Ratio, Duration)
+    // Scale and Number are both numeric and can be compared with each other
+    // But different Scale types are rejected above
+    if (left_type.is_scale()
+        || left_type.is_number()
+        || left_type.is_duration()
+        || left_type.is_ratio())
+        && (right_type.is_scale()
+            || right_type.is_number()
+            || right_type.is_duration()
+            || right_type.is_ratio())
+    {
+        return;
+    }
+    // Allow comparison between text types (including anonymous types with their base type)
+    // Anonymous types extending a base text type are comparable with that base type
+    // Options validation happens at runtime, not during type checking
+    if left_type.is_text() && right_type.is_text() {
+        return;
+    }
+    errors.push(LemmaError::engine(
+        format!("Cannot compare {:?} with {:?}", left_type, right_type),
+        Span {
+            start: 0,
+            end: 0,
+            line: 1,
+            col: 0,
+        },
+        "<unknown>",
+        Arc::from(""),
+        "<unknown>",
+        1,
+        None::<String>,
+    ));
 }
 
 fn validate_arithmetic_types(
-    left_type: Option<&LemmaType>,
-    right_type: Option<&LemmaType>,
+    left_type: &LemmaType,
+    right_type: &LemmaType,
     operator: &ArithmeticComputation,
     errors: &mut Vec<LemmaError>,
 ) {
-    if let (Some(left), Some(right)) = (left_type, right_type) {
-        if left.is_temporal() || right.is_temporal() {
-            if compute_temporal_arithmetic_result_type(left, right, operator).is_none() {
-                errors.push(LemmaError::Engine(format!(
+    // Check for temporal arithmetic (Date/Time)
+    if left_type.is_date() || left_type.is_time() || right_type.is_date() || right_type.is_time() {
+        // Validate temporal arithmetic is supported
+        // compute_temporal_arithmetic_result_type will return a fallback if unsupported
+        // but we check here to provide a better error message
+        let result = compute_temporal_arithmetic_result_type(left_type, right_type, operator);
+        // If result is duration but operator is not Subtract/Add, it's invalid
+        if result.is_duration()
+            && !matches!(
+                operator,
+                ArithmeticComputation::Subtract | ArithmeticComputation::Add
+            )
+        {
+            errors.push(LemmaError::engine(
+                format!(
                     "Invalid date/time arithmetic: {:?} {:?} {:?}",
-                    left, operator, right
-                )));
-            }
-            return;
+                    left_type, operator, right_type
+                ),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(""),
+                "<unknown>",
+                1,
+                None::<String>,
+            ));
         }
-        if !left.is_numeric() {
-            errors.push(LemmaError::Engine(format!(
-                "Arithmetic operation requires numeric operands, got {:?} for left operand",
-                left
-            )));
-            return;
-        }
-        if !right.is_numeric() {
-            errors.push(LemmaError::Engine(format!(
-                "Arithmetic operation requires numeric operands, got {:?} for right operand",
-                right
-            )));
-            return;
-        }
-        validate_arithmetic_operator_constraints(left, right, operator, errors);
+        return;
     }
+
+    // CRITICAL: If both operands are different Scale types, reject ALL arithmetic operations
+    if left_type.is_scale() && right_type.is_scale() && left_type.name != right_type.name {
+        errors.push(LemmaError::engine(
+            format!("Cannot {} different scale types: {} and {}. Operations between different scale types produce ambiguous result units.",
+                match operator {
+                    ArithmeticComputation::Add => "add",
+                    ArithmeticComputation::Subtract => "subtract",
+                    ArithmeticComputation::Multiply => "multiply",
+                    ArithmeticComputation::Divide => "divide",
+                    ArithmeticComputation::Modulo => "modulo",
+                    ArithmeticComputation::Power => "power",
+                },
+                left_type.name(),
+                right_type.name()
+            ),
+            Span { start: 0, end: 0, line: 1, col: 0 },
+            "<unknown>",
+            Arc::from(""),
+            "<unknown>",
+            1,
+            None::<String>,
+        ));
+        return;
+    }
+
+    // Check for valid arithmetic type combinations
+    // Scale, Number, Ratio, and Duration can participate in arithmetic
+    // but with specific constraints handled in validate_arithmetic_operator_constraints
+    let left_valid = left_type.is_scale()
+        || left_type.is_number()
+        || left_type.is_duration()
+        || left_type.is_ratio();
+    let right_valid = right_type.is_scale()
+        || right_type.is_number()
+        || right_type.is_duration()
+        || right_type.is_ratio();
+
+    if !left_valid {
+        errors.push(LemmaError::engine(
+            format!(
+                "Arithmetic operation requires numeric operands, got {:?} for left operand",
+                left_type
+            ),
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "<unknown>",
+            Arc::from(""),
+            "<unknown>",
+            1,
+            None::<String>,
+        ));
+        return;
+    }
+    if !right_valid {
+        errors.push(LemmaError::engine(
+            format!(
+                "Arithmetic operation requires numeric operands, got {:?} for right operand",
+                right_type
+            ),
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "<unknown>",
+            Arc::from(""),
+            "<unknown>",
+            1,
+            None::<String>,
+        ));
+        return;
+    }
+
+    validate_arithmetic_operator_constraints(left_type, right_type, operator, errors);
+}
+
+/// Check if two types share the same base type (e.g., both are Scale, both are Number, both are Ratio, etc.)
+/// Scale and Number are considered to share base (both numeric) for compatibility
+fn types_share_base(left: &LemmaType, right: &LemmaType) -> bool {
+    use crate::TypeSpecification;
+    matches!(
+        (&left.specifications, &right.specifications),
+        (
+            TypeSpecification::Scale { .. },
+            TypeSpecification::Scale { .. }
+        ) | (
+            TypeSpecification::Number { .. },
+            TypeSpecification::Number { .. }
+        ) | (
+            TypeSpecification::Scale { .. },
+            TypeSpecification::Number { .. }
+        ) | (
+            TypeSpecification::Number { .. },
+            TypeSpecification::Scale { .. }
+        ) | (
+            TypeSpecification::Duration { .. },
+            TypeSpecification::Duration { .. }
+        ) | (
+            TypeSpecification::Ratio { .. },
+            TypeSpecification::Ratio { .. }
+        )
+    )
 }
 
 fn validate_arithmetic_operator_constraints(
@@ -1002,65 +1724,217 @@ fn validate_arithmetic_operator_constraints(
 ) {
     match operator {
         ArithmeticComputation::Modulo => {
-            if left_type.is_unit() || right_type.is_unit() {
-                errors.push(LemmaError::Engine(format!(
-                    "Modulo operation not supported for unit types: {:?} % {:?}",
-                    left_type, right_type
-                )));
+            if left_type.is_duration() || right_type.is_duration() {
+                errors.push(LemmaError::engine(
+                    format!(
+                        "Modulo operation not supported for duration types: {:?} % {:?}",
+                        left_type, right_type
+                    ),
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
+            } else if !right_type.is_number() {
+                // Modulo: dividend % divisor
+                // Dividend can be Scale or Number (custom or standard)
+                // Divisor must be Number (dimensionless, not Scale)
+                // Allow: Scale % Number → result is Scale
+                // Allow: Number % Number → result is Number
+                // Error: Scale % Scale (divisor must be dimensionless)
+                // Error: Number % Scale (divisor must be dimensionless)
+                errors.push(LemmaError::engine(
+                    format!(
+                        "Modulo divisor must be a dimensionless number (not a scale type), got {}",
+                        right_type.name()
+                    ),
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
             }
+            // If right is Number, allow it (left can be Scale or Number)
         }
-        ArithmeticComputation::Multiply | ArithmeticComputation::Divide => {}
+        ArithmeticComputation::Multiply | ArithmeticComputation::Divide => {
+            // Multiply/Divide: Different Scale types are already rejected in validate_arithmetic_types
+            // At this point, if both are Scale, they must be the same Scale type
+            // Same Scale type operations are allowed (e.g., money * money, money / money)
+            // Different Scale types with units are rejected above (money * length)
+            // Scale * Number, Number * Scale, Number * Number are all allowed
+            // (Result type computed in compute_arithmetic_result_type)
+        }
         ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-            if left_type.is_unit() && right_type.is_unit() && left_type != right_type {
-                errors.push(LemmaError::Engine(format!(
-                    "Cannot add/subtract different unit categories: {:?} and {:?}",
-                    left_type, right_type
-                )));
+            // Different Scale types are already rejected in validate_arithmetic_types
+            // At this point, if both are Scale, they must be the same Scale type
+
+            // - Same type: allowed (exact equality) - handled by early return
+            // - Scale + Number: allowed (result is Scale)
+            // - Number + Scale: allowed (result is Scale)
+            // - Number + Number: allowed (result is Number)
+            // - Number + Ratio: allowed (result is Number with ratio semantics)
+            // - Scale + Ratio: allowed (result is Scale with ratio semantics)
+            // - Standard numeric type + custom Scale/Number (same base): allowed
+            if left_type != right_type {
+                // Check if Scale + Number or Number + Scale (allowed)
+                let is_scale_number = (left_type.is_scale() && right_type.is_number())
+                    || (left_type.is_number() && right_type.is_scale());
+
+                // Check if Scale op Ratio or Ratio op Scale (allowed)
+                let is_scale_ratio = (left_type.is_scale() && right_type.is_ratio())
+                    || (left_type.is_ratio() && right_type.is_scale());
+
+                // Check if Number op Ratio or Ratio op Number (allowed with ratio semantics)
+                let is_number_ratio = (left_type.is_number() && right_type.is_ratio())
+                    || (left_type.is_ratio() && right_type.is_number());
+
+                if !is_scale_number && !is_scale_ratio && !is_number_ratio {
+                    // Not the special case - check if one is standard and the other is a custom type with same base
+                    // Scale and Number share the same base (both numeric)
+                    let one_is_standard = left_type.name.is_none() || right_type.name.is_none();
+                    let other_is_custom = left_type.name.is_some() || right_type.name.is_some();
+                    let share_base = types_share_base(left_type, right_type);
+
+                    // Check if both are custom types with same base (both Number or both Scale)
+                    // Different Scale types are already rejected in validate_arithmetic_types
+                    // So if both are Scale here, they must be the same Scale type (handled by early return)
+                    // But different custom Number types with same base should be allowed
+                    let both_custom_same_base =
+                        left_type.name.is_some() && right_type.name.is_some() && share_base;
+
+                    if !(both_custom_same_base
+                        || (one_is_standard && other_is_custom && share_base))
+                    {
+                        // Not the special case - types are incompatible
+                        errors.push(LemmaError::engine(
+                            format!("Cannot {} values with different types: {} and {}. Add/Subtract require the exact same type, scale + number (or number + scale), scale + ratio (or ratio + scale), number + ratio (or ratio + number), or numeric types that share the same base.",
+                                match operator {
+                                    ArithmeticComputation::Add => "add",
+                                    ArithmeticComputation::Subtract => "subtract",
+                                    _ => unreachable!(),
+                                },
+                                left_type.name(),
+                                right_type.name()
+                            ),
+                            Span { start: 0, end: 0, line: 1, col: 0 },
+                            "<unknown>",
+                            Arc::from(""),
+                            "<unknown>",
+                            1,
+                            None::<String>,
+                        ));
+                    }
+                    // If is_scale_number, is_scale_ratio, is_number_ratio, both_custom_same_base, or (one_is_standard && other_is_custom && share_base), allow it
+                }
+            } else {
+                // Types are equal - always allowed (same custom type or both standard types)
             }
         }
         ArithmeticComputation::Power => {
-            if *right_type != LemmaType::Number && *right_type != LemmaType::Percentage {
-                errors.push(LemmaError::Engine(format!(
-                    "Power exponent must be a number, got {:?}",
-                    right_type
-                )));
+            // Power: base ^ exponent
+            // Base can be Scale or Number (custom or standard)
+            // Exponent must be Number or Ratio (dimensionless, not Scale)
+            // Allow: Scale ^ Number → result is Scale
+            // Allow: Number ^ Number → result is Number
+            // Error: Scale ^ Scale (exponent must be dimensionless)
+            // Error: Number ^ Scale (exponent must be dimensionless)
+            if !right_type.is_number() && !right_type.is_ratio() {
+                errors.push(LemmaError::engine(
+                    format!(
+                        "Power exponent must be a dimensionless number (not a scale type), got {}",
+                        right_type.name()
+                    ),
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
             }
+            // If right is Number or Ratio, allow it (left can be Scale or Number)
         }
     }
 }
 
 fn validate_unit_conversion_types(
-    source_type: Option<&LemmaType>,
+    source_type: &LemmaType,
     target: &ConversionTarget,
     errors: &mut Vec<LemmaError>,
 ) {
     let target_type = conversion_target_to_type(target);
-    if let Some(source) = source_type {
-        if *source != target_type && *source != LemmaType::Number {
-            errors.push(LemmaError::Engine(format!(
-                "Cannot convert {:?} to {:?}",
-                source, target_type
-            )));
-        }
+    // Allow conversion from Scale/Number to compatible numeric types
+    // Scale and Number are both numeric and can be converted to each other
+    if source_type.specifications != target_type.specifications
+        && !source_type.is_scale()
+        && !source_type.is_number()
+    {
+        errors.push(LemmaError::engine(
+            format!("Cannot convert {:?} to {:?}", source_type, target_type),
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "<unknown>",
+            Arc::from(""),
+            "<unknown>",
+            1,
+            None::<String>,
+        ));
     }
 }
 
-fn validate_mathematical_operand(operand_type: Option<&LemmaType>, errors: &mut Vec<LemmaError>) {
-    if let Some(operand) = operand_type {
-        if !operand.is_numeric() {
-            errors.push(LemmaError::Engine(format!(
-                "Mathematical function requires numeric operand, got {:?}",
-                operand
-            )));
-        }
+fn validate_mathematical_operand(operand_type: &LemmaType, errors: &mut Vec<LemmaError>) {
+    // Mathematical functions work on Scale and Number (not Ratio or Duration)
+    // Both Scale and Number are numeric types suitable for mathematical operations
+    if !operand_type.is_scale() && !operand_type.is_number() {
+        errors.push(LemmaError::engine(
+            format!(
+                "Mathematical function requires numeric operand (scale or number), got {:?}",
+                operand_type
+            ),
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "<unknown>",
+            Arc::from(""),
+            "<unknown>",
+            1,
+            None::<String>,
+        ));
     }
 }
 
 fn compute_fact_type(
     fact_path: &FactPath,
     graph: &Graph,
+    _computed_rule_types: &HashMap<RulePath, LemmaType>,
     errors: &mut Vec<LemmaError>,
-) -> Option<LemmaType> {
+) -> LemmaType {
     let fact = match graph.facts().get(fact_path) {
         Some(fact) => fact,
         None => {
@@ -1069,109 +1943,290 @@ fn compute_fact_type(
                 rule: fact_path.fact.clone(),
             };
             if graph.rules().contains_key(&potential_rule_path) {
-                errors.push(LemmaError::Engine(format!(
-                    "'{}' is a rule, not a fact. Use '{}?' to reference rules",
-                    fact_path.fact, fact_path.fact
-                )));
+                errors.push(LemmaError::engine(
+                    format!(
+                        "'{}' is a rule, not a fact. Use '{}?' to reference rules",
+                        fact_path.fact, fact_path.fact
+                    ),
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
             } else {
-                errors.push(LemmaError::Engine(format!(
-                    "Fact '{}' not found",
-                    fact_path
-                )));
+                errors.push(LemmaError::engine(
+                    format!("Fact '{}' not found", fact_path),
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
             }
-            return None;
+            return LemmaType::veto_type();
         }
     };
     match &fact.value {
-        FactValue::Literal(literal_value) => Some(literal_value.to_type()),
-        FactValue::TypeAnnotation(TypeAnnotation::LemmaType(lemma_type)) => {
-            Some(lemma_type.clone())
+        FactValue::Literal(literal_value) => literal_value.get_type().clone(),
+        FactValue::TypeDeclaration { .. } => {
+            // Use TypeRegistry to determine document context and resolve type
+            let fact_ref = FactReference {
+                segments: fact_path.segments.iter().map(|s| s.fact.clone()).collect(),
+                fact: fact_path.fact.clone(),
+            };
+
+            // For anonymous types, check if they exist in resolved_types
+            // Anonymous types are already fully resolved during type resolution, so just use them directly
+            for (_doc_name, document_types) in graph.resolved_types.iter() {
+                if let Some(resolved_type) = document_types.anonymous_types.get(&fact_ref) {
+                    // Anonymous type already resolved - return it directly
+                    return resolved_type.clone();
+                }
+            }
+
+            // Find which document this fact belongs to
+            // Use the document from the first segment (set during graph building)
+            // This is more reliable than searching, especially for nested facts
+            let context_doc: &str = if let Some(first_segment) = fact_path.segments.first() {
+                // Use the document from the segment - this is set during graph building
+                &first_segment.doc
+            } else {
+                // Top-level fact - search for it in all documents
+                // Top-level fact - search directly
+                let fact_ref_segments: Vec<String> = vec![];
+                let mut found_doc: Option<&str> = None;
+                for (doc_name, doc) in graph.all_docs() {
+                    for orig_fact in &doc.facts {
+                        if orig_fact.reference.segments == fact_ref_segments
+                            && orig_fact.reference.fact == fact_path.fact
+                        {
+                            found_doc = Some(doc_name);
+                            break;
+                        }
+                    }
+                    if found_doc.is_some() {
+                        break;
+                    }
+                }
+                match found_doc {
+                    Some(doc) => doc,
+                    None => {
+                        errors.push(LemmaError::engine(
+                            format!("Cannot determine document context for fact '{}'", fact_path),
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                            "<unknown>",
+                            Arc::from(""),
+                            "<unknown>",
+                            1,
+                            None::<String>,
+                        ));
+                        return LemmaType::veto_type();
+                    }
+                }
+            };
+
+            // Use Graph::resolve_type_declaration which uses TypeRegistry
+            // For direct type references [coffee] (from=None, overrides=None), this looks up the named type directly
+            match graph.resolve_type_declaration(&fact.value, context_doc) {
+                Ok(lemma_type) => {
+                    // For direct type references, we should get the actual named type back
+                    lemma_type
+                }
+                Err(e) => {
+                    errors.push(e);
+                    LemmaType::veto_type()
+                }
+            }
         }
-        FactValue::DocumentReference(_) => None,
+        FactValue::DocumentReference(_) => {
+            errors.push(LemmaError::engine(
+                format!(
+                    "Cannot compute type for document reference fact '{}'",
+                    fact_path
+                ),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(""),
+                "<unknown>",
+                1,
+                None::<String>,
+            ));
+            LemmaType::veto_type()
+        }
     }
 }
 
 fn compute_arithmetic_result_type(
-    left_type: Option<LemmaType>,
-    right_type: Option<LemmaType>,
+    left_type: LemmaType,
+    right_type: LemmaType,
     operator: &ArithmeticComputation,
-) -> Option<LemmaType> {
-    match (left_type.as_ref(), right_type.as_ref()) {
-        (Some(left), Some(right)) => {
-            if left.is_temporal() || right.is_temporal() {
-                return compute_temporal_arithmetic_result_type(left, right, operator);
-            }
-            if left == right {
-                return left_type;
-            }
-            if *left == LemmaType::Number && *right == LemmaType::Percentage {
-                return match operator {
-                    ArithmeticComputation::Multiply
-                    | ArithmeticComputation::Add
-                    | ArithmeticComputation::Subtract => Some(LemmaType::Number),
-                    _ => None,
-                };
-            }
-            if *left == LemmaType::Percentage && *right == LemmaType::Number {
-                return match operator {
-                    ArithmeticComputation::Multiply => Some(LemmaType::Number),
-                    ArithmeticComputation::Divide => Some(LemmaType::Percentage),
-                    _ => None,
-                };
-            }
-            if *left == LemmaType::Number {
-                return right_type;
-            }
-            if *right == LemmaType::Number {
-                return left_type;
-            }
-            Some(LemmaType::Number)
-        }
-        _ => None,
+) -> LemmaType {
+    let left = &left_type;
+    let right = &right_type;
+
+    if left.is_date() || left.is_time() || right.is_date() || right.is_time() {
+        return compute_temporal_arithmetic_result_type(left, right, operator);
     }
+    if left == right {
+        return left_type;
+    }
+
+    // Handle Scale + Number or Number + Scale: result is Scale (Scale has units, Number doesn't)
+    if left.is_scale() && right.is_number() {
+        return left_type; // Scale + Number → Scale
+    }
+    if left.is_number() && right.is_scale() {
+        return right_type; // Number + Scale → Scale
+    }
+
+    // Handle Ratio operations
+    // Ratio op Number or Number op Ratio → Number
+    if left.is_ratio() && right.is_number() {
+        return standard_number().clone(); // Ratio op Number → Number
+    }
+    if left.is_number() && right.is_ratio() {
+        return standard_number().clone(); // Number op Ratio → Number
+    }
+    // Ratio op Ratio → Ratio
+    if left.is_ratio() && right.is_ratio() {
+        return left_type; // Ratio op Ratio → Ratio (preserve Ratio type)
+    }
+    // Ratio op Scale or Scale op Ratio → Scale
+    if left.is_ratio() && right.is_scale() {
+        return right_type; // Ratio op Scale → Scale
+    }
+    if left.is_scale() && right.is_ratio() {
+        return left_type; // Scale op Ratio → Scale
+    }
+
+    // Handle standard (no name) + custom (has name) case: result is the custom type
+    // This handles: STANDARD_SCALE + custom_scale, STANDARD_NUMBER + custom_scale, etc.
+    // ORDER DOES NOT MATTER for Add/Subtract/Multiply/Divide - both orders return the custom type
+    // For Power/Modulo, validation ensures correct order (custom op standard)
+    let one_is_standard_one_is_custom = left_type.name.is_none() != right_type.name.is_none();
+
+    if one_is_standard_one_is_custom {
+        // One is standard, one is custom → result is the custom type (order-independent)
+        // Return whichever operand is the custom type (has a name)
+        if left_type.name.is_some() {
+            return left_type;
+        } else {
+            return right_type;
+        }
+    }
+
+    // Both are numeric types, check if we can preserve custom type
+    // If we reach here, validation should have ensured types are compatible
+    if left.name.is_some() && right.name.is_some() {
+        // Both are custom types
+        // Different Scale types are already rejected in validate_arithmetic_types
+        // But different custom Number types with same base are allowed
+        // Return the left type (result type is left operand for same base operations)
+        return left_type;
+    }
+
+    // Both are standard types (both name.is_none()) - determine result type
+    // Scale op Scale (same type) → Scale
+    // Number op Number → Number
+    // Scale op Number → Scale (handled above)
+    // Number op Scale → Scale (handled above)
+    if left.is_scale() && right.is_scale() {
+        // Both are Scale - they must be the same type (validation ensures this)
+        return left_type;
+    }
+    if left.is_number() && right.is_number() {
+        // Both are Number
+        return standard_number().clone();
+    }
+
+    // Fallback (should not reach here if validation is correct)
+    standard_number().clone()
 }
 
 fn compute_temporal_arithmetic_result_type(
     left: &LemmaType,
     right: &LemmaType,
     operator: &ArithmeticComputation,
-) -> Option<LemmaType> {
+) -> LemmaType {
     match operator {
         ArithmeticComputation::Subtract => {
-            if left.is_temporal() && right.is_temporal() {
-                return Some(LemmaType::Duration);
+            // Date - Date → Duration (supported)
+            if left.is_date() && right.is_date() {
+                return standard_duration().clone();
             }
-            if left.is_temporal() && *right == LemmaType::Duration {
-                return Some(left.clone());
+            // Time - Time → Duration (supported)
+            if left.is_time() && right.is_time() {
+                return standard_duration().clone();
+            }
+            // Date - Time → Duration (supported: datetime - time = duration)
+            if left.is_date() && right.is_time() {
+                return standard_duration().clone();
+            }
+            // Time - Date → Duration (supported: time - datetime = duration)
+            if left.is_time() && right.is_date() {
+                return standard_duration().clone();
+            }
+            // Date - Duration → Date (supported)
+            if left.is_date() && right.is_duration() {
+                return left.clone();
+            }
+            // Time - Duration → Time (supported)
+            if left.is_time() && right.is_duration() {
+                return left.clone();
             }
         }
         ArithmeticComputation::Add => {
-            if left.is_temporal() && *right == LemmaType::Duration {
-                return Some(left.clone());
+            // Date + Duration → Date (supported)
+            if left.is_date() && right.is_duration() {
+                return left.clone();
             }
-            if *left == LemmaType::Duration && right.is_temporal() {
-                return Some(right.clone());
+            // Time + Duration → Time (supported)
+            if left.is_time() && right.is_duration() {
+                return left.clone();
+            }
+            // Duration + Date → Date (supported)
+            if left.is_duration() && right.is_date() {
+                return right.clone();
+            }
+            // Duration + Time → Time (supported)
+            if left.is_duration() && right.is_time() {
+                return right.clone();
             }
         }
         _ => {}
     }
-    None
+    // Unsupported temporal arithmetic - validation should have caught this
+    // Return fallback type (validation will fail due to errors vector)
+    standard_duration().clone()
 }
 
 fn conversion_target_to_type(target: &ConversionTarget) -> LemmaType {
     match target {
-        ConversionTarget::Mass(_) => LemmaType::Mass,
-        ConversionTarget::Length(_) => LemmaType::Length,
-        ConversionTarget::Volume(_) => LemmaType::Volume,
-        ConversionTarget::Duration(_) => LemmaType::Duration,
-        ConversionTarget::Temperature(_) => LemmaType::Temperature,
-        ConversionTarget::Power(_) => LemmaType::Power,
-        ConversionTarget::Force(_) => LemmaType::Force,
-        ConversionTarget::Pressure(_) => LemmaType::Pressure,
-        ConversionTarget::Energy(_) => LemmaType::Energy,
-        ConversionTarget::Frequency(_) => LemmaType::Frequency,
-        ConversionTarget::Data(_) => LemmaType::Data,
-        ConversionTarget::Percentage => LemmaType::Percentage,
+        ConversionTarget::Duration(_) => standard_duration().clone(),
+        ConversionTarget::Percentage => standard_ratio().clone(),
     }
 }
 
@@ -1180,10 +2235,23 @@ fn validate_all_rule_references_exist(graph: &Graph, errors: &mut Vec<LemmaError
     for (rule_path, rule_node) in graph.rules() {
         for dependency in &rule_node.depends_on_rules {
             if !existing_rules.contains(dependency) {
-                errors.push(LemmaError::Engine(format!(
-                    "Rule '{}' references non-existent rule '{}'",
-                    rule_path.rule, dependency.rule
-                )));
+                errors.push(LemmaError::engine(
+                    format!(
+                        "Rule '{}' references non-existent rule '{}'",
+                        rule_path.rule, dependency.rule
+                    ),
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
             }
         }
     }
@@ -1227,10 +2295,23 @@ fn validate_document_interfaces(
                     doc.rules.iter().map(|rule| rule.name.clone()).collect();
                 for required_rule in required_rules {
                     if !doc_rule_names.contains(required_rule) {
-                        errors.push(LemmaError::Engine(format!(
-                            "Document '{}' referenced by '{}' is missing required rule '{}'",
-                            doc_name, fact_path, required_rule
-                        )));
+                        errors.push(LemmaError::engine(
+                            format!(
+                                "Document '{}' referenced by '{}' is missing required rule '{}'",
+                                doc_name, fact_path, required_rule
+                            ),
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                            "<unknown>",
+                            Arc::from(""),
+                            "<unknown>",
+                            1,
+                            None::<String>,
+                        ));
                     }
                 }
             }
@@ -1269,10 +2350,13 @@ mod tests {
     #[test]
     fn test_build_simple_graph() {
         let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(25.into())));
+        doc = doc.add_fact(create_literal_fact(
+            "age",
+            LiteralValue::number(rust_decimal::Decimal::from(25)),
+        ));
         doc = doc.add_fact(create_literal_fact(
             "name",
-            LiteralValue::Text("John".to_string()),
+            LiteralValue::text("John".to_string()),
         ));
 
         let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
@@ -1286,7 +2370,10 @@ mod tests {
     #[test]
     fn test_build_graph_with_rule() {
         let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(25.into())));
+        doc = doc.add_fact(create_literal_fact(
+            "age",
+            LiteralValue::number(rust_decimal::Decimal::from(25)),
+        ));
 
         let age_expr = Expression {
             kind: ExpressionKind::FactReference(FactReference {
@@ -1315,8 +2402,14 @@ mod tests {
     #[test]
     fn test_duplicate_fact() {
         let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(25.into())));
-        doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(30.into())));
+        doc = doc.add_fact(create_literal_fact(
+            "age",
+            LiteralValue::number(rust_decimal::Decimal::from(25)),
+        ));
+        doc = doc.add_fact(create_literal_fact(
+            "age",
+            LiteralValue::number(rust_decimal::Decimal::from(30)),
+        ));
 
         let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
         assert!(result.is_err(), "Should detect duplicate fact");
@@ -1333,13 +2426,13 @@ mod tests {
 
         let rule1 = LemmaRule {
             name: "test_rule".to_string(),
-            expression: create_literal_expr(LiteralValue::Boolean(true.into())),
+            expression: create_literal_expr(LiteralValue::boolean(true.into())),
             unless_clauses: Vec::new(),
             source_location: None,
         };
         let rule2 = LemmaRule {
             name: "test_rule".to_string(),
-            expression: create_literal_expr(LiteralValue::Boolean(false.into())),
+            expression: create_literal_expr(LiteralValue::boolean(false.into())),
             unless_clauses: Vec::new(),
             source_location: None,
         };
@@ -1411,7 +2504,10 @@ mod tests {
     #[test]
     fn test_fact_reference_conversion() {
         let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(25.into())));
+        doc = doc.add_fact(create_literal_fact(
+            "age",
+            LiteralValue::number(rust_decimal::Decimal::from(25)),
+        ));
 
         let age_expr = Expression {
             kind: ExpressionKind::FactReference(FactReference {
@@ -1477,7 +2573,10 @@ mod tests {
         };
         doc = doc.add_rule(rule2);
 
-        doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(25.into())));
+        doc = doc.add_fact(create_literal_fact(
+            "age",
+            LiteralValue::number(rust_decimal::Decimal::from(25)),
+        ));
 
         let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
         assert!(result.is_ok(), "Should build graph successfully");
@@ -1501,8 +2600,14 @@ mod tests {
     #[test]
     fn test_collect_multiple_errors() {
         let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(25.into())));
-        doc = doc.add_fact(create_literal_fact("age", LiteralValue::Number(30.into())));
+        doc = doc.add_fact(create_literal_fact(
+            "age",
+            LiteralValue::number(rust_decimal::Decimal::from(25)),
+        ));
+        doc = doc.add_fact(create_literal_fact(
+            "age",
+            LiteralValue::number(rust_decimal::Decimal::from(30)),
+        ));
 
         let missing_fact_expr = Expression {
             kind: ExpressionKind::FactReference(FactReference {

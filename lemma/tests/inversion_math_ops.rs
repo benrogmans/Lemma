@@ -29,7 +29,7 @@ fn invert_exp_simple() {
         .invert_strict(
             "math",
             "y",
-            Target::value(LiteralValue::Number(dec("7.38905609893065"))),
+            Target::value(LiteralValue::number(dec("7.38905609893065"))),
             HashMap::new(),
         )
         .expect("invert OK");

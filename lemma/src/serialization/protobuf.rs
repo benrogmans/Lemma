@@ -18,7 +18,5 @@ pub fn from_protobuf(
     _protobuf: &[u8],
     _plan: &ExecutionPlan,
 ) -> Result<HashMap<String, LiteralValue>, LemmaError> {
-    Err(LemmaError::Engine(
-        "Protobuf serialization not yet implemented".to_string(),
-    ))
+    todo!("Protobuf serialization not yet implemented");
 }
