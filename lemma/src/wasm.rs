@@ -89,7 +89,7 @@ fn json_to_literal_value(value: &serde_json::Value) -> Result<crate::LiteralValu
                 let decimal = Decimal::from_str_exact(num_str)
                     .map_err(|e| format!("Invalid percent: {}", e))?;
                 // Convert percent (e.g., 50) to ratio (0.50)
-                Ok(LiteralValue::ratio(decimal / Decimal::from(100)))
+                Ok(LiteralValue::ratio(decimal / Decimal::from(100), None))
             } else {
                 Ok(LiteralValue::text(s.clone()))
             }

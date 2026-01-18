@@ -426,7 +426,7 @@ fn substitute_rules_in_expression(
 
                 match &e.kind {
                     ExpressionKind::RulePath(rule_path) => {
-                        let visited = visited_rules_stack.last().unwrap();
+                        let visited = visited_rules_stack.last().expect("visited_rules_stack should never be empty when processing RulePath expressions");
                         if visited.contains(rule_path) {
                             return Err(LemmaError::engine(
                                 format!(

@@ -945,7 +945,10 @@ impl Reference {
                 name: String::new(),
             }
         } else {
-            let name = path.last().unwrap().clone();
+            let name = path
+                .last()
+                .expect("path is not empty but last() returned None - this indicates a bug")
+                .clone();
             let segments = path[..path.len() - 1].to_vec();
             Self { segments, name }
         }
@@ -998,7 +1001,10 @@ impl FactReference {
                 fact: String::new(),
             }
         } else {
-            let fact = path.last().unwrap().clone();
+            let fact = path
+                .last()
+                .expect("path is not empty but last() returned None - this indicates a bug")
+                .clone();
             let segments = path[..path.len() - 1].to_vec();
             Self { segments, fact }
         }

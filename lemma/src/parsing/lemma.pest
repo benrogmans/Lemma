@@ -180,7 +180,7 @@ primary = {
     literal
   | rule_reference
   | fact_reference
-  | "(" ~ expression ~ ")"
+  | "(" ~ SPACE* ~ expression ~ SPACE* ~ ")"
 }
 
 // Individual operators (for type-safe parser matching)
@@ -263,20 +263,20 @@ comparison_expression = {
 // LOGICAL EXPRESSIONS
 // ------------------------------------------------------------------------------------------------
 
-not_expr   = { ^"not" ~ SPACE+ ~ and_operand }
-sqrt_expr  = { ^"sqrt" ~ SPACE+ ~ base_expression }
-sin_expr   = { ^"sin" ~ SPACE+ ~ base_expression }
-cos_expr   = { ^"cos" ~ SPACE+ ~ base_expression }
-tan_expr   = { ^"tan" ~ SPACE+ ~ base_expression }
-asin_expr  = { ^"asin" ~ SPACE+ ~ base_expression }
-acos_expr  = { ^"acos" ~ SPACE+ ~ base_expression }
-atan_expr  = { ^"atan" ~ SPACE+ ~ base_expression }
-log_expr   = { ^"log" ~ SPACE+ ~ base_expression }
-exp_expr   = { ^"exp" ~ SPACE+ ~ base_expression }
-abs_expr   = { ^"abs" ~ SPACE+ ~ base_expression }
-floor_expr = { ^"floor" ~ SPACE+ ~ base_expression }
-ceil_expr  = { ^"ceil" ~ SPACE+ ~ base_expression }
-round_expr = { ^"round" ~ SPACE+ ~ base_expression }
+not_expr   = { ^"not" ~ (!("(") ~ SPACE+ | SPACE*)? ~ and_operand }
+sqrt_expr  = { ^"sqrt" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+sin_expr   = { ^"sin" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+cos_expr   = { ^"cos" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+tan_expr   = { ^"tan" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+asin_expr  = { ^"asin" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+acos_expr  = { ^"acos" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+atan_expr  = { ^"atan" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+log_expr   = { ^"log" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+exp_expr   = { ^"exp" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+abs_expr   = { ^"abs" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+floor_expr = { ^"floor" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+ceil_expr  = { ^"ceil" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+round_expr = { ^"round" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
 
 // ================================================================================================
 // LITERALS

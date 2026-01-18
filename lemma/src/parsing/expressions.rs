@@ -1335,4 +1335,65 @@ rule effective_tax_rate = total_tax? / income in percent"#;
             );
         }
     }
+
+    #[test]
+    fn test_parentheses_syntax_and_spacing_edge_cases() {
+        let test_cases = vec![
+            // Basic parentheses syntax
+            ("not(x)", "not with parentheses no space"),
+            ("sqrt(16)", "sqrt with parentheses no space"),
+            ("sin(0)", "sin with parentheses no space"),
+            ("log(10)", "log with parentheses no space"),
+            ("exp(1)", "exp with parentheses no space"),
+            ("abs(-5)", "abs with parentheses no space"),
+            ("floor(3.7)", "floor with parentheses no space"),
+            ("ceil(3.2)", "ceil with parentheses no space"),
+            ("round(3.5)", "round with parentheses no space"),
+            // Space before opening paren
+            ("not (x)", "not with space before paren"),
+            ("sqrt (16)", "sqrt with space before paren"),
+            ("sin (0)", "sin with space before paren"),
+            // Multiple spaces before opening paren
+            ("not     (x)", "not with multiple spaces before paren"),
+            ("sqrt    (16)", "sqrt with multiple spaces before paren"),
+            ("not  (  x  )", "not with spaces around paren and inside"),
+            ("sqrt  (  16  )", "sqrt with spaces around paren and inside"),
+            // Complex expressions with parentheses
+            ("not(x and y)", "not with parentheses containing expression"),
+            ("sqrt(x + 1)", "sqrt with parentheses containing arithmetic"),
+            ("sin(x * 2)", "sin with parentheses containing arithmetic"),
+            // Mixed forms
+            ("not(x) and y", "not with parens and regular and"),
+            ("sqrt(16) + 2", "sqrt with parens and arithmetic"),
+            ("sin(x) * cos(y)", "mixed parentheses and space forms"),
+            // Nested function calls
+            ("sqrt(sin(0))", "nested function calls"),
+            ("not(not(x))", "nested not expressions"),
+            // Edge cases with various spacing combinations
+            ("not  (  x  )", "not with multiple spaces around"),
+            ("sqrt   (   16   )", "sqrt with extreme spacing"),
+            ("sin ( x )", "sin with spaces inside"),
+            ("log (  x + 1  )", "log with spaces around expression"),
+            ("exp (  2 * 3  )", "exp with spaces in complex expr"),
+            // Combined with other operators
+            ("not(x) or not(y)", "not with parens in or expression"),
+            ("sqrt(x) ^ 2", "sqrt with parens and power operator"),
+            ("sin(x) * cos(x)", "multiple function calls"),
+        ];
+
+        for (expr, description) in test_cases {
+            let input = format!(
+                "doc test\nfact x = true\nfact y = false\nrule test = {}",
+                expr
+            );
+            let result = parse(&input, "test.lemma", &crate::ResourceLimits::default());
+            assert!(
+                result.is_ok(),
+                "Failed to parse {} ({}): {:?}",
+                expr,
+                description,
+                result.err()
+            );
+        }
+    }
 }
