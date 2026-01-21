@@ -11,9 +11,21 @@ type temperature = scale
   -> minimum -70
   -> maximum 70
 
+type clothing_style = text
+  -> option "none"
+  -> option "light"
+  -> option "warm"
+  -> option "very_warm"
+
+type comfort = text
+  -> option "comfortable"
+  -> option "cold"
+  -> option "hot"
+  -> option "uncomfortable"
+
 fact temperature = [temperature]
 fact is_raining = [boolean]
-fact wind_speed = [number]
+fact wind_speed = [number -> minimum 0]
 
 rule clothing_layer = "light"
   unless temperature < 5 celsius then "very_warm"

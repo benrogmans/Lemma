@@ -33,9 +33,6 @@ boolean_expression = "0.4"
 wasm-bindgen.workspace = true
 console_error_panic_hook.workspace = true
 
-[features]
-planning_internal_tests = []
-
 [dev-dependencies]
 proptest = "1.4"
 insta = "1.34"

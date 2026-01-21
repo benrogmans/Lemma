@@ -1,90 +1,9 @@
-//! Comprehensive integration tests for Scale/Number refactoring
+//! Integration tests for Scale/Number arithmetic behavior.
 //!
-//! Tests cover:
-//! - Unit override validation (errors collected, not returned early)
-//! - Document-level unit ambiguity (errors collected)
-//! - Scale op Scale operations (same type allowed, different types rejected)
-//! - Ratio operations
-//! - Number operations
-//! - Mixed operations
+//! Unit-resolution and TypeRegistry behavior tests live in `src/planning/types.rs`.
 
-use lemma::planning::TypeRegistry;
-use lemma::{parse, Engine, ResourceLimits};
+use lemma::Engine;
 use std::collections::HashMap;
-
-#[test]
-fn test_unit_override_validation_collects_all_errors() {
-    // Test that multiple unit override errors are collected, not returned early
-    let code = r#"doc test
-type money = scale
-  -> unit eur 1.00
-  -> unit usd 1.19
-
-type money2 = money
-  -> unit eur 1.20
-  -> unit usd 1.21
-  -> unit gbp 1.30"#;
-
-    let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-    let doc = &docs[0];
-
-    let mut registry = TypeRegistry::new();
-    registry
-        .register_type(&doc.name, doc.types[0].clone())
-        .unwrap();
-    registry
-        .register_type(&doc.name, doc.types[1].clone())
-        .unwrap();
-
-    let result = registry.resolve_types(&doc.name);
-    assert!(result.is_err(), "Should have errors for unit overrides");
-
-    let error_msg = result.unwrap_err().to_string();
-    // Should mention both eur and usd overrides
-    assert!(
-        error_msg.contains("eur") || error_msg.contains("usd"),
-        "Error should mention unit override issues. Got: {}",
-        error_msg
-    );
-}
-
-#[test]
-fn test_document_level_unit_ambiguity_collects_all_errors() {
-    // Test that multiple ambiguous unit errors are collected
-    let code = r#"doc test
-type money_a = scale
-  -> unit eur 1.00
-  -> unit usd 1.19
-
-type money_b = scale
-  -> unit eur 1.00
-  -> unit usd 1.20
-
-type length_a = scale
-  -> unit meter 1.0
-
-type length_b = scale
-  -> unit meter 1.0"#;
-
-    let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-    let doc = &docs[0];
-
-    let mut registry = TypeRegistry::new();
-    for type_def in &doc.types {
-        registry.register_type(&doc.name, type_def.clone()).unwrap();
-    }
-
-    let result = registry.resolve_types(&doc.name);
-    assert!(result.is_err(), "Should have errors for ambiguous units");
-
-    let error_msg = result.unwrap_err().to_string();
-    // Should mention both eur/usd ambiguity and meter ambiguity
-    assert!(
-        (error_msg.contains("eur") || error_msg.contains("usd") || error_msg.contains("meter")),
-        "Error should mention ambiguous units. Got: {}",
-        error_msg
-    );
-}
 
 #[test]
 fn test_scale_op_scale_same_type_allowed() {
@@ -323,107 +242,6 @@ rule result = price * ratio_value"#;
 }
 
 #[test]
-fn test_number_type_cannot_have_units() {
-    // Test that Number type rejects unit commands
-    let code = r#"doc test
-type price = number
-  -> unit eur 1.00"#;
-
-    let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-    let doc = &docs[0];
-
-    let mut registry = TypeRegistry::new();
-    registry
-        .register_type(&doc.name, doc.types[0].clone())
-        .unwrap();
-
-    let result = registry.resolve_types(&doc.name);
-    assert!(
-        result.is_err(),
-        "Should reject unit command for Number type"
-    );
-
-    let error_msg = result.unwrap_err().to_string();
-    assert!(
-        error_msg.contains("unit") && error_msg.contains("number"),
-        "Error should mention that Number types cannot have units. Got: {}",
-        error_msg
-    );
-}
-
-#[test]
-fn test_scale_type_can_have_units() {
-    // Test that Scale type can have units
-    let code = r#"doc test
-type money = scale
-  -> unit eur 1.00
-  -> unit usd 1.19"#;
-
-    let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-    let doc = &docs[0];
-
-    let mut registry = TypeRegistry::new();
-    registry
-        .register_type(&doc.name, doc.types[0].clone())
-        .unwrap();
-
-    let result = registry.resolve_types(&doc.name);
-    assert!(result.is_ok(), "Should allow units on Scale type");
-
-    let resolved_types = result.unwrap();
-    let money_type = resolved_types.named_types.get("money").unwrap();
-    assert!(money_type.is_scale());
-    match &money_type.specifications {
-        lemma::TypeSpecification::Scale { units, .. } => {
-            assert_eq!(units.len(), 2);
-            assert!(units.iter().any(|u| u.name == "eur"));
-            assert!(units.iter().any(|u| u.name == "usd"));
-        }
-        _ => panic!("Expected Scale type"),
-    }
-}
-
-#[test]
-fn test_extending_type_inherits_units() {
-    // Test that extending a type inherits its units
-    let code = r#"doc test
-type money = scale
-  -> unit eur 1.00
-  -> unit usd 1.19
-
-type my_money = money
-  -> unit gbp 1.30"#;
-
-    let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-    let doc = &docs[0];
-
-    let mut registry = TypeRegistry::new();
-    for type_def in &doc.types {
-        registry.register_type(&doc.name, type_def.clone()).unwrap();
-    }
-
-    let result = registry.resolve_types(&doc.name);
-    if let Err(e) = &result {
-        panic!(
-            "Should allow extending with new units, but got error: {}",
-            e
-        );
-    }
-
-    let resolved_types = result.unwrap();
-    let my_money_type = resolved_types.named_types.get("my_money").unwrap();
-    match &my_money_type.specifications {
-        lemma::TypeSpecification::Scale { units, .. } => {
-            assert_eq!(units.len(), 3, "Should have eur, usd, and gbp");
-            assert!(units.iter().any(|u| u.name == "eur"));
-            assert!(units.iter().any(|u| u.name == "usd"));
-            assert!(units.iter().any(|u| u.name == "gbp"));
-        }
-        _ => panic!("Expected Scale type"),
-    }
-}
-
-#[test]
 fn test_scale_comparison_same_type_allowed() {
     // Test that comparing same Scale types is allowed
     let code = r#"doc test
@@ -624,37 +442,6 @@ rule power = a ^ b"#;
     assert!(response.results.get("divide").is_some());
     assert!(response.results.get("modulo").is_some());
     assert!(response.results.get("power").is_some());
-}
-
-#[test]
-fn test_duplicate_unit_in_same_type_rejected() {
-    // Test that duplicate units within the same type definition are rejected
-    let code = r#"doc test
-type money = scale
-  -> unit eur 1.00
-  -> unit eur 1.19"#;
-
-    let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-    let doc = &docs[0];
-
-    let mut registry = TypeRegistry::new();
-    registry
-        .register_type(&doc.name, doc.types[0].clone())
-        .unwrap();
-
-    let result = registry.resolve_types(&doc.name);
-    assert!(result.is_err(), "Should reject duplicate unit in same type");
-
-    let error_msg = result.unwrap_err().to_string();
-    // The error may mention "Duplicate unit" or "already exists" - both are valid
-    assert!(
-        error_msg.contains("Duplicate unit")
-            || error_msg.contains("duplicate")
-            || error_msg.contains("already exists")
-            || error_msg.contains("eur"),
-        "Error should mention duplicate unit issue. Got: {}",
-        error_msg
-    );
 }
 
 #[test]

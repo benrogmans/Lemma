@@ -21,7 +21,7 @@ rule final_total = total_before_discount?
     let main_doc = r#"
 doc examples/rules_and_unless
 fact rules = doc private_rules
-fact rules.base_price = [number]
+fact rules.base_price = 500
 rule total = rules.final_total?
 "#;
 
@@ -78,7 +78,7 @@ rule final_total = total_before_discount?
     let main_doc = r#"
 doc examples/rules_and_unless
 fact rules = doc private_rules
-fact rules.base_price = [number]
+fact rules.base_price = 500
 rule total = rules.final_total?
 "#;
 
@@ -244,7 +244,7 @@ rule total = subtotal? + (subtotal? * tax_rate)
     let main_doc = r#"
 doc examples/rules_and_unless
 fact rules = doc private_rules
-fact rules.base_price = [number]
+fact rules.base_price = 500
 rule total = rules.total?
 "#;
 

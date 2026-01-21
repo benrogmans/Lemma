@@ -20,21 +20,17 @@ fn get_proof_node_required(
     expr: &Expression,
     operand_name: &str,
 ) -> LemmaResult<ProofNode> {
-    context.get_proof_node(expr).cloned().ok_or_else(|| {
-        let loc = expr
-            .source_location
-            .as_ref()
-            .expect("Expression must have source_location");
-        crate::LemmaError::engine(
-            format!("bug: {} was evaluated but has no proof node", operand_name),
-            loc.span.clone(),
-            loc.attribute.clone(),
-            Arc::from(""),
-            loc.doc_name.clone(),
-            1,
-            None::<String>,
+    let loc = expr
+        .source_location
+        .as_ref()
+        .expect("BUG: evaluated expression missing source_location");
+    let proof = context.get_proof_node(expr).cloned().unwrap_or_else(|| {
+        panic!(
+            "BUG: {} was evaluated but has no proof node ({}:{}:{} in {})",
+            operand_name, loc.attribute, loc.span.line, loc.span.col, loc.doc_name
         )
-    })
+    });
+    Ok(proof)
 }
 
 /// Get operand result, returning error if not found (indicates engine bug)
@@ -43,24 +39,17 @@ fn get_operand_result(
     expr: &Expression,
     operand_name: &str,
 ) -> LemmaResult<OperationResult> {
-    results.get(expr).cloned().ok_or_else(|| {
-        let loc = expr
-            .source_location
-            .as_ref()
-            .expect("Expression must have source_location");
-        crate::LemmaError::engine(
-            format!(
-                "bug: {} operand was marked ready but result is missing",
-                operand_name
-            ),
-            loc.span.clone(),
-            loc.attribute.clone(),
-            Arc::from(""),
-            loc.doc_name.clone(),
-            1,
-            None::<String>,
+    let loc = expr
+        .source_location
+        .as_ref()
+        .expect("BUG: expression operand missing source_location");
+    let result = results.get(expr).cloned().unwrap_or_else(|| {
+        panic!(
+            "BUG: {} operand was marked ready but result is missing ({}:{}:{} in {})",
+            operand_name, loc.attribute, loc.span.line, loc.span.col, loc.doc_name
         )
-    })
+    });
+    Ok(result)
 }
 
 /// Propagate veto proof from operand to current expression
@@ -198,7 +187,7 @@ pub fn evaluate_rule(
                 };
                 return Ok((result, proof));
             } else {
-                // Branch didn't match - record it as non-matched
+                // Branch didn't match - record it as non-matched.
                 context.push_operation(OperationKind::RuleBranchEvaluated {
                     index: Some(unless_clause_index),
                     matched: false,
@@ -356,16 +345,11 @@ fn evaluate_expression(
             let loc = expr
                 .source_location
                 .as_ref()
-                .expect("Expression must have source_location");
-            return Err(crate::LemmaError::engine(
-                "bug: circular dependency or missing dependency in expression tree",
-                loc.span.clone(),
-                loc.attribute.clone(),
-                Arc::from(""),
-                loc.doc_name.clone(),
-                1,
-                None::<String>,
-            ));
+                .expect("BUG: expression missing source_location");
+            panic!(
+                "BUG: circular dependency or missing dependency in expression tree ({}:{}:{} in {})",
+                loc.attribute, loc.span.line, loc.span.col, loc.doc_name
+            );
         }
 
         // Evaluate expressions that are ready
@@ -379,21 +363,17 @@ fn evaluate_expression(
         }
     }
 
-    results.get(expr).cloned().ok_or_else(|| {
-        let loc = expr
-            .source_location
-            .as_ref()
-            .expect("Expression must have source_location");
-        crate::LemmaError::engine(
-            "bug: expression was processed but has no result",
-            loc.span.clone(),
-            loc.attribute.clone(),
-            Arc::from(""),
-            loc.doc_name.clone(),
-            1,
-            None::<String>,
+    let loc = expr
+        .source_location
+        .as_ref()
+        .expect("BUG: expression missing source_location");
+    let result = results.get(expr).cloned().unwrap_or_else(|| {
+        panic!(
+            "BUG: expression was processed but has no result ({}:{}:{} in {})",
+            loc.attribute, loc.span.line, loc.span.col, loc.doc_name
         )
-    })
+    });
+    Ok(result)
 }
 
 /// Evaluate a single expression given its dependencies are already evaluated

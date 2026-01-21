@@ -210,3 +210,138 @@ fn parse_unless_statement(
         )),
     })
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use crate::parsing::parse;
+    use crate::{ExpressionKind, ResourceLimits, Value};
+
+    #[test]
+    fn parse_document_with_unless_clause_records_unless_clause() {
+        let input = r#"doc person
+rule is_active = service_started? and not service_ended?
+unless maintenance_mode then false"#;
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].rules.len(), 1);
+        assert_eq!(result[0].rules[0].unless_clauses.len(), 1);
+    }
+
+    #[test]
+    fn parse_multiple_unless_clauses_records_all_unless_clauses() {
+        let input = r#"doc test
+rule is_eligible = age >= 18 and has_license
+unless emergency_mode then true
+unless system_override then accept"#;
+
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].rules.len(), 1);
+        assert_eq!(result[0].rules[0].unless_clauses.len(), 2);
+    }
+
+    #[test]
+    fn parse_multiple_rules_in_document_preserves_rule_names() {
+        let input = r#"doc test
+rule is_adult = age >= 18
+rule is_senior = age >= 65
+rule is_minor = age < 18
+rule can_vote = age >= 18 and is_citizen"#;
+
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].rules.len(), 4);
+        assert_eq!(result[0].rules[0].name, "is_adult");
+        assert_eq!(result[0].rules[1].name, "is_senior");
+        assert_eq!(result[0].rules[2].name, "is_minor");
+        assert_eq!(result[0].rules[3].name, "can_vote");
+    }
+
+    #[test]
+    fn veto_in_unless_clauses_parses_with_message() {
+        let input = r#"doc test
+rule is_adult = age >= 18 unless age < 0 then veto "Age must be 0 or higher""#;
+        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].rules.len(), 1);
+
+        let rule = &docs[0].rules[0];
+        assert_eq!(rule.name, "is_adult");
+        assert_eq!(rule.unless_clauses.len(), 1);
+
+        match &rule.unless_clauses[0].result.kind {
+            ExpressionKind::Veto(veto) => {
+                assert_eq!(veto.message, Some("Age must be 0 or higher".to_string()));
+            }
+            other => panic!("Expected veto expression, got {:?}", other),
+        }
+
+        let input = r#"doc test
+rule is_adult = age >= 18
+  unless age > 150 then veto "Age cannot be over 150"
+  unless age < 0 then veto "Age must be 0 or higher""#;
+        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let rule = &docs[0].rules[0];
+        assert_eq!(rule.unless_clauses.len(), 2);
+
+        match &rule.unless_clauses[0].result.kind {
+            ExpressionKind::Veto(veto) => {
+                assert_eq!(veto.message, Some("Age cannot be over 150".to_string()));
+            }
+            other => panic!("Expected veto expression, got {:?}", other),
+        }
+
+        match &rule.unless_clauses[1].result.kind {
+            ExpressionKind::Veto(veto) => {
+                assert_eq!(veto.message, Some("Age must be 0 or higher".to_string()));
+            }
+            other => panic!("Expected veto expression, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn veto_without_message_parses_as_veto_with_no_message() {
+        let input = r#"doc test
+rule adult = age >= 18 unless age > 150 then veto"#;
+        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let rule = &docs[0].rules[0];
+        assert_eq!(rule.unless_clauses.len(), 1);
+
+        match &rule.unless_clauses[0].result.kind {
+            ExpressionKind::Veto(veto) => {
+                assert_eq!(veto.message, None);
+            }
+            other => panic!("Expected veto expression, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn mixed_veto_and_regular_unless_parses_both_results() {
+        let input = r#"doc test
+rule adjusted_age = age + 1
+  unless age < 0 then veto "Invalid age"
+  unless age > 100 then 100"#;
+        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let rule = &docs[0].rules[0];
+        assert_eq!(rule.unless_clauses.len(), 2);
+
+        match &rule.unless_clauses[0].result.kind {
+            ExpressionKind::Veto(veto) => {
+                assert_eq!(veto.message, Some("Invalid age".to_string()));
+            }
+            other => panic!("Expected veto expression, got {:?}", other),
+        }
+
+        match &rule.unless_clauses[1].result.kind {
+            ExpressionKind::Literal(lit) => match &lit.value {
+                Value::Number(n) => assert_eq!(*n, rust_decimal::Decimal::new(100, 0)),
+                other => panic!("Expected literal number, got {:?}", other),
+            },
+            other => panic!("Expected literal result, got {:?}", other),
+        }
+    }
+}

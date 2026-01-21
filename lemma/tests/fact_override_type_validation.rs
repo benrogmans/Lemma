@@ -135,3 +135,34 @@ rule total = price * 1.1
     assert!(result.is_err(), "Expected error for unknown fact override");
     assert!(result.unwrap_err().to_string().contains("unknown_fact"));
 }
+
+#[test]
+fn test_fact_override_with_type_definition_should_fail() {
+    let code = r#"
+doc base
+fact quantity = [number -> minimum 0 -> default 10]
+rule total = quantity * 2
+
+doc test
+fact line = doc base
+fact line.quantity = [number -> minimum 0 -> default 5]
+rule result = line.total?
+"#;
+
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+
+    assert!(
+        result.is_err(),
+        "Expected error when overriding typed fact with type definition"
+    );
+
+    let error_msg = result.unwrap_err().to_string();
+    assert!(
+        error_msg.contains("quantity")
+            || error_msg.contains("type")
+            || error_msg.contains("override"),
+        "Error message should mention the problematic fact or type override. Got: {}",
+        error_msg
+    );
+}

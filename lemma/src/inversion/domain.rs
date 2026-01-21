@@ -360,6 +360,114 @@ fn comparison_to_domain(op: &ComparisonComputation, value: &LiteralValue) -> Lem
     }
 }
 
+/// Compute the domain for a single comparison-atom used by inversion constraints.
+///
+/// This is used by numeric-aware constraint simplification to derive implications/exclusions
+/// between comparison atoms on the same fact.
+pub(crate) fn domain_for_comparison_atom(
+    op: &ComparisonComputation,
+    value: &LiteralValue,
+) -> LemmaResult<Domain> {
+    comparison_to_domain(op, value)
+}
+
+impl Domain {
+    /// Proven subset check for the atom-domain forms we generate from comparisons:
+    /// - Range
+    /// - Enumeration
+    /// - Complement(Enumeration) (used for != / is not)
+    ///
+    /// Returns false when the relationship cannot be proven with these forms.
+    pub(crate) fn is_subset_of(&self, other: &Domain) -> bool {
+        match (self, other) {
+            (Domain::Empty, _) => true,
+            (_, Domain::Unconstrained) => true,
+            (Domain::Unconstrained, _) => false,
+
+            (Domain::Enumeration(a), Domain::Enumeration(b)) => a.iter().all(|v| b.contains(v)),
+            (Domain::Enumeration(vals), Domain::Range { min, max }) => {
+                vals.iter().all(|v| value_within(v, min, max))
+            }
+
+            (
+                Domain::Range {
+                    min: amin,
+                    max: amax,
+                },
+                Domain::Range {
+                    min: bmin,
+                    max: bmax,
+                },
+            ) => range_within_range(amin, amax, bmin, bmax),
+
+            // Range ⊆ not({p}) when the range does not include p (for all excluded points)
+            (Domain::Range { min, max }, Domain::Complement(inner)) => match inner.as_ref() {
+                Domain::Enumeration(excluded) => {
+                    excluded.iter().all(|p| !value_within(p, min, max))
+                }
+                _ => false,
+            },
+
+            // {v} ⊆ not({p}) when v is not excluded
+            (Domain::Enumeration(vals), Domain::Complement(inner)) => match inner.as_ref() {
+                Domain::Enumeration(excluded) => vals.iter().all(|v| !excluded.contains(v)),
+                _ => false,
+            },
+
+            // not(A) ⊆ not(B)  iff  B ⊆ A  (for enumeration complements)
+            (Domain::Complement(a_inner), Domain::Complement(b_inner)) => {
+                match (a_inner.as_ref(), b_inner.as_ref()) {
+                    (Domain::Enumeration(excluded_a), Domain::Enumeration(excluded_b)) => {
+                        excluded_b.iter().all(|v| excluded_a.contains(v))
+                    }
+                    _ => false,
+                }
+            }
+
+            _ => false,
+        }
+    }
+}
+
+fn range_within_range(amin: &Bound, amax: &Bound, bmin: &Bound, bmax: &Bound) -> bool {
+    lower_bound_geq(amin, bmin) && upper_bound_leq(amax, bmax)
+}
+
+fn lower_bound_geq(a: &Bound, b: &Bound) -> bool {
+    match (a, b) {
+        (_, Bound::Unbounded) => true,
+        (Bound::Unbounded, _) => false,
+        (Bound::Inclusive(av), Bound::Inclusive(bv)) => lit_cmp(av.as_ref(), bv.as_ref()) >= 0,
+        (Bound::Exclusive(av), Bound::Exclusive(bv)) => lit_cmp(av.as_ref(), bv.as_ref()) >= 0,
+        (Bound::Exclusive(av), Bound::Inclusive(bv)) => {
+            let c = lit_cmp(av.as_ref(), bv.as_ref());
+            c >= 0
+        }
+        (Bound::Inclusive(av), Bound::Exclusive(bv)) => {
+            // a >= (b) only if a's value > b's value
+            lit_cmp(av.as_ref(), bv.as_ref()) > 0
+        }
+    }
+}
+
+fn upper_bound_leq(a: &Bound, b: &Bound) -> bool {
+    match (a, b) {
+        (Bound::Unbounded, Bound::Unbounded) => true,
+        (_, Bound::Unbounded) => true,
+        (Bound::Unbounded, _) => false,
+        (Bound::Inclusive(av), Bound::Inclusive(bv)) => lit_cmp(av.as_ref(), bv.as_ref()) <= 0,
+        (Bound::Exclusive(av), Bound::Exclusive(bv)) => lit_cmp(av.as_ref(), bv.as_ref()) <= 0,
+        (Bound::Exclusive(av), Bound::Inclusive(bv)) => {
+            // (a) <= [b] when a <= b
+            lit_cmp(av.as_ref(), bv.as_ref()) <= 0
+        }
+        (Bound::Inclusive(av), Bound::Exclusive(bv)) => {
+            // [a] <= (b) only if a < b
+            lit_cmp(av.as_ref(), bv.as_ref()) < 0
+        }
+    }
+}
+
 fn union_optional_domains(a: Option<Domain>, b: Option<Domain>) -> Option<Domain> {
     match (a, b) {
         (None, None) => None,
@@ -593,15 +701,87 @@ fn domain_intersection(a: Domain, b: Domain) -> Option<Domain> {
                 Some(Domain::Union(Arc::new(acc)))
             }
         }
-        (Domain::Complement(inner), other) | (other, Domain::Complement(inner)) => {
-            // Normalize the complement (not just the inner value) and recurse
-            let normalized_complement = normalize_domain(Domain::Complement(inner));
-            domain_intersection(other, normalized_complement)
+        // Range ∩ not({p1,p2,...})  =>  Range with excluded points removed (as union of ranges)
+        (Domain::Range { min, max }, Domain::Complement(inner))
+        | (Domain::Complement(inner), Domain::Range { min, max }) => match inner.as_ref() {
+            Domain::Enumeration(excluded) => range_minus_excluded_points(min, max, excluded),
+            _ => {
+                // Normalize the complement (not just the inner value) and recurse.
+                // If normalization doesn't change it, we must not recurse infinitely.
+                let normalized_complement = normalize_domain(Domain::Complement(inner));
+                if matches!(&normalized_complement, Domain::Complement(_)) {
+                    None
+                } else {
+                    domain_intersection(Domain::Range { min, max }, normalized_complement)
+                }
+            }
+        },
+        (Domain::Complement(a_inner), Domain::Complement(b_inner)) => {
+            match (a_inner.as_ref(), b_inner.as_ref()) {
+                (Domain::Enumeration(a_ex), Domain::Enumeration(b_ex)) => {
+                    // not(A) ∩ not(B) == not(A ∪ B)
+                    let mut excluded: Vec<LiteralValue> = a_ex.iter().cloned().collect();
+                    excluded.extend(b_ex.iter().cloned());
+                    Some(normalize_domain(Domain::Complement(Box::new(
+                        Domain::Enumeration(Arc::new(excluded)),
+                    ))))
+                }
+                _ => None,
+            }
         }
-        #[allow(unreachable_patterns)]
-        _ => None,
     };
     result.map(normalize_domain)
+}
+
+fn range_minus_excluded_points(
+    min: Bound,
+    max: Bound,
+    excluded: &Arc<Vec<LiteralValue>>,
+) -> Option<Domain> {
+    // Start with a single range and iteratively split on excluded points that fall within it.
+    let mut parts: Vec<(Bound, Bound)> = vec![(min, max)];
+
+    for p in excluded.iter() {
+        let mut next: Vec<(Bound, Bound)> = Vec::new();
+
+        for (rmin, rmax) in parts {
+            if !value_within(p, &rmin, &rmax) {
+                next.push((rmin, rmax));
+                continue;
+            }
+
+            // Left part: [rmin, p) or [rmin, p] depending on rmin and exclusion
+            let left_max = Bound::Exclusive(Arc::new(p.clone()));
+            if !bounds_contradict(&rmin, &left_max) {
+                next.push((rmin.clone(), left_max));
+            }
+
+            // Right part: (p, rmax)
+            let right_min = Bound::Exclusive(Arc::new(p.clone()));
+            if !bounds_contradict(&right_min, &rmax) {
+                next.push((right_min, rmax.clone()));
+            }
+        }
+
+        parts = next;
+        if parts.is_empty() {
+            return None;
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else if parts.len() == 1 {
+        let (min, max) = parts.remove(0);
+        Some(Domain::Range { min, max })
+    } else {
+        Some(Domain::Union(Arc::new(
+            parts
+                .into_iter()
+                .map(|(min, max)| Domain::Range { min, max })
+                .collect(),
+        )))
+    }
 }
 
 fn invert_bound(bound: Bound) -> Bound {

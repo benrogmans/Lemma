@@ -81,7 +81,7 @@ let response = engine.evaluate("shipping", None, Some(values))?;
 
 ### Inverse reasoning
 
-Inversion allows you to find what input values produce a desired output. This is useful for questions like "What quantity gives me a 30% discount?" or "What salary produces a total compensation of $100,000?"
+Inversion allows you to find what input values produce a desired output. This is useful for questions like "What quantity gives me a 30% discount?" or "What salary produces a total compensation of €100,000?"
 
 #### Basic example
 

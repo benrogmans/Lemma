@@ -5,15 +5,25 @@ Demonstrates: type annotations, complex rules, rule references with ?,
 unless clauses (last matching wins), arithmetic, comparisons, and veto
 """
 
-fact base_price = [number]
-fact quantity = [number]
-fact customer_tier = [text]
-fact loyalty_points = [number]
-fact package_weight = [number]
-fact delivery_distance = [number]
+type customer_tier_type = text
+  -> option "standard"
+  -> option "premium"
+  -> option "vip"
+
+type payment_method_type = text
+  -> option "credit"
+  -> option "cash"
+  -> option "debit"
+
+fact base_price = [number -> minimum 0]
+fact quantity = [number -> minimum 0]
+fact customer_tier = [customer_tier_type]
+fact loyalty_points = [number -> minimum 0]
+fact package_weight = [number -> minimum 0]
+fact delivery_distance = [number -> minimum 0]
 fact is_express = [boolean]
 fact is_fragile = [boolean]
-fact payment_method = [text]
+fact payment_method = [payment_method_type]
 
 fact min_order_value = 50
 fact free_shipping_threshold = 500
@@ -110,8 +120,6 @@ rule order_status = "standard"
 rule meets_minimum = subtotal? >= min_order_value
 
 rule order_valid = meets_minimum?
-  unless quantity <= 0 then veto "Quantity must be positive"
-  unless base_price <= 0 then veto "Price must be positive"
   unless not meets_minimum? then veto "Order below minimum value"
 
 rule summary = "Low value order"

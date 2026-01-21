@@ -15,7 +15,7 @@ type book_kind = text
   -> option "reference"
   -> option "new_release"
 
-fact days_overdue     = [number]
+fact days_overdue     = [number -> minimum 0]
 fact book_type        = [book_kind]
 fact is_first_offense = [boolean]
 

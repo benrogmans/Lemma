@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Evaluation context for storing intermediate results
 pub struct EvaluationContext {
-    facts: HashMap<FactPath, LemmaFact>,
+    fact_values: HashMap<FactPath, LiteralValue>,
     rule_results: HashMap<RulePath, OperationResult>,
     rule_proofs: HashMap<RulePath, crate::evaluation::proof::Proof>,
     operations: Vec<crate::OperationRecord>,
@@ -31,7 +31,7 @@ pub struct EvaluationContext {
 impl EvaluationContext {
     fn new(plan: &ExecutionPlan) -> Self {
         Self {
-            facts: plan.facts.clone(),
+            fact_values: plan.fact_values.clone(),
             rule_results: HashMap::new(),
             rule_proofs: HashMap::new(),
             operations: Vec::new(),
@@ -41,10 +41,7 @@ impl EvaluationContext {
     }
 
     fn get_fact(&self, fact_path: &FactPath) -> Option<&LiteralValue> {
-        self.facts.get(fact_path).and_then(|f| match &f.value {
-            crate::FactValue::Literal(lit) => Some(lit),
-            _ => None,
-        })
+        self.fact_values.get(fact_path)
     }
 
     fn push_operation(&mut self, kind: OperationKind) {

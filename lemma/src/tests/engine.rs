@@ -277,6 +277,50 @@ fn test_rules_sorted_by_source_order() {
 }
 
 #[test]
+fn invalid_parent_type_in_type_definition_should_be_rejected() {
+    let mut engine = Engine::new();
+    let code = r#"
+doc test
+type invalid = nonexistent -> minimum 0
+fact value = [invalid]
+rule result = value
+"#;
+
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(result.is_err(), "Engine should reject invalid parent types");
+
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("Unknown type") || msg.contains("nonexistent"),
+        "Error should mention unknown type. Got: {}",
+        msg
+    );
+}
+
+#[test]
+fn unknown_type_used_in_fact_type_declaration_should_be_rejected() {
+    let mut engine = Engine::new();
+    let code = r#"
+doc test
+fact value = [invalid_parent_type]
+rule result = value
+"#;
+
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(
+        result.is_err(),
+        "Engine should reject unknown types used in type declarations"
+    );
+
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("Unknown type") || msg.contains("invalid_parent_type"),
+        "Error should mention unknown type. Got: {}",
+        msg
+    );
+}
+
+#[test]
 fn test_rule_filtering_evaluates_dependencies() {
     let mut engine = Engine::new();
     engine
@@ -308,5 +352,37 @@ fn test_rule_filtering_evaluates_dependencies() {
         crate::OperationResult::Value(crate::LiteralValue::number(
             Decimal::from_str("220").unwrap()
         ))
+    );
+}
+
+#[test]
+fn test_add_lemma_code_empty_string_is_ok() {
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code("", "test.lemma");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_add_lemma_code_whitespace_only_is_ok() {
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code("   \n\t  ", "test.lemma");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn duplicate_document_names_should_be_rejected() {
+    // Higher-standard behavior: duplicate doc names are an error (no silent overwrites).
+    let mut engine = Engine::new();
+    let code = r#"
+doc test
+fact x = 1
+
+doc test
+fact x = 2
+"#;
+
+    assert!(
+        engine.add_lemma_code(code, "test.lemma").is_err(),
+        "Duplicate document names should be rejected (no silent overwrites)"
     );
 }

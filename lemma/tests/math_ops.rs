@@ -1,4 +1,4 @@
-use lemma::{Engine, LemmaError, LemmaResult};
+use lemma::{Engine, LemmaResult};
 use rust_decimal::Decimal;
 use std::{collections::HashMap, str::FromStr};
 
@@ -17,22 +17,8 @@ fn run(code: &str, rule: &str) -> LemmaResult<String> {
 
 fn run_num(code: &str, rule: &str) -> LemmaResult<Decimal> {
     let s = run(code, rule)?;
-    s.parse::<Decimal>().map_err(|e| {
-        LemmaError::engine(
-            format!("Failed to parse '{s}' as Decimal: {e}"),
-            lemma::parsing::ast::Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            std::sync::Arc::from(s),
-            "<unknown>",
-            1,
-            None::<String>,
-        )
-    })
+    Ok(s.parse::<Decimal>()
+        .expect("engine result should parse as Decimal"))
 }
 
 fn dec(s: &str) -> Decimal {

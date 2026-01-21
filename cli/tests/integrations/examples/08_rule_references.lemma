@@ -31,12 +31,12 @@ Eligibility Check with Rule References
 Shows complex rule composition and cross-rule dependencies.
 """
 
-fact user_age = 30
+fact user_age = [number -> minimum 0 -> maximum 120 -> default 30]
 fact has_passport = true
 fact passport_valid = true
 fact has_visa = false
 fact criminal_record = false
-fact debt_amount = 0
+fact debt_amount = [number -> minimum 0 -> default 0]
 
 rule is_adult = user_age >= 18
 

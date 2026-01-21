@@ -313,6 +313,27 @@ impl Graph {
             errors: Vec::new(),
         };
 
+        // Pre-resolve named types for every document up-front.
+        //
+        // Graph construction and execution-plan building may need to resolve types "from" other
+        // documents even if those documents are not reachable through document references.
+        //
+        // We only resolve *named* types here because inline type definitions are registered while
+        // traversing facts during graph building and must be resolved afterwards per document.
+        for doc in all_docs {
+            match type_registry.resolve_named_types(&doc.name) {
+                Ok(document_types) => {
+                    builder
+                        .resolved_types
+                        .insert(doc.name.clone(), document_types);
+                }
+                Err(e) => builder.errors.push(e),
+            }
+        }
+        if !builder.errors.is_empty() {
+            return Err(builder.errors);
+        }
+
         builder.build_document(main_doc, Vec::new(), &mut type_registry)?;
 
         if !builder.errors.is_empty() {
@@ -342,6 +363,8 @@ impl Graph {
 
         validate_document_interfaces(self, all_docs, &mut errors);
         validate_all_rule_references_exist(self, &mut errors);
+        validate_fact_override_paths_target_document_facts(self, &mut errors);
+        validate_fact_and_rule_name_collisions(self, &mut errors);
 
         let execution_order = match self.topological_sort() {
             Ok(order) => order,
@@ -547,37 +570,31 @@ impl<'a> GraphBuilder<'a> {
                 overrides: inline_overrides,
                 from,
             } => {
-                // Only register as anonymous type if we have 'from' OR 'overrides'
-                // If both are None, it's just a direct type reference [coffee], not an anonymous type
-                let is_anonymous_type = from.is_some() || inline_overrides.is_some();
+                // Only register as inline type definition if we have 'from' OR 'overrides'
+                // If both are None, it's just a direct type reference [coffee], not an inline type definition
+                let is_inline_type_definition = from.is_some() || inline_overrides.is_some();
 
-                if is_anonymous_type {
-                    // Register anonymous type in TypeRegistry
-                    // Create a TypeDef for this anonymous type
-                    let anonymous_type_def = TypeDef::Inline {
+                // Only register inline type definitions when processing the document directly,
+                // not when processing it as a nested reference. This prevents duplicate registrations
+                // and ensures literal overrides don't trigger type definition registration.
+                if is_inline_type_definition && current_segments.is_empty() {
+                    // Register inline type definition in TypeRegistry
+                    // Create a TypeDef for this inline type definition
+                    let inline_type_def = TypeDef::Inline {
                         parent: base.clone(),
                         overrides: inline_overrides.clone(),
                         fact_ref: fact.reference.clone(),
                         from: from.clone(),
                     };
 
-                    // Determine document context for registration
-                    let doc_name = if current_segments.is_empty() {
-                        current_doc.name.clone()
-                    } else {
-                        current_segments
-                            .last()
-                            .expect("Internal error: current_segments is not empty but last() returned None")
-                            .doc
-                            .clone()
-                    };
+                    // Register in the current document
+                    let doc_name = current_doc.name.clone();
 
-                    // Register the anonymous type
-                    if let Err(e) = type_registry.register_type(&doc_name, anonymous_type_def) {
+                    // Register the inline type definition
+                    if let Err(e) = type_registry.register_type(&doc_name, inline_type_def) {
                         self.errors.push(e);
                     }
                 }
-                // If not an anonymous type, just store the fact - it will be resolved directly as a named type later
 
                 // Check if there's an override for this type fact
                 let effective_value = if let Some(overrides) =
@@ -684,12 +701,14 @@ impl<'a> GraphBuilder<'a> {
                     doc: effective_doc_name.clone(),
                 });
 
-                let _ = self.build_document_with_overrides(
+                if let Err(errs) = self.build_document_with_overrides(
                     nested_doc,
                     nested_segments,
                     nested_overrides,
                     type_registry,
-                );
+                ) {
+                    self.errors.extend(errs);
+                }
             }
         }
     }
@@ -767,15 +786,14 @@ impl<'a> GraphBuilder<'a> {
         }
 
         // Resolve types for this document after all facts are registered
-        if !self.resolved_types.contains_key(&doc.name) {
-            match type_registry.resolve_types(&doc.name) {
-                Ok(document_types) => {
-                    self.resolved_types.insert(doc.name.clone(), document_types);
-                }
-                Err(e) => {
-                    self.errors.push(e);
-                    return Err(self.errors.clone());
-                }
+        match type_registry.resolve_types(&doc.name) {
+            Ok(document_types) => {
+                // Always overwrite: inline type definitions may have been registered while processing facts.
+                self.resolved_types.insert(doc.name.clone(), document_types);
+            }
+            Err(e) => {
+                self.errors.push(e);
+                return Err(self.errors.clone());
             }
         }
 
@@ -978,23 +996,21 @@ impl<'a> GraphBuilder<'a> {
                     }
                 };
 
-                // Get unit value and convert to base units
                 match &lemma_type.specifications {
                     TypeSpecification::Scale { units, .. } => {
-                        let unit = units
+                        if units
                             .iter()
-                            .find(|unit| unit.name.eq_ignore_ascii_case(unit_name))
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "Internal error: unit_index returned type '{}' that doesn't have unit '{}'",
-                                    lemma_type.name.as_ref().unwrap_or(&"<anonymous>".to_string()),
-                                    unit_name
-                                )
-                            });
+                            .all(|unit| !unit.name.eq_ignore_ascii_case(unit_name))
+                        {
+                            panic!(
+                                "Internal error: unit_index returned type '{}' that doesn't have unit '{}'",
+                                lemma_type.name.as_ref().unwrap_or(&"<inline>".to_string()),
+                                unit_name
+                            );
+                        }
 
-                        let value_in_base_units = *number * unit.value;
                         let literal_value = LiteralValue::scale_with_type(
-                            value_in_base_units,
+                            *number,
                             Some(unit_name.clone()), // Store the unit name with the value
                             lemma_type.clone(),
                         );
@@ -1004,20 +1020,19 @@ impl<'a> GraphBuilder<'a> {
                         })
                     }
                     TypeSpecification::Ratio { units, .. } => {
-                        let unit = units
+                        if units
                             .iter()
-                            .find(|unit| unit.name.eq_ignore_ascii_case(unit_name))
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "Internal error: unit_index returned type '{}' that doesn't have unit '{}'",
-                                    lemma_type.name.as_ref().unwrap_or(&"<anonymous>".to_string()),
-                                    unit_name
-                                )
-                            });
+                            .all(|unit| !unit.name.eq_ignore_ascii_case(unit_name))
+                        {
+                            panic!(
+                                "Internal error: unit_index returned type '{}' that doesn't have unit '{}'",
+                                lemma_type.name.as_ref().unwrap_or(&"<inline>".to_string()),
+                                unit_name
+                            );
+                        }
 
-                        let value_in_base_units = *number * unit.value;
                         let literal_value = LiteralValue::ratio_with_type(
-                            value_in_base_units,
+                            *number,
                             Some(unit_name.clone()), // Store the unit name with the value
                             lemma_type.clone(),
                         );
@@ -1029,7 +1044,7 @@ impl<'a> GraphBuilder<'a> {
                     _ => {
                         panic!(
                             "Internal error: unit_index returned non-Number/Ratio type '{}' for unit '{}'",
-                            lemma_type.name.as_ref().unwrap_or(&"<anonymous>".to_string()),
+                            lemma_type.name.as_ref().unwrap_or(&"<inline>".to_string()),
                             unit_name
                         );
                     }
@@ -1306,14 +1321,68 @@ fn compute_all_rule_types(
             let result_type = compute_expression_type(result, graph, &computed_types, errors);
             if !result_type.is_veto() {
                 // If we haven't seen a non-Veto type yet, store it
-                // All non-Veto branches must have the same type (enforced by validate_branch_type_consistency)
+                // All non-Veto branches must have the same standard type (enforced by validate_branch_type_consistency)
                 if non_veto_type.is_none() {
                     non_veto_type = Some(result_type.clone());
+                } else if let Some(ref existing_type) = non_veto_type {
+                    // Check that this branch has the same standard type as the first non-veto type
+                    if !existing_type.has_same_base_type(&result_type) {
+                        let Some(rule_node) = graph.rules().get(rule_path) else {
+                            panic!(
+                                "BUG: rule type validation referenced missing rule '{}'",
+                                rule_path.rule
+                            );
+                        };
+                        let rule_source = &rule_node.source;
+                        let default_expr = &branches[0].1;
+
+                        let mut location_parts = vec![format!(
+                            "{}:{}:{}",
+                            rule_source.attribute, rule_source.span.line, rule_source.span.col
+                        )];
+
+                        if let Some(loc) = &default_expr.source_location {
+                            location_parts.push(format!(
+                                "default branch at {}:{}:{}",
+                                loc.attribute, loc.span.line, loc.span.col
+                            ));
+                        }
+                        if let Some(loc) = &result.source_location {
+                            location_parts.push(format!(
+                                "unless clause {} at {}:{}:{}",
+                                branch_index, loc.attribute, loc.span.line, loc.span.col
+                            ));
+                        }
+
+                        errors.push(LemmaError::semantic(
+                            format!("Type mismatch in rule '{}' in document '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same standard type.",
+                            rule_path.rule,
+                            rule_source.doc_name,
+                            location_parts.join(", "),
+                            existing_type.name(),
+                            branch_index,
+                            result_type.name()),
+                            rule_source.span.clone(),
+                            rule_source.attribute.clone(),
+                            std::sync::Arc::from(""),
+                            rule_source.doc_name.clone(),
+                            1,
+                            None::<String>,
+                        ));
+                    }
                 }
             }
 
-            if default_type != result_type && !default_type.is_veto() && !result_type.is_veto() {
-                let rule_node = graph.rules().get(rule_path).expect("Rule should exist");
+            if !default_type.has_same_base_type(&result_type)
+                && !default_type.is_veto()
+                && !result_type.is_veto()
+            {
+                let Some(rule_node) = graph.rules().get(rule_path) else {
+                    panic!(
+                        "BUG: rule type validation referenced missing rule '{}'",
+                        rule_path.rule
+                    );
+                };
                 let rule_source = &rule_node.source;
                 let default_expr = &branches[0].1;
 
@@ -1336,7 +1405,7 @@ fn compute_all_rule_types(
                 }
 
                 errors.push(LemmaError::semantic(
-                    format!("Type mismatch in rule '{}' in document '{}' ({}): default branch returns {}, but unless clause {} returns {}",
+                    format!("Type mismatch in rule '{}' in document '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same standard type.",
                     rule_path.rule,
                     rule_source.doc_name,
                     location_parts.join(", "),
@@ -1379,20 +1448,15 @@ fn compute_expression_type(
         ExpressionKind::FactPath(fact_path) => {
             compute_fact_type(fact_path, graph, computed_rule_types, errors)
         }
-        ExpressionKind::RulePath(rule_path) => {
-            computed_rule_types.get(rule_path).cloned().unwrap_or_else(|| {
-                errors.push(LemmaError::engine(
-                    format!("Rule '{}' referenced before its type was computed - this indicates a bug in topological ordering", rule_path.rule),
-                    Span { start: 0, end: 0, line: 1, col: 0 },
-                    "<unknown>",
-                    Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                ));
-                LemmaType::veto_type()
-            })
-        }
+        ExpressionKind::RulePath(rule_path) => computed_rule_types
+            .get(rule_path)
+            .cloned()
+            .unwrap_or_else(|| {
+                panic!(
+                    "BUG: Rule '{}' referenced before its type was computed (topological ordering)",
+                    rule_path.rule
+                )
+            }),
         ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
             let left_type = compute_expression_type(left, graph, computed_rule_types, errors);
             let right_type = compute_expression_type(right, graph, computed_rule_types, errors);
@@ -1545,8 +1609,8 @@ fn validate_comparison_types(
     {
         return;
     }
-    // Allow comparison between text types (including anonymous types with their base type)
-    // Anonymous types extending a base text type are comparable with that base type
+    // Allow comparison between text types (including inline type definitions with their base type)
+    // Inline type definitions extending a base text type are comparable with that base type
     // Options validation happens at runtime, not during type checking
     if left_type.is_text() && right_type.is_text() {
         return;
@@ -1688,34 +1752,6 @@ fn validate_arithmetic_types(
     validate_arithmetic_operator_constraints(left_type, right_type, operator, errors);
 }
 
-/// Check if two types share the same base type (e.g., both are Scale, both are Number, both are Ratio, etc.)
-/// Scale and Number are considered to share base (both numeric) for compatibility
-fn types_share_base(left: &LemmaType, right: &LemmaType) -> bool {
-    use crate::TypeSpecification;
-    matches!(
-        (&left.specifications, &right.specifications),
-        (
-            TypeSpecification::Scale { .. },
-            TypeSpecification::Scale { .. }
-        ) | (
-            TypeSpecification::Number { .. },
-            TypeSpecification::Number { .. }
-        ) | (
-            TypeSpecification::Scale { .. },
-            TypeSpecification::Number { .. }
-        ) | (
-            TypeSpecification::Number { .. },
-            TypeSpecification::Scale { .. }
-        ) | (
-            TypeSpecification::Duration { .. },
-            TypeSpecification::Duration { .. }
-        ) | (
-            TypeSpecification::Ratio { .. },
-            TypeSpecification::Ratio { .. }
-        )
-    )
-}
-
 fn validate_arithmetic_operator_constraints(
     left_type: &LemmaType,
     right_type: &LemmaType,
@@ -1773,23 +1809,83 @@ fn validate_arithmetic_operator_constraints(
         ArithmeticComputation::Multiply | ArithmeticComputation::Divide => {
             // Multiply/Divide: Different Scale types are already rejected in validate_arithmetic_types
             // At this point, if both are Scale, they must be the same Scale type
-            // Same Scale type operations are allowed (e.g., money * money, money / money)
-            // Different Scale types with units are rejected above (money * length)
-            // Scale * Number, Number * Scale, Number * Number are all allowed
-            // (Result type computed in compute_arithmetic_result_type)
+
+            // - Same standard type: allowed (Number * Number, Scale * Scale, Ratio * Ratio, etc.)
+            // - Scale * Number, Number * Scale: allowed
+            // - Scale * Ratio, Ratio * Scale: allowed
+            // - Number * Ratio, Ratio * Number: allowed
+            // - Duration * Number: allowed (Multiply only)
+            // - Number * Duration: allowed (Multiply only)
+            // - Duration / Number: allowed (Divide only)
+            // - Number / Duration: NOT allowed
+
+            if !left_type.has_same_base_type(right_type) {
+                // Check if Scale * Number or Number * Scale (allowed)
+                let is_scale_number = (left_type.is_scale() && right_type.is_number())
+                    || (left_type.is_number() && right_type.is_scale());
+
+                // Check if Scale * Ratio or Ratio * Scale (allowed)
+                let is_scale_ratio = (left_type.is_scale() && right_type.is_ratio())
+                    || (left_type.is_ratio() && right_type.is_scale());
+
+                // Check if Number * Ratio or Ratio * Number (allowed)
+                let is_number_ratio = (left_type.is_number() && right_type.is_ratio())
+                    || (left_type.is_ratio() && right_type.is_number());
+
+                // Check Duration combinations
+                let is_duration_number = (left_type.is_duration() && right_type.is_number())
+                    || (left_type.is_number() && right_type.is_duration());
+
+                if is_duration_number {
+                    // Duration * Number or Number * Duration: only Multiply is allowed
+                    // Duration / Number: only Divide is allowed (when Duration is left)
+                    // Number / Duration: NOT allowed
+                    if matches!(operator, ArithmeticComputation::Divide)
+                        && left_type.is_number()
+                        && right_type.is_duration()
+                    {
+                        errors.push(LemmaError::engine(
+                            "Cannot divide number by duration. Duration can only be multiplied by number or divided by number.".to_string(),
+                            Span { start: 0, end: 0, line: 1, col: 0 },
+                            "<unknown>",
+                            Arc::from(""),
+                            "<unknown>",
+                            1,
+                            None::<String>,
+                        ));
+                    }
+                    // Otherwise, Duration * Number or Number * Duration (Multiply) or Duration / Number (Divide) are allowed
+                } else if !is_scale_number && !is_scale_ratio && !is_number_ratio {
+                    // Not the special case - types are incompatible
+                    errors.push(LemmaError::engine(
+                        format!(
+                            "Cannot apply '{}' to values with different types: {} and {}. '*'/'/' require the same standard type, scale * number (or number * scale), scale * ratio (or ratio * scale), number * ratio (or ratio * number), or duration * number (or number * duration) for multiply, or duration / number for divide.",
+                            operator,
+                            left_type.name(),
+                            right_type.name()
+                        ),
+                        Span { start: 0, end: 0, line: 1, col: 0 },
+                        "<unknown>",
+                        Arc::from(""),
+                        "<unknown>",
+                        1,
+                        None::<String>,
+                    ));
+                }
+            } else {
+                // Types have the same standard type - always allowed (even with different constraints)
+            }
         }
         ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
             // Different Scale types are already rejected in validate_arithmetic_types
             // At this point, if both are Scale, they must be the same Scale type
 
-            // - Same type: allowed (exact equality) - handled by early return
+            // - Same standard type: allowed (Number + Number, Scale + Scale, etc.) - even with different constraints
             // - Scale + Number: allowed (result is Scale)
             // - Number + Scale: allowed (result is Scale)
-            // - Number + Number: allowed (result is Number)
             // - Number + Ratio: allowed (result is Number with ratio semantics)
             // - Scale + Ratio: allowed (result is Scale with ratio semantics)
-            // - Standard numeric type + custom Scale/Number (same base): allowed
-            if left_type != right_type {
+            if !left_type.has_same_base_type(right_type) {
                 // Check if Scale + Number or Number + Scale (allowed)
                 let is_scale_number = (left_type.is_scale() && right_type.is_number())
                     || (left_type.is_number() && right_type.is_scale());
@@ -1803,45 +1899,24 @@ fn validate_arithmetic_operator_constraints(
                     || (left_type.is_ratio() && right_type.is_number());
 
                 if !is_scale_number && !is_scale_ratio && !is_number_ratio {
-                    // Not the special case - check if one is standard and the other is a custom type with same base
-                    // Scale and Number share the same base (both numeric)
-                    let one_is_standard = left_type.name.is_none() || right_type.name.is_none();
-                    let other_is_custom = left_type.name.is_some() || right_type.name.is_some();
-                    let share_base = types_share_base(left_type, right_type);
-
-                    // Check if both are custom types with same base (both Number or both Scale)
-                    // Different Scale types are already rejected in validate_arithmetic_types
-                    // So if both are Scale here, they must be the same Scale type (handled by early return)
-                    // But different custom Number types with same base should be allowed
-                    let both_custom_same_base =
-                        left_type.name.is_some() && right_type.name.is_some() && share_base;
-
-                    if !(both_custom_same_base
-                        || (one_is_standard && other_is_custom && share_base))
-                    {
-                        // Not the special case - types are incompatible
-                        errors.push(LemmaError::engine(
-                            format!("Cannot {} values with different types: {} and {}. Add/Subtract require the exact same type, scale + number (or number + scale), scale + ratio (or ratio + scale), number + ratio (or ratio + number), or numeric types that share the same base.",
-                                match operator {
-                                    ArithmeticComputation::Add => "add",
-                                    ArithmeticComputation::Subtract => "subtract",
-                                    _ => unreachable!(),
-                                },
-                                left_type.name(),
-                                right_type.name()
-                            ),
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
+                    // Not the special case - types are incompatible
+                    errors.push(LemmaError::engine(
+                        format!(
+                            "Cannot apply '{}' to values with different types: {} and {}. '+'/'-' require the same standard type, scale + number (or number + scale), scale + ratio (or ratio + scale), or number + ratio (or ratio + number).",
+                            operator,
+                            left_type.name(),
+                            right_type.name()
+                        ),
+                        Span { start: 0, end: 0, line: 1, col: 0 },
+                        "<unknown>",
+                        Arc::from(""),
+                        "<unknown>",
+                        1,
+                        None::<String>,
                         ));
-                    }
-                    // If is_scale_number, is_scale_ratio, is_number_ratio, both_custom_same_base, or (one_is_standard && other_is_custom && share_base), allow it
                 }
             } else {
-                // Types are equal - always allowed (same custom type or both standard types)
+                // Types have the same standard type - always allowed (even with different constraints)
             }
         }
         ArithmeticComputation::Power => {
@@ -1988,11 +2063,11 @@ fn compute_fact_type(
                 fact: fact_path.fact.clone(),
             };
 
-            // For anonymous types, check if they exist in resolved_types
-            // Anonymous types are already fully resolved during type resolution, so just use them directly
+            // For inline type definitions, check if they exist in resolved_types
+            // Inline type definitions are already fully resolved during type resolution, so just use them directly
             for (_doc_name, document_types) in graph.resolved_types.iter() {
-                if let Some(resolved_type) = document_types.anonymous_types.get(&fact_ref) {
-                    // Anonymous type already resolved - return it directly
+                if let Some(resolved_type) = document_types.inline_type_definitions.get(&fact_ref) {
+                    // Inline type definition already resolved - return it directly
                     return resolved_type.clone();
                 }
             }
@@ -2257,6 +2332,247 @@ fn validate_all_rule_references_exist(graph: &Graph, errors: &mut Vec<LemmaError
     }
 }
 
+fn validate_fact_override_paths_target_document_facts(graph: &Graph, errors: &mut Vec<LemmaError>) {
+    // For any fact path like `a.b.c`, each segment (`a`, `a.b`, ...) must be a document reference.
+    for (fact_path, _fact) in graph.facts() {
+        if fact_path.segments.is_empty() {
+            continue;
+        }
+
+        for i in 0..fact_path.segments.len() {
+            let seg = &fact_path.segments[i];
+            let prefix_segments: Vec<PathSegment> = fact_path.segments[..i].to_vec();
+            let seg_fact_path = FactPath::new(prefix_segments, seg.fact.clone());
+
+            match graph.facts().get(&seg_fact_path) {
+                Some(seg_fact) => match &seg_fact.value {
+                    FactValue::DocumentReference(_) => {}
+                    _ => errors.push(LemmaError::engine(
+                        format!(
+                            "Invalid fact override path '{}': '{}' is not a document reference",
+                            fact_path, seg_fact_path
+                        ),
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<unknown>",
+                        Arc::from(""),
+                        "<unknown>",
+                        1,
+                        None::<String>,
+                    )),
+                },
+                None => errors.push(LemmaError::engine(
+                    format!(
+                        "Invalid fact override path '{}': missing document reference '{}'",
+                        fact_path, seg_fact_path
+                    ),
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                )),
+            }
+        }
+    }
+
+    // Also validate *syntactic override facts* from source documents.
+    //
+    // GraphBuilder intentionally skips registering override facts (facts with reference.segments),
+    // so they are not present in `graph.facts()`. However, they are still part of the language and
+    // must be validated. We validate by traversing document references through the source docs:
+    // for an override `x.y.z = ...`, each segment (`x`, then `y`) must be a document reference in
+    // the document reached after traversing the previous segment.
+    for doc in graph.all_docs.values() {
+        for fact in &doc.facts {
+            if fact.reference.segments.is_empty() {
+                continue;
+            }
+
+            let mut current_doc_name = doc.name.clone();
+            let mut prefix: Vec<String> = Vec::new();
+            let mut path_valid = true;
+
+            for seg in &fact.reference.segments {
+                prefix.push(seg.clone());
+
+                let current_doc = match graph.all_docs.get(&current_doc_name) {
+                    Some(d) => d,
+                    None => {
+                        errors.push(LemmaError::engine(
+                            format!(
+                                "Invalid fact override path '{}.{}': document '{}' not found",
+                                prefix.join("."),
+                                fact.reference.fact,
+                                current_doc_name
+                            ),
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                            "<unknown>",
+                            Arc::from(""),
+                            "<unknown>",
+                            1,
+                            None::<String>,
+                        ));
+                        path_valid = false;
+                        break;
+                    }
+                };
+
+                let Some(seg_fact) = current_doc
+                    .facts
+                    .iter()
+                    .find(|f| f.reference.segments.is_empty() && f.reference.fact == *seg)
+                else {
+                    errors.push(LemmaError::engine(
+                        format!(
+                            "Invalid fact override path '{}.{}': missing document reference '{}'",
+                            prefix.join("."),
+                            fact.reference.fact,
+                            prefix.join(".")
+                        ),
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<unknown>",
+                        Arc::from(""),
+                        "<unknown>",
+                        1,
+                        None::<String>,
+                    ));
+                    path_valid = false;
+                    break;
+                };
+
+                match &seg_fact.value {
+                    FactValue::DocumentReference(next_doc) => {
+                        current_doc_name = next_doc.clone();
+                    }
+                    _ => {
+                        errors.push(LemmaError::engine(
+                            format!(
+                                "Invalid fact override path '{}.{}': '{}' is not a document reference",
+                                prefix.join("."),
+                                fact.reference.fact,
+                                prefix.join(".")
+                            ),
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                            "<unknown>",
+                            Arc::from(""),
+                            "<unknown>",
+                            1,
+                            None::<String>,
+                        ));
+                        path_valid = false;
+                        break;
+                    }
+                }
+            }
+
+            // If path traversal succeeded, validate that we're not overriding a typed fact with a type definition
+            if path_valid {
+                if let Some(target_doc) = graph.all_docs.get(&current_doc_name) {
+                    if let Some(original_fact) = target_doc.facts.iter().find(|f| {
+                        f.reference.segments.is_empty() && f.reference.fact == fact.reference.fact
+                    }) {
+                        // Check if both original and override are type declarations
+                        if matches!(&original_fact.value, FactValue::TypeDeclaration { .. })
+                            && matches!(&fact.value, FactValue::TypeDeclaration { .. })
+                        {
+                            let override_path = if fact.reference.segments.is_empty() {
+                                fact.reference.fact.clone()
+                            } else {
+                                format!(
+                                    "{}.{}",
+                                    fact.reference.segments.join("."),
+                                    fact.reference.fact
+                                )
+                            };
+                            errors.push(LemmaError::engine(
+                                format!(
+                                    "Cannot override typed fact '{}' with type definition. Use a concrete value instead.",
+                                    override_path
+                                ),
+                                fact.source_location
+                                    .as_ref()
+                                    .map(|s| s.span.clone())
+                                    .unwrap_or(Span {
+                                        start: 0,
+                                        end: 0,
+                                        line: 1,
+                                        col: 0,
+                                    }),
+                                fact.source_location
+                                    .as_ref()
+                                    .map(|s| s.attribute.as_str())
+                                    .unwrap_or("<unknown>"),
+                                fact.source_location
+                                    .as_ref()
+                                    .map(|s| Arc::from(s.doc_name.as_str()))
+                                    .unwrap_or_else(|| Arc::from("")),
+                                fact.source_location
+                                    .as_ref()
+                                    .map(|s| s.doc_name.as_str())
+                                    .unwrap_or("<unknown>"),
+                                1,
+                                None::<String>,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn validate_fact_and_rule_name_collisions(graph: &Graph, errors: &mut Vec<LemmaError>) {
+    // Disallow fact/rule name collision in the same namespace (same traversal segments).
+    for rule_path in graph.rules().keys() {
+        let fact_path = FactPath::new(rule_path.segments.clone(), rule_path.rule.clone());
+        if graph.facts().contains_key(&fact_path) {
+            errors.push(LemmaError::engine(
+                format!(
+                    "Name collision: '{}' is defined as both a fact and a rule",
+                    fact_path
+                ),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(""),
+                "<unknown>",
+                1,
+                None::<String>,
+            ));
+        }
+    }
+}
+
 fn validate_document_interfaces(
     graph: &Graph,
     all_docs: &[LemmaDoc],
@@ -2397,6 +2713,51 @@ mod tests {
         let graph = result.unwrap();
         assert_eq!(graph.facts().len(), 1);
         assert_eq!(graph.rules().len(), 1);
+    }
+
+    #[test]
+    fn should_reject_fact_override_into_non_document_fact() {
+        // Higher-standard language rule:
+        // if `x` is a literal (not a document reference), `x.y = ...` must be rejected.
+        //
+        // This is currently expected to FAIL until graph building enforces it consistently.
+        let mut doc = create_test_doc("test");
+        doc = doc.add_fact(create_literal_fact("x", LiteralValue::number(1)));
+
+        // Override x.y, but x is not a document reference.
+        doc = doc.add_fact(LemmaFact {
+            reference: FactReference::from_path(vec!["x".to_string(), "y".to_string()]),
+            value: FactValue::Literal(LiteralValue::number(2)),
+            source_location: None,
+        });
+
+        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        assert!(
+            result.is_err(),
+            "Overriding x.y must fail when x is not a document reference"
+        );
+    }
+
+    #[test]
+    fn should_reject_fact_and_rule_name_collision() {
+        // Higher-standard language rule: fact and rule names should not collide.
+        // It's ambiguous for humans and leads to confusing error messages.
+        //
+        // This is currently expected to FAIL until the language enforces it.
+        let mut doc = create_test_doc("test");
+        doc = doc.add_fact(create_literal_fact("x", LiteralValue::number(1)));
+        doc = doc.add_rule(LemmaRule {
+            name: "x".to_string(),
+            expression: create_literal_expr(LiteralValue::number(2)),
+            unless_clauses: Vec::new(),
+            source_location: None,
+        });
+
+        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        assert!(
+            result.is_err(),
+            "Fact and rule name collisions should be rejected"
+        );
     }
 
     #[test]

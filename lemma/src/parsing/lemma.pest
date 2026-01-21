@@ -88,11 +88,7 @@ command_arg  = { number_literal | boolean_literal | text_literal | label }
 lemma_file = { SOI ~ SPACE* ~ doc* ~ SPACE* ~ EOI }
 
 doc = {
-    doc_header ~ SPACE* ~ doc_body
-}
-
-doc_header = {
-    doc_declaration ~ SPACE* ~ commentary_block?
+    doc_declaration ~ SPACE* ~ commentary_block? ~ SPACE* ~ doc_body
 }
 
 doc_body = {
@@ -102,10 +98,11 @@ doc_body = {
 doc_declaration = { ^"doc" ~ SPACE+ ~ doc_name }
 
 doc_name       = { doc_identifier ~ ("/" ~ doc_identifier)* }
-doc_identifier = { ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_" | "-")* }
+doc_identifier = { ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_" | "-" | "/" | "." )* }
 
-commentary_block = { "\"\"\"" ~ commentary ~ "\"\"\"" }
-commentary = { (!"\"\"\"" ~ ANY)* }
+triple_quote = _{ "\"\"\"" }
+commentary_block = { triple_quote ~ commentary ~ triple_quote }
+commentary = { (!triple_quote ~ ANY)* }
 
 // ================================================================================================
 // FACT DEFINITIONS

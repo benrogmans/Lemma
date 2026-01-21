@@ -9,8 +9,8 @@ use crate::parsing::ast::Span;
 use crate::planning::{ExecutableRule, ExecutionPlan};
 use crate::{
     ArithmeticComputation, BooleanValue, ComparisonComputation, ConversionTarget, Expression,
-    ExpressionKind, FactPath, FactValue, LemmaError, LemmaResult, LiteralValue,
-    MathematicalComputation, NegationType, OperationResult, RulePath, Value,
+    ExpressionKind, FactPath, LemmaError, LemmaResult, LiteralValue, MathematicalComputation,
+    NegationType, OperationResult, RulePath, Value,
 };
 use serde::ser::{Serialize, SerializeMap, Serializer};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -607,152 +607,54 @@ fn substitute_rules_in_expression(
                 }
             }
             WorkItem::BuildArithmetic(op, source_loc) => {
-                let right = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing right expression for Arithmetic",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
+                let right = result_pool.pop().unwrap_or_else(|| {
+                    panic!(
+                        "BUG: missing right expression for Arithmetic during inversion hydration"
                     )
-                })?;
-                let left = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing left expression for Arithmetic",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
+                });
+                let left = result_pool.pop().unwrap_or_else(|| {
+                    panic!("BUG: missing left expression for Arithmetic during inversion hydration")
+                });
                 result_pool.push(Expression::new(
                     ExpressionKind::Arithmetic(Arc::new(left), op, Arc::new(right)),
                     source_loc,
                 ));
             }
             WorkItem::BuildComparison(op, source_loc) => {
-                let right = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing right expression for Comparison",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
+                let right = result_pool.pop().unwrap_or_else(|| {
+                    panic!(
+                        "BUG: missing right expression for Comparison during inversion hydration"
                     )
-                })?;
-                let left = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing left expression for Comparison",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
+                });
+                let left = result_pool.pop().unwrap_or_else(|| {
+                    panic!("BUG: missing left expression for Comparison during inversion hydration")
+                });
                 result_pool.push(Expression::new(
                     ExpressionKind::Comparison(Arc::new(left), op, Arc::new(right)),
                     source_loc,
                 ));
             }
             WorkItem::BuildLogicalAnd(source_loc) => {
-                let right = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing right expression for LogicalAnd",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
+                let right = result_pool.pop().unwrap_or_else(|| {
+                    panic!(
+                        "BUG: missing right expression for LogicalAnd during inversion hydration"
                     )
-                })?;
-                let left = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing left expression for LogicalAnd",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
+                });
+                let left = result_pool.pop().unwrap_or_else(|| {
+                    panic!("BUG: missing left expression for LogicalAnd during inversion hydration")
+                });
                 result_pool.push(Expression::new(
                     ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right)),
                     source_loc,
                 ));
             }
             WorkItem::BuildLogicalOr(source_loc) => {
-                let right = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing right expression for LogicalOr",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
-                let left = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing left expression for LogicalOr",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
+                let right = result_pool.pop().unwrap_or_else(|| {
+                    panic!("BUG: missing right expression for LogicalOr during inversion hydration")
+                });
+                let left = result_pool.pop().unwrap_or_else(|| {
+                    panic!("BUG: missing left expression for LogicalOr during inversion hydration")
+                });
                 result_pool.push(Expression::new(
                     ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
                     source_loc,
@@ -852,14 +754,12 @@ fn hydrate_facts_in_expression(
                 match expr_kind_ref {
                     ExpressionKind::FactPath(fact_path) => {
                         if provided_facts.contains(fact_path) {
-                            if let Some(fact) = plan.facts.get(fact_path) {
-                                if let FactValue::Literal(lit) = &fact.value {
-                                    result_pool.push(Expression::new(
-                                        ExpressionKind::Literal(lit.clone()),
-                                        source_loc,
-                                    ));
-                                    continue;
-                                }
+                            if let Some(lit) = plan.fact_values.get(fact_path) {
+                                result_pool.push(Expression::new(
+                                    ExpressionKind::Literal(lit.clone()),
+                                    source_loc,
+                                ));
+                                continue;
                             }
                         }
                         result_pool.push(Expression::new(
@@ -1403,8 +1303,10 @@ mod tests {
     fn empty_plan() -> ExecutionPlan {
         ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            fact_types: HashMap::new(),
+            fact_schema: HashMap::new(),
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         }

@@ -2,7 +2,7 @@ use crate::evaluation::Evaluator;
 use crate::parsing::ast::Span;
 use crate::planning::plan;
 use crate::{parse, LemmaDoc, LemmaError, LemmaResult, ResourceLimits, Response};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Engine for evaluating Lemma rules
@@ -143,6 +143,54 @@ impl Engine {
         } else {
             Vec::new()
         }
+    }
+
+    /// Get the resolved schema type for a fact in a document (including imported/custom types).
+    ///
+    /// This uses the document's compiled execution plan, so it reflects the authoritative schema
+    /// after type resolution and overrides.
+    pub fn get_fact_schema_type(
+        &self,
+        doc_name: &str,
+        fact_name: &str,
+    ) -> Option<crate::LemmaType> {
+        let plan = self.execution_plans.get(doc_name)?;
+        let fact_path = plan.get_fact_path_by_str(fact_name)?;
+        plan.fact_schema.get(fact_path).cloned()
+    }
+
+    /// Get the set of fact names required to evaluate a document's rules.
+    ///
+    /// - If `rule_names` is empty, returns required facts for **all** rules in the document.
+    /// - Otherwise, returns required facts for the specified local rules (by name).
+    ///
+    /// Returned names match `FactReference::to_string()` / `FactPath::to_string()` (e.g. "age",
+    /// "order.price", etc.), so they can be used by UIs to decide what to prompt for.
+    pub fn get_required_fact_names(
+        &self,
+        doc_name: &str,
+        rule_names: &[String],
+    ) -> Option<HashSet<String>> {
+        let plan = self.execution_plans.get(doc_name)?;
+        let mut required: HashSet<String> = HashSet::new();
+
+        if rule_names.is_empty() {
+            for rule in &plan.rules {
+                for fact in &rule.needs_facts {
+                    required.insert(fact.to_string());
+                }
+            }
+            return Some(required);
+        }
+
+        for rule_name in rule_names {
+            let rule = plan.get_rule(rule_name)?;
+            for fact in &rule.needs_facts {
+                required.insert(fact.to_string());
+            }
+        }
+
+        Some(required)
     }
 
     /// Evaluate rules in a document with JSON values for facts.
@@ -340,17 +388,7 @@ impl Engine {
         let plan = base_plan.clone().with_values(values, &self.limits)?;
 
         // Collect provided fact paths
-        let provided_facts = plan
-            .facts
-            .iter()
-            .filter_map(|(path, fact)| {
-                if matches!(fact.value, crate::FactValue::Literal(_)) {
-                    Some(path.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let provided_facts = plan.fact_values.keys().cloned().collect();
 
         crate::inversion::invert(rule_name, target, &plan, &provided_facts)
     }
@@ -394,17 +432,7 @@ impl Engine {
         let plan = base_plan.clone().with_typed_values(values, &self.limits)?;
 
         // Collect provided fact paths
-        let provided_facts = plan
-            .facts
-            .iter()
-            .filter_map(|(path, fact)| {
-                if matches!(fact.value, crate::FactValue::Literal(_)) {
-                    Some(path.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let provided_facts = plan.fact_values.keys().cloned().collect();
 
         crate::inversion::invert(rule_name, target, &plan, &provided_facts)
     }

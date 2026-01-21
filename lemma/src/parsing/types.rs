@@ -380,3 +380,46 @@ fn parse_command(pair: Pair<Rule>) -> Result<(String, Vec<String>), LemmaError> 
 
     Ok((name, command_args))
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use crate::{parse, ResourceLimits};
+
+    #[test]
+    fn type_definition_parsing_produces_regular_typedef_with_overrides() {
+        let code = r#"doc test
+type dice = number -> minimum 0 -> maximum 6"#;
+
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(docs.len(), 1);
+
+        let doc = &docs[0];
+        assert_eq!(doc.name, "test");
+        assert_eq!(doc.types.len(), 1);
+
+        let type_def = &doc.types[0];
+        match type_def {
+            crate::TypeDef::Regular {
+                name,
+                parent,
+                overrides,
+            } => {
+                assert_eq!(name, "dice");
+                assert_eq!(parent, "number");
+                assert!(overrides.is_some());
+
+                let overrides = overrides.as_ref().unwrap();
+                assert_eq!(overrides.len(), 2);
+                assert_eq!(overrides[0].0, "minimum");
+                assert_eq!(overrides[0].1, vec!["0"]);
+                assert_eq!(overrides[1].0, "maximum");
+                assert_eq!(overrides[1].1, vec!["6"]);
+            }
+            other => panic!("Expected Regular type definition, got {:?}", other),
+        }
+    }
+}

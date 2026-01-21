@@ -463,7 +463,9 @@ fn compute_is_determined(all_domains: &[HashMap<FactPath, Domain>]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Engine;
     use rust_decimal::Decimal;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     #[test]
@@ -543,5 +545,317 @@ mod tests {
         );
         let domains = vec![domain_map];
         assert!(!compute_is_determined(&domains));
+    }
+
+    #[test]
+    fn test_invert_strict_rule_reference_expands_constraints() {
+        // Regression-style test: rule references should be expanded during inversion,
+        // and veto conditions should constrain the domains.
+        let code = r#"
+doc example
+fact x = [number]
+rule base = x
+  unless x > 3 then veto "too much"
+  unless x < 0 then veto "too little"
+
+rule another = base?
+  unless x > 5 then veto "way too much"
+"#;
+
+        let mut engine = Engine::new();
+        engine.add_lemma_code(code, "test.lemma").unwrap();
+
+        let inv = engine
+            .invert_strict(
+                "example",
+                "another",
+                Target::value(LiteralValue::number(3)),
+                HashMap::new(),
+            )
+            .expect("inversion should succeed");
+
+        assert!(!inv.is_empty(), "expected at least one solution");
+
+        let x = FactPath::local("x".to_string());
+        let three = LiteralValue::number(3);
+
+        // For target value 3, x must be exactly 3 (not just within a broad range).
+        for (_solution, domains) in inv.iter() {
+            let d = domains.get(&x).expect("domain for x should exist");
+            assert!(
+                d.contains(&three),
+                "x domain should contain 3. Domain: {}",
+                d
+            );
+        }
+    }
+
+    #[test]
+    fn test_invert_strict_no_solution_when_value_is_blocked_by_veto() {
+        let code = r#"
+doc example
+fact x = [number]
+rule base = x
+  unless x > 3 then veto "too much"
+  unless x < 0 then veto "too little"
+
+rule another = base?
+  unless x > 5 then veto "way too much"
+"#;
+
+        let mut engine = Engine::new();
+        engine.add_lemma_code(code, "test.lemma").unwrap();
+
+        let inv = engine
+            .invert_strict(
+                "example",
+                "another",
+                Target::value(LiteralValue::number(7)),
+                HashMap::new(),
+            )
+            .expect("inversion should succeed");
+
+        assert!(
+            inv.is_empty(),
+            "Should have no solutions because another can never equal 7"
+        );
+    }
+
+    #[test]
+    fn test_invert_strict_veto_target_constrains_domain() {
+        let code = r#"
+doc example
+fact x = [number]
+rule base = x
+  unless x > 3 then veto "too much"
+  unless x < 0 then veto "too little"
+
+rule another = base?
+  unless x > 5 then veto "way too much"
+"#;
+
+        let mut engine = Engine::new();
+        engine.add_lemma_code(code, "test.lemma").unwrap();
+
+        let inv = engine
+            .invert_strict(
+                "example",
+                "another",
+                Target::veto(Some("way too much".to_string())),
+                HashMap::new(),
+            )
+            .expect("inversion should succeed");
+
+        assert!(!inv.is_empty(), "expected solutions for veto query");
+
+        let x = FactPath::local("x".to_string());
+        let five = LiteralValue::number(5);
+        let six = LiteralValue::number(6);
+
+        for (solution, domains) in inv.iter() {
+            assert_eq!(
+                solution.outcome,
+                OperationResult::Veto(Some("way too much".to_string())),
+                "Expected solution outcome to be veto('way too much'), got: {:?}",
+                solution.outcome
+            );
+
+            let d = domains.get(&x).expect("domain for x should exist");
+            match d {
+                Domain::Range { min, max } => {
+                    assert!(
+                        matches!(min, Bound::Exclusive(v) if **v == five),
+                        "Expected min bound to be (5), got: {}",
+                        d
+                    );
+                    assert!(
+                        matches!(max, Bound::Unbounded),
+                        "Expected max bound to be +inf, got: {}",
+                        d
+                    );
+                }
+                other => panic!("Expected range domain for x, got: {}", other),
+            }
+            assert!(
+                !d.contains(&five),
+                "x=5 should not be in veto('way too much') domain. Domain: {}",
+                d
+            );
+            assert!(
+                d.contains(&six),
+                "x=6 should be in veto('way too much') domain. Domain: {}",
+                d
+            );
+        }
+    }
+
+    #[test]
+    fn test_invert_strict_any_veto_target_matches_all_veto_ranges() {
+        let code = r#"
+doc example
+fact x = [number]
+rule base = x
+  unless x > 3 then veto "too much"
+  unless x < 0 then veto "too little"
+
+rule another = base?
+  unless x > 5 then veto "way too much"
+"#;
+
+        let mut engine = Engine::new();
+        engine.add_lemma_code(code, "test.lemma").unwrap();
+
+        let inv = engine
+            .invert_strict("example", "another", Target::any_veto(), HashMap::new())
+            .expect("inversion should succeed");
+
+        assert!(!inv.is_empty(), "expected solutions for any-veto query");
+
+        let x = FactPath::local("x".to_string());
+        let minus_one = LiteralValue::number(-1);
+        let zero = LiteralValue::number(0);
+        let two = LiteralValue::number(2);
+        let three = LiteralValue::number(3);
+        let four = LiteralValue::number(4);
+        let five = LiteralValue::number(5);
+        let six = LiteralValue::number(6);
+
+        let mut saw_too_little = false;
+        let mut saw_too_much = false;
+        let mut saw_way_too_much = false;
+
+        for (solution, domains) in inv.iter() {
+            let d = domains.get(&x).expect("domain for x should exist");
+            assert!(
+                !d.contains(&two),
+                "x=2 should not be in any-veto domain. Domain: {}",
+                d
+            );
+
+            match &solution.outcome {
+                OperationResult::Veto(Some(msg)) if msg == "too little" => {
+                    saw_too_little = true;
+
+                    match d {
+                        Domain::Range { min, max } => {
+                            assert!(
+                                matches!(min, Bound::Unbounded),
+                                "Expected min bound to be -inf for 'too little', got: {}",
+                                d
+                            );
+                            assert!(
+                                matches!(max, Bound::Exclusive(v) if **v == zero),
+                                "Expected max bound to be (0) for 'too little', got: {}",
+                                d
+                            );
+                        }
+                        other => panic!("Expected range domain for x, got: {}", other),
+                    }
+
+                    assert!(
+                        d.contains(&minus_one),
+                        "x=-1 should be in veto('too little') domain. Domain: {}",
+                        d
+                    );
+                    assert!(
+                        !d.contains(&zero),
+                        "x=0 should not be in veto('too little') domain. Domain: {}",
+                        d
+                    );
+                }
+                OperationResult::Veto(Some(msg)) if msg == "too much" => {
+                    saw_too_much = true;
+
+                    match d {
+                        Domain::Range { min, max } => {
+                            assert!(
+                                matches!(min, Bound::Exclusive(v) if **v == three),
+                                "Expected min bound to be (3) for 'too much', got: {}",
+                                d
+                            );
+                            assert!(
+                                matches!(max, Bound::Inclusive(v) if **v == five),
+                                "Expected max bound to be [5] for 'too much', got: {}",
+                                d
+                            );
+                        }
+                        other => panic!("Expected range domain for x, got: {}", other),
+                    }
+
+                    assert!(
+                        d.contains(&four),
+                        "x=4 should be in veto('too much') domain. Domain: {}",
+                        d
+                    );
+                    assert!(
+                        d.contains(&five),
+                        "x=5 should be in veto('too much') domain. Domain: {}",
+                        d
+                    );
+                    assert!(
+                        !d.contains(&three),
+                        "x=3 should not be in veto('too much') domain. Domain: {}",
+                        d
+                    );
+                    assert!(
+                        !d.contains(&six),
+                        "x=6 should not be in veto('too much') domain. Domain: {}",
+                        d
+                    );
+                }
+                OperationResult::Veto(Some(msg)) if msg == "way too much" => {
+                    saw_way_too_much = true;
+
+                    match d {
+                        Domain::Range { min, max } => {
+                            assert!(
+                                matches!(min, Bound::Exclusive(v) if **v == five),
+                                "Expected min bound to be (5) for 'way too much', got: {}",
+                                d
+                            );
+                            assert!(
+                                matches!(max, Bound::Unbounded),
+                                "Expected max bound to be +inf for 'way too much', got: {}",
+                                d
+                            );
+                        }
+                        other => panic!("Expected range domain for x, got: {}", other),
+                    }
+
+                    assert!(
+                        d.contains(&six),
+                        "x=6 should be in veto('way too much') domain. Domain: {}",
+                        d
+                    );
+                    assert!(
+                        !d.contains(&five),
+                        "x=5 should not be in veto('way too much') domain. Domain: {}",
+                        d
+                    );
+                }
+                OperationResult::Veto(Some(other)) => {
+                    panic!("Unexpected veto message in any-veto results: {:?}", other)
+                }
+                OperationResult::Veto(None) => {
+                    panic!("Unexpected veto(None) in any-veto results (expected a message)")
+                }
+                OperationResult::Value(v) => {
+                    panic!("Unexpected value result in any-veto results: {:?}", v)
+                }
+            }
+        }
+
+        assert!(
+            saw_too_little,
+            "Expected at least one veto('too little') solution"
+        );
+        assert!(
+            saw_too_much,
+            "Expected at least one veto('too much') solution"
+        );
+        assert!(
+            saw_way_too_much,
+            "Expected at least one veto('way too much') solution"
+        );
     }
 }

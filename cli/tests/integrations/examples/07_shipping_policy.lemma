@@ -9,19 +9,32 @@ IMPORTANT: Unless clauses use "last matching wins" semantics.
 More specific conditions should come after more general ones.
 """
 
-fact order_total = [number]
-fact item_weight = [number]
-fact destination_country = "US"
-fact destination_state = "CA"
+type country = text
+  -> option "NL"
+  -> option "BE"
+  -> option "DE"
+  -> option "FR"
+
+type customer_tier_type = text
+  -> option "standard"
+  -> option "silver"
+  -> option "gold"
+  -> option "platinum"
+
+fact order_total = [number -> minimum 0]
+fact item_weight = [number -> minimum 0]
+fact destination_country = [country -> default "NL"]
+fact destination_region = "North Holland"
 fact is_po_box = [boolean]
 fact is_expedited = [boolean]
 fact is_hazardous = [boolean]
-fact customer_tier = "gold"
+fact customer_tier = [customer_tier_type -> default "gold"]
 
 rule base_shipping_rate = 35.00
-  unless destination_country is "US" then 12.99
   unless destination_country is "NL" then 22.00
   unless destination_country is "BE" then 25.00
+  unless destination_country is "DE" then 28.00
+  unless destination_country is "FR" then 30.00
 
 rule weight_surcharge = 0
   unless item_weight > 5 then 7.50
@@ -36,14 +49,14 @@ rule expedited_fee = 0
 
 rule hazardous_fee = 0
   unless is_hazardous then 50.00
-  unless is_hazardous and destination_country != "US" then veto "Cannot ship hazardous materials internationally"
+  unless is_hazardous and destination_country != "NL" then veto "Cannot ship hazardous materials internationally"
 
 rule customer_discount = 0%
   unless customer_tier is "silver"   then 10%
   unless customer_tier is "gold"     then 20%
   unless customer_tier is "platinum" then 30%
 
-rule free_shipping_eligible = order_total >= 100 and destination_country is "US"
+rule free_shipping_eligible = order_total >= 100 and destination_country is "NL"
 
 rule shipping_before_discount = base_shipping_rate? + weight_surcharge? + po_box_fee? + expedited_fee? + hazardous_fee?
 
@@ -54,21 +67,22 @@ rule final_shipping = shipping_before_discount? - shipping_discount_amount?
 
 rule estimated_delivery_days
   = 14 days
-  unless destination_country is "US" then 5 days
-  unless destination_country is "CA" then 10 days
-  unless destination_country is "MX" then 10 days
-  unless is_expedited then 2 days
+  unless destination_country is "NL" then 2 days
+  unless destination_country is "BE" then 3 days
+  unless destination_country is "DE" then 4 days
+  unless destination_country is "FR" then 5 days
+  unless is_expedited then 1 day
 
 rule ships_to_location
   = true
   unless is_po_box and is_hazardous then veto "Cannot ship hazardous materials to PO boxes"
-  unless destination_state == "AK" or destination_state == "HI" then veto "Shipping not available to Alaska or Hawaii"
+  unless destination_region == "Svalbard" then veto "Shipping not available to Svalbard"
 
 rule total_with_shipping
   = order_total + final_shipping?
 
 rule Summary
   = "Standard shipping"
-  unless free_shipping_eligible? then "Free shipping (order over $100)"
+  unless free_shipping_eligible? then "Free shipping (order over €100)"
   unless is_expedited            then "Expedited shipping"
 

@@ -5,7 +5,7 @@ Base Pricing Configuration
 Foundation pricing rules that can be referenced and customized.
 """
 
-fact base_price = 100
+fact base_price = [number -> minimum 0 -> default 100]
 fact tax_rate = 21%
 fact standard_discount = 5%
 
@@ -71,7 +71,7 @@ Demonstrates nested document references and multi-level fact access.
 """
 
 fact pricing = doc pricing/base_config
-fact quantity = 10
+fact quantity = [number -> minimum 0 -> default 10]
 
 rule line_total = pricing.final_price? * quantity
 

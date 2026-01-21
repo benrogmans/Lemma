@@ -71,7 +71,7 @@ pub fn validate_types(
     }
 
     // Validate type definitions by resolving them and checking specifications
-    // Resolve only named types (anonymous types are registered during graph building, not validation)
+    // Resolve only named types (inline type definitions are registered during graph building, not validation)
     match type_registry.resolve_named_types(&document.name) {
         Ok(resolved_types) => {
             // Validate each named type's specifications
@@ -188,13 +188,39 @@ pub(crate) fn validate_type_specifications(
             }
 
             // Validate default value constraints
-            if let Some(def) = default {
+            if let Some((def_value, def_unit)) = default {
+                // Validate that the default unit exists
+                if !units.iter().any(|u| u.name == *def_unit) {
+                    errors.push(LemmaError::engine(
+                        format!(
+                            "Type '{}' default unit '{}' is not a valid unit. Valid units: {}",
+                            type_name,
+                            def_unit,
+                            units
+                                .iter()
+                                .map(|u| u.name.clone())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<unknown>",
+                        Arc::from(""),
+                        "<unknown>",
+                        1,
+                        None::<String>,
+                    ));
+                }
                 if let Some(min) = minimum {
-                    if *def < *min {
+                    if *def_value < *min {
                         errors.push(LemmaError::engine(
                             format!(
-                                "Type '{}' default value {} is less than minimum {}",
-                                type_name, def, min
+                                "Type '{}' default value {} {} is less than minimum {}",
+                                type_name, def_value, def_unit, min
                             ),
                             Span {
                                 start: 0,
@@ -211,11 +237,11 @@ pub(crate) fn validate_type_specifications(
                     }
                 }
                 if let Some(max) = maximum {
-                    if *def > *max {
+                    if *def_value > *max {
                         errors.push(LemmaError::engine(
                             format!(
-                                "Type '{}' default value {} is greater than maximum {}",
-                                type_name, def, max
+                                "Type '{}' default value {} {} is greater than maximum {}",
+                                type_name, def_value, def_unit, max
                             ),
                             Span {
                                 start: 0,

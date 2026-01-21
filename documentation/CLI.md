@@ -203,10 +203,6 @@ policies/
 
 The CLI automatically loads all `.lemma` files and makes their documents available for evaluation.
 
-## Configuration Files
-
-### Built-in Documents
-
 ## Examples
 
 ### Basic Workflow

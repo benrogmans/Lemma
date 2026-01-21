@@ -103,7 +103,13 @@ impl Constraint {
         if let Some(bexpr) = to_bool_expr(&self, &mut atoms) {
             const MAX_ATOMS: usize = 64;
             if atoms.len() <= MAX_ATOMS {
-                let simplified = bexpr.simplify_via_bdd();
+                // Inject numeric theory between comparison atoms on the same fact.
+                // Without this, BDD simplification is boolean-only and can keep worlds like:
+                //   (x > 5) AND NOT(x > 3)
+                // which are propositionally satisfiable but numerically impossible.
+                let theory = build_numeric_theory_closure(&atoms)?;
+                let combined = boolean_expression::Expr::and(bexpr, theory);
+                let simplified = combined.simplify_via_bdd();
                 return Ok(from_bool_expr(&simplified, &atoms));
             }
         }
@@ -433,6 +439,80 @@ impl Constraint {
         facts.dedup();
         facts
     }
+}
+
+fn build_numeric_theory_closure(
+    atoms: &[Constraint],
+) -> LemmaResult<boolean_expression::Expr<usize>> {
+    use boolean_expression::Expr;
+
+    // Group indices of comparison atoms by fact path.
+    let mut by_fact: std::collections::HashMap<FactPath, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (idx, atom) in atoms.iter().enumerate() {
+        if let Constraint::Comparison { fact, .. } = atom {
+            by_fact.entry(fact.clone()).or_default().push(idx);
+        }
+    }
+
+    let mut theory = Expr::Const(true);
+
+    for idxs in by_fact.values() {
+        for i in 0..idxs.len() {
+            for j in (i + 1)..idxs.len() {
+                let a_idx = idxs[i];
+                let b_idx = idxs[j];
+
+                let a = atoms.get(a_idx).unwrap();
+                let b = atoms.get(b_idx).unwrap();
+
+                let (a_dom, b_dom) = match (a, b) {
+                    (
+                        Constraint::Comparison {
+                            op: a_op,
+                            value: a_val,
+                            ..
+                        },
+                        Constraint::Comparison {
+                            op: b_op,
+                            value: b_val,
+                            ..
+                        },
+                    ) => (
+                        crate::inversion::domain::domain_for_comparison_atom(a_op, a_val.as_ref())?,
+                        crate::inversion::domain::domain_for_comparison_atom(b_op, b_val.as_ref())?,
+                    ),
+                    _ => continue,
+                };
+
+                // Implications (both directions as applicable)
+                if a_dom.is_subset_of(&b_dom) {
+                    // A -> B  ==  (!A) OR B
+                    theory = Expr::and(
+                        theory,
+                        Expr::or(Expr::not(Expr::Terminal(a_idx)), Expr::Terminal(b_idx)),
+                    );
+                }
+                if b_dom.is_subset_of(&a_dom) {
+                    theory = Expr::and(
+                        theory,
+                        Expr::or(Expr::not(Expr::Terminal(b_idx)), Expr::Terminal(a_idx)),
+                    );
+                }
+
+                // Mutual exclusion when disjoint
+                if a_dom.intersect(&b_dom).is_empty() {
+                    // not(A and B)
+                    theory = Expr::and(
+                        theory,
+                        Expr::not(Expr::and(Expr::Terminal(a_idx), Expr::Terminal(b_idx))),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(theory)
 }
 
 /// Evaluate a comparison between two literals, returning the boolean result
@@ -862,18 +942,44 @@ mod tests {
 
     #[test]
     fn test_simplify_contradiction() {
-        // x == 1 and x == 2 cannot both be true, BDD detects this
+        // x == 1 and x == 2 cannot both be true.
         let c1 = comparison("x", ComparisonComputation::Equal, 1);
         let c2 = comparison("x", ComparisonComputation::Equal, 2);
 
-        // Note: BDD simplification treats these as different atoms, so it doesn't
-        // automatically detect semantic contradictions. The constraint remains as-is.
-        // Contradiction detection for semantic equality is handled by domain extraction.
         let expr = c1.and(c2);
         let simplified = expr.simplify().unwrap();
 
-        // BDD cannot detect this semantic contradiction (different atoms)
-        // This is expected - use domains for semantic analysis
-        assert!(!simplified.is_false());
+        assert!(
+            simplified.is_false(),
+            "Expected contradiction to simplify to false, got: {}",
+            simplified
+        );
+    }
+
+    #[test]
+    fn test_simplify_detects_ordering_implication_contradiction() {
+        // Numerically: x > 5 implies x > 3, so (x > 5) and not(x > 3) is impossible.
+        let a = comparison("x", ComparisonComputation::GreaterThan, 5);
+        let b = comparison("x", ComparisonComputation::GreaterThan, 3);
+        let expr = a.and(b.not());
+        let simplified = expr.simplify().unwrap();
+        assert!(
+            simplified.is_false(),
+            "Expected contradiction to simplify to false, got: {}",
+            simplified
+        );
+    }
+
+    #[test]
+    fn test_simplify_detects_neq_contradiction() {
+        // x == 5 and x != 5 cannot both be true.
+        let eq = comparison("x", ComparisonComputation::Equal, 5);
+        let neq = comparison("x", ComparisonComputation::NotEqual, 5);
+        let simplified = eq.and(neq).simplify().unwrap();
+        assert!(
+            simplified.is_false(),
+            "Expected contradiction to simplify to false, got: {}",
+            simplified
+        );
     }
 }

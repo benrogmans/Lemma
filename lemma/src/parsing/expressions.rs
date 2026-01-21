@@ -9,7 +9,6 @@ use std::sync::Arc;
 fn create_expression_with_location(
     kind: ExpressionKind,
     pair: &Pair<Rule>,
-    _depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
 ) -> Expression {
@@ -26,7 +25,6 @@ fn create_expression_with_location(
 
 fn parse_literal_expression(
     pair: Pair<Rule>,
-    depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
 ) -> Result<Expression, LemmaError> {
@@ -54,7 +52,6 @@ fn parse_literal_expression(
         return Ok(create_expression_with_location(
             ExpressionKind::UnresolvedUnitLiteral(number, unit_name),
             &literal_pair,
-            depth_tracker,
             attribute,
             doc_name,
         ));
@@ -65,7 +62,6 @@ fn parse_literal_expression(
     Ok(create_expression_with_location(
         ExpressionKind::Literal(literal_value),
         &literal_pair,
-        depth_tracker,
         attribute,
         doc_name,
     ))
@@ -88,14 +84,13 @@ pub(crate) fn parse_primary(
         | Rule::time_literal
         | Rule::duration_literal
         | Rule::number_unit_literal => {
-            return parse_literal_expression(pair, depth_tracker, attribute, doc_name);
+            return parse_literal_expression(pair, attribute, doc_name);
         }
         Rule::rule_reference => {
             let rule_ref = parse_rule_reference(pair.clone())?;
             return Ok(create_expression_with_location(
                 ExpressionKind::RuleReference(rule_ref),
                 &pair,
-                depth_tracker,
                 attribute,
                 doc_name,
             ));
@@ -105,7 +100,6 @@ pub(crate) fn parse_primary(
             return Ok(create_expression_with_location(
                 ExpressionKind::FactReference(reference),
                 &pair,
-                depth_tracker,
                 attribute,
                 doc_name,
             ));
@@ -139,14 +133,13 @@ pub(crate) fn parse_primary(
             | Rule::time_literal
             | Rule::duration_literal
             | Rule::number_unit_literal => {
-                return parse_literal_expression(inner, depth_tracker, attribute, doc_name);
+                return parse_literal_expression(inner, attribute, doc_name);
             }
             Rule::rule_reference => {
                 let rule_ref = parse_rule_reference(inner.clone())?;
                 return Ok(create_expression_with_location(
                     ExpressionKind::RuleReference(rule_ref),
                     &inner,
-                    depth_tracker,
                     attribute,
                     doc_name,
                 ));
@@ -156,7 +149,6 @@ pub(crate) fn parse_primary(
                 return Ok(create_expression_with_location(
                     ExpressionKind::FactReference(reference),
                     &inner,
-                    depth_tracker,
                     attribute,
                     doc_name,
                 ));
@@ -258,13 +250,7 @@ fn parse_expression_impl(
                     let right =
                         parse_and_expression(child.clone(), depth_tracker, attribute, doc_name)?;
                     let kind = ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right));
-                    left = create_expression_with_location(
-                        kind,
-                        &original,
-                        depth_tracker,
-                        attribute,
-                        doc_name,
-                    );
+                    left = create_expression_with_location(kind, &original, attribute, doc_name);
                 }
             }
 
@@ -324,7 +310,7 @@ fn parse_expression_impl(
             | Rule::date_time_literal
             | Rule::time_literal
             | Rule::duration_literal => {
-                return parse_literal_expression(inner_pair, depth_tracker, attribute, doc_name);
+                return parse_literal_expression(inner_pair, attribute, doc_name);
             }
 
             Rule::rule_reference => {
@@ -332,7 +318,6 @@ fn parse_expression_impl(
                 return Ok(create_expression_with_location(
                     ExpressionKind::RuleReference(rule_ref),
                     &inner_pair,
-                    depth_tracker,
                     attribute,
                     doc_name,
                 ));
@@ -343,7 +328,6 @@ fn parse_expression_impl(
                 return Ok(create_expression_with_location(
                     ExpressionKind::FactReference(reference),
                     &inner_pair,
-                    depth_tracker,
                     attribute,
                     doc_name,
                 ));
@@ -488,13 +472,7 @@ fn parse_and_expression(
         if right_pair.as_rule() == Rule::and_operand {
             let right = parse_and_operand(right_pair.clone(), depth_tracker, attribute, doc_name)?;
             let kind = ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right));
-            left = create_expression_with_location(
-                kind,
-                &original_pair,
-                depth_tracker,
-                attribute,
-                doc_name,
-            );
+            left = create_expression_with_location(kind, &original_pair, attribute, doc_name);
         }
     }
 
@@ -561,13 +539,7 @@ fn parse_base_expression(
         let right = parse_term(right_term_pair, depth_tracker, attribute, doc_name)?;
 
         let kind = ExpressionKind::Arithmetic(Arc::new(left), operation, Arc::new(right));
-        left = create_expression_with_location(
-            kind,
-            &original_pair,
-            depth_tracker,
-            attribute,
-            doc_name,
-        );
+        left = create_expression_with_location(kind, &original_pair, attribute, doc_name);
     }
 
     Ok(left)
@@ -658,7 +630,6 @@ fn parse_conversion_expression(
     Ok(create_expression_with_location(
         kind,
         &original_pair,
-        depth_tracker,
         attribute,
         doc_name,
     ))
@@ -726,7 +697,7 @@ fn parse_term(
         )?;
 
         let kind = ExpressionKind::Arithmetic(Arc::new(left), operation, Arc::new(right));
-        left = create_expression_with_location(kind, &pair, depth_tracker, attribute, doc_name);
+        left = create_expression_with_location(kind, &pair, attribute, doc_name);
     }
 
     Ok(left)
@@ -782,11 +753,7 @@ fn parse_power(
                 Arc::new(right),
             );
             return Ok(create_expression_with_location(
-                kind,
-                &pair,
-                depth_tracker,
-                attribute,
-                doc_name,
+                kind, &pair, attribute, doc_name,
             ));
         }
     }
@@ -835,7 +802,6 @@ fn parse_factor(
         let zero = create_expression_with_location(
             ExpressionKind::Literal(LiteralValue::number(rust_decimal::Decimal::ZERO)),
             &pair,
-            depth_tracker,
             attribute,
             doc_name,
         );
@@ -845,11 +811,7 @@ fn parse_factor(
             Arc::new(expr),
         );
         Ok(create_expression_with_location(
-            kind,
-            &pair,
-            depth_tracker,
-            attribute,
-            doc_name,
+            kind, &pair, attribute, doc_name,
         ))
     } else {
         Ok(expr)
@@ -960,11 +922,7 @@ fn parse_comparison_expression(
 
         let kind = ExpressionKind::Comparison(Arc::new(left), operator, Arc::new(right));
         return Ok(create_expression_with_location(
-            kind,
-            &pair,
-            depth_tracker,
-            attribute,
-            doc_name,
+            kind, &pair, attribute, doc_name,
         ));
     }
 
@@ -998,7 +956,6 @@ fn parse_not_expression(
     Ok(create_expression_with_location(
         kind,
         &original_pair,
-        depth_tracker,
         attribute,
         doc_name,
     ))
@@ -1038,7 +995,12 @@ fn parse_logical_expression(
                 Rule::floor_expr => MathematicalComputation::Floor,
                 Rule::ceil_expr => MathematicalComputation::Ceil,
                 Rule::round_expr => MathematicalComputation::Round,
-                _ => unreachable!(),
+                unexpected => {
+                    unreachable!(
+                        "BUG: unexpected rule '{:?}' in mathematical expression parser (attribute={}, doc={})",
+                        unexpected, attribute, doc_name
+                    )
+                }
             };
 
             for inner in pair.clone().into_inner() {
@@ -1049,11 +1011,7 @@ fn parse_logical_expression(
                         let kind =
                             ExpressionKind::MathematicalComputation(operator, Arc::new(operand));
                         return Ok(create_expression_with_location(
-                            kind,
-                            &pair,
-                            depth_tracker,
-                            attribute,
-                            doc_name,
+                            kind, &pair, attribute, doc_name,
                         ));
                     }
                     Rule::term | Rule::primary => {
@@ -1061,11 +1019,7 @@ fn parse_logical_expression(
                         let kind =
                             ExpressionKind::MathematicalComputation(operator, Arc::new(operand));
                         return Ok(create_expression_with_location(
-                            kind,
-                            &pair,
-                            depth_tracker,
-                            attribute,
-                            doc_name,
+                            kind, &pair, attribute, doc_name,
                         ));
                     }
                     _ => {}
@@ -1101,11 +1055,7 @@ fn parse_logical_expression(
                     let kind =
                         ExpressionKind::LogicalNegation(Arc::new(negated_expr), NegationType::Not);
                     return Ok(create_expression_with_location(
-                        kind,
-                        &node,
-                        depth_tracker,
-                        attribute,
-                        doc_name,
+                        kind, &node, attribute, doc_name,
                     ));
                 }
                 let span = Span::from_pest_span(node.as_span());
@@ -1170,11 +1120,7 @@ fn parse_logical_expression(
                                 Arc::new(operand),
                             );
                             return Ok(create_expression_with_location(
-                                kind,
-                                &node,
-                                depth_tracker,
-                                attribute,
-                                doc_name,
+                                kind, &node, attribute, doc_name,
                             ));
                         }
                         Rule::term | Rule::primary => {
@@ -1185,11 +1131,7 @@ fn parse_logical_expression(
                                 Arc::new(operand),
                             );
                             return Ok(create_expression_with_location(
-                                kind,
-                                &node,
-                                depth_tracker,
-                                attribute,
-                                doc_name,
+                                kind, &node, attribute, doc_name,
                             ));
                         }
                         _ => {}

@@ -19,8 +19,8 @@ pub struct ResolvedDocumentTypes {
     /// Named types: type_name -> fully resolved type
     pub named_types: HashMap<String, LemmaType>,
 
-    /// Anonymous types: fact_reference -> fully resolved type
-    pub anonymous_types: HashMap<FactReference, LemmaType>,
+    /// Inline type definitions: fact_reference -> fully resolved type
+    pub inline_type_definitions: HashMap<FactReference, LemmaType>,
 
     /// Unit index: unit_name -> type that defines it
     /// Built during resolution - if unit appears in multiple types, resolution fails
@@ -36,9 +36,9 @@ pub struct TypeRegistry {
     /// Named types per document: doc_name -> (type_name -> TypeDef)
     /// Stores the raw definitions extracted from the AST
     named_types: HashMap<String, HashMap<String, TypeDef>>,
-    /// Anonymous types per document: doc_name -> (fact_reference -> TypeDef)
-    /// Stores anonymous types keyed by their fact reference
-    anonymous_types: HashMap<String, HashMap<FactReference, TypeDef>>,
+    /// Inline type definitions per document: doc_name -> (fact_reference -> TypeDef)
+    /// Stores inline type definitions keyed by their fact reference
+    inline_type_definitions: HashMap<String, HashMap<FactReference, TypeDef>>,
 }
 
 impl TypeRegistry {
@@ -46,7 +46,7 @@ impl TypeRegistry {
     pub fn new() -> Self {
         TypeRegistry {
             named_types: HashMap::new(),
-            anonymous_types: HashMap::new(),
+            inline_type_definitions: HashMap::new(),
         }
     }
 
@@ -79,14 +79,17 @@ impl TypeRegistry {
                 doc_types.insert(name.clone(), def);
             }
             TypeDef::Inline { fact_ref, .. } => {
-                // Anonymous type
-                let doc_anonymous = self.anonymous_types.entry(doc.to_string()).or_default();
+                // Inline type definition
+                let doc_inline_types = self
+                    .inline_type_definitions
+                    .entry(doc.to_string())
+                    .or_default();
 
-                // Check if this anonymous type already exists
-                if doc_anonymous.contains_key(fact_ref) {
+                // Check if this inline type definition already exists
+                if doc_inline_types.contains_key(fact_ref) {
                     return Err(LemmaError::engine(
                         format!(
-                            "Anonymous type for fact '{}' is already defined in document '{}'",
+                            "Inline type definition for fact '{}' is already defined in document '{}'",
                             fact_ref.fact, doc
                         ),
                         Span {
@@ -103,8 +106,8 @@ impl TypeRegistry {
                     ));
                 }
 
-                // Store the anonymous type definition
-                doc_anonymous.insert(fact_ref.clone(), def);
+                // Store the inline type definition
+                doc_inline_types.insert(fact_ref.clone(), def);
             }
         }
         Ok(())
@@ -112,7 +115,7 @@ impl TypeRegistry {
 
     /// Resolve all types for a certain document
     ///
-    /// Returns fully resolved types for the document, including named types, anonymous types,
+    /// Returns fully resolved types for the document, including named types, inline type definitions,
     /// and a unit index. After resolution, all imports are inlined - documents are independent.
     /// Follows `parent` chains, accumulates overrides into `specifications`.
     /// Handles cycle detection and cross-document references.
@@ -123,7 +126,7 @@ impl TypeRegistry {
         self.resolve_types_internal(doc, true)
     }
 
-    /// Resolve only named types (for validation before anonymous types are registered)
+    /// Resolve only named types (for validation before inline type definitions are registered)
     pub fn resolve_named_types(&self, doc: &str) -> Result<ResolvedDocumentTypes, LemmaError> {
         self.resolve_types_internal(doc, false)
     }
@@ -134,7 +137,7 @@ impl TypeRegistry {
         include_anonymous: bool,
     ) -> Result<ResolvedDocumentTypes, LemmaError> {
         let mut named_types = HashMap::new();
-        let mut anonymous_types = HashMap::new();
+        let mut inline_type_definitions = HashMap::new();
         let mut visited = HashSet::new();
 
         // Resolve named types
@@ -162,19 +165,24 @@ impl TypeRegistry {
             }
         }
 
-        // Resolve anonymous types (only if requested)
+        // Resolve inline type definitions (only if requested)
         if include_anonymous {
-            if let Some(doc_anonymous) = self.anonymous_types.get(doc) {
-                for (fact_ref, type_def) in doc_anonymous {
+            if let Some(doc_inline_types) = self.inline_type_definitions.get(doc) {
+                for (fact_ref, type_def) in doc_inline_types {
                     let mut visited = HashSet::new();
-                    match self.resolve_anonymous_type(doc, fact_ref, type_def, &mut visited)? {
+                    match self.resolve_inline_type_definition(
+                        doc,
+                        fact_ref,
+                        type_def,
+                        &mut visited,
+                    )? {
                         Some(resolved_type) => {
-                            anonymous_types.insert(fact_ref.clone(), resolved_type);
+                            inline_type_definitions.insert(fact_ref.clone(), resolved_type);
                         }
                         None => {
-                            // Anonymous type was registered but couldn't be resolved - this is an error
+                            // Inline type definition was registered but couldn't be resolved - this is an error
                             return Err(LemmaError::engine(
-                                format!("Anonymous type for fact '{}' is registered but could not be resolved. This indicates an internal error.", fact_ref),
+                                format!("Inline type definition for fact '{}' is registered but could not be resolved. This indicates an internal error.", fact_ref),
                                 Span { start: 0, end: 0, line: 1, col: 0 },
                                 "<unknown>",
                                 Arc::from(""),
@@ -188,7 +196,7 @@ impl TypeRegistry {
             }
         }
 
-        // Build unit index from both named and anonymous types
+        // Build unit index from both named and inline type definitions
         let mut unit_index: HashMap<String, LemmaType> = HashMap::new();
         let mut errors = Vec::new();
 
@@ -198,15 +206,15 @@ impl TypeRegistry {
                 resolved_type
                     .name
                     .as_deref()
-                    .unwrap_or("anonymous")
+                    .unwrap_or("inline")
                     .to_string()
             }) {
                 errors.push(e);
             }
         }
 
-        // Add units from anonymous types (collect all errors)
-        for (fact_ref, resolved_type) in &anonymous_types {
+        // Add units from inline type definitions (collect all errors)
+        for (fact_ref, resolved_type) in &inline_type_definitions {
             if let Err(e) = self.add_units_to_index(&mut unit_index, resolved_type, doc, || {
                 format!("{}::{}", doc, fact_ref)
             }) {
@@ -285,7 +293,7 @@ impl TypeRegistry {
 
         Ok(ResolvedDocumentTypes {
             named_types,
-            anonymous_types,
+            inline_type_definitions,
             unit_index,
         })
     }
@@ -356,7 +364,7 @@ impl TypeRegistry {
             Ok(Some(specs)) => specs,
             Ok(None) => {
                 // Parent type not found - this is an error for named types
-                // (anonymous types might have forward references, but named types should be resolvable)
+                // (inline type definitions might have forward references, but named types should be resolvable)
                 visited.remove(&key);
                 return Err(LemmaError::engine(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid standard types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
@@ -501,10 +509,10 @@ impl TypeRegistry {
         }
     }
 
-    /// Find which document a FactReference belongs to (for anonymous types)
+    /// Find which document a FactReference belongs to (for inline type definitions)
     pub fn find_document_for_fact(&self, fact_ref: &FactReference) -> Option<String> {
-        for (doc_name, anonymous_types) in &self.anonymous_types {
-            if anonymous_types.contains_key(fact_ref) {
+        for (doc_name, inline_types) in &self.inline_type_definitions {
+            if inline_types.contains_key(fact_ref) {
                 return Some(doc_name.clone());
             }
         }
@@ -594,8 +602,8 @@ impl TypeRegistry {
         Ok(specs)
     }
 
-    /// Resolve an anonymous type from its definition
-    fn resolve_anonymous_type(
+    /// Resolve an inline type definition from its definition
+    fn resolve_inline_type_definition(
         &self,
         doc: &str,
         _fact_ref: &FactReference,
@@ -615,8 +623,8 @@ impl TypeRegistry {
         let parent_specs = match self.resolve_parent(doc, parent, from, visited) {
             Ok(Some(specs)) => specs,
             Ok(None) => {
-                // Parent type not found - this is an error for anonymous types too
-                // Anonymous types should have valid parent types
+                // Parent type not found - this is an error for inline type definitions too
+                // Inline type definitions should have valid parent types
                 return Err(LemmaError::engine(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid standard types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                     Span { start: 0, end: 0, line: 1, col: 0 },
@@ -719,12 +727,15 @@ impl TypeRegistry {
             }
         }
 
-        // Process anonymous types
-        for (doc_name, anonymous_types) in &self.anonymous_types {
-            for (fact_ref, type_def) in anonymous_types {
-                if let Ok(Some(resolved_type)) =
-                    self.resolve_anonymous_type(doc_name, fact_ref, type_def, &mut HashSet::new())
-                {
+        // Process inline type definitions
+        for (doc_name, inline_types) in &self.inline_type_definitions {
+            for (fact_ref, type_def) in inline_types {
+                if let Ok(Some(resolved_type)) = self.resolve_inline_type_definition(
+                    doc_name,
+                    fact_ref,
+                    type_def,
+                    &mut HashSet::new(),
+                ) {
                     let units = self.extract_units_from_specs(&resolved_type.specifications);
                     let type_name = format!("{}::{}", doc_name, fact_ref);
                     for unit in units {
@@ -756,7 +767,7 @@ impl TypeRegistry {
         let current_name = get_type_name(); // Call FnOnce before the loop
         for unit in units {
             if let Some(existing_type) = unit_index.get(&unit) {
-                let existing_name = existing_type.name.as_deref().unwrap_or("anonymous");
+                let existing_name = existing_type.name.as_deref().unwrap_or("inline");
 
                 // Check if one type extends the other
                 // If the existing type's name matches the current type's name, they're the same type
@@ -876,7 +887,7 @@ mod tests {
     fn test_registry_creation() {
         let registry = TypeRegistry::new();
         assert!(registry.named_types.is_empty());
-        assert!(registry.anonymous_types.is_empty());
+        assert!(registry.inline_type_definitions.is_empty());
     }
 
     #[test]
@@ -908,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn test_register_anonymous_type() {
+    fn test_register_inline_type_definition() {
         use crate::semantic::FactReference;
         let mut registry = TypeRegistry::new();
         let fact_ref = FactReference::local("age".to_string());
@@ -925,9 +936,9 @@ mod tests {
         let result = registry.register_type("test_doc", type_def);
         assert!(result.is_ok());
 
-        // Verify the anonymous type is registered
+        // Verify the inline type definition is registered
         assert!(registry
-            .anonymous_types
+            .inline_type_definitions
             .get("test_doc")
             .unwrap()
             .contains_key(&fact_ref));
@@ -1160,5 +1171,243 @@ type percentage = ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
             }
             _ => panic!("Expected Ratio type specifications"),
         }
+    }
+
+    #[test]
+    fn test_invalid_parent_type_in_named_type_should_error() {
+        let code = r#"doc test
+type invalid = nonexistent_type -> minimum 0"#;
+
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let doc = &docs[0];
+
+        let mut registry = TypeRegistry::new();
+        registry
+            .register_type(&doc.name, doc.types[0].clone())
+            .unwrap();
+
+        let result = registry.resolve_types(&doc.name);
+        assert!(result.is_err(), "Should reject invalid parent type");
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Unknown type") && error_msg.contains("nonexistent_type"),
+            "Error should mention unknown type. Got: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_invalid_standard_type_name_should_error() {
+        // "choice" is not a standard type; this should fail resolution.
+        let code = r#"doc test
+type invalid = choice -> option "a""#;
+
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let doc = &docs[0];
+
+        let mut registry = TypeRegistry::new();
+        registry
+            .register_type(&doc.name, doc.types[0].clone())
+            .unwrap();
+
+        let result = registry.resolve_types(&doc.name);
+        assert!(result.is_err(), "Should reject invalid type base 'choice'");
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Unknown type") && error_msg.contains("choice"),
+            "Error should mention unknown type 'choice'. Got: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_unit_override_validation_errors_are_reported() {
+        // Regression guard: overriding existing units should not silently succeed.
+        let code = r#"doc test
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.19
+
+type money2 = money
+  -> unit eur 1.20
+  -> unit usd 1.21
+  -> unit gbp 1.30"#;
+
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let doc = &docs[0];
+
+        let mut registry = TypeRegistry::new();
+        for type_def in &doc.types {
+            registry.register_type(&doc.name, type_def.clone()).unwrap();
+        }
+
+        let result = registry.resolve_types(&doc.name);
+        assert!(result.is_err(), "Expected unit override conflicts to error");
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("eur") || error_msg.contains("usd"),
+            "Error should mention the conflicting units. Got: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_document_level_unit_ambiguity_errors_are_reported() {
+        // Regression guard: the same unit name must not be defined by multiple types in one doc.
+        let code = r#"doc test
+type money_a = scale
+  -> unit eur 1.00
+  -> unit usd 1.19
+
+type money_b = scale
+  -> unit eur 1.00
+  -> unit usd 1.20
+
+type length_a = scale
+  -> unit meter 1.0
+
+type length_b = scale
+  -> unit meter 1.0"#;
+
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let doc = &docs[0];
+
+        let mut registry = TypeRegistry::new();
+        for type_def in &doc.types {
+            registry.register_type(&doc.name, type_def.clone()).unwrap();
+        }
+
+        let result = registry.resolve_types(&doc.name);
+        assert!(
+            result.is_err(),
+            "Expected ambiguous unit definitions to error"
+        );
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("eur") || error_msg.contains("usd") || error_msg.contains("meter"),
+            "Error should mention at least one ambiguous unit. Got: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_number_type_cannot_have_units() {
+        let code = r#"doc test
+type price = number
+  -> unit eur 1.00"#;
+
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let doc = &docs[0];
+
+        let mut registry = TypeRegistry::new();
+        registry
+            .register_type(&doc.name, doc.types[0].clone())
+            .unwrap();
+
+        let result = registry.resolve_types(&doc.name);
+        assert!(result.is_err(), "Number types must reject unit commands");
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("unit") && error_msg.contains("number"),
+            "Error should mention units are invalid on number. Got: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_scale_type_can_have_units() {
+        let code = r#"doc test
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.19"#;
+
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let doc = &docs[0];
+
+        let mut registry = TypeRegistry::new();
+        registry
+            .register_type(&doc.name, doc.types[0].clone())
+            .unwrap();
+
+        let resolved = registry.resolve_types(&doc.name).unwrap();
+        let money_type = resolved.named_types.get("money").unwrap();
+
+        match &money_type.specifications {
+            TypeSpecification::Scale { units, .. } => {
+                assert_eq!(units.len(), 2);
+                assert!(units.iter().any(|u| u.name == "eur"));
+                assert!(units.iter().any(|u| u.name == "usd"));
+            }
+            other => panic!("Expected Scale type specifications, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_extending_type_inherits_units() {
+        let code = r#"doc test
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.19
+
+type my_money = money
+  -> unit gbp 1.30"#;
+
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let doc = &docs[0];
+
+        let mut registry = TypeRegistry::new();
+        for type_def in &doc.types {
+            registry.register_type(&doc.name, type_def.clone()).unwrap();
+        }
+
+        let resolved = registry.resolve_types(&doc.name).unwrap();
+        let my_money_type = resolved.named_types.get("my_money").unwrap();
+
+        match &my_money_type.specifications {
+            TypeSpecification::Scale { units, .. } => {
+                assert_eq!(units.len(), 3);
+                assert!(units.iter().any(|u| u.name == "eur"));
+                assert!(units.iter().any(|u| u.name == "usd"));
+                assert!(units.iter().any(|u| u.name == "gbp"));
+            }
+            other => panic!("Expected Scale type specifications, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_duplicate_unit_in_same_type_is_rejected() {
+        let code = r#"doc test
+type money = scale
+  -> unit eur 1.00
+  -> unit eur 1.19"#;
+
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let doc = &docs[0];
+
+        let mut registry = TypeRegistry::new();
+        registry
+            .register_type(&doc.name, doc.types[0].clone())
+            .unwrap();
+
+        let result = registry.resolve_types(&doc.name);
+        assert!(
+            result.is_err(),
+            "Duplicate units within a type should error"
+        );
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Duplicate unit")
+                || error_msg.contains("duplicate")
+                || error_msg.contains("already exists")
+                || error_msg.contains("eur"),
+            "Error should mention duplicate unit issue. Got: {}",
+            error_msg
+        );
     }
 }

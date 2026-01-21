@@ -4,13 +4,13 @@ Corporate Base Compensation Policy
 Foundation for all employee compensation
 """
 
-fact company_name = "TechCorp Global"
-fact base_salary_min = 50000
-fact base_salary_max = 300000
+fact company_name = "TechCorp Europe"
+fact base_salary_min = [number -> minimum 0 -> default 45000]
+fact base_salary_max = [number -> minimum 0 -> default 250000]
 fact cost_of_living_adjustment = 0%
 fact stock_grant_percentage = 2%
 fact bonus_pool_percentage = 10%
-fact health_premium_monthly = 500
+fact health_premium_monthly = [number -> minimum 0 -> default 500]
 fact retirement_match_rate = 6%
 fact retirement_match_cap = 5%
 
@@ -35,9 +35,9 @@ fact policy.bonus_pool_percentage = 15%
 fact policy.cost_of_living_adjustment = 3%
 
 fact department = "Engineering"
-fact level_multiplier = 1.0
-fact performance_rating = 0.0
-fact years_of_service = 0
+fact level_multiplier = [number -> minimum 0 -> default 1.0]
+fact performance_rating = [number -> minimum 0 -> maximum 5 -> default 0.0]
+fact years_of_service = [number -> minimum 0 -> default 0]
 
 rule base_for_level = policy.base_salary_min * level_multiplier
 
@@ -51,11 +51,14 @@ rule tenure_bonus = 0
   unless years_of_service >= 5 then 10000
   unless years_of_service >= 10 then 25000
 
-rule stock_value = base_for_level? * policy.stock_grant_percentage
+rule stock_value =
+    base_for_level? * policy.stock_grant_percentage
 
-rule annual_bonus_target = base_for_level? * policy.bonus_pool_percentage
+rule annual_bonus_target =
+    base_for_level? * policy.bonus_pool_percentage
 
-rule performance_bonus = annual_bonus_target? * performance_bonus_rate?
+rule performance_bonus =
+    annual_bonus_target? * performance_bonus_rate?
 
 rule total_cash_comp = base_for_level? + performance_bonus? + tenure_bonus?
 
@@ -64,7 +67,7 @@ rule total_comp_with_stock = total_cash_comp? + stock_value?
 rule retirement_contribution_employee = base_for_level? * 0.05
 
 rule retirement_match = retirement_contribution_employee?
-  unless retirement_contribution_employee? > (base_for_level? * policy.retirement_match_cap) 
+  unless retirement_contribution_employee? > (base_for_level? * policy.retirement_match_cap)
     then base_for_level? * policy.retirement_match_cap
 
 rule total_retirement = retirement_contribution_employee? + retirement_match?
@@ -85,9 +88,9 @@ fact eng_policy.level_multiplier = 2.5
 fact eng_policy.performance_rating = 4.2
 fact eng_policy.years_of_service = 7
 
-fact employee_name = "Alex Chen"
-fact location = "San Francisco"
-fact location_cola = 25%
+fact employee_name = "Alex van der Berg"
+fact location = "Amsterdam"
+fact location_cola = 15%
 
 rule effective_base = eng_policy.base_for_level? * (1 + location_cola)
 
@@ -135,12 +138,12 @@ fact eng_policy.years_of_service = 12
 fact eng_policy.policy.stock_grant_percentage = 8%
 fact eng_policy.policy.bonus_pool_percentage = 20%
 
-fact employee_name = "Jordan Taylor"
-fact location = "New York"
-fact location_cola = 30%
+fact employee_name = "Jordan Schmidt"
+fact location = "Berlin"
+fact location_cola = 20%
 fact has_critical_skill = true
 fact manages_team = true
-fact team_size = 15
+fact team_size = [number -> minimum 0 -> default 15]
 fact on_call_rotation = true
 
 rule critical_skill_bonus = 0
@@ -156,7 +159,7 @@ rule on_call_stipend = 0
 
 rule effective_base = eng_policy.base_for_level? * (1 + location_cola)
 
-rule all_bonuses = eng_policy.performance_bonus? + eng_policy.tenure_bonus? + 
+rule all_bonuses = eng_policy.performance_bonus? + eng_policy.tenure_bonus? +
                    critical_skill_bonus? + management_bonus? + on_call_stipend?
 
 rule base_plus_bonuses = effective_base? + all_bonuses?

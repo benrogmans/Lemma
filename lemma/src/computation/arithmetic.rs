@@ -201,14 +201,8 @@ pub fn arithmetic_operation(
                 ))
             {
                 return OperationResult::Veto(Some(format!(
-                    "Cannot {} values with different units: {:?} and {:?}",
-                    match op {
-                        ArithmeticComputation::Add => "add",
-                        ArithmeticComputation::Subtract => "subtract",
-                        _ => unreachable!(),
-                    },
-                    l_unit,
-                    r_unit
+                    "Cannot apply '{}' to values with different units: {:?} and {:?}",
+                    op, l_unit, r_unit
                 )));
             }
             // Preserve unit from left
@@ -254,7 +248,12 @@ pub fn arithmetic_operation(
                     let result = match op {
                         ArithmeticComputation::Add => *scale_val + ratio_amount,
                         ArithmeticComputation::Subtract => *scale_val - ratio_amount,
-                        _ => unreachable!(),
+                        _ => {
+                            return OperationResult::Veto(Some(format!(
+                                "Operation '{}' not supported for ratio and scale",
+                                op
+                            )))
+                        }
                     };
                     OperationResult::Value(LiteralValue::scale_with_type(
                         result,
@@ -300,7 +299,12 @@ pub fn arithmetic_operation(
                     let result = match op {
                         ArithmeticComputation::Add => *scale_val + ratio_amount,
                         ArithmeticComputation::Subtract => *scale_val - ratio_amount,
-                        _ => unreachable!(),
+                        _ => {
+                            return OperationResult::Veto(Some(format!(
+                                "Operation '{}' not supported for scale and ratio",
+                                op
+                            )))
+                        }
                     };
                     OperationResult::Value(LiteralValue::scale_with_type(
                         result,

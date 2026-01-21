@@ -1,7 +1,10 @@
 use crate::parsing::ast::Span;
 use crate::planning::ExecutionPlan;
-use crate::semantic::{BooleanValue, FactPath, LemmaFact, LiteralValue, Value as LemmaValue};
+use crate::semantic::{
+    BooleanValue, FactPath, LemmaFact, LemmaType, LiteralValue, Value as LemmaValue,
+};
 use crate::LemmaError;
+use crate::Source;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serializer};
 use serde_json::Value;
@@ -54,8 +57,8 @@ pub fn from_json(
             continue;
         }
 
-        let (fact_path, fact) = plan.get_fact_by_path_str(&fact_name).ok_or_else(|| {
-            let available: Vec<String> = plan.facts.keys().map(|p| p.to_string()).collect();
+        let fact_path = plan.get_fact_path_by_str(&fact_name).ok_or_else(|| {
+            let available: Vec<String> = plan.fact_schema.keys().map(|p| p.to_string()).collect();
             LemmaError::engine(
                 format!(
                     "Fact '{}' not found in document. Available facts: {}",
@@ -76,24 +79,12 @@ pub fn from_json(
             )
         })?;
 
-        // Get the expected type from fact_types (which contains resolved types)
-        // or fall back to resolving from the fact itself
-        let expected_type =
-            plan.fact_types
-                .get(fact_path)
-                .cloned()
-                .or_else(|| get_expected_type(fact).ok())
-                .ok_or_else(|| {
-                    LemmaError::engine(
-                    "Type declarations with custom types are not yet supported in JSON conversion",
-                    Span { start: 0, end: 0, line: 1, col: 0 },
-                    "<unknown>",
-                    Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                )
-                })?;
+        let expected_type = plan.fact_schema.get(fact_path).cloned().unwrap_or_else(|| {
+            panic!(
+                "BUG: get_fact_path_by_str returned a fact path that is not in fact_schema (fact={})",
+                fact_name
+            )
+        });
         let literal_value = convert_json_value(&fact_name, &json_value, &expected_type)?;
 
         result.insert(fact_name, literal_value);
@@ -102,41 +93,7 @@ pub fn from_json(
     Ok(result)
 }
 
-fn get_expected_type(
-    fact: &crate::semantic::LemmaFact,
-) -> Result<crate::semantic::LemmaType, LemmaError> {
-    match &fact.value {
-        crate::semantic::FactValue::Literal(lit) => Ok(lit.get_type().clone()),
-        crate::semantic::FactValue::TypeDeclaration { .. } => Err(LemmaError::engine(
-            "Type declarations with custom types are not yet supported in JSON conversion",
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        )),
-        crate::semantic::FactValue::DocumentReference(_) => Err(LemmaError::engine(
-            "Cannot provide a value for a document reference fact",
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        )),
-    }
-}
+// Note: expected types come exclusively from `ExecutionPlan.fact_schema`.
 
 fn convert_json_value(
     fact_name: &str,
@@ -197,7 +154,7 @@ fn convert_json_value(
 }
 
 fn convert_to_text(
-    _fact_name: &str,
+    fact_name: &str,
     json_value: &Value,
     expected_type: &crate::semantic::LemmaType,
 ) -> Result<LiteralValue, LemmaError> {
@@ -208,7 +165,7 @@ fn convert_to_text(
         Value::Array(_) | Value::Object(_) => {
             serde_json::to_string(json_value).unwrap_or_else(|_| json_value.to_string())
         }
-        Value::Null => unreachable!("null values are filtered before conversion"),
+        Value::Null => return Err(type_error(fact_name, "text", "null")),
     };
     Ok(LiteralValue::text_with_type(text, expected_type.clone()))
 }
@@ -252,7 +209,7 @@ fn convert_to_number(
                 expected_type.clone(),
             ))
         }
-        Value::Null => unreachable!("null values are filtered before conversion"),
+        Value::Null => Err(type_error(fact_name, "number", "null")),
         Value::Bool(_) => Err(type_error(fact_name, "number", "boolean")),
         Value::Array(_) => Err(type_error(fact_name, "number", "array")),
         Value::Object(_) => Err(type_error(fact_name, "number", "object")),
@@ -340,7 +297,26 @@ fn convert_to_scale(
             // Validate unit against type definition
             let allowed_units = match &expected_type.specifications {
                 crate::semantic::TypeSpecification::Scale { units, .. } => units,
-                _ => unreachable!("convert_to_scale called with non-Scale type"),
+                _ => {
+                    return Err(LemmaError::engine(
+                        format!(
+                            "Internal error: expected a scale type for fact '{}' but got {}",
+                            fact_name,
+                            expected_type.name()
+                        ),
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<unknown>",
+                        Arc::from(""),
+                        "<unknown>",
+                        1,
+                        None::<String>,
+                    ));
+                }
             };
 
             let unit = if unit_part.is_empty() {
@@ -407,7 +383,7 @@ fn convert_to_scale(
                 expected_type.clone(),
             ))
         }
-        Value::Null => unreachable!("null values are filtered before conversion"),
+        Value::Null => Err(type_error(fact_name, "scale", "null")),
         Value::Bool(_) => Err(type_error(fact_name, "scale", "boolean")),
         Value::Array(_) => Err(type_error(fact_name, "scale", "array")),
         Value::Object(_) => Err(type_error(fact_name, "scale", "object")),
@@ -448,7 +424,7 @@ fn convert_to_boolean(
                 expected_type.clone(),
             ))
         }
-        Value::Null => unreachable!("null values are filtered before conversion"),
+        Value::Null => Err(type_error(fact_name, "boolean", "null")),
         Value::Number(_) => Err(type_error(fact_name, "boolean", "number")),
         Value::Array(_) => Err(type_error(fact_name, "boolean", "array")),
         Value::Object(_) => Err(type_error(fact_name, "boolean", "object")),
@@ -538,7 +514,7 @@ fn convert_to_ratio(
                 expected_type.clone(),
             ))
         }
-        Value::Null => unreachable!("null values are filtered before conversion"),
+        Value::Null => Err(type_error(fact_name, "ratio", "null")),
         Value::Bool(_) => Err(type_error(fact_name, "ratio", "boolean")),
         Value::Array(_) => Err(type_error(fact_name, "ratio", "array")),
         Value::Object(_) => Err(type_error(fact_name, "ratio", "object")),
@@ -567,7 +543,7 @@ fn convert_to_date(
                 None::<String>,
             )
         }),
-        Value::Null => unreachable!("null values are filtered before conversion"),
+        Value::Null => Err(type_error(fact_name, "date", "null")),
         Value::Bool(_) => Err(type_error(fact_name, "date", "boolean")),
         Value::Number(_) => Err(type_error(fact_name, "date", "number")),
         Value::Array(_) => Err(type_error(fact_name, "date", "array")),
@@ -592,7 +568,7 @@ fn convert_to_duration(
                 None::<String>,
             )
         }),
-        Value::Null => unreachable!("null values are filtered before conversion"),
+        Value::Null => Err(type_error(fact_name, "duration", "null")),
         Value::Bool(_) => Err(type_error(fact_name, "duration", "boolean")),
         Value::Number(_) => Err(LemmaError::engine(
             format!("Invalid JSON type for fact '{}': expected duration (as string like '5 days'), got number. Duration values must include the unit name.", fact_name),
@@ -799,6 +775,148 @@ where
     Ok(result)
 }
 
+/// Custom serializer for HashMap<FactPath, LemmaType>
+///
+/// JSON object keys must be strings, so FactPath keys are serialized as strings
+/// using their Display implementation (e.g., "age" or "employee.salary").
+pub fn serialize_fact_type_map<S>(
+    map: &HashMap<FactPath, LemmaType>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut map_serializer = serializer.serialize_map(Some(map.len()))?;
+    for (key, value) in map {
+        map_serializer.serialize_entry(&key.to_string(), value)?;
+    }
+    map_serializer.end()
+}
+
+/// Custom deserializer for HashMap<FactPath, LemmaType>
+///
+/// Deserializes string keys back to FactPath using FactPath::from_path().
+pub fn deserialize_fact_type_map<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<FactPath, LemmaType>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let map: HashMap<String, LemmaType> = HashMap::deserialize(deserializer)?;
+    let mut result = HashMap::new();
+    for (key_str, value) in map {
+        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
+        let fact_path = FactPath::from_path(path_parts);
+        result.insert(fact_path, value);
+    }
+    Ok(result)
+}
+
+/// Custom serializer for HashMap<FactPath, LiteralValue>
+///
+/// JSON object keys must be strings, so FactPath keys are serialized as strings
+/// using their Display implementation (e.g., "age" or "employee.salary").
+pub fn serialize_fact_value_map<S>(
+    map: &HashMap<FactPath, LiteralValue>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut map_serializer = serializer.serialize_map(Some(map.len()))?;
+    for (key, value) in map {
+        map_serializer.serialize_entry(&key.to_string(), value)?;
+    }
+    map_serializer.end()
+}
+
+/// Custom deserializer for HashMap<FactPath, LiteralValue>
+///
+/// Deserializes string keys back to FactPath using FactPath::from_path().
+pub fn deserialize_fact_value_map<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<FactPath, LiteralValue>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let map: HashMap<String, LiteralValue> = HashMap::deserialize(deserializer)?;
+    let mut result = HashMap::new();
+    for (key_str, value) in map {
+        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
+        let fact_path = FactPath::from_path(path_parts);
+        result.insert(fact_path, value);
+    }
+    Ok(result)
+}
+
+/// Custom serializer for HashMap<FactPath, String> (document references)
+pub fn serialize_fact_doc_ref_map<S>(
+    map: &HashMap<FactPath, String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut map_serializer = serializer.serialize_map(Some(map.len()))?;
+    for (key, value) in map {
+        map_serializer.serialize_entry(&key.to_string(), value)?;
+    }
+    map_serializer.end()
+}
+
+/// Custom deserializer for HashMap<FactPath, String> (document references)
+pub fn deserialize_fact_doc_ref_map<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<FactPath, String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let map: HashMap<String, String> = HashMap::deserialize(deserializer)?;
+    let mut result = HashMap::new();
+    for (key_str, value) in map {
+        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
+        let fact_path = FactPath::from_path(path_parts);
+        result.insert(fact_path, value);
+    }
+    Ok(result)
+}
+
+/// Custom serializer for HashMap<FactPath, Source> (fact sources)
+pub fn serialize_fact_source_map<S>(
+    map: &HashMap<FactPath, Source>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut map_serializer = serializer.serialize_map(Some(map.len()))?;
+    for (key, value) in map {
+        map_serializer.serialize_entry(&key.to_string(), value)?;
+    }
+    map_serializer.end()
+}
+
+/// Custom deserializer for HashMap<FactPath, Source> (fact sources)
+pub fn deserialize_fact_source_map<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<FactPath, Source>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let map: HashMap<String, Source> = HashMap::deserialize(deserializer)?;
+    let mut result = HashMap::new();
+    for (key_str, value) in map {
+        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
+        let fact_path = FactPath::from_path(path_parts);
+        result.insert(fact_path, value);
+    }
+    Ok(result)
+}
+
 /// Custom serializer for HashSet<FactPath>
 ///
 /// Serializes as a JSON array of strings using FactPath's Display implementation.
@@ -836,38 +954,25 @@ mod tests {
     use super::*;
     use crate::semantic::{
         standard_boolean, standard_date, standard_duration, standard_number, standard_ratio,
-        standard_text, FactPath, FactReference, FactValue, LemmaFact, LemmaType, LiteralValue,
+        standard_text, FactPath, LemmaType, LiteralValue,
     };
     use rust_decimal::Decimal;
 
     fn create_test_plan(facts: Vec<(&str, LemmaType)>) -> ExecutionPlan {
-        let mut fact_map = HashMap::new();
-        let mut fact_types_map = HashMap::new();
+        let mut fact_schema = HashMap::new();
         for (name, lemma_type) in facts {
             let fact_path = FactPath {
                 segments: vec![],
                 fact: name.to_string(),
             };
-            let fact = LemmaFact {
-                reference: FactReference {
-                    segments: vec![],
-                    fact: name.to_string(),
-                },
-                value: FactValue::TypeDeclaration {
-                    base: lemma_type.name().to_string(),
-                    overrides: None,
-                    from: None,
-                },
-                source_location: None,
-            };
-            fact_map.insert(fact_path.clone(), fact);
-            // Populate fact_types with the resolved type
-            fact_types_map.insert(fact_path, lemma_type);
+            fact_schema.insert(fact_path, lemma_type);
         }
         ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: fact_map,
-            fact_types: fact_types_map,
+            fact_schema,
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: vec![],
             sources: HashMap::new(),
         }

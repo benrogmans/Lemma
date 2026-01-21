@@ -1,6 +1,7 @@
 use lemma::evaluation::proof::{NonMatchedBranch, ProofNode, ValueSource};
 use lemma::{
-    LemmaDoc, LemmaFact, LemmaRule, LiteralValue, OperationResult, Response, RuleResult, Value,
+    LemmaDoc, LemmaFact, LemmaRule, LiteralValue, OperationResult, Response, RuleResult,
+    TypeSpecification, Value,
 };
 use std::collections::HashSet;
 use super_table::{presets, Cell, CellAlignment, Table};
@@ -662,12 +663,22 @@ impl Formatter {
 
     fn split_literal(&self, lit: &LiteralValue) -> (String, String) {
         match &lit.value {
-            Value::Number(n) => (String::new(), format_decimal(n)),
+            Value::Number(n) => {
+                let decimals_opt = match &lit.lemma_type.specifications {
+                    TypeSpecification::Number { decimals, .. } => *decimals,
+                    _ => None,
+                };
+                (String::new(), format_decimal(n, decimals_opt))
+            }
             Value::Scale(n, unit_opt) => {
+                let decimals_opt = match &lit.lemma_type.specifications {
+                    TypeSpecification::Scale { decimals, .. } => *decimals,
+                    _ => None,
+                };
                 if let Some(unit) = unit_opt {
-                    (unit.clone(), format_decimal(n))
+                    (unit.clone(), format_decimal(n, decimals_opt))
                 } else {
-                    (String::new(), format_decimal(n))
+                    (String::new(), format_decimal(n, decimals_opt))
                 }
             }
             Value::Ratio(r, unit_opt) => {
@@ -675,20 +686,20 @@ impl Formatter {
                     if unit == "percent" {
                         (
                             "%".to_string(),
-                            format_decimal(&(*r * rust_decimal::Decimal::from(100))),
+                            format_decimal(&(*r * rust_decimal::Decimal::from(100)), None),
                         )
                     } else {
-                        (unit.clone(), format_decimal(r))
+                        (unit.clone(), format_decimal(r, None))
                     }
                 } else {
-                    (String::new(), format_decimal(r))
+                    (String::new(), format_decimal(r, None))
                 }
             }
             Value::Text(s) => (String::new(), s.clone()),
             Value::Boolean(b) => (String::new(), b.to_string()),
             Value::Date(d) => (String::new(), d.to_string()),
             Value::Time(t) => (String::new(), t.to_string()),
-            Value::Duration(value, unit) => (unit.to_string(), format_decimal(value)),
+            Value::Duration(value, unit) => (unit.to_string(), format_decimal(value, None)),
         }
     }
 
@@ -719,12 +730,37 @@ impl Formatter {
     }
 }
 
-fn format_decimal(d: &rust_decimal::Decimal) -> String {
-    let rounded = d.round_dp(2);
-    let normalized = rounded.normalize();
-    if normalized.fract().is_zero() {
-        normalized.trunc().to_string()
-    } else {
-        normalized.to_string()
+fn format_decimal(d: &rust_decimal::Decimal, decimals: Option<u8>) -> String {
+    match decimals {
+        Some(decimals) => {
+            // Fixed-decimal formatting, preserving trailing zeros.
+            let rounded = d.round_dp(decimals as u32);
+            let mut s = rounded.to_string();
+            if decimals == 0 {
+                if let Some(dot) = s.find('.') {
+                    s.truncate(dot);
+                }
+                return s;
+            }
+            if let Some(dot_pos) = s.find('.') {
+                let current_decimals = s.len() - dot_pos - 1;
+                if current_decimals < decimals as usize {
+                    s.push_str(&"0".repeat(decimals as usize - current_decimals));
+                }
+            } else {
+                s.push('.');
+                s.push_str(&"0".repeat(decimals as usize));
+            }
+            s
+        }
+        None => {
+            // No decimals specified: do not force rounding; remove trailing zeros.
+            let normalized = d.normalize();
+            if normalized.fract().is_zero() {
+                normalized.trunc().to_string()
+            } else {
+                normalized.to_string()
+            }
+        }
     }
 }

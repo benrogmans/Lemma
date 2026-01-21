@@ -7,7 +7,7 @@
 use crate::parsing::ast::Span;
 use crate::planning::graph::Graph;
 use crate::semantic::{
-    Expression, FactPath, FactReference, FactValue, LemmaFact, LemmaType, LiteralValue, RulePath,
+    Expression, FactPath, FactReference, FactValue, LemmaType, LiteralValue, RulePath,
 };
 use crate::LemmaError;
 use crate::ResourceLimits;
@@ -25,14 +25,27 @@ pub struct ExecutionPlan {
     /// Main document name
     pub doc_name: String,
 
-    /// All facts with their values
-    #[serde(serialize_with = "crate::serialization::serialize_fact_path_map")]
-    #[serde(deserialize_with = "crate::serialization::deserialize_fact_path_map")]
-    pub facts: HashMap<FactPath, LemmaFact>,
+    /// Resolved schema types for value-holding facts.
+    ///
+    /// This is the authoritative schema contract for adapters and validation.
+    #[serde(serialize_with = "crate::serialization::serialize_fact_type_map")]
+    #[serde(deserialize_with = "crate::serialization::deserialize_fact_type_map")]
+    pub fact_schema: HashMap<FactPath, LemmaType>,
 
-    /// Resolved types for facts (for TypeDeclaration facts that were resolved during planning)
-    #[serde(skip)]
-    pub fact_types: HashMap<FactPath, LemmaType>,
+    /// Concrete literal values for facts (document-defined literals + user-provided values).
+    #[serde(serialize_with = "crate::serialization::serialize_fact_value_map")]
+    #[serde(deserialize_with = "crate::serialization::deserialize_fact_value_map")]
+    pub fact_values: HashMap<FactPath, LiteralValue>,
+
+    /// Document reference facts (path -> referenced document name).
+    #[serde(serialize_with = "crate::serialization::serialize_fact_doc_ref_map")]
+    #[serde(deserialize_with = "crate::serialization::deserialize_fact_doc_ref_map")]
+    pub doc_refs: HashMap<FactPath, String>,
+
+    /// Fact-level source information for better errors in adapters/validation.
+    #[serde(serialize_with = "crate::serialization::serialize_fact_source_map")]
+    #[serde(deserialize_with = "crate::serialization::deserialize_fact_source_map")]
+    pub fact_sources: HashMap<FactPath, Source>,
 
     /// Rules to execute in topological order (sorted by dependencies)
     pub rules: Vec<ExecutableRule>,
@@ -88,17 +101,22 @@ pub struct Branch {
 /// Internal implementation detail - only called by plan()
 pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> ExecutionPlan {
     let execution_order = graph.execution_order();
-    let mut facts: HashMap<FactPath, LemmaFact> = HashMap::new();
-    let mut fact_types: HashMap<FactPath, LemmaType> = HashMap::new();
+    let mut fact_schema: HashMap<FactPath, LemmaType> = HashMap::new();
+    let mut fact_values: HashMap<FactPath, LiteralValue> = HashMap::new();
+    let mut doc_refs: HashMap<FactPath, String> = HashMap::new();
+    let mut fact_sources: HashMap<FactPath, Source> = HashMap::new();
 
-    // Collect facts and resolve TypeDeclarations
+    // Collect facts and compute an authoritative type (schema) for every fact path.
     for (path, fact) in graph.facts().iter() {
+        if let Some(src) = fact.source_location.clone() {
+            fact_sources.insert(path.clone(), src);
+        }
         match &fact.value {
-            FactValue::Literal(_) => {
-                facts.insert(path.clone(), fact.clone());
+            FactValue::Literal(lit) => {
+                fact_values.insert(path.clone(), lit.clone());
 
                 // Check if this literal fact overrides a type-annotated fact
-                // If so, we need to resolve the original type and store it in fact_types
+                // If so, we need to resolve the original type and store it in fact_schema
                 // This happens when you have: fact x = [money] and then fact one.x = 7
                 let fact_ref = FactReference {
                     segments: path.segments.iter().map(|s| s.fact.clone()).collect(),
@@ -147,7 +165,7 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
                                 match graph.resolve_type_declaration(&orig_fact.value, context_doc)
                                 {
                                     Ok(lemma_type) => {
-                                        fact_types.insert(path.clone(), lemma_type);
+                                        fact_schema.insert(path.clone(), lemma_type);
                                     }
                                     Err(e) => {
                                         // Type resolution failed - this should have been caught during validation
@@ -163,6 +181,12 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
                         }
                     }
                 }
+
+                // If this literal does not correspond to a typed fact declaration, its schema type
+                // is inferred from the literal value itself (standard types).
+                if !fact_schema.contains_key(path) {
+                    fact_schema.insert(path.clone(), lit.get_type().clone());
+                }
             }
             FactValue::TypeDeclaration { .. } => {
                 // Use TypeRegistry to determine document context and resolve type
@@ -171,19 +195,20 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
                     fact: path.fact.clone(),
                 };
 
-                // For anonymous types, check if they exist in resolved_types
-                // Anonymous types are already fully resolved during type resolution, so just use them directly
-                let mut found_anonymous_type = false;
+                // For inline type definitions, check if they exist in resolved_types
+                // Inline type definitions are already fully resolved during type resolution, so just use them directly
+                let mut found_inline_type = false;
                 for (_doc_name, document_types) in graph.resolved_types().iter() {
-                    if let Some(resolved_type) = document_types.anonymous_types.get(&fact_ref) {
-                        // Anonymous type already resolved - use it directly
-                        fact_types.insert(path.clone(), resolved_type.clone());
-                        facts.insert(path.clone(), fact.clone());
-                        found_anonymous_type = true;
+                    if let Some(resolved_type) =
+                        document_types.inline_type_definitions.get(&fact_ref)
+                    {
+                        // Inline type definition already resolved - use it directly
+                        fact_schema.insert(path.clone(), resolved_type.clone());
+                        found_inline_type = true;
                         break;
                     }
                 }
-                if found_anonymous_type {
+                if found_inline_type {
                     continue; // Skip the rest of the loop iteration
                 }
 
@@ -222,8 +247,7 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
 
                 match graph.resolve_type_declaration(&fact.value, context_doc) {
                     Ok(lemma_type) => {
-                        fact_types.insert(path.clone(), lemma_type);
-                        facts.insert(path.clone(), fact.clone());
+                        fact_schema.insert(path.clone(), lemma_type);
                     }
                     Err(e) => {
                         // This should have been caught during validation, but handle gracefully
@@ -234,8 +258,46 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
                     }
                 }
             }
-            _ => {
-                // Skip DocumentReference and other types
+            FactValue::DocumentReference(doc_name) => {
+                doc_refs.insert(path.clone(), doc_name.clone());
+            }
+        }
+    }
+
+    // Apply default values for facts with TypeDeclaration that don't have literal values
+    for (path, schema_type) in &fact_schema {
+        if fact_values.contains_key(path) {
+            continue; // Fact already has a value, skip
+        }
+        if let Some(default_value) = schema_type.create_default_value() {
+            fact_values.insert(path.clone(), default_value);
+        }
+    }
+
+    // Ensure literal facts are typed consistently with their declared schema type.
+    // If a fact path has a schema type, the stored literal MUST become that type,
+    // or we reject it as incompatible.
+    //
+    // Defensive check: fact_values should only contain LiteralValue entries.
+    // If a type definition somehow slipped through validation, this will catch it.
+    for (path, value) in fact_values.iter_mut() {
+        let Some(schema_type) = fact_schema.get(path).cloned() else {
+            continue;
+        };
+
+        match coerce_literal_to_schema_type(value, &schema_type) {
+            Ok(coerced) => {
+                *value = coerced;
+            }
+            Err(msg) => {
+                panic!(
+                    "Fact {} literal value is incompatible with declared type {}: {}. \
+                     This should have been caught during validation. If you see a type definition here, \
+                     it indicates a bug: type definitions cannot override typed facts.",
+                    path,
+                    schema_type.name(),
+                    msg
+                );
             }
         }
     }
@@ -270,10 +332,59 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
 
     ExecutionPlan {
         doc_name: main_doc_name.to_string(),
-        facts,
-        fact_types,
+        fact_schema,
+        fact_values,
+        doc_refs,
+        fact_sources,
         rules: executable_rules,
         sources: graph.sources().clone(),
+    }
+}
+
+fn coerce_literal_to_schema_type(
+    lit: &LiteralValue,
+    schema_type: &LemmaType,
+) -> Result<LiteralValue, String> {
+    use crate::semantic::TypeSpecification;
+    use crate::Value;
+
+    // Fast path: same specification => just retag to carry constraints/options/etc.
+    if lit.lemma_type.specifications == schema_type.specifications {
+        let mut out = lit.clone();
+        out.lemma_type = schema_type.clone();
+        return Ok(out);
+    }
+
+    match (&schema_type.specifications, &lit.value) {
+        // Same value shape; retag.
+        (TypeSpecification::Number { .. }, Value::Number(_))
+        | (TypeSpecification::Text { .. }, Value::Text(_))
+        | (TypeSpecification::Boolean { .. }, Value::Boolean(_))
+        | (TypeSpecification::Date { .. }, Value::Date(_))
+        | (TypeSpecification::Time { .. }, Value::Time(_))
+        | (TypeSpecification::Duration { .. }, Value::Duration(_, _))
+        | (TypeSpecification::Ratio { .. }, Value::Ratio(_, _))
+        | (TypeSpecification::Scale { .. }, Value::Scale(_, _)) => {
+            let mut out = lit.clone();
+            out.lemma_type = schema_type.clone();
+            Ok(out)
+        }
+
+        // Allow a bare numeric literal to satisfy a Scale type (interpreted as base unit).
+        (TypeSpecification::Scale { .. }, Value::Number(n)) => {
+            Ok(LiteralValue::scale_with_type(*n, None, schema_type.clone()))
+        }
+
+        // Allow a bare numeric literal to satisfy a Ratio type (unitless ratio).
+        (TypeSpecification::Ratio { .. }, Value::Number(n)) => {
+            Ok(LiteralValue::ratio_with_type(*n, None, schema_type.clone()))
+        }
+
+        _ => Err(format!(
+            "value {} cannot be used as type {}",
+            lit,
+            schema_type.name()
+        )),
     }
 }
 
@@ -305,8 +416,10 @@ fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
 
 impl ExecutionPlan {
     /// Look up a fact by its path string (e.g., "age" or "rules.base_price").
-    pub fn get_fact_by_path_str(&self, name: &str) -> Option<(&FactPath, &LemmaFact)> {
-        self.facts.iter().find(|(path, _)| path.to_string() == name)
+    pub fn get_fact_path_by_str(&self, name: &str) -> Option<&FactPath> {
+        self.fact_schema
+            .keys()
+            .find(|path| path.to_string() == name)
     }
 
     /// Look up a local rule by its name (rule in the main document).
@@ -323,10 +436,7 @@ impl ExecutionPlan {
 
     /// Get the literal value for a fact path, if it exists and has a literal value.
     pub fn get_fact_value(&self, path: &FactPath) -> Option<&LiteralValue> {
-        self.facts.get(path).and_then(|fact| match &fact.value {
-            FactValue::Literal(lit) => Some(lit),
-            _ => None,
-        })
+        self.fact_values.get(path)
     }
 
     /// Provide string values for facts by parsing them to their expected types.
@@ -369,7 +479,7 @@ impl ExecutionPlan {
                 });
             }
 
-            let (fact_path, existing_fact) = self.get_fact_by_path_str(name).ok_or_else(|| {
+            let fact_path = self.get_fact_path_by_str(name).ok_or_else(|| {
                 LemmaError::engine(
                     format!("Unknown fact: {}", name),
                     crate::parsing::ast::Span {
@@ -387,7 +497,22 @@ impl ExecutionPlan {
             })?;
             let fact_path = fact_path.clone();
 
-            let expected_type = self.get_fact_type(&fact_path, existing_fact)?;
+            let expected_type = self.fact_schema.get(&fact_path).cloned().ok_or_else(|| {
+                LemmaError::engine(
+                    format!("Unknown fact: {}", name),
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    std::sync::Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                )
+            })?;
             // Strict type checking: the actual type must match the expected type exactly
             if value.lemma_type.specifications != expected_type.specifications {
                 return Err(LemmaError::engine(
@@ -411,58 +536,32 @@ impl ExecutionPlan {
                 ));
             }
 
-            if let Some(existing) = self.facts.get_mut(&fact_path) {
-                existing.value = FactValue::Literal(value.clone());
-            }
+            validate_value_against_type(&expected_type, value).map_err(|msg| {
+                LemmaError::engine(
+                    format!(
+                        "Invalid value for fact {} (expected {}): {}",
+                        name,
+                        expected_type.name(),
+                        msg
+                    ),
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    std::sync::Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                )
+            })?;
+
+            self.fact_values.insert(fact_path, value.clone());
         }
 
         Ok(self)
-    }
-
-    fn get_fact_type(
-        &self,
-        fact_path: &FactPath,
-        fact: &LemmaFact,
-    ) -> Result<LemmaType, LemmaError> {
-        match &fact.value {
-            FactValue::Literal(lit) => Ok(lit.get_type().clone()),
-            FactValue::TypeDeclaration { .. } => {
-                // Look up the resolved type from fact_types
-                self.fact_types.get(fact_path).cloned().ok_or_else(|| {
-                    LemmaError::engine(
-                        format!(
-                            "TypeDeclaration for fact '{}' was not resolved during planning",
-                            fact_path
-                        ),
-                        crate::parsing::ast::Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        std::sync::Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })
-            }
-            FactValue::DocumentReference(_) => Err(LemmaError::engine(
-                "Cannot provide a value for a document reference fact",
-                crate::parsing::ast::Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
-                std::sync::Arc::from(""),
-                "<unknown>",
-                1,
-                None::<String>,
-            )),
-        }
     }
 
     fn parse_values(
@@ -472,8 +571,9 @@ impl ExecutionPlan {
         let mut typed = HashMap::new();
 
         for (fact_key, raw_value) in values {
-            let (fact_path, fact) = self.get_fact_by_path_str(&fact_key).ok_or_else(|| {
-                let available: Vec<String> = self.facts.keys().map(|p| p.to_string()).collect();
+            let fact_path = self.get_fact_path_by_str(&fact_key).ok_or_else(|| {
+                let available: Vec<String> =
+                    self.fact_schema.keys().map(|p| p.to_string()).collect();
                 LemmaError::engine(
                     format!(
                         "Fact '{}' not found. Available facts: {}",
@@ -493,7 +593,22 @@ impl ExecutionPlan {
                     None::<String>,
                 )
             })?;
-            let expected_type = self.get_fact_type(fact_path, fact)?;
+            let expected_type = self.fact_schema.get(fact_path).cloned().ok_or_else(|| {
+                LemmaError::engine(
+                    format!("Fact '{}' not found", fact_key),
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    std::sync::Arc::from(""),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                )
+            })?;
 
             let literal_value = expected_type.parse_value(&raw_value).map_err(|e| {
                 LemmaError::engine(
@@ -524,14 +639,123 @@ impl ExecutionPlan {
     }
 }
 
+fn validate_value_against_type(
+    expected_type: &LemmaType,
+    value: &LiteralValue,
+) -> Result<(), String> {
+    use crate::semantic::TypeSpecification;
+    use crate::Value;
+
+    let effective_decimals = |n: rust_decimal::Decimal| n.scale();
+
+    match (&expected_type.specifications, &value.value) {
+        (
+            TypeSpecification::Number {
+                minimum,
+                maximum,
+                decimals,
+                ..
+            },
+            Value::Number(n),
+        ) => {
+            if let Some(min) = minimum {
+                if n < min {
+                    return Err(format!("{} is below minimum {}", n, min));
+                }
+            }
+            if let Some(max) = maximum {
+                if n > max {
+                    return Err(format!("{} is above maximum {}", n, max));
+                }
+            }
+            if let Some(d) = decimals {
+                if effective_decimals(*n) > u32::from(*d) {
+                    return Err(format!("{} has more than {} decimals", n, d));
+                }
+            }
+            Ok(())
+        }
+        (
+            TypeSpecification::Scale {
+                minimum,
+                maximum,
+                decimals,
+                ..
+            },
+            Value::Scale(n, _unit),
+        ) => {
+            if let Some(min) = minimum {
+                if n < min {
+                    return Err(format!("{} is below minimum {}", n, min));
+                }
+            }
+            if let Some(max) = maximum {
+                if n > max {
+                    return Err(format!("{} is above maximum {}", n, max));
+                }
+            }
+            if let Some(d) = decimals {
+                if effective_decimals(*n) > u32::from(*d) {
+                    return Err(format!("{} has more than {} decimals", n, d));
+                }
+            }
+            Ok(())
+        }
+        (TypeSpecification::Text { options, .. }, Value::Text(s)) => {
+            if !options.is_empty() && !options.iter().any(|opt| opt == s) {
+                return Err(format!(
+                    "'{}' is not in allowed options: {}",
+                    s,
+                    options.join(", ")
+                ));
+            }
+            Ok(())
+        }
+        // If we get here, type mismatch should already have been rejected by the caller.
+        _ => Ok(()),
+    }
+}
+
+pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<LemmaError> {
+    let mut errors = Vec::new();
+
+    for (fact_path, lit) in &plan.fact_values {
+        let Some(expected_type) = plan.fact_schema.get(fact_path) else {
+            continue;
+        };
+
+        if let Err(msg) = validate_value_against_type(expected_type, lit) {
+            errors.push(LemmaError::engine(
+                format!(
+                    "Invalid value for fact {} (expected {}): {}",
+                    fact_path,
+                    expected_type.name(),
+                    msg
+                ),
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                std::sync::Arc::from(""),
+                "<unknown>",
+                1,
+                None::<String>,
+            ));
+        }
+    }
+
+    errors
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::semantic::{
-        BooleanValue, Expression, FactPath, FactReference, FactValue, LemmaFact, LiteralValue,
-        RulePath, Value,
-    };
+    use crate::semantic::{BooleanValue, Expression, FactPath, LiteralValue, RulePath, Value};
     use serde_json;
+    use std::str::FromStr;
     use std::sync::Arc;
 
     fn default_limits() -> ResourceLimits {
@@ -546,22 +770,21 @@ mod tests {
         };
         let plan = ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: {
-                let mut f = HashMap::new();
-                f.insert(
+            fact_schema: {
+                let mut s = HashMap::new();
+                s.insert(
                     fact_path.clone(),
-                    LemmaFact {
-                        reference: FactReference {
-                            segments: vec![],
-                            fact: "age".to_string(),
-                        },
-                        value: FactValue::Literal(create_number_literal(25.into())),
-                        source_location: None,
-                    },
+                    crate::semantic::standard_number().clone(),
                 );
-                f
+                s
             },
-            fact_types: HashMap::new(),
+            fact_values: {
+                let mut v = HashMap::new();
+                v.insert(fact_path.clone(), create_number_literal(25.into()));
+                v
+            },
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         };
@@ -570,13 +793,10 @@ mod tests {
         values.insert("age".to_string(), create_number_literal(30.into()));
 
         let updated_plan = plan.with_typed_values(values, &default_limits()).unwrap();
-        let updated_fact = updated_plan.facts.get(&fact_path).unwrap();
-        match &updated_fact.value {
-            FactValue::Literal(lit) => match &lit.value {
-                Value::Number(n) => assert_eq!(*n, 30.into()),
-                _ => panic!("Expected number literal"),
-            },
-            _ => panic!("Expected number literal"),
+        let updated_value = updated_plan.fact_values.get(&fact_path).unwrap();
+        match &updated_value.value {
+            Value::Number(n) => assert_eq!(*n, 30.into()),
+            other => panic!("Expected number literal, got {:?}", other),
         }
     }
 
@@ -588,26 +808,14 @@ mod tests {
         };
         let plan = ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: {
-                let mut f = HashMap::new();
-                f.insert(
-                    fact_path,
-                    LemmaFact {
-                        reference: FactReference {
-                            segments: vec![],
-                            fact: "age".to_string(),
-                        },
-                        value: FactValue::TypeDeclaration {
-                            base: "number".to_string(),
-                            overrides: None,
-                            from: None,
-                        },
-                        source_location: None,
-                    },
-                );
-                f
+            fact_schema: {
+                let mut s = HashMap::new();
+                s.insert(fact_path, crate::semantic::standard_number().clone());
+                s
             },
-            fact_types: HashMap::new(),
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         };
@@ -622,8 +830,10 @@ mod tests {
     fn test_with_typed_values_unknown_fact() {
         let plan = ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            fact_types: HashMap::new(),
+            fact_schema: HashMap::new(),
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         };
@@ -646,26 +856,7 @@ mod tests {
         };
         let plan = ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: {
-                let mut f = HashMap::new();
-                f.insert(
-                    fact_path.clone(),
-                    LemmaFact {
-                        reference: FactReference {
-                            segments: vec!["rules".to_string()],
-                            fact: "base_price".to_string(),
-                        },
-                        value: FactValue::TypeDeclaration {
-                            base: "number".to_string(),
-                            overrides: None,
-                            from: None,
-                        },
-                        source_location: None,
-                    },
-                );
-                f
-            },
-            fact_types: {
+            fact_schema: {
                 let mut types = HashMap::new();
                 types.insert(
                     fact_path.clone(),
@@ -673,6 +864,9 @@ mod tests {
                 );
                 types
             },
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         };
@@ -684,13 +878,10 @@ mod tests {
         );
 
         let updated_plan = plan.with_typed_values(values, &default_limits()).unwrap();
-        let updated_fact = updated_plan.facts.get(&fact_path).unwrap();
-        match &updated_fact.value {
-            FactValue::Literal(lit) => match &lit.value {
-                Value::Number(n) => assert_eq!(*n, 100.into()),
-                _ => panic!("Expected number literal"),
-            },
-            _ => panic!("Expected number literal"),
+        let updated_value = updated_plan.fact_values.get(&fact_path).unwrap();
+        match &updated_value.value {
+            Value::Number(n) => assert_eq!(*n, 100.into()),
+            other => panic!("Expected number literal, got {:?}", other),
         }
     }
 
@@ -712,6 +903,117 @@ mod tests {
     }
 
     #[test]
+    fn with_values_should_enforce_number_maximum_constraint() {
+        // Higher-standard requirement: user input must be validated against type constraints.
+        // If this test fails, Lemma accepts invalid values and gives false reassurance.
+        let fact_path = FactPath::local("x".to_string());
+
+        let mut fact_schema = HashMap::new();
+        let max10 = crate::LemmaType::without_name(crate::TypeSpecification::Number {
+            minimum: None,
+            maximum: Some(rust_decimal::Decimal::from_str("10").unwrap()),
+            decimals: None,
+            precision: None,
+            help: None,
+            default: None,
+        });
+        fact_schema.insert(fact_path.clone(), max10.clone());
+
+        let plan = ExecutionPlan {
+            doc_name: "test".to_string(),
+            fact_schema,
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
+            rules: Vec::new(),
+            sources: HashMap::new(),
+        };
+
+        let mut values = HashMap::new();
+        values.insert("x".to_string(), "11".to_string());
+
+        assert!(
+            plan.with_values(values, &default_limits()).is_err(),
+            "Providing x=11 should fail due to maximum 10"
+        );
+    }
+
+    #[test]
+    fn with_values_should_enforce_text_enum_options() {
+        // Higher-standard requirement: enum options must be enforced for text types.
+        let fact_path = FactPath::local("tier".to_string());
+
+        let mut fact_schema = HashMap::new();
+        let tier = crate::LemmaType::without_name(crate::TypeSpecification::Text {
+            minimum: None,
+            maximum: None,
+            length: None,
+            options: vec!["silver".to_string(), "gold".to_string()],
+            help: None,
+            default: None,
+        });
+        fact_schema.insert(fact_path.clone(), tier.clone());
+
+        let plan = ExecutionPlan {
+            doc_name: "test".to_string(),
+            fact_schema,
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
+            rules: Vec::new(),
+            sources: HashMap::new(),
+        };
+
+        let mut values = HashMap::new();
+        values.insert("tier".to_string(), "platinum".to_string());
+
+        assert!(
+            plan.with_values(values, &default_limits()).is_err(),
+            "Invalid enum value should be rejected (tier='platinum')"
+        );
+    }
+
+    #[test]
+    fn with_values_should_enforce_scale_decimals() {
+        // Higher-standard requirement: decimals should be enforced on scale inputs,
+        // unless the language explicitly defines rounding semantics.
+        let fact_path = FactPath::local("price".to_string());
+
+        let mut fact_schema = HashMap::new();
+        let money = crate::LemmaType::without_name(crate::TypeSpecification::Scale {
+            minimum: None,
+            maximum: None,
+            decimals: Some(2),
+            precision: None,
+            units: vec![crate::semantic::Unit {
+                name: "eur".to_string(),
+                value: rust_decimal::Decimal::from_str("1.0").unwrap(),
+            }],
+            help: None,
+            default: None,
+        });
+        fact_schema.insert(fact_path.clone(), money.clone());
+
+        let plan = ExecutionPlan {
+            doc_name: "test".to_string(),
+            fact_schema,
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
+            rules: Vec::new(),
+            sources: HashMap::new(),
+        };
+
+        let mut values = HashMap::new();
+        values.insert("price".to_string(), "1.234 eur".to_string());
+
+        assert!(
+            plan.with_values(values, &default_limits()).is_err(),
+            "Scale decimals=2 should reject 1.234 eur"
+        );
+    }
+
+    #[test]
     fn test_serialize_deserialize_execution_plan() {
         let fact_path = FactPath {
             segments: vec![],
@@ -719,26 +1021,17 @@ mod tests {
         };
         let plan = ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: {
-                let mut f = HashMap::new();
-                f.insert(
+            fact_schema: {
+                let mut s = HashMap::new();
+                s.insert(
                     fact_path.clone(),
-                    LemmaFact {
-                        reference: FactReference {
-                            segments: vec![],
-                            fact: "age".to_string(),
-                        },
-                        value: FactValue::TypeDeclaration {
-                            base: "number".to_string(),
-                            overrides: None,
-                            from: None,
-                        },
-                        source_location: None,
-                    },
+                    crate::semantic::standard_number().clone(),
                 );
-                f
+                s
             },
-            fact_types: HashMap::new(),
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: {
                 let mut s = HashMap::new();
@@ -751,7 +1044,10 @@ mod tests {
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
 
         assert_eq!(deserialized.doc_name, plan.doc_name);
-        assert_eq!(deserialized.facts.len(), plan.facts.len());
+        assert_eq!(deserialized.fact_schema.len(), plan.fact_schema.len());
+        assert_eq!(deserialized.fact_values.len(), plan.fact_values.len());
+        assert_eq!(deserialized.doc_refs.len(), plan.doc_refs.len());
+        assert_eq!(deserialized.fact_sources.len(), plan.fact_sources.len());
         assert_eq!(deserialized.rules.len(), plan.rules.len());
         assert_eq!(deserialized.sources.len(), plan.sources.len());
     }
@@ -762,28 +1058,17 @@ mod tests {
 
         let mut plan = ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            fact_types: HashMap::new(),
+            fact_schema: HashMap::new(),
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         };
 
         let age_path = FactPath::local("age".to_string());
-        plan.facts.insert(
-            age_path.clone(),
-            LemmaFact {
-                reference: FactReference {
-                    segments: vec![],
-                    fact: "age".to_string(),
-                },
-                value: FactValue::TypeDeclaration {
-                    base: "number".to_string(),
-                    overrides: None,
-                    from: None,
-                },
-                source_location: None,
-            },
-        );
+        plan.fact_schema
+            .insert(age_path.clone(), crate::semantic::standard_number().clone());
 
         let rule = ExecutableRule {
             path: RulePath::local("can_drive".to_string()),
@@ -818,7 +1103,7 @@ mod tests {
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
 
         assert_eq!(deserialized.doc_name, plan.doc_name);
-        assert_eq!(deserialized.facts.len(), plan.facts.len());
+        assert_eq!(deserialized.fact_schema.len(), plan.fact_schema.len());
         assert_eq!(deserialized.rules.len(), plan.rules.len());
         assert_eq!(deserialized.rules[0].name, "can_drive");
         assert_eq!(deserialized.rules[0].branches.len(), 1);
@@ -838,26 +1123,17 @@ mod tests {
 
         let plan = ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: {
-                let mut f = HashMap::new();
-                f.insert(
+            fact_schema: {
+                let mut s = HashMap::new();
+                s.insert(
                     fact_path.clone(),
-                    LemmaFact {
-                        reference: FactReference {
-                            segments: vec!["employee".to_string()],
-                            fact: "salary".to_string(),
-                        },
-                        value: FactValue::TypeDeclaration {
-                            base: "number".to_string(),
-                            overrides: None,
-                            from: None,
-                        },
-                        source_location: None,
-                    },
+                    crate::semantic::standard_number().clone(),
                 );
-                f
+                s
             },
-            fact_types: HashMap::new(),
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         };
@@ -865,8 +1141,8 @@ mod tests {
         let json = serde_json::to_string(&plan).expect("Should serialize");
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
 
-        assert_eq!(deserialized.facts.len(), 1);
-        let (deserialized_path, _) = deserialized.facts.iter().next().unwrap();
+        assert_eq!(deserialized.fact_schema.len(), 1);
+        let (deserialized_path, _) = deserialized.fact_schema.iter().next().unwrap();
         assert_eq!(deserialized_path.segments.len(), 1);
         assert_eq!(deserialized_path.segments[0].fact, "employee");
         assert_eq!(deserialized_path.fact, "salary");
@@ -874,90 +1150,53 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_plan_with_multiple_fact_types() {
-        let mut plan = ExecutionPlan {
+        let name_path = FactPath::local("name".to_string());
+        let age_path = FactPath::local("age".to_string());
+        let active_path = FactPath::local("active".to_string());
+
+        let mut fact_schema = HashMap::new();
+        fact_schema.insert(name_path.clone(), crate::semantic::standard_text().clone());
+        fact_schema.insert(age_path.clone(), crate::semantic::standard_number().clone());
+        fact_schema.insert(
+            active_path.clone(),
+            crate::semantic::standard_boolean().clone(),
+        );
+
+        let mut fact_values = HashMap::new();
+        fact_values.insert(name_path.clone(), create_text_literal("Alice".to_string()));
+        fact_values.insert(age_path.clone(), create_number_literal(30.into()));
+        fact_values.insert(
+            active_path.clone(),
+            create_boolean_literal(crate::BooleanValue::True),
+        );
+
+        let plan = ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            fact_types: HashMap::new(),
+            fact_schema,
+            fact_values,
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         };
 
-        plan.facts.insert(
-            FactPath::local("name".to_string()),
-            LemmaFact {
-                reference: FactReference {
-                    segments: vec![],
-                    fact: "name".to_string(),
-                },
-                value: FactValue::Literal(create_text_literal("Alice".to_string())),
-                source_location: None,
-            },
-        );
-
-        plan.facts.insert(
-            FactPath::local("age".to_string()),
-            LemmaFact {
-                reference: FactReference {
-                    segments: vec![],
-                    fact: "age".to_string(),
-                },
-                value: FactValue::Literal(create_number_literal(30.into())),
-                source_location: None,
-            },
-        );
-
-        plan.facts.insert(
-            FactPath::local("active".to_string()),
-            LemmaFact {
-                reference: FactReference {
-                    segments: vec![],
-                    fact: "active".to_string(),
-                },
-                value: FactValue::Literal(create_boolean_literal(crate::BooleanValue::True)),
-                source_location: None,
-            },
-        );
-
         let json = serde_json::to_string(&plan).expect("Should serialize");
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
 
-        assert_eq!(deserialized.facts.len(), 3);
+        assert_eq!(deserialized.fact_values.len(), 3);
 
-        let name_fact = deserialized
-            .facts
-            .get(&FactPath::local("name".to_string()))
-            .unwrap();
-        match &name_fact.value {
-            FactValue::Literal(lit) => match &lit.value {
-                Value::Text(s) => assert_eq!(s, "Alice"),
-                _ => panic!("Expected text literal"),
-            },
-            _ => panic!("Expected text literal"),
-        }
-
-        let age_fact = deserialized
-            .facts
-            .get(&FactPath::local("age".to_string()))
-            .unwrap();
-        match &age_fact.value {
-            FactValue::Literal(lit) => match &lit.value {
-                Value::Number(n) => assert_eq!(*n, 30.into()),
-                _ => panic!("Expected number literal"),
-            },
-            _ => panic!("Expected number literal"),
-        }
-
-        let active_fact = deserialized
-            .facts
-            .get(&FactPath::local("active".to_string()))
-            .unwrap();
-        match &active_fact.value {
-            FactValue::Literal(lit) => match &lit.value {
-                Value::Boolean(b) => assert_eq!(*b, crate::BooleanValue::True),
-                _ => panic!("Expected boolean literal"),
-            },
-            _ => panic!("Expected boolean literal"),
-        }
+        assert_eq!(
+            deserialized.fact_values.get(&name_path).unwrap().value,
+            Value::Text("Alice".to_string())
+        );
+        assert_eq!(
+            deserialized.fact_values.get(&age_path).unwrap().value,
+            Value::Number(30.into())
+        );
+        assert_eq!(
+            deserialized.fact_values.get(&active_path).unwrap().value,
+            Value::Boolean(crate::BooleanValue::True)
+        );
     }
 
     #[test]
@@ -966,27 +1205,18 @@ mod tests {
 
         let mut plan = ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            fact_types: HashMap::new(),
+            fact_schema: HashMap::new(),
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         };
 
         let points_path = FactPath::local("points".to_string());
-        plan.facts.insert(
+        plan.fact_schema.insert(
             points_path.clone(),
-            LemmaFact {
-                reference: FactReference {
-                    segments: vec![],
-                    fact: "points".to_string(),
-                },
-                value: FactValue::TypeDeclaration {
-                    base: "number".to_string(),
-                    overrides: None,
-                    from: None,
-                },
-                source_location: None,
-            },
+            crate::semantic::standard_number().clone(),
         );
 
         let rule = ExecutableRule {
@@ -1054,8 +1284,10 @@ mod tests {
     fn test_serialize_deserialize_empty_plan() {
         let plan = ExecutionPlan {
             doc_name: "empty".to_string(),
-            facts: HashMap::new(),
-            fact_types: HashMap::new(),
+            fact_schema: HashMap::new(),
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         };
@@ -1064,7 +1296,8 @@ mod tests {
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
 
         assert_eq!(deserialized.doc_name, "empty");
-        assert_eq!(deserialized.facts.len(), 0);
+        assert_eq!(deserialized.fact_schema.len(), 0);
+        assert_eq!(deserialized.fact_values.len(), 0);
         assert_eq!(deserialized.rules.len(), 0);
         assert_eq!(deserialized.sources.len(), 0);
     }
@@ -1075,28 +1308,17 @@ mod tests {
 
         let mut plan = ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            fact_types: HashMap::new(),
+            fact_schema: HashMap::new(),
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         };
 
         let x_path = FactPath::local("x".to_string());
-        plan.facts.insert(
-            x_path.clone(),
-            LemmaFact {
-                reference: FactReference {
-                    segments: vec![],
-                    fact: "x".to_string(),
-                },
-                value: FactValue::TypeDeclaration {
-                    base: "number".to_string(),
-                    overrides: None,
-                    from: None,
-                },
-                source_location: None,
-            },
-        );
+        plan.fact_schema
+            .insert(x_path.clone(), crate::semantic::standard_number().clone());
 
         let rule = ExecutableRule {
             path: RulePath::local("doubled".to_string()),
@@ -1153,8 +1375,10 @@ mod tests {
 
         let mut plan = ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            fact_types: HashMap::new(),
+            fact_schema: HashMap::new(),
+            fact_values: HashMap::new(),
+            doc_refs: HashMap::new(),
+            fact_sources: HashMap::new(),
             rules: Vec::new(),
             sources: {
                 let mut s = HashMap::new();
@@ -1164,21 +1388,8 @@ mod tests {
         };
 
         let age_path = FactPath::local("age".to_string());
-        plan.facts.insert(
-            age_path.clone(),
-            LemmaFact {
-                reference: FactReference {
-                    segments: vec![],
-                    fact: "age".to_string(),
-                },
-                value: FactValue::TypeDeclaration {
-                    base: "number".to_string(),
-                    overrides: None,
-                    from: None,
-                },
-                source_location: None,
-            },
-        );
+        plan.fact_schema
+            .insert(age_path.clone(), crate::semantic::standard_number().clone());
 
         let rule = ExecutableRule {
             path: RulePath::local("is_adult".to_string()),
@@ -1217,7 +1428,7 @@ mod tests {
             serde_json::from_str(&json2).expect("Should deserialize again");
 
         assert_eq!(deserialized2.doc_name, plan.doc_name);
-        assert_eq!(deserialized2.facts.len(), plan.facts.len());
+        assert_eq!(deserialized2.fact_schema.len(), plan.fact_schema.len());
         assert_eq!(deserialized2.rules.len(), plan.rules.len());
         assert_eq!(deserialized2.sources.len(), plan.sources.len());
         assert_eq!(deserialized2.rules[0].name, plan.rules[0].name);

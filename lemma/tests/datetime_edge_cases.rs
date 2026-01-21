@@ -27,10 +27,15 @@ rule check = leap_date
     engine
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
-    let response = engine
-        .evaluate("test", vec![], HashMap::new())
-        .expect("Failed to evaluate");
-    assert!(!response.results.is_empty());
+
+    let lit = get_rule_value(&engine, "test", "check");
+    if let lemma::Value::Date(date) = &lit.value {
+        assert_eq!(date.year, 2024);
+        assert_eq!(date.month, 2);
+        assert_eq!(date.day, 29);
+    } else {
+        panic!("Expected Date value");
+    }
 }
 
 #[test]
@@ -45,10 +50,15 @@ rule check = leap_date
     engine
         .add_lemma_code(code, "test.lemma")
         .expect("Failed to parse");
-    let response = engine
-        .evaluate("test", vec![], HashMap::new())
-        .expect("Failed to evaluate");
-    assert!(!response.results.is_empty());
+
+    let lit = get_rule_value(&engine, "test", "check");
+    if let lemma::Value::Date(date) = &lit.value {
+        assert_eq!(date.year, 2000);
+        assert_eq!(date.month, 2);
+        assert_eq!(date.day, 29);
+    } else {
+        panic!("Expected Date value");
+    }
 }
 
 #[test]

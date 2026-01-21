@@ -3,7 +3,26 @@
 //! Ensures all example files in documentation/examples/ are valid and can be evaluated
 
 use lemma::Engine;
+use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::str::FromStr;
+
+fn get_rule_value(
+    engine: &Engine,
+    doc_name: &str,
+    rule_name: &str,
+    facts: HashMap<String, String>,
+) -> lemma::LiteralValue {
+    let response = engine.evaluate(doc_name, vec![], facts).unwrap();
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("rule '{}' not found in {}", rule_name, doc_name))
+        .result
+        .value()
+        .unwrap_or_else(|| panic!("rule '{}' had no value", rule_name))
+        .clone()
+}
 
 fn load_documentation_examples() -> Engine {
     let mut engine = Engine::new();
@@ -33,32 +52,23 @@ fn test_01_coffee_order() {
     let engine = load_documentation_examples();
 
     let mut facts = HashMap::new();
-    facts.insert("price".to_string(), "5.00 usd".to_string());
-    facts.insert("priority".to_string(), "medium".to_string());
     facts.insert("product".to_string(), "latte".to_string());
     facts.insert("size".to_string(), "large".to_string());
     facts.insert("number_of_cups".to_string(), "2".to_string());
     facts.insert("has_loyalty_card".to_string(), "true".to_string());
+    facts.insert("age".to_string(), "70".to_string());
 
-    let response = engine
-        .evaluate("coffee_order", vec![], facts)
-        .expect("Evaluation failed");
+    let total = get_rule_value(&engine, "coffee_order", "total", facts);
 
-    assert_eq!(response.doc_name, "coffee_order");
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "base_price"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "size_multiplier"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "price_per_cup"));
-    assert!(response.results.values().any(|r| r.rule.name == "subtotal"));
-    assert!(response.results.values().any(|r| r.rule.name == "total"));
+    // latte base_price (3.50 eur) * large size_multiplier (120%) = 4.20 eur per cup
+    // 4.20 eur * 2 cups = 8.40 eur subtotal
+    // loyalty card discount 10% = 0.84 eur (age >= 65, so age_discount = 10%)
+    // discount_amount = 0.84 eur - 10% = 0.84 - 0.084 = 0.756 eur
+    // total = 8.40 - 0.756 = 7.644 eur
+    assert_eq!(
+        total.value,
+        lemma::Value::Scale(Decimal::from_str("7.644").unwrap(), Some("eur".to_string()))
+    );
 }
 
 #[test]
@@ -70,31 +80,17 @@ fn test_02_library_fees() {
     facts.insert("book_type".to_string(), "regular".to_string());
     facts.insert("is_first_offense".to_string(), "false".to_string());
 
-    let response = engine
-        .evaluate("library_fees", vec![], facts)
-        .expect("Evaluation failed");
+    let final_fee = get_rule_value(&engine, "library_fees", "final_fee", facts.clone());
+    assert_eq!(
+        final_fee.value,
+        lemma::Value::Scale(Decimal::from_str("1.25").unwrap(), Some("eur".to_string()))
+    );
 
-    assert_eq!(response.doc_name, "library_fees");
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "daily_fee"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "is_in_grace_period"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "total_fee"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "final_fee"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "can_checkout"));
+    let can_checkout = get_rule_value(&engine, "library_fees", "can_checkout", facts);
+    assert_eq!(
+        can_checkout.value,
+        lemma::Value::Boolean(lemma::BooleanValue::True)
+    );
 }
 
 #[test]
@@ -106,43 +102,31 @@ fn test_03_recipe_scaling() {
     facts.insert("desired_servings".to_string(), "8".to_string());
     facts.insert("recipe_name".to_string(), "chocolate_cake".to_string());
 
-    let response = engine
-        .evaluate("recipe_scaling", vec![], facts)
-        .expect("Evaluation failed");
+    let scaling_factor = get_rule_value(&engine, "recipe_scaling", "scaling_factor", facts.clone());
+    assert_eq!(
+        scaling_factor.value,
+        lemma::Value::Number(Decimal::from_str("2").unwrap())
+    );
 
-    assert_eq!(response.doc_name, "recipe_scaling");
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "scaling_factor"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "scaled_flour"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "scaled_sugar"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "scaled_butter"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "scaled_eggs"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "total_dry_ingredients"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "baking_time_minutes"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "oven_temperature"));
+    let baking_time = get_rule_value(
+        &engine,
+        "recipe_scaling",
+        "baking_time_minutes",
+        facts.clone(),
+    );
+    assert_eq!(
+        baking_time.value,
+        lemma::Value::Number(Decimal::from_str("40").unwrap())
+    );
+
+    let oven_temp = get_rule_value(&engine, "recipe_scaling", "oven_temperature", facts);
+    assert_eq!(
+        oven_temp.value,
+        lemma::Value::Scale(
+            Decimal::from_str("175").unwrap(),
+            Some("celsius".to_string())
+        )
+    );
 }
 
 #[test]
@@ -150,55 +134,48 @@ fn test_04_membership_benefits() {
     let engine = load_documentation_examples();
 
     // Test premium_membership document (has rules, no facts needed)
-    let response = engine
-        .evaluate("premium_membership", vec![], HashMap::new())
-        .expect("Evaluation failed");
-
-    assert_eq!(response.doc_name, "premium_membership");
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "discount_rate"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "free_shipping_threshold"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "points_multiplier"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "monthly_bonus_points"));
+    let discount_rate = get_rule_value(
+        &engine,
+        "premium_membership",
+        "discount_rate",
+        HashMap::new(),
+    );
+    assert_eq!(
+        discount_rate.value,
+        lemma::Value::Ratio(
+            Decimal::from_str("0.10").unwrap(),
+            Some("percent".to_string())
+        )
+    );
 
     // Test membership_benefits document (references premium_membership)
-    let response = engine
-        .evaluate("membership_benefits", vec![], HashMap::new())
-        .expect("Evaluation failed");
+    let discount = get_rule_value(&engine, "membership_benefits", "discount", HashMap::new());
+    assert_eq!(
+        discount.value,
+        lemma::Value::Number(Decimal::from_str("15").unwrap())
+    );
 
-    assert_eq!(response.doc_name, "membership_benefits");
-    assert!(response.results.values().any(|r| r.rule.name == "discount"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "shipping_cost"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "base_points"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "bonus_points"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "total_points"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "total_savings"));
+    let shipping_cost = get_rule_value(
+        &engine,
+        "membership_benefits",
+        "shipping_cost",
+        HashMap::new(),
+    );
+    assert_eq!(
+        shipping_cost.value,
+        lemma::Value::Number(Decimal::from_str("0").unwrap())
+    );
+
+    let total_points = get_rule_value(
+        &engine,
+        "membership_benefits",
+        "total_points",
+        HashMap::new(),
+    );
+    assert_eq!(
+        total_points.value,
+        lemma::Value::Number(Decimal::from_str("325").unwrap())
+    );
 }
 
 #[test]
@@ -210,35 +187,18 @@ fn test_05_weather_clothing() {
     facts.insert("is_raining".to_string(), "false".to_string());
     facts.insert("wind_speed".to_string(), "10".to_string());
 
-    let response = engine
-        .evaluate("weather_clothing", vec![], facts)
-        .expect("Evaluation failed");
+    let clothing_layer =
+        get_rule_value(&engine, "weather_clothing", "clothing_layer", facts.clone());
+    assert_eq!(
+        clothing_layer.value,
+        lemma::Value::Text("light".to_string())
+    );
 
-    assert_eq!(response.doc_name, "weather_clothing");
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "clothing_layer"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "needs_jacket"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "needs_umbrella"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "needs_hat"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "comfort_level"));
-    assert!(response
-        .results
-        .values()
-        .any(|r| r.rule.name == "recommendation"));
+    let needs_jacket = get_rule_value(&engine, "weather_clothing", "needs_jacket", facts);
+    assert_eq!(
+        needs_jacket.value,
+        lemma::Value::Boolean(lemma::BooleanValue::False)
+    );
 }
 
 #[test]
@@ -259,7 +219,6 @@ fn test_all_documentation_examples_parse() {
 
     // Verify key documents exist
     let key_docs = vec![
-        "examples",            // from 01_coffee_order.lemma
         "coffee_order",        // from 01_coffee_order.lemma
         "library_fees",        // from 02_library_fees.lemma
         "recipe_scaling",      // from 03_recipe_scaling.lemma

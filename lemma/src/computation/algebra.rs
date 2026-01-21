@@ -27,7 +27,7 @@ pub fn solve_for(expression: &Expression, unknown: &Expression) -> Result<Expres
             .source_location
             .as_ref()
             .or(unknown.source_location.as_ref())
-            .expect("Expression or unknown must have source_location");
+            .unwrap_or_else(|| panic!("BUG: solve_for called with missing source_location"));
         let source_text = std::sync::Arc::from("");
         return Err(LemmaError::engine(
             "Unknown not found in expression",
@@ -45,7 +45,7 @@ pub fn solve_for(expression: &Expression, unknown: &Expression) -> Result<Expres
             .source_location
             .as_ref()
             .or(unknown.source_location.as_ref())
-            .expect("Expression or unknown must have source_location");
+            .unwrap_or_else(|| panic!("BUG: solve_for called with missing source_location"));
         let source_text = std::sync::Arc::from("");
         return Err(LemmaError::engine(
             "Non-linear: unknown appears multiple times",

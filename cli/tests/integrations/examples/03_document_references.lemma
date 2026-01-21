@@ -6,7 +6,7 @@ Defines basic employee facts that can be referenced and extended.
 """
 
 fact name = "John Doe"
-fact monthly_salary = 5000
+fact monthly_salary = [number -> minimum 0 -> default 5000]
 fact department = "Engineering"
 fact employment_duration = 0 years
 fact is_full_time = true
@@ -45,7 +45,7 @@ Shows a different employment model using document references.
 
 fact person = doc base_employee
 fact person.is_full_time = false
-fact hourly_rate = 85
+fact hourly_rate = [number -> minimum 0 -> default 85]
 fact hours_worked = 120 hours
 
 rule total_payment = hourly_rate * hours_worked

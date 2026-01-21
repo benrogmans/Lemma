@@ -471,3 +471,26 @@ fn parse_decimal_number(number_str: &str) -> Result<Decimal, LemmaError> {
         )
     })
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use crate::parsing::parse;
+    use crate::ResourceLimits;
+
+    #[test]
+    fn parse_rejects_percent_literal_with_trailing_digits() {
+        // Guard against tokenization bugs around percent literals.
+        // The grammar comment says '%' must be directly followed by a non-digit or EOI.
+        let input = r#"doc test
+fact x = 10%5"#;
+        let result = parse(input, "test.lemma", &ResourceLimits::default());
+        assert!(
+            result.is_err(),
+            "Percent literals like `10%5` must be rejected"
+        );
+    }
+}

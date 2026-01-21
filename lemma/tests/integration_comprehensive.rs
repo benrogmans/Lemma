@@ -1,5 +1,7 @@
 use lemma::Engine;
+use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::str::FromStr;
 
 #[test]
 fn test_employee_contract_comprehensive() {
@@ -42,41 +44,29 @@ rule contract_valid = is_salary_valid? and vacation_days_ok? and is_adult?
         .evaluate("employment_terms", vec![], HashMap::new())
         .unwrap();
 
-    // DEBUG: inspect what rules we actually got back
-    println!("=== employment_terms results keys ===");
-    for k in response.results.keys() {
-        println!("  result key: {}", k);
-    }
-
-    println!("=== employment_terms rule names and values ===");
-    for r in response.results.values() {
-        println!("  rule: {}", r.rule.name);
-        if let Some(v) = r.result.value() {
-            println!("    value: {}", v);
-        } else {
-            println!("    value: <no value>");
-        }
-    }
-
     let total_comp = response
         .results
         .values()
         .find(|r| r.rule.name == "total_compensation")
         .unwrap();
 
-    assert!(total_comp
-        .result
-        .value()
-        .unwrap()
-        .to_string()
-        .contains("82,500"));
+    match &total_comp.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("82500").unwrap()),
+            other => panic!("Expected Number for total_compensation, got {:?}", other),
+        },
+        other => panic!("Expected Value for total_compensation, got {:?}", other),
+    }
 
     let contract_valid = response
         .results
         .values()
         .find(|r| r.rule.name == "contract_valid")
         .unwrap();
-    assert_eq!(contract_valid.result.value().unwrap().to_string(), "true");
+    assert_eq!(
+        contract_valid.result,
+        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+    );
 
     engine.remove_document("employment_terms");
     engine.remove_document("base_contract");
@@ -121,26 +111,36 @@ rule effective_rate = (tax_amount? / income) * 100%
         .values()
         .find(|r| r.rule.name == "taxable_income")
         .unwrap();
-    assert!(taxable
-        .result
-        .value()
-        .unwrap()
-        .to_string()
-        .contains("70,000"));
+    match &taxable.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("70000").unwrap()),
+            other => panic!("Expected Number for taxable_income, got {:?}", other),
+        },
+        other => panic!("Expected Value for taxable_income, got {:?}", other),
+    }
 
     let in_mid = response
         .results
         .values()
         .find(|r| r.rule.name == "in_mid_bracket")
         .unwrap();
-    assert_eq!(in_mid.result.value().unwrap().to_string(), "true");
+    assert_eq!(
+        in_mid.result,
+        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+    );
 
     let tax_rate = response
         .results
         .values()
         .find(|r| r.rule.name == "tax_rate")
         .unwrap();
-    assert!(tax_rate.result.value().unwrap().to_string().contains("20"));
+    assert_eq!(
+        tax_rate.result,
+        lemma::OperationResult::Value(lemma::LiteralValue::ratio(
+            Decimal::from_str("0.2").unwrap(),
+            Some("percent".to_string())
+        ))
+    );
 
     engine.remove_document("tax_calculation");
 }
@@ -242,7 +242,10 @@ rule is_on_schedule = elapsed_time? <= phase1_duration + phase2_duration
         .values()
         .find(|r| r.rule.name == "is_phase2_complete")
         .unwrap();
-    assert_eq!(phase2_complete.result.value().unwrap().to_string(), "false");
+    assert_eq!(
+        phase2_complete.result,
+        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::False))
+    );
 
     engine.remove_document("project_timeline");
 }
@@ -271,10 +274,17 @@ rule end_date = start + timespan
         .find(|r| r.rule.name == "end_date")
         .unwrap();
 
-    assert!(end_date.result.value().is_some());
-    let result_str = end_date.result.value().unwrap().to_string();
-    assert!(result_str.contains("2024"));
-    assert!(result_str.contains("2") && result_str.contains("14"));
+    match &end_date.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Date(date) => {
+                assert_eq!(date.year, 2024);
+                assert_eq!(date.month, 2);
+                assert_eq!(date.day, 14);
+            }
+            other => panic!("Expected Date for end_date, got {:?}", other),
+        },
+        other => panic!("Expected Value for end_date, got {:?}", other),
+    }
 }
 
 #[test]
@@ -297,10 +307,17 @@ rule start_date = end - timespan
         .find(|r| r.rule.name == "start_date")
         .unwrap();
 
-    assert!(start_date.result.value().is_some());
-    let result_str = start_date.result.value().unwrap().to_string();
-    assert!(result_str.contains("2024"));
-    assert!(result_str.contains("1") && result_str.contains("15"));
+    match &start_date.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Date(date) => {
+                assert_eq!(date.year, 2024);
+                assert_eq!(date.month, 1);
+                assert_eq!(date.day, 15);
+            }
+            other => panic!("Expected Date for start_date, got {:?}", other),
+        },
+        other => panic!("Expected Value for start_date, got {:?}", other),
+    }
 }
 
 #[test]
@@ -323,11 +340,17 @@ rule timespan = end - start
         .find(|r| r.rule.name == "timespan")
         .unwrap();
 
-    assert!(duration.result.value().is_some());
-    let result_str = duration.result.value().unwrap().to_string();
-    // Date - Date returns seconds (30 days = 2,592,000 seconds)
-    assert!(result_str.contains("2592000") || result_str.contains("2,592,000"));
-    assert!(result_str.contains("second"));
+    match &duration.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Duration(seconds, unit) => {
+                // Date - Date returns seconds (30 days = 2,592,000 seconds)
+                assert_eq!(*seconds, Decimal::from_str("2592000").unwrap());
+                assert_eq!(unit.to_string(), "seconds");
+            }
+            other => panic!("Expected Duration for timespan, got {:?}", other),
+        },
+        other => panic!("Expected Value for timespan, got {:?}", other),
+    }
 }
 
 #[test]
@@ -350,14 +373,20 @@ rule date1_after_date2 = date1 > date2
         .values()
         .find(|r| r.rule.name == "date1_before_date2")
         .unwrap();
-    assert_eq!(before.result.value().unwrap().to_string(), "true");
+    assert_eq!(
+        before.result,
+        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+    );
 
     let after = response
         .results
         .values()
         .find(|r| r.rule.name == "date1_after_date2")
         .unwrap();
-    assert_eq!(after.result.value().unwrap().to_string(), "false");
+    assert_eq!(
+        after.result,
+        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::False))
+    );
 }
 
 // ============================================================================
@@ -504,7 +533,10 @@ rule is_valid = value >= config.min_value and value <= config.max_value
         .values()
         .find(|r| r.rule.name == "is_valid")
         .unwrap();
-    assert_eq!(is_valid.result.value().unwrap().to_string(), "true");
+    assert_eq!(
+        is_valid.result,
+        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+    );
 }
 
 #[test]
@@ -535,7 +567,10 @@ rule is_valid = salary >= base_contract.min_salary and salary <= base_contract.m
         .values()
         .find(|r| r.rule.name == "is_valid")
         .unwrap();
-    assert_eq!(is_valid.result.value().unwrap().to_string(), "true");
+    assert_eq!(
+        is_valid.result,
+        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+    );
 }
 
 #[test]
@@ -566,8 +601,15 @@ rule probation_end = base_contract.project_start + base_contract.probation_perio
         .find(|r| r.rule.name == "probation_end")
         .unwrap();
 
-    assert!(probation_end.result.value().is_some());
-    let result_str = probation_end.result.value().unwrap().to_string();
-    assert!(result_str.contains("2024"));
-    assert!(result_str.contains("4") && result_str.contains("14"));
+    match &probation_end.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Date(date) => {
+                assert_eq!(date.year, 2024);
+                assert_eq!(date.month, 4);
+                assert_eq!(date.day, 14);
+            }
+            other => panic!("Expected Date for probation_end, got {:?}", other),
+        },
+        other => panic!("Expected Value for probation_end, got {:?}", other),
+    }
 }

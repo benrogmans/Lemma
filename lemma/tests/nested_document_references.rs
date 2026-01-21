@@ -1,5 +1,7 @@
 use lemma::Engine;
+use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::str::FromStr;
 
 /// Rule references work through one level of document reference.
 #[test]
@@ -35,7 +37,13 @@ rule line_total = pricing.final_price? * quantity
         .unwrap();
 
     // Should be: (100 * 1.21) * 10 = 1210
-    assert_eq!(line_total.result.value().unwrap().to_string(), "1,210");
+    match &line_total.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("1210").unwrap()),
+            other => panic!("Expected Number for line_total, got {:?}", other),
+        },
+        other => panic!("Expected Value for line_total, got {:?}", other),
+    }
 }
 
 /// Multi-level document rule references should work correctly.
@@ -69,25 +77,19 @@ rule top_calc = middle_ref.middle_calc?
 
     let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
 
-    println!("Response results:");
-    for r in response.results.values() {
-        println!("  Rule: {} = {:?}", r.rule.name, r.result);
-        let missing: Vec<String> = r
-            .facts
-            .iter()
-            .filter(|f| matches!(f.value, lemma::FactValue::TypeDeclaration { .. }))
-            .map(|f| f.reference.to_string())
-            .collect();
-        println!("       missing: {:?}", missing);
-    }
-
     let top_calc = response
         .results
         .values()
         .find(|r| r.rule.name == "top_calc")
         .expect("top_calc rule not found in results");
 
-    assert_eq!(top_calc.result.value().unwrap().to_string(), "250");
+    match &top_calc.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("250").unwrap()),
+            other => panic!("Expected Number for top_calc, got {:?}", other),
+        },
+        other => panic!("Expected Value for top_calc, got {:?}", other),
+    }
 }
 
 /// Overriding nested document references should propagate through rule evaluations.
@@ -137,7 +139,13 @@ rule order_total = line.line_total?
         .find(|r| r.rule.name == "order_total")
         .expect("order_total rule not found in results");
 
-    assert_eq!(order_total.result.value().unwrap().to_string(), "8,250");
+    match &order_total.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("8250").unwrap()),
+            other => panic!("Expected Number for order_total, got {:?}", other),
+        },
+        other => panic!("Expected Value for order_total, got {:?}", other),
+    }
 }
 
 /// Accessing facts through multi-level document references with nested overrides works correctly.
@@ -174,7 +182,13 @@ rule final_value = settings.config.value * 2
         .unwrap();
 
     // Should be: 100 * 2 = 200 (using the overridden value from middle)
-    assert_eq!(final_value.result.value().unwrap().to_string(), "200");
+    match &final_value.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("200").unwrap()),
+            other => panic!("Expected Number for final_value, got {:?}", other),
+        },
+        other => panic!("Expected Value for final_value, got {:?}", other),
+    }
 }
 
 /// Deep nested fact overrides through multiple document layers should work.
@@ -219,7 +233,13 @@ rule order_total = line.line_total?
 
     // base_price=100, tax_rate=10% (overridden), quantity=5
     // (100 * 1.10) * 5 = 550
-    assert_eq!(order_total.result.value().unwrap().to_string(), "550");
+    match &order_total.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("550").unwrap()),
+            other => panic!("Expected Number for order_total, got {:?}", other),
+        },
+        other => panic!("Expected Value for order_total, got {:?}", other),
+    }
 }
 
 /// Different fact paths to the same base document should produce different results
@@ -275,11 +295,29 @@ rule difference = total2? - total1?
         .unwrap();
 
     // path1: 100 * 1.21 = 121
-    assert_eq!(total1.result.value().unwrap().to_string(), "121");
+    match &total1.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("121").unwrap()),
+            other => panic!("Expected Number for total1, got {:?}", other),
+        },
+        other => panic!("Expected Value for total1, got {:?}", other),
+    }
     // path2: 75 * 1.21 = 90.75
-    assert_eq!(total2.result.value().unwrap().to_string(), "90.75");
+    match &total2.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("90.75").unwrap()),
+            other => panic!("Expected Number for total2, got {:?}", other),
+        },
+        other => panic!("Expected Value for total2, got {:?}", other),
+    }
     // difference: 90.75 - 121 = -30.25
-    assert_eq!(difference.result.value().unwrap().to_string(), "-30.25");
+    match &difference.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("-30.25").unwrap()),
+            other => panic!("Expected Number for difference, got {:?}", other),
+        },
+        other => panic!("Expected Value for difference, got {:?}", other),
+    }
 }
 
 /// Multiple independent document references in a single document should all work.
@@ -326,9 +364,21 @@ rule product = c1.value * c2.value
         .unwrap();
 
     // sum: (100 * 2) + (50 * 3) = 200 + 150 = 350
-    assert_eq!(sum.result.value().unwrap().to_string(), "350");
+    match &sum.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("350").unwrap()),
+            other => panic!("Expected Number for sum, got {:?}", other),
+        },
+        other => panic!("Expected Value for sum, got {:?}", other),
+    }
     // product: 100 * 50 = 5000
-    assert_eq!(product.result.value().unwrap().to_string(), "5,000");
+    match &product.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("5000").unwrap()),
+            other => panic!("Expected Number for product, got {:?}", other),
+        },
+        other => panic!("Expected Value for product, got {:?}", other),
+    }
 }
 
 /// Referencing rules from a document that itself has document references.
@@ -369,7 +419,13 @@ rule final_result = middle_config.x_squared_plus_ten? * 2
         .unwrap();
 
     // x=20 (overridden), x_squared=400, x_squared_plus_ten=410, final=820
-    assert_eq!(final_result.result.value().unwrap().to_string(), "820");
+    match &final_result.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("820").unwrap()),
+            other => panic!("Expected Number for final_result, got {:?}", other),
+        },
+        other => panic!("Expected Value for final_result, got {:?}", other),
+    }
 }
 
 /// Overriding the same document reference in different ways should produce
@@ -423,9 +479,27 @@ rule price_difference = retail_final? - wholesale_final?
         .unwrap();
 
     // retail: 100 * (1 - 0.05) = 95
-    assert_eq!(retail_final.result.value().unwrap().to_string(), "95");
+    match &retail_final.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("95").unwrap()),
+            other => panic!("Expected Number for retail_final, got {:?}", other),
+        },
+        other => panic!("Expected Value for retail_final, got {:?}", other),
+    }
     // wholesale: 80 * (1 - 0.15) = 68
-    assert_eq!(wholesale_final.result.value().unwrap().to_string(), "68");
+    match &wholesale_final.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("68").unwrap()),
+            other => panic!("Expected Number for wholesale_final, got {:?}", other),
+        },
+        other => panic!("Expected Value for wholesale_final, got {:?}", other),
+    }
     // difference: 95 - 68 = 27
-    assert_eq!(price_difference.result.value().unwrap().to_string(), "27");
+    match &price_difference.result {
+        lemma::OperationResult::Value(lit) => match &lit.value {
+            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("27").unwrap()),
+            other => panic!("Expected Number for price_difference, got {:?}", other),
+        },
+        other => panic!("Expected Value for price_difference, got {:?}", other),
+    }
 }

@@ -53,6 +53,10 @@ Create `shipping.lemma`:
 ```lemma
 doc shipping
 
+type weight = scale
+  -> unit kilogram 1.0
+  -> unit gram 0.001
+
 fact is_express = true
 fact package_weight = 2.5 kilograms
 
@@ -69,8 +73,8 @@ rule total_cost = base_shipping? + express_fee?
 Use spaces and tabs in `unless` expressions to align it like a table, making scanning the rule at a glance really easy.
 
 **What this calculates:**
-- Express fee: $0.00, unless `is_express` is true, then $4.99
-- Base shipping: $5.99, but for packages that weigh 1-5kg it is $8.99, and for all packages >5kg it is $15.99
+- Express fee: €0.00, unless `is_express` is true, then €4.99
+- Base shipping: €5.99, but for packages that weigh 1-5kg it is €8.99, and for all packages >5kg it is €15.99
 - Total cost: Base shipping plus express fee
 
 As obvious as it looks, that is how Lemma encodes it.
@@ -91,11 +95,11 @@ lemma run shipping
 # ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
 # │ base_shipping ┆ 8.99                                             │
 # │               ┆                                                      │
-# │               ┆    0. fact package_weight = 2.5 kilogram             │
-# │               ┆    1. greater_than(2.5 kilogram, 5 kilogram) → false │
+# │               ┆    0. fact package_weight = 2.5 kilograms             │
+# │               ┆    1. greater_than(2.5 kilograms, 5 kilograms) → false │
 # │               ┆    2. unless clause 1 skipped                        │
-# │               ┆    3. fact package_weight = 2.5 kilogram             │
-# │               ┆    4. greater_than(2.5 kilogram, 1 kilogram) → true  │
+# │               ┆    3. fact package_weight = 2.5 kilograms             │
+# │               ┆    4. greater_than(2.5 kilograms, 1 kilogram) → true  │
 # │               ┆    5. unless clause 0 matched → 8.99             │
 # │               ┆    6. result = 8.99                              │
 # ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
@@ -128,33 +132,54 @@ rule price = 100 - discount?
 
 ### Rich type system
 
+Define custom types with units and constraints:
+
 ```lemma
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.10
+  -> decimals 2
+  -> minimum 0
+
+type mass = scale
+  -> unit kilogram 1.0
+  -> unit gram 0.001
+  -> unit pound 0.453592
+
 fact salary = 50000
 fact workweek = 40 hours
 fact vacation = 3 weeks
 fact weight = 75 kilograms
 fact tax_rate = 22%
 fact deadline = 2024-12-31
-fact pattern = /[A-Z]{3}-\d{4}/
 ```
 
-**Supported Types:**
-- **Basic**: `text`, `number`, `boolean`, `date`, `percentage`, `regex`
-- **Units**: `mass` (kilograms, grams, pounds, ounces), `length` (meters, kilometers, feet, inches, miles), `volume` (liters, gallons, cubic meters), `duration` (seconds, minutes, hours, days, weeks, months, years), `temperature` (celsius, fahrenheit, kelvin)
-- **Advanced**: `power` (watts, kilowatts, megawatts, horsepower), `energy` (joules, kilojoules, kilowatt-hours, calories), `force` (newtons, kilonewtons, pound-force), `pressure` (pascals, kilopascals, atmospheres, bars, psi), `frequency` (hertz, kilohertz, megahertz, gigahertz), `data_size` (bytes, kilobytes, megabytes, gigabytes, terabytes)
+**Standard Types:**
+- `boolean` - true/false values
+- `number` - dimensionless numeric values
+- `scale` - numeric values that can have units
+- `text` - string values
+- `date` - ISO 8601 dates
+- `time` - time values
+- `duration` - time periods (hours, days, weeks, etc.)
+- `ratio` - proportional values (percent, permille)
 
-Automatic unit conversions:
+**User-Defined Types:**
+Define custom types with units, constraints, and validation:
 
 ```lemma
-doc conversions
+type money = scale -> unit eur 1.00 -> unit usd 1.10
+type temperature = scale -> unit celsius 1.0 -> unit fahrenheit 1.8
+type discount = ratio -> minimum 0 -> maximum 1
+```
 
-fact weight = 75 kilograms
-fact distance = 10 kilometers
-fact temperature = 25 celsius
+Unit conversions work within the same type:
 
-rule weight_in_pounds = weight in pounds
-rule distance_in_miles = distance in miles
-rule temperature_f = temperature in fahrenheit
+```lemma
+type money = scale -> unit eur 1.00 -> unit usd 1.10
+
+fact price = 100 eur
+rule price_usd = price in usd  // Converts to 110 usd
 ```
 
 ### Rule references
@@ -213,7 +238,7 @@ rule loan_approval = credit_score >= 600
 ## Documentation
 
 - **[Language Guide](documentation/index.md)** - Complete language reference
-- **[Reference](documentation/reference.md)** - All operators, units, and types
+- **[Reference](documentation/reference.md)** - All operators and types
 - **[Examples](documentation/examples/)** - Example Lemma documents
 
 [📚 View Full Documentation](documentation/)

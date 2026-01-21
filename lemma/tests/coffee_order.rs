@@ -18,7 +18,7 @@ type money = scale
   -> minimum 0
   -> decimals 2
   -> unit eur 1.00
-  -> unit usd 1.10
+  -> unit gbp 1.17
 
 type priority = text
   -> option "low"
@@ -53,10 +53,10 @@ rule ordered_priority = veto "Unknown priority"
   unless priority is "high"   then 3
 
 rule base_price = veto "Unknown type of coffee"
-  unless product is "espresso"   then 2.50 usd
-  unless product is "latte"      then 3.50 usd
-  unless product is "cappuccino" then 3.50 usd
-  unless product is "mocha"      then 4.00 usd
+  unless product is "espresso"   then 2.50 eur
+  unless product is "latte"      then 3.50 eur
+  unless product is "cappuccino" then 3.50 eur
+  unless product is "mocha"      then 4.00 eur
 
 rule size_multiplier = veto "Unknown size of coffee"
   unless size is "small"  then 0.80
@@ -121,20 +121,20 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .result
         .value()
         .expect("base_price should have value");
-    // base_price should be Scale with unit "usd"
+    // base_price should be Scale with unit "eur"
     match &base_price_value.value {
         lemma::Value::Scale(n, unit_opt) => {
             assert_eq!(
                 unit_opt.as_deref(),
-                Some("usd"),
-                "base_price should have unit 'usd', got: {:?}",
+                Some("eur"),
+                "base_price should have unit 'eur', got: {:?}",
                 unit_opt
             );
-            // 2.50 usd with usd = 1.10 * eur (base) converts to 2.50 * 1.10 = 2.75
+            // base_price preserves the numeric value as written for the unit.
             assert_eq!(
                 *n,
-                Decimal::from_str("2.75").unwrap(),
-                "base_price should be exactly 2.75 (2.50 usd * 1.10), got: {}",
+                Decimal::from_str("2.50").unwrap(),
+                "base_price should be exactly 2.50 (2.50 eur), got: {}",
                 n
             );
         }
@@ -182,21 +182,21 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .result
         .value()
         .expect("price_per_cup should have value");
-    // price_per_cup should be Scale with unit "usd" (inherited from base_price)
+    // price_per_cup should be Scale with unit "eur" (inherited from base_price)
     match &cup_price.value {
         lemma::Value::Scale(n, unit_opt) => {
             assert_eq!(
                 unit_opt.as_deref(),
-                Some("usd"),
-                "price_per_cup should have unit 'usd', got: {:?}",
+                Some("eur"),
+                "price_per_cup should have unit 'eur', got: {:?}",
                 unit_opt
             );
-            // base_price = 2.75 (2.50 usd * 1.10), size_multiplier = 0.80
-            // price_per_cup = 2.75 * 0.80 = 2.20
+            // base_price = 2.50, size_multiplier = 0.80
+            // price_per_cup = 2.50 * 0.80 = 2.00
             assert_eq!(
                 *n,
-                Decimal::from_str("2.20").unwrap(),
-                "price_per_cup should be exactly 2.20 (2.75 * 0.80), got: {}",
+                Decimal::from_str("2.00").unwrap(),
+                "price_per_cup should be exactly 2.00 (2.50 * 0.80), got: {}",
                 n
             );
         }
@@ -214,13 +214,13 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("subtotal rule not found");
 
     let subtotal_value = subtotal.result.value().expect("subtotal should have value");
-    // subtotal should be Scale with unit "usd" (inherited from price_per_cup)
+    // subtotal should be Scale with unit "eur" (inherited from price_per_cup)
     let subtotal_num = match &subtotal_value.value {
         lemma::Value::Scale(n, unit_opt) => {
             assert_eq!(
                 unit_opt.as_deref(),
-                Some("usd"),
-                "subtotal should have unit 'usd', got: {:?}",
+                Some("eur"),
+                "subtotal should have unit 'eur', got: {:?}",
                 unit_opt
             );
             *n
@@ -230,12 +230,12 @@ fn test_coffee_order_espresso_small_no_loyalty() {
             subtotal_value.value
         ),
     };
-    // price_per_cup = 2.20, number_of_cups = 2
-    // subtotal = 2.20 * 2 = 4.40
+    // price_per_cup = 2.00, number_of_cups = 2
+    // subtotal = 2.00 * 2 = 4.00
     assert_eq!(
         subtotal_num,
-        Decimal::from_str("4.40").unwrap(),
-        "subtotal should be exactly 4.40 (2.20 * 2), got: {}",
+        Decimal::from_str("4.00").unwrap(),
+        "subtotal should be exactly 4.00 (2.00 * 2), got: {}",
         subtotal_num
     );
 
@@ -274,13 +274,13 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("total rule not found");
 
     let total_value = total.result.value().expect("total should have value");
-    // total should be Scale with unit "usd" (inherited from subtotal)
+    // total should be Scale with unit "eur" (inherited from subtotal)
     let total_num = match &total_value.value {
         lemma::Value::Scale(n, unit_opt) => {
             assert_eq!(
                 unit_opt.as_deref(),
-                Some("usd"),
-                "total should have unit 'usd', got: {:?}",
+                Some("eur"),
+                "total should have unit 'eur', got: {:?}",
                 unit_opt
             );
             *n
@@ -322,20 +322,20 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .result
         .value()
         .expect("base_price should have value");
-    // base_price should be Scale with unit "usd"
+    // base_price should be Scale with unit "eur"
     match &base_price_value.value {
         lemma::Value::Scale(n, unit_opt) => {
             assert_eq!(
                 unit_opt.as_deref(),
-                Some("usd"),
-                "base_price should have unit 'usd', got: {:?}",
+                Some("eur"),
+                "base_price should have unit 'eur', got: {:?}",
                 unit_opt
             );
-            // 3.50 usd with usd = 1.10 * eur (base) converts to 3.50 * 1.10 = 3.85
+            // base_price preserves the numeric value as written for the unit.
             assert_eq!(
                 *n,
-                Decimal::from_str("3.85").unwrap(),
-                "base_price should be exactly 3.85 (3.50 usd * 1.10), got: {}",
+                Decimal::from_str("3.50").unwrap(),
+                "base_price should be exactly 3.50 (3.50 eur), got: {}",
                 n
             );
         }
@@ -416,13 +416,13 @@ fn test_coffee_order_latte_large_with_loyalty() {
     let subtotal_value = subtotal.result.value().expect("subtotal should have value");
     let total_value = total.result.value().expect("total should have value");
 
-    // subtotal should be Scale with unit "usd" (inherited from price_per_cup)
+    // subtotal should be Scale with unit "eur" (inherited from price_per_cup)
     let subtotal_num = match &subtotal_value.value {
         lemma::Value::Scale(n, unit_opt) => {
             assert_eq!(
                 unit_opt.as_deref(),
-                Some("usd"),
-                "subtotal should have unit 'usd', got: {:?}",
+                Some("eur"),
+                "subtotal should have unit 'eur', got: {:?}",
                 unit_opt
             );
             *n
@@ -432,34 +432,34 @@ fn test_coffee_order_latte_large_with_loyalty() {
             subtotal_value.value
         ),
     };
-    // price_per_cup = 3.85 * 1.20 = 4.62, number_of_cups = 3
-    // subtotal = 4.62 * 3 = 13.86
+    // price_per_cup = 3.50 * 1.20 = 4.20, number_of_cups = 3
+    // subtotal = 4.20 * 3 = 12.60
     assert_eq!(
         subtotal_num,
-        Decimal::from_str("13.86").unwrap(),
-        "subtotal should be exactly 13.86 (4.62 * 3), got: {}",
+        Decimal::from_str("12.60").unwrap(),
+        "subtotal should be exactly 12.60 (4.20 * 3), got: {}",
         subtotal_num
     );
 
-    // total should be Scale with unit "usd" (inherited from subtotal)
+    // total should be Scale with unit "eur" (inherited from subtotal)
     let total_num = match &total_value.value {
         lemma::Value::Scale(n, unit_opt) => {
             assert_eq!(
                 unit_opt.as_deref(),
-                Some("usd"),
-                "total should have unit 'usd', got: {:?}",
+                Some("eur"),
+                "total should have unit 'eur', got: {:?}",
                 unit_opt
             );
             *n
         }
         _ => panic!("total should be Scale type, got: {:?}", total_value.value),
     };
-    // discount_amount = 13.86 * 0.10 = 1.386
-    // total = 13.86 - 1.386 = 12.474
+    // discount_amount = 12.60 * 0.10 = 1.26
+    // total = 12.60 - 1.26 = 11.34
     assert_eq!(
         total_num,
-        Decimal::from_str("12.474").unwrap(),
-        "total should be exactly 12.474 (13.86 - 1.386), got: {}",
+        Decimal::from_str("11.34").unwrap(),
+        "total should be exactly 11.34 (12.60 - 1.26), got: {}",
         total_num
     );
 }

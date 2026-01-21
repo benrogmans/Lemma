@@ -704,16 +704,18 @@ impl LiteralValue {
     /// Create a Boolean literal value
     /// Uses STANDARD_BOOLEAN as the type
     pub fn boolean(value: BooleanValue) -> Self {
+        let canonical: BooleanValue = bool::from(&value).into();
         LiteralValue {
-            value: Value::Boolean(value),
+            value: Value::Boolean(canonical),
             lemma_type: standard_boolean().clone(),
         }
     }
 
     /// Create a Boolean literal value with a custom type
     pub fn boolean_with_type(value: BooleanValue, lemma_type: LemmaType) -> Self {
+        let canonical: BooleanValue = bool::from(&value).into();
         LiteralValue {
-            value: Value::Boolean(value),
+            value: Value::Boolean(canonical),
             lemma_type,
         }
     }
@@ -900,16 +902,7 @@ macro_rules! impl_unit_serialize {
 
 impl_unit_serialize!(DurationUnit);
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Deserialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize, strum_macros::EnumString)]
 #[strum(serialize_all = "lowercase")]
 pub enum DurationUnit {
     Year,
@@ -921,6 +914,23 @@ pub enum DurationUnit {
     Second,
     Millisecond,
     Microsecond,
+}
+
+impl fmt::Display for DurationUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            DurationUnit::Year => "years",
+            DurationUnit::Month => "months",
+            DurationUnit::Week => "weeks",
+            DurationUnit::Day => "days",
+            DurationUnit::Hour => "hours",
+            DurationUnit::Minute => "minutes",
+            DurationUnit::Second => "seconds",
+            DurationUnit::Millisecond => "milliseconds",
+            DurationUnit::Microsecond => "microseconds",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 impl Reference {
@@ -945,10 +955,8 @@ impl Reference {
                 name: String::new(),
             }
         } else {
-            let name = path
-                .last()
-                .expect("path is not empty but last() returned None - this indicates a bug")
-                .clone();
+            // Safe: path is non-empty.
+            let name = path[path.len() - 1].clone();
             let segments = path[..path.len() - 1].to_vec();
             Self { segments, name }
         }
@@ -1001,10 +1009,8 @@ impl FactReference {
                 fact: String::new(),
             }
         } else {
-            let fact = path
-                .last()
-                .expect("path is not empty but last() returned None - this indicates a bug")
-                .clone();
+            // Safe: path is non-empty.
+            let fact = path[path.len() - 1].clone();
             let segments = path[..path.len() - 1].to_vec();
             Self { segments, fact }
         }
@@ -1555,7 +1561,7 @@ pub enum TypeSpecification {
         precision: Option<Decimal>,
         units: Vec<Unit>,
         help: Option<String>,
-        default: Option<Decimal>,
+        default: Option<(Decimal, String)>,
     },
     Number {
         minimum: Option<Decimal>,
@@ -1781,12 +1787,29 @@ impl TypeSpecification {
                 }
                 "help" => *help = args.first().cloned(),
                 "default" => {
-                    let d = args
-                        .first()
-                        .ok_or_else(|| "default requires an argument".to_string())?
+                    if args.len() < 2 {
+                        return Err(
+                            "default requires a value and unit (e.g., 'default 1 kilogram')"
+                                .to_string(),
+                        );
+                    }
+                    let value = args[0]
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid default value: {:?}", args.first()))?;
-                    *default = Some(d);
+                        .map_err(|_| format!("invalid default value: {:?}", args[0]))?;
+                    let unit_name = args[1].clone();
+                    // Validate that the unit exists
+                    if !units.iter().any(|u| u.name == unit_name) {
+                        return Err(format!(
+                            "Invalid unit '{}' for default. Valid units: {}",
+                            unit_name,
+                            units
+                                .iter()
+                                .map(|u| u.name.clone())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                    *default = Some((value, unit_name));
                 }
                 _ => {
                     return Err(format!(
@@ -1910,13 +1933,13 @@ impl TypeSpecification {
                 length,
                 options,
                 help,
-                ..
+                default,
             } => match command {
                 "option" if args.len() == 1 => {
-                    options.push(args[0].clone());
+                    options.push(strip_surrounding_quotes(&args[0]));
                 }
                 "options" => {
-                    *options = args.to_vec();
+                    *options = args.iter().map(|s| strip_surrounding_quotes(s)).collect();
                 }
                 "minimum" => {
                     let m = args
@@ -1943,6 +1966,12 @@ impl TypeSpecification {
                     *length = Some(l);
                 }
                 "help" => *help = args.first().cloned(),
+                "default" => {
+                    let arg = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?;
+                    *default = Some(strip_surrounding_quotes(arg));
+                }
                 _ => {
                     return Err(format!(
                         "Invalid command '{}' for text type. Valid commands: options, minimum, maximum, length, help, default",
@@ -2092,7 +2121,7 @@ impl TypeSpecification {
 /// - Basic type extension: `type money = number -> decimals 2 -> unit EUR 1.00 -> unit USD 1.18`
 /// - From another custom type: `type currency from lemma`
 /// - Shorthand with overrides: `type currency from lemma -> maximum 1000`
-/// - Anonymous types: `fact age = [number -> minimum 0 -> maximum 120]`
+/// - Inline type definitions: `fact age = [number -> minimum 0 -> maximum 120]`
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypeDef {
     /// Regular named type definition
@@ -2110,7 +2139,7 @@ pub enum TypeDef {
         from: String,
         overrides: Option<Vec<(String, Vec<String>)>>,
     },
-    /// Anonymous/inline type declaration
+    /// Inline type definition
     /// Example: `fact age = [number -> minimum 0 -> maximum 120]`
     /// Example: `fact age = [age from lemma]`
     /// Example: `fact age = [age from lemma -> minimum 18]`
@@ -2219,9 +2248,59 @@ impl LemmaType {
         matches!(&self.specifications, TypeSpecification::Veto { .. })
     }
 
+    /// Check if two types have the same standard type specification (ignoring constraints/overrides)
+    /// This compares only the TypeSpecification variant (Boolean, Number, Scale, Text, etc.)
+    /// and ignores all constraints like minimum, maximum, decimals, units, options, etc.
+    pub fn has_same_base_type(&self, other: &LemmaType) -> bool {
+        use TypeSpecification::*;
+        matches!(
+            (&self.specifications, &other.specifications),
+            (Boolean { .. }, Boolean { .. })
+                | (Number { .. }, Number { .. })
+                | (Scale { .. }, Scale { .. })
+                | (Text { .. }, Text { .. })
+                | (Date { .. }, Date { .. })
+                | (Time { .. }, Time { .. })
+                | (Duration { .. }, Duration { .. })
+                | (Ratio { .. }, Ratio { .. })
+                | (Veto { .. }, Veto { .. })
+        )
+    }
+
     /// Create a Veto LemmaType (internal use only - not user-declarable)
     pub fn veto_type() -> Self {
         Self::without_name(TypeSpecification::veto())
+    }
+
+    /// Create a LiteralValue from this type's default value, if one exists
+    pub fn create_default_value(&self) -> Option<LiteralValue> {
+        use TypeSpecification::*;
+        match &self.specifications {
+            Boolean { default, .. } => default
+                .map(|b| LiteralValue::boolean_with_type(BooleanValue::from(b), self.clone())),
+            Text { default, .. } => default
+                .as_ref()
+                .map(|s| LiteralValue::text_with_type(s.clone(), self.clone())),
+            Number { default, .. } => {
+                default.map(|d| LiteralValue::number_with_type(d, self.clone()))
+            }
+            Scale { default, .. } => default.as_ref().map(|(value, unit_name)| {
+                LiteralValue::scale_with_type(*value, Some(unit_name.clone()), self.clone())
+            }),
+            Ratio { default, .. } => {
+                default.map(|d| LiteralValue::ratio_with_type(d, None, self.clone()))
+            }
+            Date { default, .. } => default
+                .as_ref()
+                .map(|d| LiteralValue::date_with_type(d.clone(), self.clone())),
+            Time { default, .. } => default
+                .as_ref()
+                .map(|t| LiteralValue::time_with_type(t.clone(), self.clone())),
+            Duration { default, .. } => default
+                .as_ref()
+                .map(|(v, u)| LiteralValue::duration_with_type(*v, u.clone(), self.clone())),
+            Veto { .. } => None,
+        }
     }
 
     /// Parse a raw string value into a LiteralValue according to this type
@@ -2332,7 +2411,25 @@ impl LemmaType {
         // Validate unit against type definition
         let allowed_units = match &lemma_type.specifications {
             TypeSpecification::Scale { units, .. } => units,
-            _ => unreachable!("parse_scale_value called with non-Scale type"),
+            _ => {
+                return Err(LemmaError::engine(
+                    format!(
+                        "Internal error: expected a scale type but got {}",
+                        lemma_type.name()
+                    ),
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<unknown>",
+                    Arc::from(raw),
+                    "<unknown>",
+                    1,
+                    None::<String>,
+                ));
+            }
         };
 
         let unit = if unit_part.is_empty() {
@@ -2772,6 +2869,18 @@ impl LemmaType {
     }
 }
 
+fn strip_surrounding_quotes(s: &str) -> String {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return s[1..bytes.len() - 1].to_string();
+        }
+    }
+    s.to_string()
+}
+
 impl fmt::Display for LemmaType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())
@@ -2874,13 +2983,13 @@ mod tests {
 
     #[test]
     fn test_duration_unit_display() {
-        assert_eq!(format!("{}", DurationUnit::Second), "second");
-        assert_eq!(format!("{}", DurationUnit::Minute), "minute");
-        assert_eq!(format!("{}", DurationUnit::Hour), "hour");
-        assert_eq!(format!("{}", DurationUnit::Day), "day");
-        assert_eq!(format!("{}", DurationUnit::Week), "week");
-        assert_eq!(format!("{}", DurationUnit::Millisecond), "millisecond");
-        assert_eq!(format!("{}", DurationUnit::Microsecond), "microsecond");
+        assert_eq!(format!("{}", DurationUnit::Second), "seconds");
+        assert_eq!(format!("{}", DurationUnit::Minute), "minutes");
+        assert_eq!(format!("{}", DurationUnit::Hour), "hours");
+        assert_eq!(format!("{}", DurationUnit::Day), "days");
+        assert_eq!(format!("{}", DurationUnit::Week), "weeks");
+        assert_eq!(format!("{}", DurationUnit::Millisecond), "milliseconds");
+        assert_eq!(format!("{}", DurationUnit::Microsecond), "microseconds");
     }
 
     #[test]
@@ -2888,7 +2997,7 @@ mod tests {
         assert_eq!(format!("{}", ConversionTarget::Percentage), "percent");
         assert_eq!(
             format!("{}", ConversionTarget::Duration(DurationUnit::Hour)),
-            "hour"
+            "hours"
         );
     }
 
@@ -3035,7 +3144,9 @@ mod tests {
 
     #[test]
     fn test_negation_types() {
-        let _ = NegationType::Not;
+        let json = serde_json::to_string(&NegationType::Not).expect("serialize NegationType");
+        let decoded: NegationType = serde_json::from_str(&json).expect("deserialize NegationType");
+        assert_eq!(decoded, NegationType::Not);
     }
 
     #[test]

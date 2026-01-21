@@ -59,7 +59,7 @@ This creates several problems:
 Lemma addresses these problems by providing a declarative language that:
 
 - **Reads like English**: Natural syntax using keywords like "unless," "then," and "is" makes rules immediately comprehensible.
-- **Types matter**: Built-in support for dates, durations, units, and percentages with automatic conversions eliminates a major source of bugs.
+- **Types matter**: User-defined types with units, constraints, and automatic conversions eliminate a major source of bugs.
 - **Last wins semantics**: The "unless" clause uses "last matching wins" logic that mirrors how humans naturally express exceptions and special cases.
 - **Fully executable**: Despite its natural syntax, Lemma uses a pure Rust evaluator, providing rigorous logical inference and deterministic evaluation.
 - **Composable**: Documents reference and extend each other, enabling modular rule design.
@@ -93,7 +93,7 @@ This document is immediately readable by business stakeholders while being fully
 
 Lemma's syntax is designed to mirror how people naturally express business rules. Consider how you might explain a shipping policy:
 
-> "Shipping is $12.99, unless you're in Canada then it's $25, unless you're ordering over 100 dollars then it's free."
+> "Shipping is €12.99, unless you're in Canada then it's €25, unless you're ordering over 100 euros then it's free."
 
 Lemma encodes this exactly as stated:
 
@@ -103,7 +103,7 @@ rule shipping = 12.99
   unless order_total >= 100 then 0
 ```
 
-This "last matching wins" semantic is counterintuitive to programmers accustomed to "first match" or "most specific match" logic, but it aligns perfectly with natural language. When we say "X, unless Y, unless Z," we mean that Z overrides Y, which overrides X.
+This "last matching wins" semantic might seem counterintuitive to programmers who are accustomed to "early returns" or "first match" logic, but it aligns perfectly with natural language. When we say "X, unless Y, unless Z," we mean that Z overrides Y, which overrides X.
 
 ### 2.2 Declarative by design
 
@@ -119,18 +119,22 @@ Lemma is purely declarative. You describe *what* should be true, not *how* to co
 Programming languages typically require verbose type annotations. Lemma infers types from literals while providing a rich type system:
 
 ```lemma
+type mass = scale -> unit kilogram 1.0 -> unit pound 0.453592
+
 fact salary = 75000              // Number type inferred
 fact vacation = 3 weeks          // Duration type inferred
-fact weight = 15 kilograms       // Mass type inferred
+fact weight = 15 kilograms       // Uses custom mass type
 fact deadline = 2024-12-31       // Date type inferred
-fact tax_rate = 22%              // Percentage type inferred
+fact tax_rate = 22%              // Ratio type inferred
 ```
 
-The type system prevents nonsensical operations (you can't add a date to a weight) while enabling automatic unit conversions:
+The type system prevents nonsensical operations (you can't add a date to a weight) while enabling automatic unit conversions within the same type:
 
 ```lemma
+type mass = scale -> unit kilogram 1.0 -> unit pound 0.453592
+
 fact weight = 70 kilograms
-rule weight_in_pounds = weight in pounds  // Automatic conversion
+rule weight_in_pounds = weight in pounds  // Automatic conversion within type
 ```
 
 ### 2.4 Composition over configuration
@@ -256,7 +260,7 @@ Lemma intelligently handles arithmetic between different types. When you write:
 rule discounted_price = 200 - 25%
 ```
 
-Lemma understands that subtracting a percentage from a number means "subtract 25% of the value," producing `150`.
+Lemma understands that subtracting a ratio from a number means "subtract 25% of the value," producing `150`.
 
 ---
 
@@ -264,80 +268,119 @@ Lemma understands that subtracting a percentage from a number means "subtract 25
 
 ### 4.1 Primitive types
 
-Lemma provides several primitive types:
+Lemma provides several standard primitive types:
 
-- **Number**: Integers and floating-point values
-- **Text**: String literals
 - **Boolean**: true/false, yes/no, accept/reject
+- **Number**: Dimensionless integers and floating-point values
+- **Scale**: Numeric values that can have units
+- **Text**: String literals
 - **Date**: ISO 8601 format dates and datetimes
-- **Regex**: Pattern matching with standard regex syntax
+- **Time**: Time values
+- **Duration**: Time periods (hours, days, weeks, etc.)
+- **Ratio**: Proportional values (percent, permille)
 
 ```lemma
 fact count = 42
 fact name = "Alice"
 fact is_active = true
 fact deadline = 2024-12-31
-fact email_pattern = /^[\w]+@[\w]+\.[\w]+$/
-```
-
-### 4.2 Unit types
-
-Lemma has built-in support for physical and business units:
-
-**Mass**: kilogram, gram, milligram, pound, ounce
-
-```lemma
-fact weight = 75 kilograms
-fact package_weight = 5 pounds
-```
-
-**Length**: kilometer, meter, centimeter, millimeter, mile, foot, inch
-
-```lemma
-fact distance = 100 kilometers
-fact height = 6 feet
-```
-
-**Duration**: year, month, week, day, hour, minute, second
-
-```lemma
-fact project_duration = 6 months
-fact meeting_length = 90 minutes
-```
-
-**Temperature**: celsius, fahrenheit, kelvin
-
-```lemma
-fact room_temp = 22 celsius
-```
-
-**Other Units**: volume, power, force, pressure, energy, frequency, data size
-
-### 4.3 Automatic unit conversion
-
-Lemma automatically converts between compatible units:
-
-```lemma
-fact weight = 70 kilograms
-rule weight_in_pounds = weight in pounds  // Returns 154.32 pounds
-
-fact distance = 5 kilometers
-rule distance_in_miles = distance in miles  // Returns 3.107 miles
-```
-
-This eliminates manual conversion logic and reduces errors in international applications.
-
-### 4.4 Percentage type
-
-Percentages are a first-class type in Lemma:
-
-```lemma
+fact workweek = 40 hours
 fact tax_rate = 15%
+```
+
+### 4.2 User-defined types
+
+Lemma allows users to define custom types with units, constraints, and validation. This provides flexibility while maintaining type safety.
+
+**Basic type definition:**
+
+```lemma
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.10
+  -> decimals 2
+  -> minimum 0
+
+type mass = scale
+  -> unit kilogram 1.0
+  -> unit gram 0.001
+  -> unit pound 0.453592
+
+fact price = 100 eur
+fact weight = 75 kilograms
+```
+
+**Type commands** allow fine-grained control:
+
+- `unit <name> <value>` - Define units (for `scale` and `ratio` types)
+- `decimals <n>` - Set decimal precision
+- `minimum <value>` / `maximum <value>` - Set value constraints
+- `option "<value>"` - Define allowed text values
+- `help "<text>"` - Add documentation
+- `default <value>` - Set default values
+
+**Type imports** enable reuse across documents:
+
+```lemma
+type currency from base_types
+type discount_rate from pricing -> maximum 0.5
+```
+
+**Inline types** allow type definitions directly in fact declarations:
+
+```lemma
+fact age = [number -> minimum 0 -> maximum 120]
+fact price = [scale -> unit eur 1.00 -> unit usd 1.10]
+```
+
+### 4.3 Unit conversion
+
+Unit conversions work within the same type definition. This ensures type safety while allowing flexible unit systems.
+
+```lemma
+type money = scale -> unit eur 1.00 -> unit usd 1.10
+
+fact price = 100 eur
+rule price_usd = price in usd  // Converts to 110 usd
+```
+
+**Duration units** are built-in (the only exception):
+
+```lemma
+fact workweek = 40 hours
+rule workweek_days = workweek in days  // Converts to ~1.67 days
+```
+
+**Number to ratio conversion:**
+
+```lemma
+rule discount_as_percent = 0.25 in percent  // Converts to 25 percent
+```
+
+This design eliminates manual conversion logic while maintaining clear type boundaries.
+
+### 4.4 Ratio type
+
+Ratios represent proportional values. The `ratio` type includes `percent` and `permille` units by default.
+
+```lemma
+fact tax_rate = 15%        // or 15 percent
 fact discount = 25%
+fact error_rate = 2 permille  // or 2%%
 fact completion = 87.5%
 ```
 
-Percentages interact intelligently with other types in arithmetic operations, automatically applying proportional calculations.
+**Custom ratio types:**
+
+```lemma
+type discount_ratio = ratio
+  -> minimum 0
+  -> maximum 1
+
+fact discount = 0.25  // 25% as decimal ratio
+```
+
+Ratios interact intelligently with other types in arithmetic operations, automatically applying proportional calculations.
 
 ---
 
@@ -483,7 +526,7 @@ The evaluator handles:
 - **Fact resolution**: Direct lookup of facts and rule references
 - **Rule evaluation**: Recursive evaluation of expressions with proper dependency ordering
 - **Unless clauses**: "Last match wins" semantics implemented through conditional evaluation
-- **Unit conversions**: Built-in conversion between compatible unit types
+- **Unit conversions**: Conversion between units within the same type definition
 - **Type-aware operations**: Automatic type checking and conversion for arithmetic and comparisons
 
 Example evaluation:
@@ -505,9 +548,9 @@ The evaluator processes this by:
 
 Lemma's type system provides:
 
-- **Automatic conversions**: Between compatible units (e.g., kilograms to pounds)
-- **Type safety**: Prevents invalid operations (e.g., adding different currencies)
-- **Rich types**: Dates, durations, percentages, and physical units
+- **Automatic conversions**: Between units within the same type definition
+- **Type safety**: Prevents invalid operations (e.g., adding different scale types)
+- **User-defined types**: Custom types with units, constraints, and validation
 - **Validation**: Compile-time checking of type compatibility
 
 ### 6.6 Error Handling
@@ -616,6 +659,8 @@ Complex shipping calculations with multiple factors:
 doc shipping
 
 fact order_total = [number]
+type mass = scale -> unit kilogram 1.0 -> unit pound 0.453592
+
 fact weight = [mass]
 fact destination = [text]
 fact is_expedited = false
@@ -876,7 +921,7 @@ Lemma represents a new approach to encoding business logic. By providing a decla
 Key innovations include:
 
 1. **Natural Language Semantics**: "Last matching wins" logic that mirrors how humans express rules
-2. **Rich Type System**: Built-in support for dates, durations, units, and percentages
+2. **Rich Type System**: User-defined types with units, constraints, and automatic conversions
 3. **Type-Aware Arithmetic**: Intelligent handling of operations between different types
 4. **Compositional Design**: Documents reference and extend each other, enabling modular rule libraries
 5. **Veto Semantics**: Clear distinction between returning false and blocking a rule entirely
@@ -1050,9 +1095,8 @@ Literals:
   <text>             // "hello world"
   <boolean>          // true, false, yes, no, accept, reject
   <date>             // 2024-01-15, 2024-01-15T14:30:00Z
-  <percentage>       // 15%, 100%
-  <unit-value>       // 5 kilograms, 3 weeks
-  <regex>            // /[A-Z]{3}-\d{4}/
+  <ratio>            // 15%, 15 percent, 5 permille, 5%%
+  <unit-value>       // 5 eur (requires type definition), 3 weeks (duration)
 ```
 
 ---

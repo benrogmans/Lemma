@@ -5,47 +5,51 @@ Progressive Tax Calculation
 A real-world example demonstrating progressive tax brackets.
 This shows how Lemma can encode complex business rules clearly.
 """
+type filing_status_type = text
+  -> option "single"
+  -> option "married"
+  -> option "head_of_household"
 
-fact income = [number]
-fact filing_status = "single"
-fact state = "CA"
-fact deductions = [number]
+fact income = [number -> minimum 0]
+fact filing_status = [filing_status_type -> default "single"]
+fact country = "NL"
+fact deductions = [number -> minimum 0]
 
 rule taxable_income = income - deductions
   unless income < deductions then 0
 
-rule federal_tax_bracket_1 = 10%
-rule federal_tax_bracket_2 = 12%
-rule federal_tax_bracket_3 = 22%
-rule federal_tax_bracket_4 = 24%
+rule tax_bracket_1 = 9%
+rule tax_bracket_2 = 21%
+rule tax_bracket_3 = 37%
+rule tax_bracket_4 = 49%
 
-rule bracket_1_limit = 11000
-rule bracket_2_limit = 44725
-rule bracket_3_limit = 95375
+rule bracket_1_limit = 73031
+rule bracket_2_limit = 110881
+rule bracket_3_limit = 201347
 
-rule tax_on_bracket_1 = bracket_1_limit? * federal_tax_bracket_1?
+rule tax_on_bracket_1 = bracket_1_limit? * tax_bracket_1?
   unless taxable_income? < bracket_1_limit?
-    then taxable_income? * federal_tax_bracket_1?
+    then taxable_income? * tax_bracket_1?
 
-rule tax_on_bracket_2 = (bracket_2_limit? - bracket_1_limit?) * federal_tax_bracket_2?
+rule tax_on_bracket_2 = (bracket_2_limit? - bracket_1_limit?) * tax_bracket_2?
   unless taxable_income? < bracket_2_limit?
-    then (taxable_income? - bracket_1_limit?) * federal_tax_bracket_2?
+    then (taxable_income? - bracket_1_limit?) * tax_bracket_2?
 
-rule tax_on_bracket_3 = (bracket_3_limit? - bracket_2_limit?) * federal_tax_bracket_3?
-  unless taxable_income? < bracket_3_limit? then (taxable_income? - bracket_2_limit?) * federal_tax_bracket_3?
+rule tax_on_bracket_3 = (bracket_3_limit? - bracket_2_limit?) * tax_bracket_3?
+  unless taxable_income? < bracket_3_limit? then (taxable_income? - bracket_2_limit?) * tax_bracket_3?
   unless taxable_income? < bracket_2_limit? then 0
 
-rule tax_on_bracket_4 = (taxable_income? - bracket_3_limit?) * federal_tax_bracket_4?
+rule tax_on_bracket_4 = (taxable_income? - bracket_3_limit?) * tax_bracket_4?
   unless taxable_income? <= bracket_3_limit? then 0
 
-rule total_federal_tax = tax_on_bracket_1? + tax_on_bracket_2? + tax_on_bracket_3? + tax_on_bracket_4?
+rule total_income_tax = tax_on_bracket_1? + tax_on_bracket_2? + tax_on_bracket_3? + tax_on_bracket_4?
 
-rule state_tax_rate = 9.3%
-  unless state != "CA" then 0%
+rule country_tax_rate = 21%
+  unless country != "NL" then 0%
 
-rule state_tax = taxable_income? * state_tax_rate?
+rule vat_tax = taxable_income? * country_tax_rate?
 
-rule total_tax = total_federal_tax? + state_tax?
+rule total_tax = total_income_tax? + vat_tax?
 
 rule effective_tax_rate = total_tax? / income in percent
   unless income == 0 then 0%

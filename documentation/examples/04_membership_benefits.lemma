@@ -24,7 +24,7 @@ Shows how documents can reference other documents.
 Membership levels have different benefits.
 """
 
-fact monthly_spend = 150
+fact monthly_spend = [number -> minimum 0 -> default 150]
 
 fact membership = doc premium_membership
 

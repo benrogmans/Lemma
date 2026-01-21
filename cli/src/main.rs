@@ -191,6 +191,11 @@ fn run_command(
         let (d, r, interactive_facts, interactive_target) =
             interactive::run_interactive(&engine, parsed_doc, parsed_rules, &cli_facts)?;
 
+        // Add a blank line after the final interactive prompt so the
+        // formatted output sections ("Facts", "Rules", etc.) don't run
+        // directly against the last user-entered line.
+        println!();
+
         let mut all_facts = cli_facts;
         all_facts.extend(interactive_facts);
         (d, r.unwrap_or_default(), all_facts, interactive_target)

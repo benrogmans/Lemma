@@ -7,11 +7,15 @@ Scale a recipe up or down based on servings needed.
 """
 
 type temperature = scale
-  -> unit fahrenheit 1.0
+  -> unit celsius 1.0
 
-fact original_servings = [number]
-fact desired_servings = [number]
-fact recipe_name = [text]
+fact original_servings = [number -> minimum 1]
+fact desired_servings = [number -> minimum 1]
+type recipe = text
+  -> option "chocolate_cake"
+  -> option "bread"
+  -> option "cookies"
+fact recipe_name = [recipe]
 
 rule scaling_factor = desired_servings / original_servings
 
@@ -31,7 +35,5 @@ rule baking_time_minutes = 30
   unless desired_servings <= 4 then 35
   unless desired_servings >= 8 then 40
 
-rule oven_temperature = 350 fahrenheit
-  unless recipe_name == "chocolate_cake" then 350 fahrenheit
-  unless recipe_name == "bread" then 375 fahrenheit
-  unless recipe_name != "chocolate_cake" and recipe_name != "bread" then veto "Unknown recipe name"
+rule oven_temperature = 175 celsius
+  unless recipe_name is "bread" then 190 celsius

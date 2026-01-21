@@ -259,7 +259,9 @@ fn test_timezone_value() {
 
 #[test]
 fn test_negation_types() {
-    let _ = NegationType::Not;
+    let json = serde_json::to_string(&NegationType::Not).expect("serialize NegationType");
+    let decoded: NegationType = serde_json::from_str(&json).expect("deserialize NegationType");
+    assert_eq!(decoded, NegationType::Not);
 }
 
 #[test]

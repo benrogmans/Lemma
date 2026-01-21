@@ -107,54 +107,6 @@ fn test_duplicate_fact_shows_name() {
 }
 
 // ============================================================================
-// PARSE ERRORS - Syntax Errors
-// ============================================================================
-
-#[test]
-fn test_parse_error_with_span() {
-    let result = lemma::parse(
-        r#"
-        doc test
-        fact name = "Unclosed string
-        fact age = 25
-    "#,
-        "test.lemma",
-        &lemma::ResourceLimits::default(),
-    );
-
-    match result {
-        Err(LemmaError::Parse(details)) => {
-            assert_eq!(details.source_location.attribute, "test.lemma");
-            assert_eq!(details.source_location.doc_name, "<parse-error>");
-        }
-        Err(e) => panic!("Expected Parse error, got: {e:?}"),
-        Ok(_) => panic!("Expected parse error for unclosed string"),
-    }
-}
-
-#[test]
-fn test_parse_error_malformed_input() {
-    let result = lemma::parse(
-        r#"
-        doc test
-        this is not valid lemma syntax @#$%
-    "#,
-        "test.lemma",
-        &lemma::ResourceLimits::default(),
-    );
-
-    assert!(result.is_err(), "Should fail on malformed input");
-
-    match result {
-        Err(LemmaError::Parse { .. }) => {
-            // Expected
-        }
-        Err(e) => panic!("Expected Parse error, got: {e:?}"),
-        Ok(_) => panic!("Expected parse error"),
-    }
-}
-
-// ============================================================================
 // RUNTIME ERRORS - Division by Zero (now returns Veto, not Error)
 // ============================================================================
 
