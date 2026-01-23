@@ -1,6 +1,7 @@
 use crate::parsing::ast::Span;
 use crate::parsing::source::Source;
 use crate::planning::types::{ResolvedDocumentTypes, TypeRegistry};
+use crate::planning::validation::validate_type_specifications;
 use crate::semantic::{
     standard_boolean, standard_duration, standard_number, standard_ratio, ArithmeticComputation,
     ConversionTarget, Expression, ExpressionKind, FactPath, FactReference, FactValue, LemmaDoc,
@@ -323,6 +324,12 @@ impl Graph {
         for doc in all_docs {
             match type_registry.resolve_named_types(&doc.name) {
                 Ok(document_types) => {
+                    // Validate type specifications for all resolved named types
+                    for (type_name, lemma_type) in &document_types.named_types {
+                        let mut spec_errors =
+                            validate_type_specifications(&lemma_type.specifications, type_name);
+                        builder.errors.append(&mut spec_errors);
+                    }
                     builder
                         .resolved_types
                         .insert(doc.name.clone(), document_types);
@@ -788,6 +795,13 @@ impl<'a> GraphBuilder<'a> {
         // Resolve types for this document after all facts are registered
         match type_registry.resolve_types(&doc.name) {
             Ok(document_types) => {
+                // Validate type specifications for inline type definitions
+                for (fact_ref, lemma_type) in &document_types.inline_type_definitions {
+                    let type_name = format!("{} (inline)", fact_ref.fact);
+                    let mut spec_errors =
+                        validate_type_specifications(&lemma_type.specifications, &type_name);
+                    self.errors.append(&mut spec_errors);
+                }
                 // Always overwrite: inline type definitions may have been registered while processing facts.
                 self.resolved_types.insert(doc.name.clone(), document_types);
             }
@@ -899,7 +913,7 @@ impl<'a> GraphBuilder<'a> {
                 )
             }),
             depends_on_rules,
-            rule_type: LemmaType::veto_type(), // Temporary placeholder - will be computed in compute_all_rule_types
+            rule_type: LemmaType::veto_type(), // Initialized to veto_type; actual type computed in compute_all_rule_types during validation
         };
 
         self.rules.insert(rule_path, rule_node);
@@ -965,7 +979,7 @@ impl<'a> GraphBuilder<'a> {
                 // Types must be resolved by this point (after facts, before rules)
                 // Even empty documents get resolved types (with empty maps) - so get() should never fail
                 let document_types = self.resolved_types.get(&current_doc.name).unwrap_or_else(|| {
-                    panic!(
+                    unreachable!(
                         "Internal error: resolved types not found for document '{}' - types should have been resolved before processing rules (even empty documents have resolved types with empty maps)",
                         current_doc.name
                     )
@@ -1002,7 +1016,7 @@ impl<'a> GraphBuilder<'a> {
                             .iter()
                             .all(|unit| !unit.name.eq_ignore_ascii_case(unit_name))
                         {
-                            panic!(
+                            unreachable!(
                                 "Internal error: unit_index returned type '{}' that doesn't have unit '{}'",
                                 lemma_type.name.as_ref().unwrap_or(&"<inline>".to_string()),
                                 unit_name
@@ -1024,7 +1038,7 @@ impl<'a> GraphBuilder<'a> {
                             .iter()
                             .all(|unit| !unit.name.eq_ignore_ascii_case(unit_name))
                         {
-                            panic!(
+                            unreachable!(
                                 "Internal error: unit_index returned type '{}' that doesn't have unit '{}'",
                                 lemma_type.name.as_ref().unwrap_or(&"<inline>".to_string()),
                                 unit_name
@@ -1042,7 +1056,7 @@ impl<'a> GraphBuilder<'a> {
                         })
                     }
                     _ => {
-                        panic!(
+                        unreachable!(
                             "Internal error: unit_index returned non-Number/Ratio type '{}' for unit '{}'",
                             lemma_type.name.as_ref().unwrap_or(&"<inline>".to_string()),
                             unit_name
@@ -1328,7 +1342,7 @@ fn compute_all_rule_types(
                     // Check that this branch has the same standard type as the first non-veto type
                     if !existing_type.has_same_base_type(&result_type) {
                         let Some(rule_node) = graph.rules().get(rule_path) else {
-                            panic!(
+                            unreachable!(
                                 "BUG: rule type validation referenced missing rule '{}'",
                                 rule_path.rule
                             );
@@ -1378,7 +1392,7 @@ fn compute_all_rule_types(
                 && !result_type.is_veto()
             {
                 let Some(rule_node) = graph.rules().get(rule_path) else {
-                    panic!(
+                    unreachable!(
                         "BUG: rule type validation referenced missing rule '{}'",
                         rule_path.rule
                     );
@@ -1452,7 +1466,7 @@ fn compute_expression_type(
             .get(rule_path)
             .cloned()
             .unwrap_or_else(|| {
-                panic!(
+                unreachable!(
                     "BUG: Rule '{}' referenced before its type was computed (topological ordering)",
                     rule_path.rule
                 )
@@ -1495,10 +1509,10 @@ fn compute_expression_type(
         ExpressionKind::Reference(_)
         | ExpressionKind::FactReference(_)
         | ExpressionKind::RuleReference(_) => {
-            panic!("Internal error: Reference/FactReference/RuleReference should be converted during graph building");
+            unreachable!("Internal error: Reference/FactReference/RuleReference should be converted during graph building");
         }
         ExpressionKind::UnresolvedUnitLiteral(_, _) => {
-            panic!(
+            unreachable!(
                 "UnresolvedUnitLiteral found during type computation - this is a bug: unresolved units should be resolved during graph building in convert_expression_and_extract_dependencies"
             );
         }
@@ -2079,8 +2093,7 @@ fn compute_fact_type(
                 // Use the document from the segment - this is set during graph building
                 &first_segment.doc
             } else {
-                // Top-level fact - search for it in all documents
-                // Top-level fact - search directly
+                // Top-level fact - try to find it by searching documents
                 let fact_ref_segments: Vec<String> = vec![];
                 let mut found_doc: Option<&str> = None;
                 for (doc_name, doc) in graph.all_docs() {
@@ -2096,25 +2109,32 @@ fn compute_fact_type(
                         break;
                     }
                 }
-                match found_doc {
-                    Some(doc) => doc,
-                    None => {
-                        errors.push(LemmaError::engine(
-                            format!("Cannot determine document context for fact '{}'", fact_path),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
-                        ));
-                        return LemmaType::veto_type();
-                    }
+                // If not found by searching, use the document from the fact's source_location
+                // This is reliable since facts are always added from a specific document
+                if let Some(doc) = found_doc.or_else(|| {
+                    fact.source_location
+                        .as_ref()
+                        .map(|src| src.doc_name.as_str())
+                }) {
+                    doc
+                } else {
+                    // This should not happen - all facts should have document context
+                    // But if it does, return an error rather than panicking
+                    errors.push(LemmaError::engine(
+                        format!("Cannot determine document context for fact '{}'", fact_path),
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<unknown>",
+                        Arc::from(""),
+                        "<unknown>",
+                        1,
+                        None::<String>,
+                    ));
+                    return LemmaType::veto_type();
                 }
             };
 

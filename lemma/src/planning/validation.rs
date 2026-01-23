@@ -10,16 +10,15 @@ use rust_decimal::Decimal;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-/// Validate all types in a document
+/// Validate basic type declaration structure in a document
 ///
-/// If `all_docs` is provided, all types from all documents are registered first,
-/// allowing cross-document type imports to resolve correctly.
+/// This performs lightweight structural validation (e.g., checking that TypeDeclaration
+/// base is not empty). Type registration, resolution, and specification validation
+/// are handled during graph building where types are actually needed.
 pub fn validate_types(
     document: &LemmaDoc,
-    all_docs: Option<&[LemmaDoc]>,
+    _all_docs: Option<&[LemmaDoc]>,
 ) -> Result<(), Vec<LemmaError>> {
-    use crate::planning::types::TypeRegistry;
-
     let mut errors = Vec::new();
 
     // Validate type declarations in facts (inline type definitions)
@@ -50,42 +49,6 @@ pub fn validate_types(
         }
     }
 
-    // Create type registry and register all types from all documents first
-    // This allows cross-document type imports to resolve correctly
-    let mut type_registry = TypeRegistry::new();
-    if let Some(all_docs) = all_docs {
-        for doc in all_docs {
-            for type_def in &doc.types {
-                if let Err(e) = type_registry.register_type(&doc.name, type_def.clone()) {
-                    errors.push(e);
-                }
-            }
-        }
-    } else {
-        // Fallback: only register types from current document
-        for type_def in &document.types {
-            if let Err(e) = type_registry.register_type(&document.name, type_def.clone()) {
-                errors.push(e);
-            }
-        }
-    }
-
-    // Validate type definitions by resolving them and checking specifications
-    // Resolve only named types (inline type definitions are registered during graph building, not validation)
-    match type_registry.resolve_named_types(&document.name) {
-        Ok(resolved_types) => {
-            // Validate each named type's specifications
-            for (type_name, lemma_type) in &resolved_types.named_types {
-                let mut spec_errors =
-                    validate_type_specifications(&lemma_type.specifications, type_name);
-                errors.append(&mut spec_errors);
-            }
-        }
-        Err(e) => {
-            errors.push(e);
-        }
-    }
-
     if errors.is_empty() {
         Ok(())
     } else {
@@ -102,10 +65,7 @@ pub fn validate_types(
 /// - precision/decimals are within valid ranges
 ///
 /// Returns a vector of errors (empty if valid)
-pub(crate) fn validate_type_specifications(
-    specs: &TypeSpecification,
-    type_name: &str,
-) -> Vec<LemmaError> {
+pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) -> Vec<LemmaError> {
     let mut errors = Vec::new();
 
     match specs {
@@ -1142,6 +1102,10 @@ mod tests {
 
     #[test]
     fn validate_type_definition_with_invalid_constraints() {
+        // This test now validates that type specification validation works correctly.
+        // The actual validation happens during graph building, but we test the validation
+        // function directly here.
+        use crate::planning::types::TypeRegistry;
         use crate::semantic::TypeDef;
 
         let type_def = TypeDef::Regular {
@@ -1153,12 +1117,22 @@ mod tests {
             ]),
         };
 
-        let mut doc = make_doc("test");
-        doc.types.push(type_def);
+        // Register and resolve the type to get its specifications
+        let mut type_registry = TypeRegistry::new();
+        type_registry
+            .register_type("test", type_def)
+            .expect("Should register type");
+        let resolved_types = type_registry
+            .resolve_named_types("test")
+            .expect("Should resolve types");
 
-        let result = validate_types(&doc, None);
-        assert!(result.is_err());
-        let errors = result.unwrap_err();
+        // Validate the specifications
+        let lemma_type = resolved_types
+            .named_types
+            .get("invalid_money")
+            .expect("Should have invalid_money type");
+        let errors = validate_type_specifications(&lemma_type.specifications, "invalid_money");
+        assert!(!errors.is_empty());
         assert!(errors.iter().any(|e| e
             .to_string()
             .contains("minimum 100 is greater than maximum 50")));

@@ -170,7 +170,7 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
                                     Err(e) => {
                                         // Type resolution failed - this should have been caught during validation
                                         // Panic to prevent silent failures
-                                        panic!(
+                                        unreachable!(
                                             "Failed to resolve type for fact {}: {}. This indicates a bug in validation - all types should be validated before execution plan building.",
                                             path, e
                                         );
@@ -238,7 +238,7 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
                     }
 
                     found_doc.unwrap_or_else(|| {
-                        panic!(
+                        unreachable!(
                             "Cannot determine document context for fact '{}'. This indicates a bug in graph building.",
                             path
                         );
@@ -250,8 +250,7 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
                         fact_schema.insert(path.clone(), lemma_type);
                     }
                     Err(e) => {
-                        // This should have been caught during validation, but handle gracefully
-                        panic!(
+                        unreachable!(
                             "Failed to resolve type for fact {}: {}. This indicates a bug in validation.",
                             path, e
                         );
@@ -290,7 +289,7 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
                 *value = coerced;
             }
             Err(msg) => {
-                panic!(
+                unreachable!(
                     "Fact {} literal value is incompatible with declared type {}: {}. \
                      This should have been caught during validation. If you see a type definition here, \
                      it indicates a bug: type definitions cannot override typed facts.",

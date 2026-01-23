@@ -850,24 +850,7 @@ Lemma provides better readability, version control, testing, and composition.
 
 ## 9. Future work
 
-### 9.1 User-defined types
-
-**Planned feature**: Allow users to define custom types within documents.
-
-```lemma
-type priority = low | medium | high | critical
-
-type custom_currency = cryptocurrency
-  convert 1 bitcoin = 45000 usd
-  convert 1 ethereum = 2500 usd
-
-fact task_priority = [priority]
-fact wallet_balance = 0.5 bitcoin
-```
-
-This will enable domain-specific types and custom unit conversions.
-
-### 9.2 Multi-facts (collections)
+### 9.1 Tables (collections)
 
 **Planned feature**: Support facts that hold multiple values with declarative operations.
 
@@ -883,7 +866,7 @@ rule high_earners = salaries where value > 100000
 
 This will enable working with collections of data in a declarative way.
 
-### 9.3 Language Server Protocol (LSP)
+### 9.2 Language Server Protocol (LSP)
 
 **Planned feature**: IDE support for `.lemma` files with:
 - Syntax highlighting
@@ -893,7 +876,7 @@ This will enable working with collections of data in a declarative way.
 - Hover documentation
 - Refactoring support
 
-### 9.4 WebAssembly support
+### 9.3 WebAssembly support
 
 **Planned feature**: Compile Lemma to WebAssembly for browser-based evaluation, enabling:
 - Client-side rule evaluation
@@ -901,7 +884,7 @@ This will enable working with collections of data in a declarative way.
 - Browser-based policy simulators
 - No server round-trip required
 
-### 9.5 API and integration
+### 9.4 API and integration
 
 **Planned features**:
 - REST API server for rule evaluation

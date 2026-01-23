@@ -168,18 +168,29 @@ fact deadline = 2024-12-31
 Define custom types with units, constraints, and validation:
 
 ```lemma
-type money = scale -> unit eur 1.00 -> unit usd 1.10
-type temperature = scale -> unit celsius 1.0 -> unit fahrenheit 1.8
-type discount = ratio -> minimum 0 -> maximum 1
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.10
+
+type temperature = scale
+  -> unit celsius 1.0
+  -> unit fahrenheit 1.8
+
+type discount = ratio
+  -> minimum 0
+  -> maximum 1
 ```
 
 Unit conversions work within the same type:
 
 ```lemma
-type money = scale -> unit eur 1.00 -> unit usd 1.10
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.10
 
 fact price = 100 eur
-rule price_usd = price in usd  // Converts to 110 usd
+
+rule price_usd = price in usd
 ```
 
 ### Rule references

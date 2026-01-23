@@ -502,7 +502,7 @@ fn substitute_rules_in_expression(
                         ));
                     }
                     ExpressionKind::UnresolvedUnitLiteral(_, _) => {
-                        panic!(
+                        unreachable!(
                             "UnresolvedUnitLiteral found during substitution - this is a bug: unresolved units should be resolved during planning"
                         );
                     }
@@ -608,12 +608,14 @@ fn substitute_rules_in_expression(
             }
             WorkItem::BuildArithmetic(op, source_loc) => {
                 let right = result_pool.pop().unwrap_or_else(|| {
-                    panic!(
+                    unreachable!(
                         "BUG: missing right expression for Arithmetic during inversion hydration"
                     )
                 });
                 let left = result_pool.pop().unwrap_or_else(|| {
-                    panic!("BUG: missing left expression for Arithmetic during inversion hydration")
+                    unreachable!(
+                        "BUG: missing left expression for Arithmetic during inversion hydration"
+                    )
                 });
                 result_pool.push(Expression::new(
                     ExpressionKind::Arithmetic(Arc::new(left), op, Arc::new(right)),
@@ -622,12 +624,14 @@ fn substitute_rules_in_expression(
             }
             WorkItem::BuildComparison(op, source_loc) => {
                 let right = result_pool.pop().unwrap_or_else(|| {
-                    panic!(
+                    unreachable!(
                         "BUG: missing right expression for Comparison during inversion hydration"
                     )
                 });
                 let left = result_pool.pop().unwrap_or_else(|| {
-                    panic!("BUG: missing left expression for Comparison during inversion hydration")
+                    unreachable!(
+                        "BUG: missing left expression for Comparison during inversion hydration"
+                    )
                 });
                 result_pool.push(Expression::new(
                     ExpressionKind::Comparison(Arc::new(left), op, Arc::new(right)),
@@ -636,12 +640,14 @@ fn substitute_rules_in_expression(
             }
             WorkItem::BuildLogicalAnd(source_loc) => {
                 let right = result_pool.pop().unwrap_or_else(|| {
-                    panic!(
+                    unreachable!(
                         "BUG: missing right expression for LogicalAnd during inversion hydration"
                     )
                 });
                 let left = result_pool.pop().unwrap_or_else(|| {
-                    panic!("BUG: missing left expression for LogicalAnd during inversion hydration")
+                    unreachable!(
+                        "BUG: missing left expression for LogicalAnd during inversion hydration"
+                    )
                 });
                 result_pool.push(Expression::new(
                     ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right)),
@@ -650,10 +656,14 @@ fn substitute_rules_in_expression(
             }
             WorkItem::BuildLogicalOr(source_loc) => {
                 let right = result_pool.pop().unwrap_or_else(|| {
-                    panic!("BUG: missing right expression for LogicalOr during inversion hydration")
+                    unreachable!(
+                        "BUG: missing right expression for LogicalOr during inversion hydration"
+                    )
                 });
                 let left = result_pool.pop().unwrap_or_else(|| {
-                    panic!("BUG: missing left expression for LogicalOr during inversion hydration")
+                    unreachable!(
+                        "BUG: missing left expression for LogicalOr during inversion hydration"
+                    )
                 });
                 result_pool.push(Expression::new(
                     ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
@@ -801,7 +811,7 @@ fn hydrate_facts_in_expression(
                         ));
                     }
                     ExpressionKind::UnresolvedUnitLiteral(_, _) => {
-                        panic!(
+                        unreachable!(
                             "UnresolvedUnitLiteral found during hydration - this is a bug: unresolved units should be resolved during planning"
                         );
                     }

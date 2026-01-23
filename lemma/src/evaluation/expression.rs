@@ -25,7 +25,7 @@ fn get_proof_node_required(
         .as_ref()
         .expect("BUG: evaluated expression missing source_location");
     let proof = context.get_proof_node(expr).cloned().unwrap_or_else(|| {
-        panic!(
+        unreachable!(
             "BUG: {} was evaluated but has no proof node ({}:{}:{} in {})",
             operand_name, loc.attribute, loc.span.line, loc.span.col, loc.doc_name
         )
@@ -44,7 +44,7 @@ fn get_operand_result(
         .as_ref()
         .expect("BUG: expression operand missing source_location");
     let result = results.get(expr).cloned().unwrap_or_else(|| {
-        panic!(
+        unreachable!(
             "BUG: {} operand was marked ready but result is missing ({}:{}:{} in {})",
             operand_name, loc.attribute, loc.span.line, loc.span.col, loc.doc_name
         )
@@ -346,7 +346,7 @@ fn evaluate_expression(
                 .source_location
                 .as_ref()
                 .expect("BUG: expression missing source_location");
-            panic!(
+            unreachable!(
                 "BUG: circular dependency or missing dependency in expression tree ({}:{}:{} in {})",
                 loc.attribute, loc.span.line, loc.span.col, loc.doc_name
             );
@@ -368,7 +368,7 @@ fn evaluate_expression(
         .as_ref()
         .expect("BUG: expression missing source_location");
     let result = results.get(expr).cloned().unwrap_or_else(|| {
-        panic!(
+        unreachable!(
             "BUG: expression was processed but has no result ({}:{}:{} in {})",
             loc.attribute, loc.span.line, loc.span.col, loc.doc_name
         )
@@ -801,7 +801,7 @@ fn evaluate_single_expression(
             )))
         }
         ExpressionKind::UnresolvedUnitLiteral(_, _) => {
-            panic!(
+            unreachable!(
                 "UnresolvedUnitLiteral found during evaluation - unresolved units must be resolved during planning"
             );
         }

@@ -169,8 +169,7 @@ impl ExpressionKind {
             ExpressionKind::Literal(lit) => lit.semantic_hash(state),
             ExpressionKind::Reference(r) => r.hash(state),
             ExpressionKind::UnresolvedUnitLiteral(_, _) => {
-                // UnresolvedUnitLiteral should never be hashed - it should be resolved during planning
-                panic!("UnresolvedUnitLiteral found during hashing - this indicates a bug: unresolved units should be resolved during planning");
+                unreachable!("UnresolvedUnitLiteral found during hashing - this indicates a bug: unresolved units should be resolved during planning");
             }
             ExpressionKind::FactReference(fr) => fr.hash(state),
             ExpressionKind::RuleReference(rr) => rr.hash(state),

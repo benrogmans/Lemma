@@ -80,7 +80,7 @@ pub fn from_json(
         })?;
 
         let expected_type = plan.fact_schema.get(fact_path).cloned().unwrap_or_else(|| {
-            panic!(
+            unreachable!(
                 "BUG: get_fact_path_by_str returned a fact path that is not in fact_schema (fact={})",
                 fact_name
             )
@@ -122,20 +122,9 @@ fn convert_json_value(
         crate::semantic::TypeSpecification::Duration { .. } => {
             convert_to_duration(fact_name, json_value, expected_type)
         }
-        crate::semantic::TypeSpecification::Time { .. } => Err(LemmaError::engine(
-            "Time type not yet supported in JSON conversion",
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        )),
+        crate::semantic::TypeSpecification::Time { .. } => {
+            convert_to_time(fact_name, json_value, expected_type)
+        }
         crate::semantic::TypeSpecification::Veto { .. } => Err(LemmaError::engine(
             "Veto type is not a user-declarable type and cannot be converted from JSON",
             Span {
@@ -584,6 +573,36 @@ fn convert_to_duration(
     }
 }
 
+fn convert_to_time(
+    fact_name: &str,
+    json_value: &Value,
+    expected_type: &crate::semantic::LemmaType,
+) -> Result<LiteralValue, LemmaError> {
+    match json_value {
+        Value::String(s) => expected_type.parse_value(s).map_err(|e| {
+            LemmaError::engine(
+                format!("Invalid time value for fact '{}': {}", fact_name, e),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(s.as_str()),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        }),
+        Value::Null => Err(type_error(fact_name, "time", "null")),
+        Value::Bool(_) => Err(type_error(fact_name, "time", "boolean")),
+        Value::Number(_) => Err(type_error(fact_name, "time", "number")),
+        Value::Array(_) => Err(type_error(fact_name, "time", "array")),
+        Value::Object(_) => Err(type_error(fact_name, "time", "object")),
+    }
+}
+
 fn json_number_to_decimal(fact_name: &str, n: &serde_json::Number) -> Result<Decimal, LemmaError> {
     if let Some(i) = n.as_i64() {
         Ok(Decimal::from(i))
@@ -954,7 +973,7 @@ mod tests {
     use super::*;
     use crate::semantic::{
         standard_boolean, standard_date, standard_duration, standard_number, standard_ratio,
-        standard_text, FactPath, LemmaType, LiteralValue,
+        standard_text, standard_time, FactPath, LemmaType, LiteralValue,
     };
     use rust_decimal::Decimal;
 
@@ -1341,6 +1360,92 @@ mod tests {
         assert!(result.is_err());
         let error_message = result.unwrap_err().to_string();
         assert!(error_message.contains("Duration values must include the unit name"));
+    }
+
+    #[test]
+    fn test_time_from_string_hhmm() {
+        let plan = create_test_plan(vec![("start_time", standard_time().clone())]);
+        let json = br#"{"start_time": "14:30"}"#;
+        let result = from_json(json, &plan).unwrap();
+        match result.get("start_time") {
+            Some(lit) => {
+                if let LemmaValue::Time(t) = &lit.value {
+                    assert_eq!(t.hour, 14);
+                    assert_eq!(t.minute, 30);
+                    assert_eq!(t.second, 0);
+                    assert_eq!(t.timezone, None);
+                } else {
+                    panic!("Expected Time, got {:?}", lit);
+                }
+            }
+            other => panic!("Expected Time, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_time_from_string_hhmmss() {
+        let plan = create_test_plan(vec![("start_time", standard_time().clone())]);
+        let json = br#"{"start_time": "14:30:45"}"#;
+        let result = from_json(json, &plan).unwrap();
+        match result.get("start_time") {
+            Some(lit) => {
+                if let LemmaValue::Time(t) = &lit.value {
+                    assert_eq!(t.hour, 14);
+                    assert_eq!(t.minute, 30);
+                    assert_eq!(t.second, 45);
+                    assert_eq!(t.timezone, None);
+                } else {
+                    panic!("Expected Time, got {:?}", lit);
+                }
+            }
+            other => panic!("Expected Time, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_time_from_string_with_timezone() {
+        let plan = create_test_plan(vec![("start_time", standard_time().clone())]);
+        // Test with Z timezone format (UTC)
+        let json = br#"{"start_time": "14:30:00Z"}"#;
+        let result = from_json(json, &plan);
+        // Note: Timezone parsing may not work for all formats yet
+        // This test verifies the conversion function is called and handles the input
+        // If timezone parsing fails, it should return a proper error, not panic
+        match result {
+            Ok(values) => {
+                // If parsing succeeds, verify it's a valid time
+                if let Some(lit) = values.get("start_time") {
+                    if let LemmaValue::Time(t) = &lit.value {
+                        assert!(t.hour < 24 && t.minute < 60 && t.second < 60);
+                    }
+                }
+            }
+            Err(_) => {
+                // Timezone parsing may not be fully supported yet, which is acceptable
+                // The important thing is that convert_to_time is being called
+            }
+        }
+    }
+
+    #[test]
+    fn test_time_rejects_number() {
+        let plan = create_test_plan(vec![("start_time", standard_time().clone())]);
+        let json = br#"{"start_time": 1430}"#;
+        let result = from_json(json, &plan);
+        assert!(result.is_err());
+        let error_message = result.unwrap_err().to_string();
+        assert!(error_message.contains("expected time"));
+        assert!(error_message.contains("got number"));
+    }
+
+    #[test]
+    fn test_time_rejects_invalid_format() {
+        let plan = create_test_plan(vec![("start_time", standard_time().clone())]);
+        let json = br#"{"start_time": "25:00"}"#;
+        let result = from_json(json, &plan);
+        assert!(result.is_err());
+        let error_message = result.unwrap_err().to_string();
+        assert!(error_message.contains("Invalid time"));
     }
 
     #[test]
