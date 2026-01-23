@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lemma - Prism.js Syntax Highlighting</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+            background: #1e293b;
+            color: #cbd5e1;
+        }
+        h1 {
+            color: #f1f5f9;
+        }
+        pre {
+            background: #0f172a;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        code {
+            font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 14px;
+        }
+        code[class*="language-"],
+        pre[class*="language-"] {
+            color: #cbd5e1;
+        }
+        .token.comment {
+            color: #64748b;
+            font-style: italic;
+        }
+        .token.declaration-keyword {
+            color: #a78bfa;
+        }
+        .token.conditional-keyword,
+        .token.veto-keyword,
+        .token.control-keyword {
+            color: #fbbf24;
+        }
+        .token.boolean {
+            color: #fbbf24;
+        }
+        .token.type-annotation {
+            color: #38bdf8;
+        }
+        .token.percentage,
+        .token.number,
+        .token.unit-value,
+        .token.datetime,
+        .token.time,
+        .token.quoted-string,
+        .token.regex {
+            color: #34d399;
+        }
+        .token.unknown-marker {
+            color: #fb7185;
+        }
+        .token.reference {
+            color: #cbd5e1;
+        }
+        .token.comparison-operator,
+        .token.arithmetic-operator,
+        .token.math-function {
+            color: #94a3b8;
+        }
+    </style>
+</head>
+<body>
+    <h1>Lemma - Prism.js Example</h1>
+    
+    <pre><code class="language-lemma">doc pricing
+
+fact quantity = [number]
+fact is_member = [boolean]
+fact base_price = 100
+
+rule discount = 0%
+  unless quantity >= 10 then 10%
+  unless quantity >= 50 then 20%
+  unless is_member then 15%
+
+rule price = base_price - discount?</code></pre>
+
+    <pre><code class="language-lemma">doc employee_contract
+
+fact salary = 5000 eur
+fact start_date = 2024-01-15
+fact vacation_days = 25
+
+rule annual_salary = salary * 12
+rule daily_rate = salary / 21
+rule can_take_vacation = vacation_days? > 0</code></pre>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+    <script src="prism.js"></script>
+    <script>Prism.highlightAll();</script>
+</body>
+</html>

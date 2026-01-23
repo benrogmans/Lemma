@@ -17,14 +17,11 @@ Test robustness against:
 - Invalid fact overrides
 - Missing required facts
 - Circular document references (should be caught by semantic validator)
-- **Cross-document rule references** - Currently not properly implemented and cause evaluation failures
 - Invalid type conversions
 - Evaluation failures
 - Resource exhaustion scenarios
 
 Target: All errors produce helpful messages with source locations
-
-**Known Issue**: Cross-document rule references are not fully supported and may cause runtime errors during evaluation. This needs investigation and proper implementation or explicit error handling.
 
 ### Security Audit
 

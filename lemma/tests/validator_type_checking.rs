@@ -40,23 +40,6 @@ rule result = 10
 }
 
 #[test]
-fn test_conversion_to_valid_unit() {
-    let code = r#"
-doc test
-fact distance = 1000
-rule km = distance in kilometers
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(
-        result.is_ok(),
-        "Valid unit conversion should pass: {:?}",
-        result
-    );
-}
-
-#[test]
 fn test_percentage_literal_type() {
     let code = r#"
 doc test
@@ -72,50 +55,6 @@ rule doubled = rate
         "Percentage types should be consistent: {:?}",
         result
     );
-}
-
-#[test]
-fn test_money_requires_same_currency_in_comparison() {
-    let code = r#"
-doc test
-fact price_usd = 100 USD
-fact price_eur = 80 EUR
-rule comparison = price_usd > price_eur
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(
-        result.is_err(),
-        "Should reject different currency comparison"
-    );
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .to_lowercase()
-        .contains("currenc"));
-}
-
-#[test]
-fn test_money_requires_same_currency_in_arithmetic() {
-    let code = r#"
-doc test
-fact price_usd = 100 USD
-fact price_gbp = 80 GBP
-rule total = price_usd + price_gbp
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(
-        result.is_err(),
-        "Should reject different currency arithmetic"
-    );
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .to_lowercase()
-        .contains("currenc"));
 }
 
 #[test]
@@ -155,40 +94,21 @@ rule is_valid_range = end > start
 }
 
 #[test]
-fn test_all_unit_types_in_conversions() {
-    let test_cases = vec![
-        ("(value * 100) in kilograms", "Mass"),
-        ("(value * 50) in meters", "Length"),
-        ("(value * 200) in liters", "Volume"),
-        ("(value * 60) in seconds", "Duration"),
-        ("(value * 25) in celsius", "Temperature"),
-        ("(value * 1000) in watts", "Power"),
-        ("(value * 100) in newtons", "Force"),
-        ("(value * 101325) in pascals", "Pressure"),
-        ("(value * 1000) in joules", "Energy"),
-        ("(value * 60) in hertz", "Frequency"),
-        ("(value * 1024) in bytes", "Data"),
-    ];
-
-    for (conversion, unit_name) in test_cases {
-        let code = format!(
-            r#"
+fn test_duration_conversion() {
+    // Duration is the only remaining built-in unit type
+    let code = r#"
 doc test
-fact value = 1
-rule converted = {}
-"#,
-            conversion
-        );
+fact value = 60
+rule converted = (value * 60) in seconds
+"#;
 
-        let mut engine = Engine::new();
-        let result = engine.add_lemma_code(&code, "test.lemma");
-        assert!(
-            result.is_ok(),
-            "{} conversion should work: {:?}",
-            unit_name,
-            result
-        );
-    }
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(
+        result.is_ok(),
+        "Duration conversion should work: {:?}",
+        result
+    );
 }
 
 #[test]
@@ -196,7 +116,7 @@ fn test_percentage_conversion_from_number() {
     let code = r#"
 doc test
 fact ratio = 0.25
-rule as_percentage = ratio in percentage
+rule as_percentage = ratio in percent
 "#;
 
     let mut engine = Engine::new();
@@ -209,7 +129,7 @@ rule as_percentage = ratio in percentage
 }
 
 #[test]
-fn test_veto_type_is_never() {
+fn test_veto_type_is_compatible_with_other_types() {
     let code = r#"
 doc test
 fact age = 15
@@ -228,24 +148,6 @@ rule result = 100
 }
 
 #[test]
-fn test_mixed_number_and_money_not_allowed() {
-    let code = r#"
-doc test
-fact base = 100
-rule amount = base
-  unless base > 50 then 200 USD
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    assert!(
-        result.is_err(),
-        "Should reject mixing number and money types"
-    );
-    assert!(result.unwrap_err().to_string().contains("incompatible"));
-}
-
-#[test]
 fn test_mixed_text_and_number_not_allowed() {
     let code = r#"
 doc test
@@ -260,7 +162,12 @@ rule value = "default"
         result.is_err(),
         "Should reject mixing text and number types"
     );
-    assert!(result.unwrap_err().to_string().contains("incompatible"));
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
+        "Error message should contain type mismatch info: {}",
+        err_msg
+    );
 }
 
 #[test]
@@ -278,24 +185,11 @@ rule value = 2024-01-01
         result.is_err(),
         "Should reject mixing date and number types"
     );
-    assert!(result.unwrap_err().to_string().contains("incompatible"));
-}
-
-#[test]
-fn test_same_category_units_allowed_in_rule() {
-    let code = r#"
-doc test
-fact weight = 1000 grams
-rule adjusted = weight
-  unless weight > 500 grams then 2 kilograms
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let err_msg = result.unwrap_err().to_string();
     assert!(
-        result.is_ok(),
-        "Same category units should be allowed: {:?}",
-        result
+        err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
+        "Error message should contain type mismatch info: {}",
+        err_msg
     );
 }
 
@@ -370,23 +264,12 @@ rule value = 10
     let mut engine = Engine::new();
     let result = engine.add_lemma_code(code, "test.lemma");
     assert!(result.is_err(), "Mixed number/text should be rejected");
-    assert!(result.unwrap_err().to_string().contains("incompatible"));
-}
-
-#[test]
-fn test_conversion_changes_type() {
-    let code = r#"
-doc test
-fact meters = 100
-rule as_km = meters in kilometers
-rule back_to_number = as_km
-  unless as_km > 0 kilometers then 0
-"#;
-
-    let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
-    // as_km is Length type, so mixing with number should fail
-    assert!(result.is_err(), "Conversion should create distinct type");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
+        "Error message should contain type mismatch info: {}",
+        err_msg
+    );
 }
 
 #[test]
@@ -405,5 +288,63 @@ rule another = derived?
         result.is_ok(),
         "Rule reference types should propagate: {:?}",
         result
+    );
+}
+
+#[test]
+fn test_time_type_validation() {
+    let code = r#"
+doc test
+fact meeting_time = 14:30:00
+rule is_afternoon = meeting_time > 12:00:00
+"#;
+
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(
+        result.is_ok(),
+        "Time type should be validated correctly: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_time_cannot_use_in_logical_operators() {
+    let code = r#"
+doc test
+fact time1 = 14:30:00
+fact time2 = 15:00:00
+rule result = time1 and time2
+"#;
+
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(
+        result.is_err(),
+        "Should reject time values in logical operators"
+    );
+    assert!(result.unwrap_err().to_string().contains("boolean"));
+}
+
+#[test]
+fn test_mixed_time_and_number_not_allowed() {
+    let code = r#"
+doc test
+fact use_time = true
+rule value = 14:30:00
+  unless use_time then 100
+"#;
+
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(
+        result.is_err(),
+        "Should reject mixing time and number types"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
+        "Error message should contain type mismatch info: {}",
+        err_msg
     );
 }

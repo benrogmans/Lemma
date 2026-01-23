@@ -1,0 +1,342 @@
+// ================================================================================================
+// BASIC TOKENS
+// ================================================================================================
+
+SPACE = _{ WHITE_SPACE | NEWLINE }
+
+reserved_keyword = _{
+    (^"doc" | ^"fact" | ^"rule" | ^"then" | ^"unless" | ^"not" | ^"in" | ^"and" | ^"or" | ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" | ^"abs" | ^"floor" | ^"ceil" | ^"round" | ^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject" | ^"veto" | ^"scale" | ^"number" | ^"text" | ^"date" | ^"time" | ^"duration" | ^"type" | ^"from" | ^"with") ~ !(ASCII_ALPHANUMERIC | "_")
+}
+
+// Low-level identifier used by public rules; kept silent so only higher-level
+// rules (fact_name, rule_name, etc.) appear in the parse tree.
+label = _{ !reserved_keyword ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// Supports scientific notation: 1.23e+5, 5.67E-3, 1e10, etc.
+number_literal = { scientific_number | decimal_number }
+
+scientific_number = {
+    decimal_number ~ ("e" | "E") ~ exponent_part
+}
+
+decimal_number = {
+    ("+" | "-")? ~ ASCII_DIGIT+ ~ (("_" | ",") ~ ASCII_DIGIT+)* ~ ("." ~ ASCII_DIGIT+)?
+}
+
+exponent_part = {
+    ("+" | "-")? ~ ASCII_DIGIT+
+}
+
+// ================================================================================================
+// TYPE DEFINITIONS
+// ================================================================================================
+
+type_standard = {
+    ^"boolean"
+  | ^"scale"
+  | ^"number"
+  | ^"percent"
+  | ^"ratio"
+  | ^"text"
+  | ^"date"
+  | ^"time"
+  | ^"duration"
+}
+
+// Type definition statement
+type_definition = {
+    ^"type" ~ SPACE+ ~ type_name_def ~ SPACE* ~ "=" ~ SPACE* ~ type_arrow_chain
+}
+
+// Type import statement
+type_import = {
+    ^"type" ~ SPACE+ ~ type_import_def
+}
+
+type_custom = { label }
+type_name_def    = { type_custom | type_standard }
+type_import_def = { type_name_def ~ SPACE+ ~ ^"from" ~ SPACE+ ~ doc_name }
+type_arrow_chain = { (type_import_def | type_name_def) ~ (SPACE* ~ arrow_symbol ~ SPACE* ~ command)* }
+
+// ================================================================================================
+// OTHER COMMON DEFINITIONS
+// ================================================================================================
+
+boolean_literal = {
+    (^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject") ~ !(ASCII_ALPHANUMERIC | "_")
+}
+
+text_literal = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+percent_literal = {
+    number_literal ~ ( // '%' must be directly followed by a non-digit or end of input
+  "%" ~ !(ASCII_DIGIT) | SPACE* ~ ^"percent")
+}
+
+// Arrow chains
+arrow_symbol = { "->" }
+
+// Commands in arrow chains
+command      = { command_name ~ (SPACE+ ~ command_arg)* }
+command_name = { label }
+command_arg  = { number_literal | boolean_literal | text_literal | label }
+
+// ================================================================================================
+// TOP-LEVEL DOCUMENT STRUCTURE
+// ================================================================================================
+
+lemma_file = { SOI ~ SPACE* ~ doc* ~ SPACE* ~ EOI }
+
+doc = {
+    doc_declaration ~ SPACE* ~ commentary_block? ~ SPACE* ~ doc_body
+}
+
+doc_body = {
+    (type_import | type_definition | fact_definition | fact_override | rule_definition | SPACE)*
+}
+
+doc_declaration = { ^"doc" ~ SPACE+ ~ doc_name }
+
+doc_name       = { doc_identifier ~ ("/" ~ doc_identifier)* }
+doc_identifier = { ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_" | "-" | "/" | "." )* }
+
+triple_quote = _{ "\"\"\"" }
+commentary_block = { triple_quote ~ commentary ~ triple_quote }
+commentary = { (!triple_quote ~ ANY)* }
+
+// ================================================================================================
+// FACT DEFINITIONS
+// ================================================================================================
+
+fact_reference_segment = { type_custom | type_standard }
+fact_reference = { fact_reference_segment ~ ("." ~ fact_reference_segment)* }
+
+fact_definition = { ^"fact" ~ SPACE+ ~ fact_reference_segment ~ SPACE* ~ "=" ~ SPACE* ~ fact_value }
+fact_override   = { ^"fact" ~ SPACE+ ~ fact_reference ~ SPACE* ~ "=" ~ SPACE* ~ fact_value }
+
+fact_value = {
+    inline_type_definition
+  | type_declaration
+  | doc_reference
+  | literal
+}
+
+type_declaration = { "[" ~ type_name_def ~ "]" }
+inline_type_definition = { "[" ~ type_arrow_chain ~ "]" }
+
+doc_reference = { ^"doc" ~ SPACE+ ~ doc_name }
+
+// ================================================================================================
+// RULE DEFINITIONS
+// ================================================================================================
+
+rule_name = { label }
+
+rule_definition = { ^"rule" ~ SPACE+ ~ rule_name ~ SPACE* ~ "=" ~ SPACE* ~ rule_expression }
+
+rule_expression = {
+    (expression | veto_expression) ~ (SPACE* ~ unless_statement)*
+}
+
+unless_statement = {
+    ^"unless" ~ SPACE+ ~ expression ~ SPACE* ~ ^"then" ~ SPACE+ ~ (veto_expression | expression)
+}
+
+veto_expression = {
+    ^"veto" ~ (SPACE+ ~ text_literal)?
+}
+
+rule_reference_segment = { label }
+rule_reference         = { rule_reference_segment ~ ("." ~ rule_reference_segment)* ~ "?" }
+
+// ================================================================================================
+// EXPRESSIONS
+// ================================================================================================
+
+expression = {
+    and_expression ~ (SPACE+ ~ ^"or" ~ SPACE+ ~ and_expression)*
+}
+
+and_expression = {
+    and_operand ~ (SPACE+ ~ ^"and" ~ SPACE+ ~ and_operand)*
+}
+
+and_operand = {
+    not_expr
+  | comparison_expression
+  | conversion_expression
+  | base_expression
+}
+
+// ------------------------------------------------------------------------------------------------
+// BASE EXPRESSIONS (arithmetic)
+// ------------------------------------------------------------------------------------------------
+
+// Primary - the ONLY place where parentheses appear
+primary = {
+    literal
+  | rule_reference
+  | fact_reference
+  | "(" ~ SPACE* ~ expression ~ SPACE* ~ ")"
+}
+
+// Individual operators (for type-safe parser matching)
+op_add = { "+" }
+op_sub = { "-" }
+op_mul = { "*" }
+op_div = { "/" }
+op_mod = { "%" }
+op_pow = { "^" }
+
+// Math functions
+math_function = {
+    sqrt_expr
+  | sin_expr
+  | cos_expr
+  | tan_expr
+  | asin_expr
+  | acos_expr
+  | atan_expr
+  | log_expr
+  | exp_expr
+  | abs_expr
+  | floor_expr
+  | ceil_expr
+  | round_expr
+}
+
+// Precedence hierarchy (highest to lowest): unary > power > multiply > add
+factor          = { (op_add | op_sub)? ~ (primary | math_function) }
+power           = { factor ~ (SPACE* ~ op_pow ~ SPACE* ~ power)? }
+term            = { power ~ (SPACE* ~ (op_mul | op_div | op_mod) ~ SPACE* ~ power)* }
+base_expression = { term ~ (SPACE* ~ (op_add | op_sub) ~ SPACE* ~ term)* }
+
+conversion_expression = { base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ duration_unit }
+
+// Duration units for conversion
+duration_unit = {
+    ^"years"
+  | ^"year"
+  | ^"months"
+  | ^"month"
+  | ^"weeks"
+  | ^"week"
+  | ^"days"
+  | ^"day"
+  | ^"hours"
+  | ^"hour"
+  | ^"minutes"
+  | ^"minute"
+  | ^"seconds"
+  | ^"second"
+  | ^"milliseconds"
+  | ^"millisecond"
+  | ^"microseconds"
+  | ^"microsecond"
+  | ^"percent"
+}
+
+// ------------------------------------------------------------------------------------------------
+// COMPARISON EXPRESSIONS
+// ------------------------------------------------------------------------------------------------
+
+comp_gte      = { ">=" }
+comp_lte      = { "<=" }
+comp_eq       = { "==" }
+comp_ne       = { "!=" }
+comp_is_not   = { ^"is not" }
+comp_gt       = { ">" }
+comp_lt       = { "<" }
+comp_is       = { ^"is" }
+comp_operator = { comp_gte | comp_lte | comp_eq | comp_ne | comp_is_not | comp_gt | comp_lt | comp_is }
+
+simple_expression = { not_expr | conversion_expression | base_expression }
+
+comparison_expression = {
+    simple_expression ~ SPACE* ~ comp_operator ~ SPACE* ~ simple_expression
+}
+
+// ------------------------------------------------------------------------------------------------
+// LOGICAL EXPRESSIONS
+// ------------------------------------------------------------------------------------------------
+
+not_expr   = { ^"not" ~ (!("(") ~ SPACE+ | SPACE*)? ~ and_operand }
+sqrt_expr  = { ^"sqrt" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+sin_expr   = { ^"sin" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+cos_expr   = { ^"cos" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+tan_expr   = { ^"tan" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+asin_expr  = { ^"asin" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+acos_expr  = { ^"acos" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+atan_expr  = { ^"atan" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+log_expr   = { ^"log" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+exp_expr   = { ^"exp" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+abs_expr   = { ^"abs" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+floor_expr = { ^"floor" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+ceil_expr  = { ^"ceil" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+round_expr = { ^"round" ~ (!("(") ~ SPACE+ | SPACE*)? ~ base_expression }
+
+// ================================================================================================
+// LITERALS
+// ================================================================================================
+
+literal = {
+    date_time_literal
+  | time_literal
+  | boolean_literal
+  | text_literal
+  | percent_literal
+  | duration_literal
+  | number_unit_literal
+  | number_literal
+}
+
+// ------------------------------------------------------------------------------------------------
+// DATE/TIME LITERALS
+// ------------------------------------------------------------------------------------------------
+
+year   = _{ ASCII_DIGIT{4} }
+month  = _{ ASCII_DIGIT{2} }
+day    = _{ ASCII_DIGIT{2} }
+hour   = _{ ASCII_DIGIT{2} }
+minute = _{ ASCII_DIGIT{2} }
+second = _{ ASCII_DIGIT{2} }
+
+timezone        = { timezone_utc | timezone_offset }
+timezone_utc    = { "Z" }
+timezone_offset = { timezone_sign ~ timezone_hour ~ ":" ~ timezone_minute }
+timezone_sign   = { "+" | "-" }
+timezone_hour   = { ASCII_DIGIT{2} }
+timezone_minute = { ASCII_DIGIT{2} }
+
+// Time literals (HH:MM:SS with optional timezone)
+time_literal = { hour ~ ":" ~ minute ~ (":" ~ second)? ~ timezone? }
+
+// ISO8601 DateTime literals with optional time and timezone
+date_time_literal = {
+    year ~ "-" ~ month ~ "-" ~ day ~ ("T" ~ hour ~ ":" ~ minute ~ (":" ~ second)? ~ timezone?)?
+}
+
+// ------------------------------------------------------------------------------------------------
+// DURATION LITERAL
+// ------------------------------------------------------------------------------------------------
+
+duration_literal = { number_literal ~ SPACE+ ~ duration_unit }
+
+// ------------------------------------------------------------------------------------------------
+// NUMBER + UNIT LITERALS (user-defined units)
+// ------------------------------------------------------------------------------------------------
+
+// Unit name for user-defined units (reuses label, disambiguation happens during semantic analysis)
+unit_name = { label }
+
+// Number with unit literal: e.g., "5 celsius", "10.5 kilogram"
+number_unit_literal = { number_literal ~ SPACE+ ~ unit_name }
+
+// ================================================================================================
+// NOTES
+// ================================================================================================
+// - WHITE_SPACE and NEWLINE are built-in Pest rules and should not be redefined
+// - Rules marked with _ are silent (won't appear in the parse tree)
+// - Type declarations are case-insensitive using the ^ operator
+// - Literal values are ordered by parsing precedence to avoid conflicts
+// - number_unit_literal must come before number_literal in the literal rule to match correctly

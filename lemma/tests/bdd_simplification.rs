@@ -1,5 +1,4 @@
 use lemma::{Engine, LiteralValue, Target};
-use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 #[test]
@@ -22,19 +21,19 @@ fn bdd_unification_simplifies_to_single_atom() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let solutions = engine
-        .invert(
+        .invert_strict(
             "shop_bdd",
             "target",
-            Target::value(LiteralValue::Number(Decimal::from(1))),
+            Target::value(LiteralValue::number(1)),
             HashMap::new(),
         )
         .expect("invert should succeed");
 
-    // Should have solution solutions
+    // Should have solutions
     assert!(!solutions.is_empty(), "Expected at least one solution");
 
     // Should track discount_code in domains
-    let var_count = solutions.iter().flat_map(|r| r.keys()).count();
+    let var_count: usize = solutions.domains.iter().map(|d| d.len()).sum();
     assert!(var_count >= 1, "Expected variables in domains");
 
     // Test validates that BDD simplification works during inversion

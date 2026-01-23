@@ -1,4 +1,5 @@
 use lemma::Engine;
+use std::collections::HashMap;
 
 /// Test cross-document fact references (should work)
 #[test]
@@ -20,14 +21,14 @@ rule total = base_data.price * base_data.quantity
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "total")
+        .values()
+        .find(|r| r.rule.name == "total")
         .unwrap();
 
-    assert_eq!(total.result.as_ref().unwrap().to_string(), "500");
+    assert_eq!(total.result.value().unwrap().to_string(), "500");
 }
 
 /// Test cross-document rule reference
@@ -50,14 +51,14 @@ rule derived_value = base_data.doubled? + 10
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let derived_value = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "derived_value")
+        .values()
+        .find(|r| r.rule.name == "derived_value")
         .unwrap();
 
-    assert_eq!(derived_value.result.as_ref().unwrap().to_string(), "110");
+    assert_eq!(derived_value.result.value().unwrap().to_string(), "110");
 }
 
 /// Test cross-document rule reference with dependencies
@@ -81,14 +82,14 @@ rule manager_bonus = employee.annual_salary? * 0.15
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("manager", None, None).unwrap();
+    let response = engine.evaluate("manager", vec![], HashMap::new()).unwrap();
     let bonus = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "manager_bonus")
+        .values()
+        .find(|r| r.rule.name == "manager_bonus")
         .unwrap();
 
-    assert_eq!(bonus.result.as_ref().unwrap().to_string(), "9000.00");
+    assert_eq!(bonus.result.value().unwrap().to_string(), "9,000");
 }
 
 /// Test fact override with cross-doc rule reference
@@ -114,14 +115,14 @@ rule derived_total = config.total?
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "derived_total")
+        .values()
+        .find(|r| r.rule.name == "derived_total")
         .unwrap();
 
-    assert_eq!(total.result.as_ref().unwrap().to_string(), "600");
+    assert_eq!(total.result.value().unwrap().to_string(), "600");
 }
 
 /// Test nested cross-document rule references
@@ -153,14 +154,14 @@ rule total_days = settings.standard_processing_days? + order_info.processing_day
     engine.add_lemma_code(order_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "total_days")
+        .values()
+        .find(|r| r.rule.name == "total_days")
         .unwrap();
 
-    assert_eq!(total.result.as_ref().unwrap().to_string(), "8");
+    assert_eq!(total.result.value().unwrap().to_string(), "8");
 }
 
 /// Test cross-document rule reference in unless clause
@@ -185,14 +186,14 @@ rule status = "invalid"
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let status = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "status")
+        .values()
+        .find(|r| r.rule.name == "status")
         .unwrap();
 
-    assert_eq!(status.result.as_ref().unwrap().to_string(), "\"valid\"");
+    assert_eq!(status.result.value().unwrap().to_string(), "\"valid\"");
 }
 
 /// Test that we can mix cross-doc fact and rule references
@@ -215,14 +216,14 @@ rule combined = base_data.input + base_data.calculated?
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let combined = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "combined")
+        .values()
+        .find(|r| r.rule.name == "combined")
         .unwrap();
 
-    assert_eq!(combined.result.as_ref().unwrap().to_string(), "150");
+    assert_eq!(combined.result.value().unwrap().to_string(), "150");
 }
 
 /// Test cross-document fact override with multiple levels (should work)
@@ -248,16 +249,16 @@ rule sum = data.x + data.y + data.z
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let sum = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "sum")
+        .values()
+        .find(|r| r.rule.name == "sum")
         .unwrap();
 
     // x=100 (overridden), y=200 (overridden), z=30 (original)
     // 100 + 200 + 30 = 330
-    assert_eq!(sum.result.as_ref().unwrap().to_string(), "330");
+    assert_eq!(sum.result.value().unwrap().to_string(), "330");
 }
 
 /// Test simple fact override without rule references (should work)
@@ -282,15 +283,15 @@ rule total = config.price * config.quantity
     engine.add_lemma_code(base_doc, "test.lemma").unwrap();
     engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", None, None).unwrap();
+    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "total")
+        .values()
+        .find(|r| r.rule.name == "total")
         .unwrap();
 
     // Should be 200 * 3 = 600 (using overridden fact values)
-    assert_eq!(total.result.as_ref().unwrap().to_string(), "600");
+    assert_eq!(total.result.value().unwrap().to_string(), "600");
 }
 
 /// Test that different fact paths to the same rule produce different results
@@ -324,23 +325,23 @@ rule total2 = base2.base.total?
     engine.add_lemma_code(example2_doc, "test.lemma").unwrap();
     engine.add_lemma_code(example3_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("example3", None, None).unwrap();
+    let response = engine.evaluate("example3", vec![], HashMap::new()).unwrap();
 
     let total1 = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "total1")
+        .values()
+        .find(|r| r.rule.name == "total1")
         .unwrap();
 
     let total2 = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "total2")
+        .values()
+        .find(|r| r.rule.name == "total2")
         .unwrap();
 
     // total1 uses original price: 99 * 1.21 = 119.79
-    assert_eq!(total1.result.as_ref().unwrap().to_string(), "119.79");
+    assert_eq!(total1.result.value().unwrap().to_string(), "119.79");
 
     // total2 uses overridden price: 79 * 1.21 = 95.59
-    assert_eq!(total2.result.as_ref().unwrap().to_string(), "95.59");
+    assert_eq!(total2.result.value().unwrap().to_string(), "95.59");
 }

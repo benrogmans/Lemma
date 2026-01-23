@@ -70,15 +70,23 @@ fact start_date = 2024-01-15
 fact salary = 75000
 fact tax_rate = 15%
 fact is_manager = true
-fact weight_limit = 50 kilograms
-fact email_pattern = /^[\w]+@[\w]+\.[\w]+$/
+fact workweek = 40 hours
 ```
 
 **Type Annotations** - Declare expected types without values:
 
 ```lemma
+type length = scale -> unit meter 1.0 -> unit kilometer 1000.0
+
 fact birth_date = [date]
 fact distance = [length]
+```
+
+Or use inline type definitions:
+
+```lemma
+fact age = [number -> minimum 0 -> maximum 120]
+fact price = [scale -> unit eur 1.00 -> unit usd 1.10]
 ```
 
 See all available types: [reference.md - Type Annotations](reference.md#type-annotations)
@@ -250,17 +258,9 @@ rule can_approve_loan
 rule needs_manager_review
   = loan_amount > 100000
     or risk_score > 7
-
-rule has_cosigner
-  = have application.cosigner_name
-
-rule missing_documentation
-  = not have applicant.tax_returns
 ```
 
-Operators: `and`, `or`, `not`, `have`, `have not`, `not have`
-
-The `have` operator checks if a fact has any value (useful for optional fields).
+Operators: `and`, `or`, `not`
 
 See: [reference.md - Logical](reference.md#logical)
 
@@ -278,23 +278,60 @@ Note: These are prefix operators, not functions. Both `sin angle` and `sin(angle
 
 See: [reference.md - Mathematical](reference.md#mathematical)
 
-## Unit Conversions
+## User-Defined Types
 
-Automatic conversions between compatible units:
+Define custom types with units, constraints, and validation:
 
 ```lemma
-fact weight = 10 kilograms
-rule weight_in_pounds = weight in pounds
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.10
+  -> decimals 2
+  -> minimum 0
 
-fact distance = 5 kilometers
-rule distance_in_miles = distance in miles
+type mass = scale
+  -> unit kilogram 1.0
+  -> unit gram 0.001
+  -> unit pound 0.453592
+
+fact price = 100 eur
+fact weight = 75 kilograms
+```
+
+**Type Imports** - Reuse types across documents:
+
+```lemma
+type currency from base_types
+type discount_rate from pricing -> maximum 0.5
+```
+
+See: [reference.md - User-Defined Types](reference.md#user-defined-types)
+
+## Unit Conversions
+
+Unit conversions work within the same type definition:
+
+```lemma
+type money = scale -> unit eur 1.00 -> unit usd 1.10
+
+fact price = 100 eur
+rule price_usd = price in usd  // Converts to 110 usd
+```
+
+**Duration conversions** (duration units are built-in):
+
+```lemma
+fact workweek = 40 hours
+rule workweek_days = workweek in days  // Converts to ~1.67 days
+```
+
+**Number to ratio conversion:**
+
+```lemma
+rule discount_as_percent = 0.25 in percent  // Converts to 25 percent
 ```
 
 See: [examples/04_unit_conversions.lemma](examples/04_unit_conversions.lemma)
-
-Supported types: mass, length, volume, duration, temperature, power, force, pressure, energy, frequency, data size
-
-Full list with all unit keywords: [reference.md - Unit Types](reference.md#unit-types)
 
 ## Literal Types
 
@@ -304,15 +341,11 @@ Full list with all unit keywords: [reference.md - Unit Types](reference.md#unit-
 | **Text** | `"hello"` | String literals |
 | **Boolean** | `true`, `false`, `yes`, `no`, `accept`, `reject` | Aliases allowed |
 | **Date** | `2024-01-15`, `2024-01-15T14:30:00Z` | ISO 8601 format |
-| **Duration** | `5 hours`, `3 days`, `2 weeks` | Time periods |
-| **Mass** | `10 kilograms`, `5 pounds` | Weight/mass |
-| **Length** | `100 meters`, `5 kilometers` | Distance |
-| **Temperature** | `25 celsius`, `98 fahrenheit` | Heat |
-| **Percentage** | `15%`, `100%` | 0-100 range |
-| **Regex** | `/[A-Z]{3}-\d{4}/` | Pattern matching |
-| **Volume** | `2 liters`, `1 gallon` | Liquid volume |
-| **Power** | `1000 watts`, `5 kilowatts` | Electrical power |
-| **Data** | `10 megabytes`, `1 gigabyte` | File sizes |
+| **Duration** | `5 hours`, `3 days`, `2 weeks` | Time periods (built-in units) |
+| **Ratio** | `15 percent`, `15%`, `5 permille`, `5%%` | Proportional values |
+| **Scale** | `100 eur`, `75 kilograms` | Requires user-defined type with units |
+
+**Note:** Units like `kilograms`, `eur`, `celsius` must be defined in custom types. Only duration units are built-in.
 
 See: [examples/01_simple_facts.lemma](examples/01_simple_facts.lemma), [reference.md](reference.md)
 
@@ -328,6 +361,50 @@ rule is_overdue = today > deadline
 ```
 
 See: [examples/05_date_handling.lemma](examples/05_date_handling.lemma)
+
+## Inverse Reasoning
+
+Inversion allows you to find what input values produce a desired output. This is useful for questions like "What quantity gives me a 30% discount?" or "What salary produces a total compensation of €100,000?"
+
+**Note:** Inversion is available in the Rust engine library.
+
+### Example
+
+```rust
+use lemma::{Engine, Target, LiteralValue};
+use std::collections::HashMap;
+
+let mut engine = Engine::new();
+
+engine.add_lemma_code(r#"
+    doc pricing
+    fact quantity = [number]
+    fact is_vip = false
+
+    rule discount = 0%
+      unless quantity >= 10 then 10%
+      unless quantity >= 50 then 20%
+      unless is_vip then 25%
+"#, "pricing.lemma")?;
+
+// Find what gives a 25% discount
+use rust_decimal::Decimal;
+let response = engine.invert(
+    "pricing",
+    "discount",
+    Target::value(LiteralValue::Ratio(Decimal::from(25), Some("percent".to_string()))),
+    HashMap::new()
+)?;
+
+// Response shows: is_vip must be true (regardless of quantity)
+```
+
+The inversion response contains:
+- **Solutions**: Domain constraints for each variable
+- **Shape**: Symbolic representation of all valid solutions
+- **Free variables**: Facts that can vary while still satisfying the target
+
+See the [engine README](../lemma/README.md#inverse-reasoning) for detailed API documentation.
 
 ## Complete Examples
 

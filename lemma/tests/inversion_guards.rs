@@ -1,63 +1,61 @@
-use lemma::{Engine, LiteralValue, MoneyUnit, NumericUnit, Target, TargetOp};
-use rust_decimal::Decimal;
-
-fn eur(amount: i64) -> LiteralValue {
-    LiteralValue::Unit(NumericUnit::Money(Decimal::from(amount), MoneyUnit::Eur))
-}
+use lemma::{Engine, LiteralValue, Target, TargetOp};
 
 #[test]
 fn piecewise_value_guard_pruning_equality() {
     let code = r#"
         doc shipping
-        fact weight = [mass]
+        fact weight = [number]
 
-        rule shipping_cost = 5 EUR
-             unless weight >= 10 kilograms then 10 EUR
-             unless weight >= 50 kilograms then 25 EUR
+        rule shipping_cost = 5
+             unless weight >= 10 then 10
+             unless weight >= 50 then 25
     "#;
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
 
     let solutions = engine
-        .invert(
+        .invert_strict(
             "shipping",
             "shipping_cost",
-            Target::value(eur(10)),
+            Target::value(LiteralValue::number(10)),
             std::collections::HashMap::new(),
         )
         .expect("invert should succeed");
 
-    // Should have solution solutions
+    // Should have solutions
     assert!(!solutions.is_empty(), "Expected at least one solution");
 
     // Test validates that guard conditions filter branches correctly
-    // The 10 EUR branch should be included with appropriate weight constraints
+    // The 10 branch should be included with appropriate weight constraints
 }
 
 #[test]
 fn piecewise_value_guard_pruning_inequality() {
     let code = r#"
         doc shipping
-        fact weight = [mass]
+        fact weight = [number]
 
-        rule shipping_cost = 5 EUR
-             unless weight >= 10 kilograms then 10 EUR
-             unless weight >= 50 kilograms then 25 EUR
+        rule shipping_cost = 5
+             unless weight >= 10 then 10
+             unless weight >= 50 then 25
     "#;
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
 
     let solutions = engine
-        .invert(
+        .invert_strict(
             "shipping",
             "shipping_cost",
-            Target::with_op(TargetOp::Gt, lemma::OperationResult::Value(eur(5))),
+            Target::with_op(
+                TargetOp::Gt,
+                lemma::OperationResult::Value(LiteralValue::number(5)),
+            ),
             std::collections::HashMap::new(),
         )
         .expect("invert should succeed");
 
-    // Should have solution solutions (both 10 EUR and 25 EUR satisfy > 5 EUR)
+    // Should have solutions (both 10 and 25 satisfy > 5)
     assert!(!solutions.is_empty(), "Expected at least one solution");
 }

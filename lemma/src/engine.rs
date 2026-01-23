@@ -1,14 +1,18 @@
-use crate::evaluator::Evaluator;
-use crate::{parse, LemmaDoc, LemmaError, LemmaResult, ResourceLimits, Response, Validator};
-use std::collections::HashMap;
+use crate::evaluation::Evaluator;
+use crate::parsing::ast::Span;
+use crate::planning::plan;
+use crate::{parse, LemmaDoc, LemmaError, LemmaResult, ResourceLimits, Response};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Engine for evaluating Lemma rules
 ///
 /// Pure Rust implementation that evaluates Lemma docs directly from the AST.
+/// Uses pre-built execution plans that are self-contained and ready for evaluation.
 pub struct Engine {
+    execution_plans: HashMap<String, crate::planning::ExecutionPlan>,
     documents: HashMap<String, LemmaDoc>,
     sources: HashMap<String, String>,
-    validator: Validator,
     evaluator: Evaluator,
     limits: ResourceLimits,
 }
@@ -16,9 +20,9 @@ pub struct Engine {
 impl Default for Engine {
     fn default() -> Self {
         Self {
+            execution_plans: HashMap::new(),
             documents: HashMap::new(),
             sources: HashMap::new(),
-            validator: Validator,
             evaluator: Evaluator,
             limits: ResourceLimits::default(),
         }
@@ -33,40 +37,87 @@ impl Engine {
     /// Create an engine with custom resource limits
     pub fn with_limits(limits: ResourceLimits) -> Self {
         Self {
+            execution_plans: HashMap::new(),
             documents: HashMap::new(),
             sources: HashMap::new(),
-            validator: Validator,
             evaluator: Evaluator,
             limits,
         }
     }
 
-    /// Get the current resource limits
-    pub fn limits(&self) -> &ResourceLimits {
-        &self.limits
-    }
-
     pub fn add_lemma_code(&mut self, lemma_code: &str, source: &str) -> LemmaResult<()> {
-        let new_docs = parse(lemma_code, Some(source.to_owned()), &self.limits)?;
+        let new_docs = parse(lemma_code, source, &self.limits)?;
 
         for doc in &new_docs {
-            let source_id = doc.source.clone().unwrap_or_else(|| "<input>".to_owned());
-            self.sources.insert(source_id, lemma_code.to_owned());
+            let attribute = doc.attribute.clone().unwrap_or_else(|| doc.name.clone());
+            self.sources.insert(attribute, lemma_code.to_owned());
+            self.documents.insert(doc.name.clone(), doc.clone());
         }
 
-        let mut all_docs: Vec<crate::LemmaDoc> = self.documents.values().cloned().collect();
-        all_docs.extend(new_docs);
+        // Collect all documents (existing + new)
+        let all_docs: Vec<LemmaDoc> = self.documents.values().cloned().collect();
 
-        let validated = self.validator.validate_all(all_docs)?;
+        // Build execution plans for all new documents
+        for doc in &new_docs {
+            let execution_plan = plan(doc, &all_docs, self.sources.clone()).map_err(|errs| {
+                if errs.is_empty() {
+                    use crate::parsing::ast::Span;
+                    let attribute = doc.attribute.as_deref().unwrap_or(&doc.name);
+                    let source_text = self
+                        .sources
+                        .get(attribute)
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    LemmaError::engine(
+                        format!("Failed to build execution plan for document: {}", doc.name),
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: doc.start_line,
+                            col: 0,
+                        },
+                        attribute,
+                        std::sync::Arc::from(source_text),
+                        doc.name.clone(),
+                        doc.start_line,
+                        None::<String>,
+                    )
+                } else {
+                    errs.into_iter().next().unwrap_or_else(|| {
+                        use crate::parsing::ast::Span;
+                        let attribute = doc.attribute.as_deref().unwrap_or(&doc.name);
+                        let source_text = self
+                            .sources
+                            .get(attribute)
+                            .map(|s| s.as_str())
+                            .unwrap_or("");
+                        LemmaError::engine(
+                            format!("Failed to build execution plan for document: {}", doc.name),
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: doc.start_line,
+                                col: 0,
+                            },
+                            attribute,
+                            std::sync::Arc::from(source_text),
+                            doc.name.clone(),
+                            doc.start_line,
+                            None::<String>,
+                        )
+                    })
+                }
+            })?;
 
-        for doc in validated.documents {
-            self.documents.insert(doc.name.clone(), doc);
+            self.execution_plans
+                .insert(doc.name.clone(), execution_plan);
         }
 
         Ok(())
     }
 
     pub fn remove_document(&mut self, doc_name: &str) {
+        self.execution_plans.remove(doc_name);
         self.documents.remove(doc_name);
     }
 
@@ -74,7 +125,7 @@ impl Engine {
         self.documents.keys().cloned().collect()
     }
 
-    pub fn get_document(&self, doc_name: &str) -> Option<&crate::LemmaDoc> {
+    pub fn get_document(&self, doc_name: &str) -> Option<&LemmaDoc> {
         self.documents.get(doc_name)
     }
 
@@ -94,74 +145,624 @@ impl Engine {
         }
     }
 
-    /// Evaluate rules in a document with optional fact overrides
+    /// Get the resolved schema type for a fact in a document (including imported/custom types).
     ///
-    /// If `rule_names` is None, evaluates all rules.
-    /// If `rule_names` is Some, only returns results for the specified rules,
-    /// but still computes their dependencies.
-    ///
-    /// Fact overrides must be pre-parsed using `parse_facts()`.
-    pub fn evaluate(
+    /// This uses the document's compiled execution plan, so it reflects the authoritative schema
+    /// after type resolution and overrides.
+    pub fn get_fact_schema_type(
         &self,
         doc_name: &str,
-        rule_names: Option<Vec<String>>,
-        fact_overrides: Option<Vec<crate::LemmaFact>>,
-    ) -> LemmaResult<Response> {
-        let overrides = fact_overrides.unwrap_or_default();
+        fact_name: &str,
+    ) -> Option<crate::LemmaType> {
+        let plan = self.execution_plans.get(doc_name)?;
+        let fact_path = plan.get_fact_path_by_str(fact_name)?;
+        plan.fact_schema.get(fact_path).cloned()
+    }
 
-        for fact in &overrides {
-            if let crate::FactValue::Literal(lit) = &fact.value {
-                let size = lit.byte_size();
-                if size > self.limits.max_fact_value_bytes {
-                    return Err(LemmaError::ResourceLimitExceeded {
-                        limit_name: "max_fact_value_bytes".to_string(),
-                        limit_value: self.limits.max_fact_value_bytes.to_string(),
-                        actual_value: size.to_string(),
-                        suggestion: format!(
-                            "Reduce the size of fact values to {} bytes or less",
-                            self.limits.max_fact_value_bytes
-                        ),
-                    });
+    /// Get the set of fact names required to evaluate a document's rules.
+    ///
+    /// - If `rule_names` is empty, returns required facts for **all** rules in the document.
+    /// - Otherwise, returns required facts for the specified local rules (by name).
+    ///
+    /// Returned names match `FactReference::to_string()` / `FactPath::to_string()` (e.g. "age",
+    /// "order.price", etc.), so they can be used by UIs to decide what to prompt for.
+    pub fn get_required_fact_names(
+        &self,
+        doc_name: &str,
+        rule_names: &[String],
+    ) -> Option<HashSet<String>> {
+        let plan = self.execution_plans.get(doc_name)?;
+        let mut required: HashSet<String> = HashSet::new();
+
+        if rule_names.is_empty() {
+            for rule in &plan.rules {
+                for fact in &rule.needs_facts {
+                    required.insert(fact.to_string());
                 }
+            }
+            return Some(required);
+        }
+
+        for rule_name in rule_names {
+            let rule = plan.get_rule(rule_name)?;
+            for fact in &rule.needs_facts {
+                required.insert(fact.to_string());
             }
         }
 
-        self.evaluator.evaluate_document(
-            doc_name,
-            &self.documents,
-            &self.sources,
-            overrides,
-            rule_names,
-            &self.limits,
-        )
+        Some(required)
     }
 
-    /// Get all documents (needed by serializers for schema resolution)
-    pub fn get_all_documents(&self) -> &HashMap<String, crate::LemmaDoc> {
-        &self.documents
+    /// Evaluate rules in a document with JSON values for facts.
+    ///
+    /// This is a convenience method that accepts JSON directly and converts it
+    /// to typed values using the document's fact type declarations.
+    ///
+    /// If `rule_names` is empty, evaluates all rules.
+    /// Otherwise, only returns results for the specified rules (dependencies still computed).
+    ///
+    /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
+    /// They are automatically parsed to the expected type based on the document schema.
+    pub fn evaluate_json(
+        &self,
+        doc_name: &str,
+        rule_names: Vec<String>,
+        json: &[u8],
+    ) -> LemmaResult<Response> {
+        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
+            LemmaError::engine(
+                format!("Document '{}' not found", doc_name),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(""),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        })?;
+
+        let values = crate::serialization::from_json(json, base_plan)?;
+
+        self.evaluate_strict(doc_name, rule_names, values)
     }
 
-    /// Invert a rule to find input domains that produce a desired outcome
+    /// Evaluate rules in a document with string values for facts.
     ///
-    /// Returns a vector of solutions, where each solution is a map from
-    /// fact paths to their valid domains. Multiple solutions represent different
-    /// ways to satisfy the target outcome (disjunction).
+    /// This is the user-friendly API that accepts raw string values and parses them
+    /// to the appropriate types based on the document's fact type declarations.
+    /// Use this for CLI, HTTP APIs, and other user-facing interfaces.
     ///
-    /// Use `given_facts` to constrain the search to specific known values.
+    /// If `rule_names` is empty, evaluates all rules.
+    /// Otherwise, only returns results for the specified rules (dependencies still computed).
+    ///
+    /// Values are provided as name -> value string pairs (e.g., "type" -> "latte").
+    /// They are automatically parsed to the expected type based on the document schema.
+    pub fn evaluate(
+        &self,
+        doc_name: &str,
+        rule_names: Vec<String>,
+        values: HashMap<String, String>,
+    ) -> LemmaResult<Response> {
+        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
+            LemmaError::engine(
+                format!("Document '{}' not found", doc_name),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(""),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        })?;
+
+        let plan = base_plan.clone().with_values(values, &self.limits)?;
+
+        self.evaluate_plan(plan, rule_names)
+    }
+
+    /// Evaluate rules in a document with typed values for facts.
+    ///
+    /// This is the strict API that accepts pre-typed LiteralValue values.
+    /// Use this for programmatic APIs, protobuf, msgpack, FFI, and other
+    /// strongly-typed interfaces where values are already parsed.
+    ///
+    /// If `rule_names` is empty, evaluates all rules.
+    /// Otherwise, only returns results for the specified rules (dependencies still computed).
+    ///
+    /// Values are provided as name -> LiteralValue pairs (e.g., "age" -> Number(25)).
+    pub fn evaluate_strict(
+        &self,
+        doc_name: &str,
+        rule_names: Vec<String>,
+        values: HashMap<String, crate::LiteralValue>,
+    ) -> LemmaResult<Response> {
+        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
+            LemmaError::engine(
+                format!("Document '{}' not found", doc_name),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(""),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        })?;
+
+        let plan = base_plan.clone().with_typed_values(values, &self.limits)?;
+
+        self.evaluate_plan(plan, rule_names)
+    }
+
+    /// Invert a rule to find input domains that produce a desired outcome with JSON values.
+    ///
+    /// This is a convenience method that accepts JSON directly and converts it
+    /// to typed values using the document's fact type declarations.
+    ///
+    /// Returns an InversionResponse containing:
+    /// - `solutions`: Concrete domain constraints for each free variable
+    /// - `undetermined_facts`: Facts that are not fully determined
+    /// - `is_determined`: Whether all facts have concrete values
+    ///
+    /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
+    /// They are automatically parsed to the expected type based on the document schema.
+    pub fn invert_json(
+        &self,
+        doc_name: &str,
+        rule_name: &str,
+        target: crate::inversion::Target,
+        json: &[u8],
+    ) -> LemmaResult<crate::InversionResponse> {
+        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
+            LemmaError::engine(
+                format!("Document '{}' not found", doc_name),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(""),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        })?;
+
+        let values = crate::serialization::from_json(json, base_plan)?;
+
+        self.invert_strict(doc_name, rule_name, target, values)
+    }
+
+    /// Invert a rule to find input domains that produce a desired outcome.
+    ///
+    /// This is the user-friendly API that accepts raw string values and parses them
+    /// to the appropriate types based on the document's fact type declarations.
+    ///
+    /// Returns an InversionResponse containing:
+    /// - `solutions`: Concrete domain constraints for each free variable
+    /// - `undetermined_facts`: Facts that are not fully determined
+    /// - `is_determined`: Whether all facts have concrete values
+    ///
+    /// Values are provided as name -> value string pairs (e.g., "quantity" -> "5").
+    /// They are automatically parsed to the expected type based on the document schema.
     pub fn invert(
         &self,
-        document: &str,
-        rule: &str,
-        target: crate::Target,
-        given_facts: HashMap<String, crate::LiteralValue>,
-    ) -> LemmaResult<Vec<HashMap<crate::FactReference, crate::Domain>>> {
-        let shape = crate::inversion::inverter::invert(
-            document,
-            rule,
-            target,
-            given_facts,
-            &self.documents,
-        )?;
-        crate::inversion::domain_extraction::shape_to_domains(&shape)
+        doc_name: &str,
+        rule_name: &str,
+        target: crate::inversion::Target,
+        values: HashMap<String, String>,
+    ) -> LemmaResult<crate::InversionResponse> {
+        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
+            LemmaError::engine(
+                format!("Document '{}' not found", doc_name),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(""),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        })?;
+
+        let plan = base_plan.clone().with_values(values, &self.limits)?;
+
+        // Collect provided fact paths
+        let provided_facts = plan.fact_values.keys().cloned().collect();
+
+        crate::inversion::invert(rule_name, target, &plan, &provided_facts)
+    }
+
+    /// Invert a rule to find input domains that produce a desired outcome.
+    ///
+    /// This is the strict API that accepts pre-typed LiteralValue values.
+    /// Use this for programmatic APIs, protobuf, msgpack, FFI, and other
+    /// strongly-typed interfaces where values are already parsed.
+    ///
+    /// Returns an InversionResponse containing:
+    /// - `solutions`: Concrete domain constraints for each free variable
+    /// - `undetermined_facts`: Facts that are not fully determined
+    /// - `is_determined`: Whether all facts have concrete values
+    ///
+    /// Values are provided as name -> LiteralValue pairs (e.g., "quantity" -> Number(5)).
+    pub fn invert_strict(
+        &self,
+        doc_name: &str,
+        rule_name: &str,
+        target: crate::inversion::Target,
+        values: HashMap<String, crate::LiteralValue>,
+    ) -> LemmaResult<crate::InversionResponse> {
+        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
+            LemmaError::engine(
+                format!("Document '{}' not found", doc_name),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<unknown>",
+                Arc::from(""),
+                "<unknown>",
+                1,
+                None::<String>,
+            )
+        })?;
+
+        let plan = base_plan.clone().with_typed_values(values, &self.limits)?;
+
+        // Collect provided fact paths
+        let provided_facts = plan.fact_values.keys().cloned().collect();
+
+        crate::inversion::invert(rule_name, target, &plan, &provided_facts)
+    }
+
+    fn evaluate_plan(
+        &self,
+        plan: crate::planning::ExecutionPlan,
+        rule_names: Vec<String>,
+    ) -> LemmaResult<Response> {
+        let mut response = self.evaluator.evaluate(&plan)?;
+
+        if !rule_names.is_empty() {
+            response.filter_rules(&rule_names);
+        }
+
+        Ok(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_evaluate_document_all_rules() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+        doc test
+        fact x = 10
+        fact y = 5
+        rule sum = x + y
+        rule product = x * y
+    "#,
+                "test.lemma",
+            )
+            .unwrap();
+
+        let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+        assert_eq!(response.results.len(), 2);
+
+        let sum_result = response
+            .results
+            .values()
+            .find(|r| r.rule.name == "sum")
+            .unwrap();
+        assert_eq!(
+            sum_result.result,
+            crate::OperationResult::Value(crate::LiteralValue::number(
+                Decimal::from_str("15").unwrap()
+            ))
+        );
+
+        let product_result = response
+            .results
+            .values()
+            .find(|r| r.rule.name == "product")
+            .unwrap();
+        assert_eq!(
+            product_result.result,
+            crate::OperationResult::Value(crate::LiteralValue::number(
+                Decimal::from_str("50").unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_evaluate_empty_facts() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+        doc test
+        fact price = 100
+        rule total = price * 2
+    "#,
+                "test.lemma",
+            )
+            .unwrap();
+
+        let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(
+            response.results.values().next().unwrap().result,
+            crate::OperationResult::Value(crate::LiteralValue::number(
+                Decimal::from_str("200").unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_evaluate_boolean_rule() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+        doc test
+        fact age = 25
+        rule is_adult = age >= 18
+    "#,
+                "test.lemma",
+            )
+            .unwrap();
+
+        let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+        assert_eq!(
+            response.results.values().next().unwrap().result,
+            crate::OperationResult::Value(crate::LiteralValue::boolean(crate::BooleanValue::True))
+        );
+    }
+
+    #[test]
+    fn test_evaluate_with_unless_clause() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+        doc test
+        fact quantity = 15
+        rule discount = 0
+          unless quantity >= 10 then 10
+    "#,
+                "test.lemma",
+            )
+            .unwrap();
+
+        let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+        assert_eq!(
+            response.results.values().next().unwrap().result,
+            crate::OperationResult::Value(crate::LiteralValue::number(
+                Decimal::from_str("10").unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_document_not_found() {
+        let engine = Engine::new();
+        let result = engine.evaluate("nonexistent", vec![], HashMap::new());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_multiple_documents() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+        doc doc1
+        fact x = 10
+        rule result = x * 2
+    "#,
+                "doc1.lemma",
+            )
+            .unwrap();
+
+        engine
+            .add_lemma_code(
+                r#"
+        doc doc2
+        fact y = 5
+        rule result = y * 3
+    "#,
+                "doc2.lemma",
+            )
+            .unwrap();
+
+        let response1 = engine.evaluate("doc1", vec![], HashMap::new()).unwrap();
+        assert_eq!(
+            response1.results[0].result,
+            crate::OperationResult::Value(crate::LiteralValue::number(
+                Decimal::from_str("20").unwrap()
+            ))
+        );
+
+        let response2 = engine.evaluate("doc2", vec![], HashMap::new()).unwrap();
+        assert_eq!(
+            response2.results[0].result,
+            crate::OperationResult::Value(crate::LiteralValue::number(
+                Decimal::from_str("15").unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_runtime_error_mapping() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+        doc test
+        fact numerator = 10
+        fact denominator = 0
+        rule division = numerator / denominator
+    "#,
+                "test.lemma",
+            )
+            .unwrap();
+
+        let result = engine.evaluate("test", vec![], HashMap::new());
+        // Division by zero returns a Veto (not an error) in the new evaluation design
+        assert!(result.is_ok(), "Evaluation should succeed");
+        let response = result.unwrap();
+        let division_result = response
+            .results
+            .values()
+            .find(|r| r.rule.name == "division");
+        assert!(
+            division_result.is_some(),
+            "Should have division rule result"
+        );
+        match &division_result.unwrap().result {
+            crate::OperationResult::Veto(message) => {
+                assert!(
+                    message
+                        .as_ref()
+                        .map(|m| m.contains("Division by zero"))
+                        .unwrap_or(false),
+                    "Veto message should mention division by zero: {:?}",
+                    message
+                );
+            }
+            other => panic!("Expected Veto for division by zero, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rules_sorted_by_source_order() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+        doc test
+        fact a = 1
+        fact b = 2
+        rule z = a + b
+        rule y = a * b
+        rule x = a - b
+    "#,
+                "test.lemma",
+            )
+            .unwrap();
+
+        let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+        assert_eq!(response.results.len(), 3);
+
+        // Check they all have span information for ordering
+        for result in response.results.values() {
+            assert!(
+                result.rule.source_location.is_some(),
+                "Rule {} missing source_location",
+                result.rule.name
+            );
+        }
+
+        // Verify source positions increase (z < y < x)
+        let z_pos = response
+            .results
+            .values()
+            .find(|r| r.rule.name == "z")
+            .unwrap()
+            .rule
+            .source_location
+            .as_ref()
+            .unwrap()
+            .span
+            .start;
+        let y_pos = response
+            .results
+            .values()
+            .find(|r| r.rule.name == "y")
+            .unwrap()
+            .rule
+            .source_location
+            .as_ref()
+            .unwrap()
+            .span
+            .start;
+        let x_pos = response
+            .results
+            .values()
+            .find(|r| r.rule.name == "x")
+            .unwrap()
+            .rule
+            .source_location
+            .as_ref()
+            .unwrap()
+            .span
+            .start;
+
+        assert!(z_pos < y_pos);
+        assert!(y_pos < x_pos);
+    }
+
+    #[test]
+    fn test_rule_filtering_evaluates_dependencies() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+        doc test
+        fact base = 100
+        rule subtotal = base * 2
+        rule tax = subtotal? * 10%
+        rule total = subtotal? + tax?
+    "#,
+                "test.lemma",
+            )
+            .unwrap();
+
+        // Request only 'total', but it depends on 'subtotal' and 'tax'
+        let response = engine
+            .evaluate("test", vec!["total".to_string()], HashMap::new())
+            .unwrap();
+
+        // Only 'total' should be in results
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results.keys().next().unwrap(), "total");
+
+        // But the value should be correct (dependencies were computed)
+        let total = response.results.values().next().unwrap();
+        assert_eq!(
+            total.result,
+            crate::OperationResult::Value(crate::LiteralValue::number(
+                Decimal::from_str("220").unwrap()
+            ))
+        );
     }
 }

@@ -72,6 +72,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
@@ -100,6 +102,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.92.0
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
@@ -142,6 +145,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest

@@ -20,10 +20,10 @@ rule discount = 0%
   unless quantity >= 50 then 20%
   unless is_vip         then 25%
 
-rule price = quantity * 20 eur - discount?
+rule price = quantity * 20 - discount?
 ```
 
-Note how Lemma automatically deducts the discount percentage in the expression `quantity * 20 eur - discount?`.
+Note how Lemma automatically deducts the discount percentage in the expression `quantity * 20 - discount?`.
 
 ## Why Lemma?
 
@@ -53,15 +53,19 @@ Create `shipping.lemma`:
 ```lemma
 doc shipping
 
+type weight = scale
+  -> unit kilogram 1.0
+  -> unit gram 0.001
+
 fact is_express = true
 fact package_weight = 2.5 kilograms
 
-rule express_fee = 0 USD
-  unless is_express then 4.99 USD
+rule express_fee = 0
+  unless is_express then 4.99
 
-rule base_shipping = 5.99 USD
-  unless package_weight > 1 kilogram  then  8.99 USD
-  unless package_weight > 5 kilograms then 15.99 USD
+rule base_shipping = 5.99
+  unless package_weight > 1 kilogram  then  8.99
+  unless package_weight > 5 kilograms then 15.99
 
 rule total_cost = base_shipping? + express_fee?
 ```
@@ -69,8 +73,8 @@ rule total_cost = base_shipping? + express_fee?
 Use spaces and tabs in `unless` expressions to align it like a table, making scanning the rule at a glance really easy.
 
 **What this calculates:**
-- Express fee: $0.00 USD, unless `is_express` is true, then $4.99
-- Base shipping: $5.99, but for packages that weigh 1-5kg it is $8.99, and for all packages >5kg it is $15.99
+- Express fee: €0.00, unless `is_express` is true, then €4.99
+- Base shipping: €5.99, but for packages that weigh 1-5kg it is €8.99, and for all packages >5kg it is €15.99
 - Total cost: Base shipping plus express fee
 
 As obvious as it looks, that is how Lemma encodes it.
@@ -83,28 +87,28 @@ lemma run shipping
 # ┌───────────────┬──────────────────────────────────────────────────────┐
 # │ Rule          ┆ Evaluation                                           │
 # ╞═══════════════╪══════════════════════════════════════════════════════╡
-# │ express_fee   ┆ 4.99 USD                                             │
+# │ express_fee   ┆ 4.99                                             │
 # │               ┆                                                      │
 # │               ┆    0. fact is_express = true                         │
-# │               ┆    1. unless clause 0 matched → 4.99 USD             │
-# │               ┆    2. result = 4.99 USD                              │
+# │               ┆    1. unless clause 0 matched → 4.99             │
+# │               ┆    2. result = 4.99                              │
 # ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
-# │ base_shipping ┆ 8.99 USD                                             │
+# │ base_shipping ┆ 8.99                                             │
 # │               ┆                                                      │
-# │               ┆    0. fact package_weight = 2.5 kilogram             │
-# │               ┆    1. greater_than(2.5 kilogram, 5 kilogram) → false │
+# │               ┆    0. fact package_weight = 2.5 kilograms             │
+# │               ┆    1. greater_than(2.5 kilograms, 5 kilograms) → false │
 # │               ┆    2. unless clause 1 skipped                        │
-# │               ┆    3. fact package_weight = 2.5 kilogram             │
-# │               ┆    4. greater_than(2.5 kilogram, 1 kilogram) → true  │
-# │               ┆    5. unless clause 0 matched → 8.99 USD             │
-# │               ┆    6. result = 8.99 USD                              │
+# │               ┆    3. fact package_weight = 2.5 kilograms             │
+# │               ┆    4. greater_than(2.5 kilograms, 1 kilogram) → true  │
+# │               ┆    5. unless clause 0 matched → 8.99             │
+# │               ┆    6. result = 8.99                              │
 # ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
-# │ total_cost    ┆ 13.98 USD                                            │
+# │ total_cost    ┆ 13.98                                            │
 # │               ┆                                                      │
-# │               ┆    0. rule base_shipping = 8.99 USD                  │
-# │               ┆    1. rule express_fee = 4.99 USD                    │
-# │               ┆    2. add(8.99 USD, 4.99 USD) → 13.98 USD            │
-# │               ┆    3. result = 13.98 USD                             │
+# │               ┆    0. rule base_shipping = 8.99                  │
+# │               ┆    1. rule express_fee = 4.99                    │
+# │               ┆    2. add(8.99, 4.99) → 13.98            │
+# │               ┆    3. result = 13.98                             │
 # └───────────────┴──────────────────────────────────────────────────────┘
 ```
 
@@ -121,41 +125,72 @@ rule discount = 0%
   unless quantity > 50 then 20%
   unless is_premium_member then 25%
 
-rule price = 100 EUR - discount?
+rule price = 100 - discount?
 ```
 
 **The last matching condition wins** - mirroring how business rules, legal documents, and standard operating procedures are written: "In principle X applies, unless [more specific condition] Y, unless [even more specific] Z..."
 
 ### Rich type system
 
+Define custom types with units and constraints:
+
 ```lemma
-fact salary = 50000 USD
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.10
+  -> decimals 2
+  -> minimum 0
+
+type mass = scale
+  -> unit kilogram 1.0
+  -> unit gram 0.001
+  -> unit pound 0.453592
+
+fact salary = 50000
 fact workweek = 40 hours
 fact vacation = 3 weeks
 fact weight = 75 kilograms
 fact tax_rate = 22%
 fact deadline = 2024-12-31
-fact pattern = /[A-Z]{3}-\d{4}/
 ```
 
-**Supported Types:**
-- **Basic**: `text`, `number`, `boolean`, `date`, `percentage`, `regex`
-- **Units**: `mass` (kilograms, grams, pounds, ounces), `length` (meters, kilometers, feet, inches, miles), `volume` (liters, gallons, cubic meters), `duration` (seconds, minutes, hours, days, weeks, months, years), `temperature` (celsius, fahrenheit, kelvin)
-- **Advanced**: `power` (watts, kilowatts, megawatts, horsepower), `energy` (joules, kilojoules, kilowatt-hours, calories), `force` (newtons, kilonewtons, pound-force), `pressure` (pascals, kilopascals, atmospheres, bars, psi), `frequency` (hertz, kilohertz, megahertz, gigahertz), `data_size` (bytes, kilobytes, megabytes, gigabytes, terabytes)
-- **Money**: `USD`, `EUR`, `GBP`, `JPY`, `CNY`, `CHF`, `CAD`, `AUD`, `INR`
+**Standard Types:**
+- `boolean` - true/false values
+- `number` - dimensionless numeric values
+- `scale` - numeric values that can have units
+- `text` - string values
+- `date` - ISO 8601 dates
+- `time` - time values
+- `duration` - time periods (hours, days, weeks, etc.)
+- `ratio` - proportional values (percent, permille)
 
-Automatic unit conversions:
+**User-Defined Types:**
+Define custom types with units, constraints, and validation:
 
 ```lemma
-doc conversions
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.10
 
-fact weight = 75 kilograms
-fact distance = 10 kilometers
-fact temperature = 25 celsius
+type temperature = scale
+  -> unit celsius 1.0
+  -> unit fahrenheit 1.8
 
-rule weight_in_pounds = weight in pounds
-rule distance_in_miles = distance in miles
-rule temperature_f = temperature in fahrenheit
+type discount = ratio
+  -> minimum 0
+  -> maximum 1
+```
+
+Unit conversions work within the same type:
+
+```lemma
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.10
+
+fact price = 100 eur
+
+rule price_usd = price in usd
 ```
 
 ### Rule references
@@ -181,11 +216,11 @@ rule can_drive = is_adult? and has_license?
 
 ```lemma
 doc employee
-fact base_salary = 60000 USD
+fact base_salary = 60000
 fact years_service = 5
 
 doc manager
-fact base_salary = 80000 USD
+fact base_salary = 80000
 
 doc bonus_policy
 fact bonus_rate = 10%
@@ -214,8 +249,8 @@ rule loan_approval = credit_score >= 600
 ## Documentation
 
 - **[Language Guide](documentation/index.md)** - Complete language reference
-- **[Reference](documentation/reference.md)** - All operators, units, and types
-- **[Examples](documentation/examples/)** - 10 comprehensive examples
+- **[Reference](documentation/reference.md)** - All operators and types
+- **[Examples](documentation/examples/)** - Example Lemma documents
 
 [📚 View Full Documentation](documentation/)
 
@@ -223,13 +258,13 @@ rule loan_approval = credit_score >= 600
 
 ```bash
 # Run a document (evaluates all rules)
-lemma run examples/simple_facts
+lemma run simple_facts
 
 # Run specific rules only
-lemma run examples/tax_calculation:tax_owed
+lemma run tax_calculation:tax_owed
 
 # Override facts at runtime
-lemma run examples/tax_calculation income=75000 filing_status="married"
+lemma run tax_calculation income=75000 filing_status="married"
 
 # Interactive mode for exploring documents and facts
 lemma run --interactive

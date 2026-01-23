@@ -1,16 +1,40 @@
-use crate::response::{Response, RuleResult};
-use crate::LiteralValue;
+use crate::evaluation::response::{Response, RuleResult};
+use crate::{Expression, ExpressionKind, LemmaRule, LiteralValue, OperationResult};
+use indexmap::IndexMap;
 use rust_decimal::Decimal;
-use std::collections::HashMap;
 use std::str::FromStr;
+
+fn dummy_rule(name: &str) -> LemmaRule {
+    LemmaRule {
+        name: name.to_string(),
+        expression: Expression {
+            kind: ExpressionKind::Literal(LiteralValue::boolean(crate::BooleanValue::True)),
+            source_location: None,
+        },
+        unless_clauses: vec![],
+        source_location: None,
+    }
+}
 
 #[test]
 fn test_response_serialization() {
-    let mut response = Response::new("test_doc".to_string());
-
-    let literal = LiteralValue::Number(Decimal::from_str("42").unwrap());
-    let result = RuleResult::success("test_rule".to_string(), literal, HashMap::new());
-    response.add_result(result);
+    let mut results = IndexMap::new();
+    results.insert(
+        "test_rule".to_string(),
+        RuleResult {
+            rule: dummy_rule("test_rule"),
+            result: OperationResult::Value(LiteralValue::number(Decimal::from_str("42").unwrap())),
+            facts: vec![],
+            operations: vec![],
+            proof: None,
+            rule_type: crate::semantic::standard_number().clone(),
+        },
+    );
+    let response = Response {
+        doc_name: "test_doc".to_string(),
+        facts: vec![],
+        results,
+    };
 
     let json = serde_json::to_string(&response).unwrap();
     assert!(json.contains("test_doc"));
@@ -19,53 +43,88 @@ fn test_response_serialization() {
 }
 
 #[test]
-fn test_response_with_warnings() {
-    let mut response = Response::new("test_doc".to_string());
-    response.add_warning("Test warning".to_string());
-
-    let json = serde_json::to_string(&response).unwrap();
-    assert!(json.contains("Test warning"));
-    assert!(json.contains("warnings"));
-}
-
-#[test]
 fn test_response_filter_rules() {
-    let mut response = Response::new("test_doc".to_string());
-
-    let literal1 = LiteralValue::Boolean(true);
-    let literal2 = LiteralValue::Boolean(false);
-
-    response.add_result(RuleResult::success(
+    let mut results = IndexMap::new();
+    results.insert(
         "rule1".to_string(),
-        literal1,
-        HashMap::new(),
-    ));
-    response.add_result(RuleResult::success(
+        RuleResult {
+            rule: dummy_rule("rule1"),
+            result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::True)),
+            facts: vec![],
+            operations: vec![],
+            proof: None,
+            rule_type: crate::semantic::standard_boolean().clone(),
+        },
+    );
+    results.insert(
         "rule2".to_string(),
-        literal2,
-        HashMap::new(),
-    ));
+        RuleResult {
+            rule: dummy_rule("rule2"),
+            result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::False)),
+            facts: vec![],
+            operations: vec![],
+            proof: None,
+            rule_type: crate::semantic::standard_boolean().clone(),
+        },
+    );
+    let mut response = Response {
+        doc_name: "test_doc".to_string(),
+        facts: vec![],
+        results,
+    };
 
     response.filter_rules(&["rule1".to_string()]);
 
     assert_eq!(response.results.len(), 1);
-    assert_eq!(response.results[0].rule_name, "rule1");
+    assert_eq!(response.results.values().next().unwrap().rule.name, "rule1");
 }
 
 #[test]
 fn test_rule_result_types() {
-    let literal = LiteralValue::Boolean(true);
+    let success = RuleResult {
+        rule: dummy_rule("rule1"),
+        result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::True)),
+        facts: vec![],
+        operations: vec![],
+        proof: None,
+        rule_type: crate::semantic::standard_boolean().clone(),
+    };
+    assert!(matches!(success.result, OperationResult::Value(_)));
 
-    let success = RuleResult::success("rule1".to_string(), literal.clone(), HashMap::new());
-    assert!(success.result.is_some());
-    assert!(success.veto_message.is_none());
+    let missing = RuleResult {
+        rule: dummy_rule("rule3"),
+        result: OperationResult::Veto(Some("Missing fact: fact1".to_string())),
+        facts: vec![crate::LemmaFact {
+            reference: crate::FactReference::from_path(vec!["fact1".to_string()]),
+            value: crate::FactValue::TypeDeclaration {
+                base: "number".to_string(),
+                overrides: None,
+                from: None,
+            },
+            source_location: None,
+        }],
+        operations: vec![],
+        proof: None,
+        rule_type: crate::LemmaType::veto_type(),
+    };
+    assert_eq!(missing.facts.len(), 1);
+    assert_eq!(missing.facts[0].reference.to_string(), "fact1");
+    assert!(matches!(
+        missing.facts[0].value,
+        crate::FactValue::TypeDeclaration { .. }
+    ));
+    assert!(matches!(missing.result, OperationResult::Veto(_)));
 
-    let no_match = RuleResult::no_match("rule2".to_string());
-    assert!(no_match.result.is_none());
-
-    let missing = RuleResult::missing_facts("rule3".to_string(), vec!["fact1".to_string()]);
-    assert_eq!(missing.missing_facts, Some(vec!["fact1".to_string()]));
-
-    let veto = RuleResult::veto("rule4".to_string(), Some("Vetoed".to_string()));
-    assert_eq!(veto.veto_message, Some("Vetoed".to_string()));
+    let veto = RuleResult {
+        rule: dummy_rule("rule4"),
+        result: OperationResult::Veto(Some("Vetoed".to_string())),
+        facts: vec![],
+        operations: vec![],
+        proof: None,
+        rule_type: crate::LemmaType::veto_type(),
+    };
+    assert_eq!(
+        veto.result,
+        OperationResult::Veto(Some("Vetoed".to_string()))
+    );
 }

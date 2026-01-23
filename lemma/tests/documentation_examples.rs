@@ -1,24 +1,39 @@
-//! Tests for all documentation examples
+//! Tests for all documentation example files
 //!
 //! Ensures all example files in documentation/examples/ are valid and can be evaluated
 
 use lemma::Engine;
+use rust_decimal::Decimal;
+use std::collections::HashMap;
+use std::str::FromStr;
 
-fn load_examples() -> Engine {
+fn get_rule_value(
+    engine: &Engine,
+    doc_name: &str,
+    rule_name: &str,
+    facts: HashMap<String, String>,
+) -> lemma::LiteralValue {
+    let response = engine.evaluate(doc_name, vec![], facts).unwrap();
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("rule '{}' not found in {}", rule_name, doc_name))
+        .result
+        .value()
+        .unwrap_or_else(|| panic!("rule '{}' had no value", rule_name))
+        .clone()
+}
+
+fn load_documentation_examples() -> Engine {
     let mut engine = Engine::new();
 
-    // Load all example files - paths relative to lemma/ crate
+    // Load all example files - paths relative to lemma/ crate root (same pattern as integration_examples.rs)
     let examples = [
-        "../documentation/examples/01_simple_facts.lemma",
-        "../documentation/examples/02_rules_and_unless.lemma",
-        "../documentation/examples/03_document_references.lemma",
-        "../documentation/examples/04_unit_conversions.lemma",
-        "../documentation/examples/05_date_handling.lemma",
-        "../documentation/examples/06_tax_calculation.lemma",
-        "../documentation/examples/07_shipping_policy.lemma",
-        "../documentation/examples/08_rule_references.lemma",
-        "../documentation/examples/09_stress_test.lemma",
-        "../documentation/examples/10_compensation_policy.lemma",
+        "../documentation/examples/01_coffee_order.lemma",
+        "../documentation/examples/02_library_fees.lemma",
+        "../documentation/examples/03_recipe_scaling.lemma",
+        "../documentation/examples/04_membership_benefits.lemma",
+        "../documentation/examples/05_weather_clothing.lemma",
     ];
 
     for path in examples {
@@ -33,352 +48,183 @@ fn load_examples() -> Engine {
 }
 
 #[test]
-fn test_01_simple_facts() {
-    let engine = load_examples();
+fn test_01_coffee_order() {
+    let engine = load_documentation_examples();
 
-    // Document has only facts, no rules - just verify it loads without errors
-    let response = engine
-        .evaluate("examples/simple_facts", None, None)
-        .expect("Evaluation failed");
+    let mut facts = HashMap::new();
+    facts.insert("product".to_string(), "latte".to_string());
+    facts.insert("size".to_string(), "large".to_string());
+    facts.insert("number_of_cups".to_string(), "2".to_string());
+    facts.insert("has_loyalty_card".to_string(), "true".to_string());
+    facts.insert("age".to_string(), "70".to_string());
 
-    assert_eq!(response.doc_name, "examples/simple_facts");
-    // No rules in this document, just facts
-    assert_eq!(response.results.len(), 0);
-}
-#[test]
-fn test_02_rules_and_unless() {
-    let engine = load_examples();
+    let total = get_rule_value(&engine, "coffee_order", "total", facts);
 
-    // Document needs base_price fact override (as money type)
-    let facts = lemma::parser::parse_facts(&["base_price = 100.00 USD"]).unwrap();
-
-    let response = engine
-        .evaluate("examples/rules_and_unless", None, Some(facts))
-        .expect("Evaluation failed");
-
-    assert_eq!(response.doc_name, "examples/rules_and_unless");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "discount_percentage"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "final_total"));
+    // latte base_price (3.50 eur) * large size_multiplier (120%) = 4.20 eur per cup
+    // 4.20 eur * 2 cups = 8.40 eur subtotal
+    // loyalty card discount 10% = 0.84 eur (age >= 65, so age_discount = 10%)
+    // discount_amount = 0.84 eur - 10% = 0.84 - 0.084 = 0.756 eur
+    // total = 8.40 - 0.756 = 7.644 eur
+    assert_eq!(
+        total.value,
+        lemma::Value::Scale(Decimal::from_str("7.644").unwrap(), Some("eur".to_string()))
+    );
 }
 
 #[test]
-fn test_03_document_references() {
-    let engine = load_examples();
+fn test_02_library_fees() {
+    let engine = load_documentation_examples();
 
-    // Test examples/base_employee document
-    let response = engine
-        .evaluate("examples/base_employee", None, None)
-        .expect("Evaluation failed");
+    let mut facts = HashMap::new();
+    facts.insert("days_overdue".to_string(), "5".to_string());
+    facts.insert("book_type".to_string(), "regular".to_string());
+    facts.insert("is_first_offense".to_string(), "false".to_string());
 
-    assert_eq!(response.doc_name, "examples/base_employee");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "annual_salary"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "is_eligible_for_bonus"));
+    let final_fee = get_rule_value(&engine, "library_fees", "final_fee", facts.clone());
+    assert_eq!(
+        final_fee.value,
+        lemma::Value::Scale(Decimal::from_str("1.25").unwrap(), Some("eur".to_string()))
+    );
 
-    // Test examples/specific_employee document (references base_employee)
-    let response = engine
-        .evaluate("examples/specific_employee", None, None)
-        .expect("Evaluation failed");
-
-    assert_eq!(response.doc_name, "examples/specific_employee");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "salary_with_bonus"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "employee_summary"));
-
-    // Test examples/contractor document (also references base_employee)
-    let response = engine
-        .evaluate("examples/contractor", None, None)
-        .expect("Evaluation failed");
-
-    assert_eq!(response.doc_name, "examples/contractor");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "total_payment"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "benefits_eligible"));
+    let can_checkout = get_rule_value(&engine, "library_fees", "can_checkout", facts);
+    assert_eq!(
+        can_checkout.value,
+        lemma::Value::Boolean(lemma::BooleanValue::True)
+    );
 }
 
 #[test]
-fn test_04_unit_conversions() {
-    let engine = load_examples();
+fn test_03_recipe_scaling() {
+    let engine = load_documentation_examples();
 
-    // Document has all facts defined, no type annotations needed
-    let response = engine
-        .evaluate("examples/unit_conversions", None, None)
-        .expect("Evaluation failed");
+    let mut facts = HashMap::new();
+    facts.insert("original_servings".to_string(), "4".to_string());
+    facts.insert("desired_servings".to_string(), "8".to_string());
+    facts.insert("recipe_name".to_string(), "chocolate_cake".to_string());
 
-    assert_eq!(response.doc_name, "examples/unit_conversions");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "package_weight_lbs"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "distance_miles"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "temperature_f"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "is_overweight"));
+    let scaling_factor = get_rule_value(&engine, "recipe_scaling", "scaling_factor", facts.clone());
+    assert_eq!(
+        scaling_factor.value,
+        lemma::Value::Number(Decimal::from_str("2").unwrap())
+    );
+
+    let baking_time = get_rule_value(
+        &engine,
+        "recipe_scaling",
+        "baking_time_minutes",
+        facts.clone(),
+    );
+    assert_eq!(
+        baking_time.value,
+        lemma::Value::Number(Decimal::from_str("40").unwrap())
+    );
+
+    let oven_temp = get_rule_value(&engine, "recipe_scaling", "oven_temperature", facts);
+    assert_eq!(
+        oven_temp.value,
+        lemma::Value::Scale(
+            Decimal::from_str("175").unwrap(),
+            Some("celsius".to_string())
+        )
+    );
 }
 
 #[test]
-fn test_05_date_handling() {
-    let engine = load_examples();
+fn test_04_membership_benefits() {
+    let engine = load_documentation_examples();
 
-    // Document uses [date] type annotation for current_date, need to provide it
-    // Note: This document has a bug - employee_age rule tries to convert calendar units
-    // which is not supported. We just test that the document loads.
-    let facts = lemma::parser::parse_facts(&["current_date = 2024-06-15"]).unwrap();
+    // Test premium_membership document (has rules, no facts needed)
+    let discount_rate = get_rule_value(
+        &engine,
+        "premium_membership",
+        "discount_rate",
+        HashMap::new(),
+    );
+    assert_eq!(
+        discount_rate.value,
+        lemma::Value::Ratio(
+            Decimal::from_str("0.10").unwrap(),
+            Some("percent".to_string())
+        )
+    );
 
-    let result = engine.evaluate("examples/date_handling", None, Some(facts));
+    // Test membership_benefits document (references premium_membership)
+    let discount = get_rule_value(&engine, "membership_benefits", "discount", HashMap::new());
+    assert_eq!(
+        discount.value,
+        lemma::Value::Number(Decimal::from_str("15").unwrap())
+    );
 
-    // Document will fail due to calendar unit conversion bug in employee_age rule
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("calendar units"));
-}
-#[test]
-fn test_06_tax_calculation() {
-    let engine = load_examples();
+    let shipping_cost = get_rule_value(
+        &engine,
+        "membership_benefits",
+        "shipping_cost",
+        HashMap::new(),
+    );
+    assert_eq!(
+        shipping_cost.value,
+        lemma::Value::Number(Decimal::from_str("0").unwrap())
+    );
 
-    // Document has all facts defined, no type annotations needed
-    let response = engine
-        .evaluate("examples/tax_calculation", None, None)
-        .expect("Evaluation failed");
-
-    assert_eq!(response.doc_name, "examples/tax_calculation");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "taxable_income"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "total_federal_tax"));
-    assert!(response.results.iter().any(|r| r.rule_name == "total_tax"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "after_tax_income"));
-}
-
-#[test]
-fn test_07_shipping_policy() {
-    let engine = load_examples();
-
-    // Document uses type annotations for dynamic input, need to provide facts
-    let facts = lemma::parser::parse_facts(&[
-        "order_total = 75.00 USD",
-        "item_weight = 8 kilograms",
-        "destination_country = \"US\"",
-        "destination_state = \"CA\"",
-        "is_po_box = false",
-        "is_expedited = false",
-        "is_hazardous = false",
-    ])
-    .unwrap();
-
-    let response = engine
-        .evaluate("examples/shipping_policy", None, Some(facts))
-        .expect("Evaluation failed");
-
-    assert_eq!(response.doc_name, "examples/shipping_policy");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "final_shipping"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "estimated_delivery_days"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "total_with_shipping"));
+    let total_points = get_rule_value(
+        &engine,
+        "membership_benefits",
+        "total_points",
+        HashMap::new(),
+    );
+    assert_eq!(
+        total_points.value,
+        lemma::Value::Number(Decimal::from_str("325").unwrap())
+    );
 }
 
 #[test]
-fn test_08_rule_references() {
-    let engine = load_examples();
+fn test_05_weather_clothing() {
+    let engine = load_documentation_examples();
 
-    // Test examples/rule_references document
-    let response = engine
-        .evaluate("examples/rule_references", None, None)
-        .expect("Evaluation failed");
+    let mut facts = HashMap::new();
+    facts.insert("temperature".to_string(), "15 celsius".to_string());
+    facts.insert("is_raining".to_string(), "false".to_string());
+    facts.insert("wind_speed".to_string(), "10".to_string());
 
-    assert_eq!(response.doc_name, "examples/rule_references");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "can_drive_legally"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "driving_status"));
+    let clothing_layer =
+        get_rule_value(&engine, "weather_clothing", "clothing_layer", facts.clone());
+    assert_eq!(
+        clothing_layer.value,
+        lemma::Value::Text("light".to_string())
+    );
 
-    // Test examples/eligibility_check document (also in the same file)
-    let response = engine
-        .evaluate("examples/eligibility_check", None, None)
-        .expect("Evaluation failed");
-
-    assert_eq!(response.doc_name, "examples/eligibility_check");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "can_travel_internationally"));
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "eligibility_message"));
+    let needs_jacket = get_rule_value(&engine, "weather_clothing", "needs_jacket", facts);
+    assert_eq!(
+        needs_jacket.value,
+        lemma::Value::Boolean(lemma::BooleanValue::False)
+    );
 }
 
 #[test]
-fn test_09_stress_test() {
-    let engine = load_examples();
-
-    // Document uses type annotations for all facts, need to provide them
-    // Note: This document has a bug - savings_percent rule has unit conversion issues
-    let facts = lemma::parser::parse_facts(&[
-        "base_price = 100.00 USD",
-        "quantity = 50",
-        "customer_tier = \"premium\"",
-        "loyalty_points = 5000",
-        "package_weight = 25",
-        "delivery_distance = 300",
-        "is_express = false",
-        "is_fragile = false",
-        "payment_method = \"credit\"",
-    ])
-    .unwrap();
-
-    let result = engine.evaluate("examples/stress_test", None, Some(facts));
-
-    // Document will fail due to unit conversion bug in savings_percent rule
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("unit"));
-}
-
-#[test]
-fn test_09_stress_test_config() {
-    let engine = load_examples();
-
-    // Test the config document (has all facts defined)
-    let response = engine
-        .evaluate("examples/stress_test_config", None, None)
-        .expect("Evaluation failed");
-
-    assert_eq!(response.doc_name, "examples/stress_test_config");
-    // Config doc only has facts, no rules to check
-}
-
-#[test]
-fn test_09_stress_test_extended() {
-    let engine = load_examples();
-
-    // Need to provide facts for the composed order document
-    // Note: This document has cross-document reference bugs
-    let facts = lemma::parser::parse_facts(&[
-        "order.base_price = 100.00 USD",
-        "order.quantity = 100",
-        "order.customer_tier = \"vip\"",
-        "order.loyalty_points = 10000",
-        "order.package_weight = 30",
-        "order.delivery_distance = 250",
-        "order.is_express = true",
-        "order.is_fragile = true",
-        "order.payment_method = \"debit\"",
-    ])
-    .unwrap();
-
-    let result = engine.evaluate("examples/stress_test_extended", None, Some(facts));
-
-    // Document will fail due to cross-document rule reference bugs
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("does not exist"));
-}
-
-#[test]
-fn test_10_compensation_policy() {
-    let engine = load_examples();
-
-    // Test base_policy document
-    let response = engine
-        .evaluate("examples/compensation/base_policy", None, None)
-        .expect("Evaluation failed");
-
-    assert_eq!(response.doc_name, "examples/compensation/base_policy");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "annual_health_cost"));
-
-    // Test engineering_dept document (has all facts defined)
-    let response = engine
-        .evaluate("examples/compensation/engineering_dept", None, None)
-        .expect("Evaluation failed");
-
-    assert_eq!(response.doc_name, "examples/compensation/engineering_dept");
-    assert!(response
-        .results
-        .iter()
-        .any(|r| r.rule_name == "total_package"));
-
-    // Test senior_engineer document - has cross-document rule reference bugs
-    let result = engine.evaluate("examples/compensation/senior_engineer", None, None);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("does not exist"));
-
-    // Test principal_engineer document - also has cross-document rule reference bugs
-    let result = engine.evaluate("examples/compensation/principal_engineer", None, None);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("does not exist"));
-}
-
-#[test]
-fn test_all_examples_parse() {
+fn test_all_documentation_examples_parse() {
     // This test just ensures all examples can be loaded without errors
-    let engine = load_examples();
+    let engine = load_documentation_examples();
 
     // Verify all documents are loaded
     let docs = engine.list_documents();
 
-    // Just verify we have a reasonable number of documents loaded
+    // Verify we have at least the expected documents loaded
     assert!(
-        docs.len() >= 10,
-        "Expected at least 10 documents, found {}. Available: {:?}",
+        docs.len() >= 6,
+        "Expected at least 6 documents (examples + coffee_order), found {}. Available: {:?}",
         docs.len(),
         docs
     );
 
-    // Verify some key documents exist
+    // Verify key documents exist
     let key_docs = vec![
-        "examples/simple_facts",
-        "examples/rules_and_unless",
-        "examples/stress_test",
-        "examples/stress_test_extended",
+        "coffee_order",        // from 01_coffee_order.lemma
+        "library_fees",        // from 02_library_fees.lemma
+        "recipe_scaling",      // from 03_recipe_scaling.lemma
+        "premium_membership",  // from 04_membership_benefits.lemma
+        "membership_benefits", // from 04_membership_benefits.lemma
+        "weather_clothing",    // from 05_weather_clothing.lemma
     ];
 
     for expected in key_docs {

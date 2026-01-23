@@ -66,7 +66,7 @@ lemma run pricing -i
 lemma run pricing:total,tax -i
 
 # Interactive mode with date picker for date fields
-lemma run examples/date_handling -i -d documentation/examples
+lemma run coffee_order -i -d documentation/examples
 
 # Using long form flags
 lemma run pricing --dir ./policies --raw
@@ -79,19 +79,19 @@ Default output shows a table with evaluation steps:
 ┌───────────┬─────────────────────────────────────────┐
 │ Rule      │ Evaluation                              │
 ├───────────┼─────────────────────────────────────────┤
-│ total     │ 242.00 USD                              │
+│ total     │ 242.00                              │
 │           │                                         │
-│           │   0. fact base_price = 200.00 USD       │
-│           │   1. rule subtotal = 200.00 USD         │
-│           │   2. rule tax = 42.00 USD               │
+│           │   0. fact base_price = 200.00       │
+│           │   1. rule subtotal = 200.00         │
+│           │   2. rule tax = 42.00               │
 │           │   3. add(200.00, 42.00) → 242.00        │
-│           │   4. result = 242.00 USD                │
+│           │   4. result = 242.00                │
 └───────────┴─────────────────────────────────────────┘
 ```
 
 Raw output (`--raw`) shows only values (perfect for piping):
 ```
-242.00 USD
+242.00
 ```
 
 **Note:** When evaluating specific rules, their dependencies are still computed but only the requested rules appear in the output.
@@ -202,10 +202,6 @@ policies/
 ```
 
 The CLI automatically loads all `.lemma` files and makes their documents available for evaluation.
-
-## Configuration Files
-
-### Built-in Documents
 
 ## Examples
 

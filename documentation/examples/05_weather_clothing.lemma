@@ -1,0 +1,55 @@
+doc weather_clothing
+"""
+Weather-Based Clothing Recommendation
+
+Shows how rules can make decisions based on conditions.
+Simple logic that's easy to understand.
+"""
+
+type temperature = scale
+  -> unit celsius 1.0
+  -> minimum -70
+  -> maximum 70
+
+type clothing_style = text
+  -> option "none"
+  -> option "light"
+  -> option "warm"
+  -> option "very_warm"
+
+type comfort = text
+  -> option "comfortable"
+  -> option "cold"
+  -> option "hot"
+  -> option "uncomfortable"
+
+fact temperature = [temperature]
+fact is_raining = [boolean]
+fact wind_speed = [number -> minimum 0]
+
+rule clothing_layer = "light"
+  unless temperature < 5 celsius then "very_warm"
+  unless temperature < 10 celsius then "warm"
+  unless temperature > 25 celsius then "none"
+
+rule needs_jacket = no
+  unless temperature < 15 celsius then yes
+  unless is_raining then yes
+  unless wind_speed > 20 then yes
+
+rule needs_umbrella = no
+  unless is_raining then yes
+
+rule needs_hat = no
+  unless temperature > 25 celsius then yes
+  unless temperature < 0 celsius then yes
+
+rule comfort_level = "comfortable"
+  unless temperature < 5 celsius then "cold"
+  unless temperature > 30 celsius then "hot"
+  unless is_raining and temperature < 10 celsius then "uncomfortable"
+
+rule recommendation = "Enjoy your day!"
+  unless comfort_level? == "cold" then "Dress warmly and stay indoors if possible"
+  unless comfort_level? == "hot" then "Stay hydrated and seek shade"
+  unless comfort_level? == "uncomfortable" then "Consider postponing outdoor activities"

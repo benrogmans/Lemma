@@ -1,0 +1,37 @@
+doc library_fees
+"""
+Library Late Fees
+
+Shows conditional logic with unless clauses.
+Easy to understand: books returned late incur fees.
+"""
+
+type money = scale
+  -> unit eur 1.00
+  -> decimals 2
+
+type book_kind = text
+  -> option "regular"
+  -> option "reference"
+  -> option "new_release"
+
+fact days_overdue     = [number -> minimum 0]
+fact book_type        = [book_kind]
+fact is_first_offense = [boolean]
+
+rule daily_fee = 0 eur
+  unless book_type is "regular"      then 0.25 eur
+  unless book_type is "reference"    then 0.50 eur
+  unless book_type is "new_release"  then 1.00 eur
+
+rule is_in_grace_period = days_overdue <= 3
+  unless book_type is "new_release" then no
+
+rule total_fee = days_overdue * daily_fee?
+
+rule final_fee = total_fee?
+  unless is_first_offense    then total_fee? - 50%
+  unless is_in_grace_period? then 0 eur
+
+rule can_checkout = yes
+  unless final_fee? > 10 eur then no

@@ -1,13 +1,6 @@
-use lemma::{Engine, FactReference, LiteralValue, OperationResult, Target, TargetOp};
+use lemma::{Engine, FactPath, LiteralValue, OperationResult, Target, TargetOp};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
-
-fn money_eur(amount: i64) -> LiteralValue {
-    LiteralValue::Unit(lemma::NumericUnit::Money(
-        Decimal::from(amount),
-        lemma::MoneyUnit::Eur,
-    ))
-}
 
 #[test]
 fn premium_greater_than_or_equal() {
@@ -15,41 +8,44 @@ fn premium_greater_than_or_equal() {
         doc insurance
         fact age = [number]
 
-        rule premium = 100 EUR
+        rule premium = 100
           unless age < 25 then veto "too young"
           unless age > 65 then veto "too old"
-          unless (age >= 30 and age <= 40) then 80 EUR
+          unless (age >= 30 and age <= 40) then 80
     "#;
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
 
-    // Find ages where premium >= 80 EUR
+    // Find ages where premium >= 80
     let solutions = engine
-        .invert(
+        .invert_strict(
             "insurance",
             "premium",
-            Target::with_op(TargetOp::Gte, OperationResult::Value(money_eur(80))),
+            Target::with_op(
+                TargetOp::Gte,
+                OperationResult::Value(LiteralValue::number(80)),
+            ),
             HashMap::new(),
         )
         .expect("should invert");
 
-    println!("\n=== Ages where premium >= 80 EUR ===");
-    for (i, solution) in solutions.iter().enumerate() {
+    println!("\n=== Ages where premium >= 80 ===");
+    for (i, domains) in solutions.domains.iter().enumerate() {
         println!("Solution {}:", i + 1);
-        for (fact, domain) in solution.iter() {
-            println!("  {}: {:?}", fact.reference.join("."), domain);
+        for (fact, domain) in domains.iter() {
+            println!("  {}: {:?}", fact, domain);
         }
     }
 
     // Should include:
-    // - Ages 25-29 (premium = 100 EUR, which is >= 80)
-    // - Ages 30-40 (premium = 80 EUR, which is >= 80)
-    // - Ages 41-65 (premium = 100 EUR, which is >= 80)
+    // - Ages 25-29 (premium = 100, which is >= 80)
+    // - Ages 30-40 (premium = 80, which is >= 80)
+    // - Ages 41-65 (premium = 100, which is >= 80)
 
     assert!(
         !solutions.is_empty(),
-        "Expected solutions where premium >= 80 EUR"
+        "Expected solutions where premium >= 80"
     );
 }
 
@@ -71,13 +67,14 @@ fn discount_greater_than_threshold() {
 
     // Find quantities where discount > 5%
     let solutions = engine
-        .invert(
+        .invert_strict(
             "pricing",
             "discount",
             Target::with_op(
                 TargetOp::Gt,
-                OperationResult::Value(LiteralValue::Percentage(
-                    Decimal::from_str_exact("5").unwrap(),
+                OperationResult::Value(LiteralValue::ratio(
+                    Decimal::from_str_exact("0.05").unwrap(), // 5% = 0.05 as ratio
+                    Some("percent".to_string()),
                 )),
             ),
             HashMap::new(),
@@ -85,11 +82,9 @@ fn discount_greater_than_threshold() {
         .expect("should invert");
 
     println!("\n=== Quantities where discount > 5% ===");
-    let quantity_path = FactReference {
-        reference: vec!["pricing".to_string(), "quantity".to_string()],
-    };
-    for (i, solution) in solutions.iter().enumerate() {
-        if let Some(domain) = solution.get(&quantity_path) {
+    let quantity_path = FactPath::local("quantity".to_string());
+    for (i, domains) in solutions.domains.iter().enumerate() {
+        if let Some(domain) = domains.get(&quantity_path) {
             println!("Solution {}: {:?}", i + 1, domain);
         }
     }
@@ -108,7 +103,7 @@ fn discount_greater_than_threshold() {
 fn price_less_than_budget() {
     let code = r#"
         doc shopping
-        fact base_price = [money]
+        fact base_price = [number]
         fact quantity = [number]
 
         rule total = base_price * quantity
@@ -118,25 +113,28 @@ fn price_less_than_budget() {
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
 
-    // Find combinations where total < 100 EUR
+    // Find combinations where total < 100
     let solutions = engine
-        .invert(
+        .invert_strict(
             "shopping",
             "total",
-            Target::with_op(TargetOp::Lt, OperationResult::Value(money_eur(100))),
+            Target::with_op(
+                TargetOp::Lt,
+                OperationResult::Value(LiteralValue::number(100)),
+            ),
             HashMap::new(),
         )
         .expect("should invert");
 
-    println!("\n=== Price/quantity combinations where total < 100 EUR ===");
-    for (i, solution) in solutions.iter().enumerate() {
+    println!("\n=== Price/quantity combinations where total < 100 ===");
+    for (i, domains) in solutions.domains.iter().enumerate() {
         println!("Solution {}:", i + 1);
-        for (fact, domain) in solution.iter() {
-            println!("  {}: {:?}", fact.reference.join("."), domain);
+        for (fact, domain) in domains.iter() {
+            println!("  {}: {:?}", fact, domain);
         }
     }
 
-    // Relationship: base_price * quantity < 100 EUR (with quantity >= 1)
+    // Relationship: base_price * quantity < 100 (with quantity >= 1)
     assert!(!solutions.is_empty(), "Expected solutions");
 }
 
@@ -158,23 +156,21 @@ fn temperature_in_comfortable_range() {
 
     // Find temps where comfort >= 2 (most comfortable)
     let solutions = engine
-        .invert(
+        .invert_strict(
             "climate",
             "comfort_level",
             Target::with_op(
                 TargetOp::Gte,
-                OperationResult::Value(LiteralValue::Number(Decimal::from(2))),
+                OperationResult::Value(LiteralValue::number(2)),
             ),
             HashMap::new(),
         )
         .expect("should invert");
 
     println!("\n=== Temperatures where comfort_level >= 2 ===");
-    let temp_path = FactReference {
-        reference: vec!["climate".to_string(), "temp".to_string()],
-    };
-    for (i, solution) in solutions.iter().enumerate() {
-        if let Some(domain) = solution.get(&temp_path) {
+    let temp_path = FactPath::local("temp".to_string());
+    for (i, domains) in solutions.domains.iter().enumerate() {
+        if let Some(domain) = domains.get(&temp_path) {
             println!("Solution {}: {:?}", i + 1, domain);
         }
     }
@@ -191,37 +187,38 @@ fn get_valid_domain_with_threshold() {
     // Use case: "What order sizes are eligible for free shipping?"
     let code = r#"
         doc shipping
-        fact order_total = [money]
+        fact order_total = [number]
 
-        rule shipping_cost = 5 EUR
-          unless order_total >= 50 EUR then 0 EUR
-          unless order_total < 0 EUR then veto "invalid"
+        rule shipping_cost = 5
+          unless order_total >= 50 then 0
+          unless order_total < 0 then veto "invalid"
     "#;
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test").unwrap();
 
-    // First, find when shipping_cost <= 0 EUR (free shipping)
+    // First, find when shipping_cost <= 0 (free shipping)
     let solutions = engine
-        .invert(
+        .invert_strict(
             "shipping",
             "shipping_cost",
-            Target::with_op(TargetOp::Lte, OperationResult::Value(money_eur(0))),
+            Target::with_op(
+                TargetOp::Lte,
+                OperationResult::Value(LiteralValue::number(0)),
+            ),
             HashMap::new(),
         )
         .expect("should invert");
 
     println!("\n=== Order totals eligible for free shipping (cost <= 0) ===");
-    let total_path = FactReference {
-        reference: vec!["shipping".to_string(), "order_total".to_string()],
-    };
-    for (i, solution) in solutions.iter().enumerate() {
-        if let Some(domain) = solution.get(&total_path) {
+    let total_path = FactPath::local("order_total".to_string());
+    for (i, domains) in solutions.domains.iter().enumerate() {
+        if let Some(domain) = domains.get(&total_path) {
             println!("Solution {}: {:?}", i + 1, domain);
         }
     }
 
-    // Should show: order_total >= 50 EUR
+    // Should show: order_total >= 50
     assert!(
         !solutions.is_empty(),
         "Expected threshold for free shipping"
@@ -253,13 +250,10 @@ fn all_comparison_operators() {
     println!("\n=== Testing all comparison operators ===");
     for (name, op, description) in test_cases {
         let solutions = engine
-            .invert(
+            .invert_strict(
                 "test",
                 "result",
-                Target::with_op(
-                    op,
-                    OperationResult::Value(LiteralValue::Number(Decimal::from(10))),
-                ),
+                Target::with_op(op, OperationResult::Value(LiteralValue::number(10))),
                 HashMap::new(),
             )
             .expect("should invert");

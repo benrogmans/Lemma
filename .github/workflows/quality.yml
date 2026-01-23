@@ -22,7 +22,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.rust }}
+          toolchain: ${{ matrix.rust == 'stable' && '1.92.0' || matrix.rust }}
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
@@ -66,6 +66,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.92.0
           components: clippy, rustfmt
 
       - name: Cache cargo registry
@@ -100,6 +101,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -130,6 +133,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
 
       - name: Install cargo-deny
         run: cargo install cargo-deny
@@ -166,6 +171,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.92.0
           components: llvm-tools-preview
 
       - name: Cache cargo registry

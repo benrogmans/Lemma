@@ -6,8 +6,9 @@
 //! 3. Unless clauses can provide alternative values, so the veto doesn't apply
 //! 4. Veto in unless clause conditions or results will apply to the dependent rule
 
-use lemma::{Engine, LiteralValue};
+use lemma::{Engine, LiteralValue, OperationResult};
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 #[test]
@@ -22,17 +23,18 @@ rule is_adult = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("age_check", None, None).unwrap();
+    let response = engine
+        .evaluate("age_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "is_adult")
+        .values()
+        .find(|r| r.rule.name == "is_adult")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Must be at least 18 years old".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Must be at least 18 years old".to_string()))
     );
 }
 
@@ -48,15 +50,16 @@ rule is_valid = value > 0
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("validation", None, None).unwrap();
+    let response = engine
+        .evaluate("validation", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "is_valid")
+        .values()
+        .find(|r| r.rule.name == "is_valid")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
-    assert_eq!(rule_result.veto_message, None);
+    assert_eq!(rule_result.result, OperationResult::Veto(None));
 }
 
 #[test]
@@ -71,15 +74,19 @@ rule is_adult = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("age_check", None, None).unwrap();
+    let response = engine
+        .evaluate("age_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "is_adult")
+        .values()
+        .find(|r| r.rule.name == "is_adult")
         .unwrap();
 
-    assert_eq!(rule_result.result, Some(LiteralValue::Boolean(true)));
-    assert_eq!(rule_result.veto_message, None);
+    assert_eq!(
+        rule_result.result,
+        OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::True))
+    );
 }
 
 #[test]
@@ -96,17 +103,18 @@ rule eligible = age >= 18 and score >= 80
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("validation", None, None).unwrap();
+    let response = engine
+        .evaluate("validation", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "eligible")
+        .values()
+        .find(|r| r.rule.name == "eligible")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Age requirement not met".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Age requirement not met".to_string()))
     );
 }
 
@@ -124,17 +132,18 @@ rule eligible = age >= 18 and score >= 80
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("validation", None, None).unwrap();
+    let response = engine
+        .evaluate("validation", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "eligible")
+        .values()
+        .find(|r| r.rule.name == "eligible")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Score requirement not met".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Score requirement not met".to_string()))
     );
 }
 
@@ -151,17 +160,18 @@ rule valid_compensation = salary >= 40000
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("salary_check", None, None).unwrap();
+    let response = engine
+        .evaluate("salary_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "valid_compensation")
+        .values()
+        .find(|r| r.rule.name == "valid_compensation")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Insufficient salary for experience level".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Insufficient salary for experience level".to_string()))
     );
 }
 
@@ -181,40 +191,45 @@ rule can_drive = age >= 16
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("mixed_validation", None, None).unwrap();
+    let response = engine
+        .evaluate("mixed_validation", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "can_drive")
+        .values()
+        .find(|r| r.rule.name == "can_drive")
         .unwrap();
 
-    assert_eq!(rule_result.result, Some(LiteralValue::Boolean(false)));
-    assert_eq!(rule_result.veto_message, None);
+    assert_eq!(
+        rule_result.result,
+        OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::False))
+    );
 }
 
 #[test]
-fn test_veto_with_unit_comparison() {
+fn test_veto_with_number_comparison() {
     let code = r#"
 doc weight_check
-fact package_weight = 100 kilograms
-rule can_ship = package_weight <= 50 kilograms
-    unless package_weight > 75 kilograms then veto "Package exceeds maximum weight limit"
+fact package_weight = 100
+rule can_ship = package_weight <= 50
+    unless package_weight > 75 then veto "Package exceeds maximum weight limit"
 "#;
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("weight_check", None, None).unwrap();
+    let response = engine
+        .evaluate("weight_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "can_ship")
+        .values()
+        .find(|r| r.rule.name == "can_ship")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Package exceeds maximum weight limit".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Package exceeds maximum weight limit".to_string()))
     );
 }
 
@@ -230,17 +245,18 @@ rule is_affordable = price <= 1000
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("pricing_check", None, None).unwrap();
+    let response = engine
+        .evaluate("pricing_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "is_affordable")
+        .values()
+        .find(|r| r.rule.name == "is_affordable")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Price exceeds budget limit".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Price exceeds budget limit".to_string()))
     );
 }
 
@@ -257,17 +273,18 @@ rule is_valid_date = event_date >= min_date
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("date_validation", None, None).unwrap();
+    let response = engine
+        .evaluate("date_validation", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "is_valid_date")
+        .values()
+        .find(|r| r.rule.name == "is_valid_date")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Event date is too early in the year".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Event date is too early in the year".to_string()))
     );
 }
 
@@ -283,17 +300,18 @@ rule is_complete = completion >= 95%
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("completion_check", None, None).unwrap();
+    let response = engine
+        .evaluate("completion_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "is_complete")
+        .values()
+        .find(|r| r.rule.name == "is_complete")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Project barely started".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Project barely started".to_string()))
     );
 }
 
@@ -311,17 +329,18 @@ rule eligible = has_permission
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("eligibility", None, None).unwrap();
+    let response = engine
+        .evaluate("eligibility", vec![], HashMap::new())
+        .unwrap();
     let eligible_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "eligible")
+        .values()
+        .find(|r| r.rule.name == "eligible")
         .unwrap();
 
-    assert_eq!(eligible_result.result, None);
     assert_eq!(
-        eligible_result.veto_message,
-        Some("Must be adult or have permission".to_string())
+        eligible_result.result,
+        OperationResult::Veto(Some("Must be adult or have permission".to_string()))
     );
 }
 
@@ -338,17 +357,18 @@ rule within_budget = expenses < income
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("budget_check", None, None).unwrap();
+    let response = engine
+        .evaluate("budget_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "within_budget")
+        .values()
+        .find(|r| r.rule.name == "within_budget")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Expenses exceed 90% of income".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Expenses exceed 90% of income".to_string()))
     );
 }
 
@@ -364,17 +384,18 @@ rule is_active = status == "active"
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("status_check", None, None).unwrap();
+    let response = engine
+        .evaluate("status_check", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "is_active")
+        .values()
+        .find(|r| r.rule.name == "is_active")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Cannot process cancelled items".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Cannot process cancelled items".to_string()))
     );
 }
 
@@ -392,37 +413,39 @@ rule double_value = value * 2
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("multi_rule", None, None).unwrap();
+    let response = engine
+        .evaluate("multi_rule", vec![], HashMap::new())
+        .unwrap();
 
     let check_positive = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "check_positive")
+        .values()
+        .find(|r| r.rule.name == "check_positive")
         .unwrap();
-    assert_eq!(check_positive.result, None);
     assert_eq!(
-        check_positive.veto_message,
-        Some("Value must be positive".to_string())
+        check_positive.result,
+        OperationResult::Veto(Some("Value must be positive".to_string()))
     );
 
     let check_negative = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "check_negative")
+        .values()
+        .find(|r| r.rule.name == "check_negative")
         .unwrap();
-    assert_eq!(check_negative.result, Some(LiteralValue::Boolean(true)));
-    assert_eq!(check_negative.veto_message, None);
+    assert_eq!(
+        check_negative.result,
+        OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::True))
+    );
 
     let double_value = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "double_value")
+        .values()
+        .find(|r| r.rule.name == "double_value")
         .unwrap();
     assert_eq!(
         double_value.result,
-        Some(LiteralValue::Number(Decimal::from_str("-20.0").unwrap()))
+        OperationResult::Value(LiteralValue::number(Decimal::from_str("-20.0").unwrap()))
     );
-    assert_eq!(double_value.veto_message, None);
 }
 
 #[test]
@@ -437,15 +460,16 @@ rule is_valid = value > 0
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("edge_case", None, None).unwrap();
+    let response = engine
+        .evaluate("edge_case", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "is_valid")
+        .values()
+        .find(|r| r.rule.name == "is_valid")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
-    assert!(rule_result.veto_message.is_some());
+    assert!(matches!(rule_result.result, OperationResult::Veto(Some(_))));
 }
 
 #[test]
@@ -460,17 +484,20 @@ rule valid = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("special_chars", None, None).unwrap();
+    let response = engine
+        .evaluate("special_chars", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "valid")
+        .values()
+        .find(|r| r.rule.name == "valid")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Error: Age < 18! Must be 18+. Contact: admin@example.com (555-1234)".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some(
+            "Error: Age < 18! Must be 18+. Contact: admin@example.com (555-1234)".to_string()
+        ))
     );
 }
 
@@ -491,15 +518,19 @@ rule valid = value > 0
     let mut engine = Engine::new();
     engine.add_lemma_code(&code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("long_message", None, None).unwrap();
+    let response = engine
+        .evaluate("long_message", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "valid")
+        .values()
+        .find(|r| r.rule.name == "valid")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
-    assert_eq!(rule_result.veto_message, Some(message.to_string()));
+    assert_eq!(
+        rule_result.result,
+        OperationResult::Veto(Some(message.to_string()))
+    );
 }
 
 #[test]
@@ -515,17 +546,18 @@ rule check = value > 10
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("priority_test", None, None).unwrap();
+    let response = engine
+        .evaluate("priority_test", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "check")
+        .values()
+        .find(|r| r.rule.name == "check")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Value too small".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Value too small".to_string()))
     );
 }
 
@@ -543,15 +575,16 @@ rule eligible = age >= 18 and score >= 80
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("double_veto", None, None).unwrap();
+    let response = engine
+        .evaluate("double_veto", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "eligible")
+        .values()
+        .find(|r| r.rule.name == "eligible")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
-    assert!(rule_result.veto_message.is_some());
+    assert!(matches!(rule_result.result, OperationResult::Veto(Some(_))));
 }
 
 #[test]
@@ -567,17 +600,18 @@ rule eligible = age >= 18
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("or_condition", None, None).unwrap();
+    let response = engine
+        .evaluate("or_condition", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "eligible")
+        .values()
+        .find(|r| r.rule.name == "eligible")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Eligibility criteria not met".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Eligibility criteria not met".to_string()))
     );
 }
 
@@ -593,16 +627,17 @@ rule can_proceed = true
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("negation_test", None, None).unwrap();
+    let response = engine
+        .evaluate("negation_test", vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
-        .iter()
-        .find(|r| r.rule_name == "can_proceed")
+        .values()
+        .find(|r| r.rule.name == "can_proceed")
         .unwrap();
 
-    assert_eq!(rule_result.result, None);
     assert_eq!(
-        rule_result.veto_message,
-        Some("Account must be verified".to_string())
+        rule_result.result,
+        OperationResult::Veto(Some("Account must be verified".to_string()))
     );
 }

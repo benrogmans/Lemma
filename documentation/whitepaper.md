@@ -59,7 +59,7 @@ This creates several problems:
 Lemma addresses these problems by providing a declarative language that:
 
 - **Reads like English**: Natural syntax using keywords like "unless," "then," and "is" makes rules immediately comprehensible.
-- **Types matter**: Built-in support for money, dates, durations, units, and percentages with automatic conversions eliminates a major source of bugs.
+- **Types matter**: User-defined types with units, constraints, and automatic conversions eliminate a major source of bugs.
 - **Last wins semantics**: The "unless" clause uses "last matching wins" logic that mirrors how humans naturally express exceptions and special cases.
 - **Fully executable**: Despite its natural syntax, Lemma uses a pure Rust evaluator, providing rigorous logical inference and deterministic evaluation.
 - **Composable**: Documents reference and extend each other, enabling modular rule design.
@@ -80,7 +80,7 @@ rule discount = 0%
   unless quantity >= 50 then 20%
   unless is_vip         then 25%
 
-rule price = 200 eur - discount?
+rule price = 200 - discount?
 ```
 
 This document is immediately readable by business stakeholders while being fully executable by software systems. The semantics are clear: start with no discount, but if quantity is 10 or more, apply 10%; if 50 or more, apply 20%; if customer is VIP, apply 25%. The last matching condition wins, so a VIP customer with 100 units gets 25%, not 20%.
@@ -93,17 +93,17 @@ This document is immediately readable by business stakeholders while being fully
 
 Lemma's syntax is designed to mirror how people naturally express business rules. Consider how you might explain a shipping policy:
 
-> "Shipping is $12.99, unless you're in Canada then it's $25, unless you're ordering over 100 dollars then it's free."
+> "Shipping is €12.99, unless you're in Canada then it's €25, unless you're ordering over 100 euros then it's free."
 
 Lemma encodes this exactly as stated:
 
 ```lemma
-rule shipping = 12.99 usd
-  unless destination == "CA" then 25.00 usd
-  unless order_total >= 100 usd then 0 usd
+rule shipping = 12.99
+  unless destination == "CA" then 25.00
+  unless order_total >= 100 then 0
 ```
 
-This "last matching wins" semantic is counterintuitive to programmers accustomed to "first match" or "most specific match" logic, but it aligns perfectly with natural language. When we say "X, unless Y, unless Z," we mean that Z overrides Y, which overrides X.
+This "last matching wins" semantic might seem counterintuitive to programmers who are accustomed to "early returns" or "first match" logic, but it aligns perfectly with natural language. When we say "X, unless Y, unless Z," we mean that Z overrides Y, which overrides X.
 
 ### 2.2 Declarative by design
 
@@ -119,18 +119,22 @@ Lemma is purely declarative. You describe *what* should be true, not *how* to co
 Programming languages typically require verbose type annotations. Lemma infers types from literals while providing a rich type system:
 
 ```lemma
-fact salary = 75000 usd          // Money type inferred
+type mass = scale -> unit kilogram 1.0 -> unit pound 0.453592
+
+fact salary = 75000              // Number type inferred
 fact vacation = 3 weeks          // Duration type inferred
-fact weight = 15 kilograms       // Mass type inferred
+fact weight = 15 kilograms       // Uses custom mass type
 fact deadline = 2024-12-31       // Date type inferred
-fact tax_rate = 22%              // Percentage type inferred
+fact tax_rate = 22%              // Ratio type inferred
 ```
 
-The type system prevents nonsensical operations (you can't add a date to a weight) while enabling automatic unit conversions:
+The type system prevents nonsensical operations (you can't add a date to a weight) while enabling automatic unit conversions within the same type:
 
 ```lemma
+type mass = scale -> unit kilogram 1.0 -> unit pound 0.453592
+
 fact weight = 70 kilograms
-rule weight_in_pounds = weight in pounds  // Automatic conversion
+rule weight_in_pounds = weight in pounds  // Automatic conversion within type
 ```
 
 ### 2.4 Composition over configuration
@@ -139,12 +143,12 @@ Lemma encourages building complex systems from simple, composable pieces. Docume
 
 ```lemma
 doc base_employee
-fact salary = 50000 usd
+fact salary = 50000
 fact bonus_rate = 5%
 
 doc manager
 fact employee = doc base_employee
-fact employee.salary = 80000 usd
+fact employee.salary = 80000
 fact employee.bonus_rate = 15%
 
 rule manager_bonus = employee.salary * employee.bonus_rate
@@ -164,7 +168,7 @@ Facts are named values of a certain type. They represent inputs to the system:
 fact name = "Alice"
 fact age = 35
 fact start_date = 2024-01-15
-fact salary = 75000 usd
+fact salary = 75000
 fact is_manager = true
 ```
 
@@ -236,11 +240,10 @@ rule compound = principal * (1 + rate) ^ years
 rule is_eligible = age >= 18 and income > 30000
 ```
 
-**Logical**: `and`, `or`, `not`, `have`, `have not`
+**Logical**: `and`, `or`, `not`
 
 ```lemma
 rule can_approve = is_manager? and not is_suspended?
-rule has_email = have customer.email
 ```
 
 **Mathematical**: `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `abs`, `floor`, `ceil`, `round`
@@ -254,10 +257,10 @@ rule hypotenuse = sqrt(a^2 + b^2)
 Lemma intelligently handles arithmetic between different types. When you write:
 
 ```lemma
-rule discounted_price = 200 eur - 25%
+rule discounted_price = 200 - 25%
 ```
 
-Lemma understands that subtracting a percentage from money means "subtract 25% of the money value," producing `150 eur`.
+Lemma understands that subtracting a ratio from a number means "subtract 25% of the value," producing `150`.
 
 ---
 
@@ -265,87 +268,119 @@ Lemma understands that subtracting a percentage from money means "subtract 25% o
 
 ### 4.1 Primitive types
 
-Lemma provides several primitive types:
+Lemma provides several standard primitive types:
 
-- **Number**: Integers and floating-point values
-- **Text**: String literals
 - **Boolean**: true/false, yes/no, accept/reject
+- **Number**: Dimensionless integers and floating-point values
+- **Scale**: Numeric values that can have units
+- **Text**: String literals
 - **Date**: ISO 8601 format dates and datetimes
-- **Regex**: Pattern matching with standard regex syntax
+- **Time**: Time values
+- **Duration**: Time periods (hours, days, weeks, etc.)
+- **Ratio**: Proportional values (percent, permille)
 
 ```lemma
 fact count = 42
 fact name = "Alice"
 fact is_active = true
 fact deadline = 2024-12-31
-fact email_pattern = /^[\w]+@[\w]+\.[\w]+$/
-```
-
-### 4.2 Unit types
-
-Lemma has built-in support for physical and business units:
-
-**Money**: USD, EUR, GBP, JPY, CNY, CHF, CAD, AUD, INR, etc.
-
-```lemma
-fact revenue = 1000000 usd
-fact cost = 500000 eur
-```
-
-**Mass**: kilogram, gram, milligram, pound, ounce
-
-```lemma
-fact weight = 75 kilograms
-fact package_weight = 5 pounds
-```
-
-**Length**: kilometer, meter, centimeter, millimeter, mile, foot, inch
-
-```lemma
-fact distance = 100 kilometers
-fact height = 6 feet
-```
-
-**Duration**: year, month, week, day, hour, minute, second
-
-```lemma
-fact project_duration = 6 months
-fact meeting_length = 90 minutes
-```
-
-**Temperature**: celsius, fahrenheit, kelvin
-
-```lemma
-fact room_temp = 22 celsius
-```
-
-**Other Units**: volume, power, force, pressure, energy, frequency, data size
-
-### 4.3 Automatic unit conversion
-
-Lemma automatically converts between compatible units:
-
-```lemma
-fact weight = 70 kilograms
-rule weight_in_pounds = weight in pounds  // Returns 154.32 pounds
-
-fact distance = 5 kilometers
-rule distance_in_miles = distance in miles  // Returns 3.107 miles
-```
-
-This eliminates manual conversion logic and reduces errors in international applications.
-
-### 4.4 Percentage type
-
-Percentages are a first-class type in Lemma:
-
-```lemma
+fact workweek = 40 hours
 fact tax_rate = 15%
+```
+
+### 4.2 User-defined types
+
+Lemma allows users to define custom types with units, constraints, and validation. This provides flexibility while maintaining type safety.
+
+**Basic type definition:**
+
+```lemma
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.10
+  -> decimals 2
+  -> minimum 0
+
+type mass = scale
+  -> unit kilogram 1.0
+  -> unit gram 0.001
+  -> unit pound 0.453592
+
+fact price = 100 eur
+fact weight = 75 kilograms
+```
+
+**Type commands** allow fine-grained control:
+
+- `unit <name> <value>` - Define units (for `scale` and `ratio` types)
+- `decimals <n>` - Set decimal precision
+- `minimum <value>` / `maximum <value>` - Set value constraints
+- `option "<value>"` - Define allowed text values
+- `help "<text>"` - Add documentation
+- `default <value>` - Set default values
+
+**Type imports** enable reuse across documents:
+
+```lemma
+type currency from base_types
+type discount_rate from pricing -> maximum 0.5
+```
+
+**Inline types** allow type definitions directly in fact declarations:
+
+```lemma
+fact age = [number -> minimum 0 -> maximum 120]
+fact price = [scale -> unit eur 1.00 -> unit usd 1.10]
+```
+
+### 4.3 Unit conversion
+
+Unit conversions work within the same type definition. This ensures type safety while allowing flexible unit systems.
+
+```lemma
+type money = scale -> unit eur 1.00 -> unit usd 1.10
+
+fact price = 100 eur
+rule price_usd = price in usd  // Converts to 110 usd
+```
+
+**Duration units** are built-in (the only exception):
+
+```lemma
+fact workweek = 40 hours
+rule workweek_days = workweek in days  // Converts to ~1.67 days
+```
+
+**Number to ratio conversion:**
+
+```lemma
+rule discount_as_percent = 0.25 in percent  // Converts to 25 percent
+```
+
+This design eliminates manual conversion logic while maintaining clear type boundaries.
+
+### 4.4 Ratio type
+
+Ratios represent proportional values. The `ratio` type includes `percent` and `permille` units by default.
+
+```lemma
+fact tax_rate = 15%        // or 15 percent
 fact discount = 25%
+fact error_rate = 2 permille  // or 2%%
 fact completion = 87.5%
 ```
 
-Percentages interact intelligently with other types in arithmetic operations, automatically applying proportional calculations.
+**Custom ratio types:**
+
+```lemma
+type discount_ratio = ratio
+  -> minimum 0
+  -> maximum 1
+
+fact discount = 0.25  // 25% as decimal ratio
+```
+
+Ratios interact intelligently with other types in arithmetic operations, automatically applying proportional calculations.
 
 ---
 
@@ -378,11 +413,11 @@ Documents can reference other documents, enabling composition and reuse:
 ```lemma
 doc base_employee
 fact name = "John Doe"
-fact salary = 50000 usd
+fact salary = 50000
 
 doc manager
 fact employee = doc base_employee
-fact employee.salary = 80000 usd
+fact employee.salary = 80000
 
 rule manager_bonus = employee.salary * 0.15
 ```
@@ -396,11 +431,11 @@ Facts can be overridden at different levels:
 ```lemma
 doc pricing
 fact quantity = 100
-fact unit_price = 50 usd
+fact unit_price = 50
 
 doc wholesale_pricing
 fact pricing.quantity = 1000
-fact pricing.unit_price = 35 usd
+fact pricing.unit_price = 35
 
 rule total = pricing.quantity * pricing.unit_price
 ```
@@ -491,7 +526,7 @@ The evaluator handles:
 - **Fact resolution**: Direct lookup of facts and rule references
 - **Rule evaluation**: Recursive evaluation of expressions with proper dependency ordering
 - **Unless clauses**: "Last match wins" semantics implemented through conditional evaluation
-- **Unit conversions**: Built-in conversion between compatible unit types
+- **Unit conversions**: Conversion between units within the same type definition
 - **Type-aware operations**: Automatic type checking and conversion for arithmetic and comparisons
 
 Example evaluation:
@@ -513,9 +548,9 @@ The evaluator processes this by:
 
 Lemma's type system provides:
 
-- **Automatic conversions**: Between compatible units (e.g., kilograms to pounds)
-- **Type safety**: Prevents invalid operations (e.g., adding different currencies)
-- **Rich types**: Money, dates, durations, percentages, and physical units
+- **Automatic conversions**: Between units within the same type definition
+- **Type safety**: Prevents invalid operations (e.g., adding different scale types)
+- **User-defined types**: Custom types with units, constraints, and validation
 - **Validation**: Compile-time checking of type compatibility
 
 ### 6.6 Error Handling
@@ -547,21 +582,21 @@ Progressive tax systems are naturally expressed in Lemma:
 ```lemma
 doc tax_policy
 
-fact income = 85000 usd
+fact income = 85000
 fact filing_status = "single"
 
 rule taxable_income = income - standard_deduction?
 
-rule standard_deduction = 13850 usd
-  unless filing_status == "married" then 27700 usd
+rule standard_deduction = 13850
+  unless filing_status == "married" then 27700
 
-rule tax_owed = 0 usd
-  unless taxable_income? > 11000 usd
-    then (taxable_income? - 11000 usd) * 10%
-  unless taxable_income? > 44725 usd
-    then 3372.50 usd + (taxable_income? - 44725 usd) * 12%
-  unless taxable_income? > 95375 usd
-    then 9875 usd + (taxable_income? - 95375 usd) * 22%
+rule tax_owed = 0
+  unless taxable_income? > 11000
+    then (taxable_income? - 11000) * 10%
+  unless taxable_income? > 44725
+    then 3372.50 + (taxable_income? - 44725) * 12%
+  unless taxable_income? > 95375
+    then 9875 + (taxable_income? - 95375) * 22%
 ```
 
 ### 7.2 E-commerce pricing
@@ -573,7 +608,7 @@ doc pricing
 
 fact quantity = [number]
 fact customer_tier = "standard"
-fact unit_price = 100 usd
+fact unit_price = 100
 
 rule volume_discount = 0%
   unless quantity >= 10 then 5%
@@ -623,26 +658,28 @@ Complex shipping calculations with multiple factors:
 ```lemma
 doc shipping
 
-fact order_total = [money]
+fact order_total = [number]
+type mass = scale -> unit kilogram 1.0 -> unit pound 0.453592
+
 fact weight = [mass]
 fact destination = [text]
 fact is_expedited = false
 
-rule base_rate = 12.99 usd
-  unless destination == "CA" then 25.00 usd
-  unless destination == "MX" then 22.00 usd
+rule base_rate = 12.99
+  unless destination == "CA" then 25.00
+  unless destination == "MX" then 22.00
 
-rule weight_surcharge = 0 usd
-  unless weight > 5 kilograms then 7.50 usd
+rule weight_surcharge = 0
+  unless weight > 5 kilograms then 7.50
   unless weight > 20 kilograms then veto "Too heavy for standard shipping"
 
-rule expedited_fee = 0 usd
-  unless is_expedited then 25.00 usd
+rule expedited_fee = 0
+  unless is_expedited then 25.00
 
-rule free_shipping = order_total >= 100 usd and destination == "US"
+rule free_shipping = order_total >= 100 and destination == "US"
 
 rule final_shipping = base_rate? + weight_surcharge? + expedited_fee?
-  unless free_shipping? then 0 usd
+  unless free_shipping? then 0
 ```
 
 ### 7.5 HR compensation policy
@@ -652,12 +689,12 @@ Complex compensation rules with multiple variables:
 ```lemma
 doc compensation
 
-fact base_salary = [money]
+fact base_salary = [number]
 fact years_of_service = [number]
 fact performance_rating = [number]
 fact department = [text]
 
-rule tenure_bonus = 0 usd
+rule tenure_bonus = 0
   unless years_of_service >= 5 then base_salary * 5%
   unless years_of_service >= 10 then base_salary * 10%
   unless years_of_service >= 15 then base_salary * 15%
@@ -667,7 +704,7 @@ rule performance_bonus = base_salary * 0%
   unless performance_rating >= 4 then base_salary * 10%
   unless performance_rating >= 4.5 then base_salary * 15%
 
-rule department_bonus = 0 usd
+rule department_bonus = 0
   unless department == "sales" then base_salary * 10%
   unless department == "engineering" then base_salary * 5%
 
@@ -813,40 +850,23 @@ Lemma provides better readability, version control, testing, and composition.
 
 ## 9. Future work
 
-### 9.1 User-defined types
-
-**Planned feature**: Allow users to define custom types within documents.
-
-```lemma
-type priority = low | medium | high | critical
-
-type custom_currency = cryptocurrency
-  convert 1 bitcoin = 45000 usd
-  convert 1 ethereum = 2500 usd
-
-fact task_priority = [priority]
-fact wallet_balance = 0.5 bitcoin
-```
-
-This will enable domain-specific types and custom unit conversions.
-
-### 9.2 Multi-facts (collections)
+### 9.1 Tables (collections)
 
 **Planned feature**: Support facts that hold multiple values with declarative operations.
 
 ```lemma
 fact employees = multi [text]
-fact salaries = multi [money]
+fact salaries = multi [number]
 
 rule total_payroll = sum of salaries
 rule average_salary = avg of salaries
 rule employee_count = count of employees
-rule high_earners = salaries where value > 100000 usd
+rule high_earners = salaries where value > 100000
 ```
 
 This will enable working with collections of data in a declarative way.
 
-### 9.3 Language Server Protocol (LSP)
+### 9.2 Language Server Protocol (LSP)
 
 **Planned feature**: IDE support for `.lemma` files with:
 - Syntax highlighting
@@ -856,7 +876,7 @@ This will enable working with collections of data in a declarative way.
 - Hover documentation
 - Refactoring support
 
-### 9.4 WebAssembly support
+### 9.3 WebAssembly support
 
 **Planned feature**: Compile Lemma to WebAssembly for browser-based evaluation, enabling:
 - Client-side rule evaluation
@@ -864,7 +884,7 @@ This will enable working with collections of data in a declarative way.
 - Browser-based policy simulators
 - No server round-trip required
 
-### 9.5 API and integration
+### 9.4 API and integration
 
 **Planned features**:
 - REST API server for rule evaluation
@@ -884,7 +904,7 @@ Lemma represents a new approach to encoding business logic. By providing a decla
 Key innovations include:
 
 1. **Natural Language Semantics**: "Last matching wins" logic that mirrors how humans express rules
-2. **Rich Type System**: Built-in support for money, dates, durations, units, and percentages
+2. **Rich Type System**: User-defined types with units, constraints, and automatic conversions
 3. **Type-Aware Arithmetic**: Intelligent handling of operations between different types
 4. **Compositional Design**: Documents reference and extend each other, enabling modular rule libraries
 5. **Veto Semantics**: Clear distinction between returning false and blocking a rule entirely
@@ -926,18 +946,18 @@ cat > example.lemma << 'EOF'
 doc example
 
 fact age = 25
-fact income = 50000 usd
+fact income = 50000
 
 rule can_vote = false
   unless age >= 18 then true
 
 rule tax_bracket = "10%"
-  unless income > 44725 usd then "12%"
-  unless income > 95375 usd then "22%"
+  unless income > 44725 then "12%"
+  unless income > 95375 then "22%"
 EOF
 
 # Override facts
-lemma run example income="100000 usd"
+lemma run example income=100000
 ```
 
 Documentation, examples, and source code are available at:
@@ -962,7 +982,7 @@ base salary, bonuses, equity, and benefits.
 """
 
 fact employee_id = [text]
-fact base_salary = [money]
+fact base_salary = [number]
 fact years_of_service = [number]
 fact performance_rating = [number]
 fact department = [text]
@@ -994,7 +1014,7 @@ rule target_bonus_rate = 10%
 
 rule performance_bonus = adjusted_salary? * target_bonus_rate? * performance_multiplier?
 
-rule equity_grant_value = 0 usd
+rule equity_grant_value = 0
   unless is_manager then adjusted_salary? * 25%
   unless years_of_service < 1 then veto "Not eligible for equity in first year"
 
@@ -1013,7 +1033,7 @@ Query examples:
 
 ```bash
 lemma run compensation total_compensation \
-  base_salary="120000 usd" years_of_service=7 performance_rating=4.2 \
+  base_salary=120000 years_of_service=7 performance_rating=4.2 \
   location="New York" department=engineering is_manager=true
 
 lemma run compensation vacation_days \
@@ -1046,7 +1066,7 @@ Rule Definition:
 Expressions:
   <arithmetic>        // +, -, *, /, %, ^
   <comparison>        // >, <, >=, <=, ==, !=, is, is not
-  <logical>          // and, or, not, have, have not
+  <logical>          // and, or, not
   <mathematical>     // sqrt, sin, cos, tan, log, exp, abs, floor, ceil, round
   <unit-conversion>  // <value> in <unit>
   <rule-reference>   // <name>?
@@ -1058,9 +1078,8 @@ Literals:
   <text>             // "hello world"
   <boolean>          // true, false, yes, no, accept, reject
   <date>             // 2024-01-15, 2024-01-15T14:30:00Z
-  <percentage>       // 15%, 100%
-  <unit-value>       // 100 usd, 5 kilograms, 3 weeks
-  <regex>            // /[A-Z]{3}-\d{4}/
+  <ratio>            // 15%, 15 percent, 5 permille, 5%%
+  <unit-value>       // 5 eur (requires type definition), 3 weeks (duration)
 ```
 
 ---

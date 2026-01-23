@@ -1,24 +1,24 @@
-use lemma::{Engine, LemmaError, LemmaResult};
+use lemma::{Engine, LemmaResult};
 use rust_decimal::Decimal;
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 fn run(code: &str, rule: &str) -> LemmaResult<String> {
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma")?;
-    let resp = engine.evaluate("test", Some(vec![rule.to_string()]), None)?;
+    let resp = engine.evaluate("test", vec![rule.to_string()], HashMap::new())?;
     let v = resp
         .results
-        .iter()
-        .find(|r| r.rule_name == rule)
-        .and_then(|r| r.result.clone())
+        .values()
+        .find(|r| r.rule.name == rule)
+        .and_then(|r| r.result.value().cloned())
         .expect("rule value");
     Ok(v.to_string())
 }
 
 fn run_num(code: &str, rule: &str) -> LemmaResult<Decimal> {
     let s = run(code, rule)?;
-    s.parse::<Decimal>()
-        .map_err(|e| LemmaError::Engine(format!("Failed to parse '{}' as Decimal: {}", s, e)))
+    Ok(s.parse::<Decimal>()
+        .expect("engine result should parse as Decimal"))
 }
 
 fn dec(s: &str) -> Decimal {
@@ -33,11 +33,7 @@ fn assert_close_dec(actual: &Decimal, expected: &Decimal, tol: &Decimal) {
     };
     assert!(
         diff <= *tol,
-        "expected ~{} (±{}), got {} (diff {})",
-        expected,
-        tol,
-        actual,
-        diff
+        "expected ~{expected} (±{tol}), got {actual} (diff {diff})"
     );
 }
 
@@ -65,7 +61,7 @@ fn test_exp_and_power() -> LemmaResult<()> {
 fn test_abs_floor_ceil_round() -> LemmaResult<()> {
     let code = r#"
     doc test
-    rule a = abs(-3.5)
+    rule a = abs -3.5
     rule b = floor 3.9
     rule c = ceil 3.1
     rule d = round 3.5
@@ -133,7 +129,7 @@ fn test_trig_at_zero() -> LemmaResult<()> {
 fn test_nested_math_ops() -> LemmaResult<()> {
     let code = r#"
     doc test
-    rule a = round(abs(-3.6))
+    rule a = round (abs -3.6)
     rule b = ceil (sqrt 2)
     rule c = floor (exp 1)
     "#;
@@ -154,7 +150,7 @@ fn test_sqrt_negative_and_log_domain_errors() {
         .add_lemma_code(
             r#"
         doc test
-        rule bad_sqrt = sqrt(-1)
+        rule bad_sqrt = sqrt -1
         rule bad_log0 = log 0
         rule bad_log_neg = log -5
     "#,
@@ -162,20 +158,53 @@ fn test_sqrt_negative_and_log_domain_errors() {
         )
         .unwrap();
 
-    // Evaluate all rules and expect a runtime error
-    let res1 = engine.evaluate("test", Some(vec!["bad_sqrt".to_string()]), None);
-    assert!(res1.is_err(), "sqrt(-1) should error");
+    // Evaluate all rules and expect a Veto result (runtime error)
+    let res1 = engine
+        .evaluate("test", vec!["bad_sqrt".to_string()], HashMap::new())
+        .unwrap();
+    let rule = res1
+        .results
+        .values()
+        .find(|r| r.rule.name == "bad_sqrt")
+        .unwrap();
+    assert!(
+        rule.result.value().is_none(),
+        "sqrt(-1) should return Veto, got: {:?}",
+        rule.result
+    );
 
-    let res2 = engine.evaluate("test", Some(vec!["bad_log0".to_string()]), None);
-    assert!(res2.is_err(), "log 0 should error");
+    let res2 = engine
+        .evaluate("test", vec!["bad_log0".to_string()], HashMap::new())
+        .unwrap();
+    let rule = res2
+        .results
+        .values()
+        .find(|r| r.rule.name == "bad_log0")
+        .unwrap();
+    assert!(
+        rule.result.value().is_none(),
+        "log 0 should return Veto, got: {:?}",
+        rule.result
+    );
 
-    let res3 = engine.evaluate("test", Some(vec!["bad_log_neg".to_string()]), None);
-    assert!(res3.is_err(), "log negative should error");
+    let res3 = engine
+        .evaluate("test", vec!["bad_log_neg".to_string()], HashMap::new())
+        .unwrap();
+    let rule = res3
+        .results
+        .values()
+        .find(|r| r.rule.name == "bad_log_neg")
+        .unwrap();
+    assert!(
+        rule.result.value().is_none(),
+        "log negative should return Veto, got: {:?}",
+        rule.result
+    );
 }
 
 #[test]
 fn test_inverse_trig_domain_error() {
-    // asin(x) domain is [-1,1]; asin(2) should error
+    // asin(x) domain is [-1,1]; asin(2) should return Veto
     let mut engine = Engine::new();
     engine
         .add_lemma_code(
@@ -187,6 +216,18 @@ fn test_inverse_trig_domain_error() {
         )
         .unwrap();
 
-    let res = engine.evaluate("test", Some(vec!["bad_asin".to_string()]), None);
-    assert!(res.is_err(), "asin 2 should error");
+    let response = engine
+        .evaluate("test", vec!["bad_asin".to_string()], HashMap::new())
+        .unwrap();
+
+    let rule = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "bad_asin")
+        .unwrap();
+    assert!(
+        rule.result.value().is_none(),
+        "asin 2 should return Veto, got: {:?}",
+        rule.result
+    );
 }

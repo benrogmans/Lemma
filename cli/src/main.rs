@@ -45,6 +45,16 @@ enum Commands {
         ///
         /// Examples: price=100, quantity=5, config.tax_rate=0.21
         facts: Vec<String>,
+        /// Invert a rule to find inputs that produce desired output
+        ///
+        /// Format: rule[=target] where target can be =value, >value, <value, >=value, <=value, or =veto
+        ///
+        /// Examples:
+        ///   --target total=100
+        ///   --target total>50
+        ///   --target can_drive=veto
+        #[arg(short = 't', long)]
+        target: Option<String>,
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
@@ -101,33 +111,6 @@ enum Commands {
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
     },
-    /// Invert a rule to find what inputs produce desired outputs
-    ///
-    /// Uses symbolic inversion to derive input constraints from rule definitions.
-    /// Returns domains (valid ranges/values) for each fact that satisfies the target.
-    Invert {
-        /// Document name
-        doc_name: String,
-        /// Rule name to invert
-        rule_name: String,
-        /// Target to invert for (default: any non-veto value)
-        ///
-        /// Examples:
-        ///   any                - any non-veto value (default)
-        ///   veto               - any veto
-        ///   100                - specific value
-        ///   >50                - greater than 50
-        ///   >=50               - greater than or equal to 50
-        /// > <100               - less than 100
-        /// > <=100              - less than or equal to 100
-        #[arg(short = 't', long, default_value = "any")]
-        target: String,
-        /// Facts to provide as given (format: name=value)
-        facts: Vec<String>,
-        /// Workspace root directory containing .lemma files
-        #[arg(short = 'd', long = "dir", default_value = ".")]
-        workdir: PathBuf,
-    },
 }
 
 fn main() {
@@ -138,9 +121,16 @@ fn main() {
             workdir,
             doc_name,
             facts,
-            raw,
+            target,
             interactive,
-        } => run_command(workdir, doc_name.as_ref(), facts, *raw, *interactive),
+            ..
+        } => run_command(
+            workdir,
+            doc_name.as_ref(),
+            facts,
+            target.as_ref(),
+            *interactive,
+        ),
         Commands::Show { workdir, doc_name } => show_command(workdir, doc_name),
         Commands::List { root } => list_command(root),
         Commands::Server {
@@ -149,13 +139,6 @@ fn main() {
             port,
         } => server_command(workdir, host, *port),
         Commands::Mcp { workdir } => mcp_command(workdir),
-        Commands::Invert {
-            workdir,
-            doc_name,
-            rule_name,
-            target,
-            facts,
-        } => invert_command(workdir, doc_name, rule_name, target, facts),
     };
 
     if let Err(e) = result {
@@ -173,13 +156,13 @@ fn run_command(
     workdir: &Path,
     doc_name: Option<&String>,
     facts: &[String],
-    raw: bool,
+    target: Option<&String>,
     interactive: bool,
 ) -> Result<()> {
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
-    let (doc, rules, final_facts) = if interactive || doc_name.is_none() {
+    let (doc, rules, final_facts, final_target) = if interactive || doc_name.is_none() {
         if doc_name.is_none() && !interactive {
             eprintln!("Error: No document specified\n");
             eprintln!("Usage: lemma run [DOC[:RULES]] [FACTS...] [OPTIONS]\n");
@@ -203,36 +186,49 @@ fn run_command(
             (Some(doc), rules)
         });
 
-        let (d, r, interactive_facts) =
-            interactive::run_interactive(&engine, parsed_doc, parsed_rules)?;
-        let mut all_facts = facts.to_vec();
+        let cli_facts: std::collections::HashMap<String, String> = parse_fact_strings(facts);
+
+        let (d, r, interactive_facts, interactive_target) =
+            interactive::run_interactive(&engine, parsed_doc, parsed_rules, &cli_facts)?;
+
+        // Add a blank line after the final interactive prompt so the
+        // formatted output sections ("Facts", "Rules", etc.) don't run
+        // directly against the last user-entered line.
+        println!();
+
+        let mut all_facts = cli_facts;
         all_facts.extend(interactive_facts);
-        (d, r, all_facts)
+        (d, r.unwrap_or_default(), all_facts, interactive_target)
     } else if let Some(name) = doc_name {
         let (doc, rules) = parse_doc_and_rules(name);
-        (doc, rules, facts.to_vec())
+        let fact_overrides = parse_fact_strings(facts);
+        (doc, rules.unwrap_or_default(), fact_overrides, None)
     } else {
         unreachable!()
     };
 
-    // Parse facts
-    let facts = if !final_facts.is_empty() {
-        let refs: Vec<&str> = final_facts.iter().map(|s| s.as_str()).collect();
-        Some(lemma::parse_facts(&refs)?)
-    } else {
-        None
-    };
-
-    // Evaluate
-    let response = engine.evaluate(&doc, rules, facts)?;
-    let formatter = Formatter::default();
-    print!("{}", formatter.format_response(&response, raw));
-
-    for warning in &response.warnings {
-        eprintln!("Warning: {}", warning);
+    let target_str = target.or(final_target.as_ref());
+    if target_str.is_some() {
+        return Err(anyhow::anyhow!("Inversion not implemented"));
     }
 
+    // Normal evaluation mode
+    let response = engine.evaluate(&doc, rules, final_facts)?;
+    let formatter = Formatter;
+    print!("{}", formatter.format_response(&response));
+
     Ok(())
+}
+
+/// Parse fact override strings in "key=value" format into a HashMap
+fn parse_fact_strings(facts: &[String]) -> std::collections::HashMap<String, String> {
+    facts
+        .iter()
+        .filter_map(|s| {
+            s.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
+        .collect()
 }
 
 fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
@@ -243,7 +239,7 @@ fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
         let facts = engine.get_document_facts(doc_name);
         let rules = engine.get_document_rules(doc_name);
 
-        let formatter = Formatter::default();
+        let formatter = Formatter;
         print!(
             "{}",
             formatter.format_document_inspection(doc, &facts, &rules)
@@ -259,8 +255,6 @@ fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
 fn list_command(root: &PathBuf) -> Result<()> {
     let mut engine = Engine::new();
 
-    println!("Loading workspace from {}...", root.display());
-
     let mut file_count = 0;
     for entry in WalkDir::new(root) {
         let entry = entry?;
@@ -274,7 +268,7 @@ fn list_command(root: &PathBuf) -> Result<()> {
 
     let documents = engine.list_documents();
 
-    let doc_stats: Vec<(String, usize, usize)> = documents
+    let mut doc_stats: Vec<(String, usize, usize)> = documents
         .iter()
         .map(|doc_name| {
             let facts_count = engine.get_document_facts(doc_name).len();
@@ -282,10 +276,10 @@ fn list_command(root: &PathBuf) -> Result<()> {
             (doc_name.clone(), facts_count, rules_count)
         })
         .collect();
+    doc_stats.sort_by(|a, b| a.0.cmp(&b.0));
 
-    println!();
-    let formatter = Formatter::default();
-    print!(
+    let formatter = Formatter;
+    println!(
         "{}",
         formatter.format_workspace_summary(file_count, documents.len(), &doc_stats)
     );
@@ -341,112 +335,6 @@ fn mcp_command(workdir: &Path) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn invert_command(
-    workdir: &Path,
-    doc_name: &str,
-    rule_name: &str,
-    target_str: &str,
-    facts: &[String],
-) -> Result<()> {
-    let mut engine = Engine::new();
-    load_workspace(&mut engine, workdir)?;
-
-    // Parse target
-    let target = parse_target(target_str)?;
-
-    // Parse facts
-    let given_facts = if !facts.is_empty() {
-        let refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
-        let parsed_facts = lemma::parse_facts(&refs)?;
-
-        // Convert Vec<LemmaFact> to HashMap<String, LiteralValue>
-        let mut fact_map = std::collections::HashMap::new();
-        for fact in parsed_facts {
-            if let lemma::FactValue::Literal(value) = fact.value {
-                let fact_name = match &fact.fact_type {
-                    lemma::FactType::Local(name) => format!("{}.{}", doc_name, name),
-                    lemma::FactType::Foreign(foreign) => foreign.reference.join("."),
-                };
-                fact_map.insert(fact_name, value);
-            }
-        }
-        fact_map
-    } else {
-        std::collections::HashMap::new()
-    };
-
-    // Perform inversion
-    let solutions = engine.invert(doc_name, rule_name, target, given_facts)?;
-
-    // Format output
-    let formatter = Formatter::default();
-    print!("{}", formatter.format_inversion_result(&solutions));
-
-    Ok(())
-}
-
-fn parse_target(target_str: &str) -> Result<lemma::Target> {
-    use lemma::{OperationResult, Target, TargetOp};
-
-    match target_str {
-        "any" => Ok(Target::any_value()),
-        "veto" => Ok(Target::any_veto()),
-        s if s.starts_with(">=") => {
-            let value_str = &s[2..];
-            let value = parse_literal_value(value_str)?;
-            Ok(Target::with_op(
-                TargetOp::Gte,
-                OperationResult::Value(value),
-            ))
-        }
-        s if s.starts_with("<=") => {
-            let value_str = &s[2..];
-            let value = parse_literal_value(value_str)?;
-            Ok(Target::with_op(
-                TargetOp::Lte,
-                OperationResult::Value(value),
-            ))
-        }
-        s if s.starts_with(">") => {
-            let value_str = &s[1..];
-            let value = parse_literal_value(value_str)?;
-            Ok(Target::with_op(TargetOp::Gt, OperationResult::Value(value)))
-        }
-        s if s.starts_with("<") => {
-            let value_str = &s[1..];
-            let value = parse_literal_value(value_str)?;
-            Ok(Target::with_op(TargetOp::Lt, OperationResult::Value(value)))
-        }
-        _ => {
-            // Try to parse as a specific value
-            let value = parse_literal_value(target_str)?;
-            Ok(Target::value(value))
-        }
-    }
-}
-
-fn parse_literal_value(s: &str) -> Result<lemma::LiteralValue> {
-    use lemma::LiteralValue;
-    use rust_decimal::Decimal;
-
-    // Try parsing as various types
-    if s == "true" {
-        Ok(LiteralValue::Boolean(true))
-    } else if s == "false" {
-        Ok(LiteralValue::Boolean(false))
-    } else if let Ok(num) = s.parse::<Decimal>() {
-        Ok(LiteralValue::Number(num))
-    } else if let Some(s_without_percent) = s.strip_suffix('%') {
-        if let Ok(num) = s_without_percent.parse::<Decimal>() {
-            Ok(LiteralValue::Percentage(num))
-        } else {
-            Err(anyhow::anyhow!("Invalid percentage: {}", s))
-        }
-    } else {
-        Ok(LiteralValue::Text(s.to_string()))
-    }
 }
 
 /// Load all .lemma files from the workspace directory

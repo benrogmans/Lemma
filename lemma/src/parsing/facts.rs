@@ -1,0 +1,438 @@
+use super::ast::Span;
+use super::Rule;
+use crate::error::LemmaError;
+use crate::parsing::types;
+use crate::semantic::*;
+use crate::Source;
+use pest::iterators::Pair;
+use std::sync::Arc;
+
+pub(crate) fn parse_fact_definition(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+    _types: &[TypeDef],
+) -> Result<LemmaFact, LemmaError> {
+    let span = Span::from_pest_span(pair.as_span());
+    let attribute_str = attribute;
+    let doc_name_str = doc_name;
+    let mut fact_name = None;
+    let mut fact_value = None;
+
+    for inner_pair in pair.into_inner() {
+        match inner_pair.as_rule() {
+            Rule::fact_reference_segment => fact_name = Some(inner_pair.as_str().to_string()),
+            Rule::fact_value => {
+                fact_value = Some(parse_fact_value(inner_pair, attribute_str, doc_name_str)?)
+            }
+            _ => {}
+        }
+    }
+
+    let name = fact_name.ok_or_else(|| {
+        LemmaError::engine(
+            "Grammar error: fact_definition missing reference",
+            span.clone(),
+            attribute,
+            Arc::from(""),
+            doc_name,
+            1,
+            None::<String>,
+        )
+    })?;
+    let value = fact_value.ok_or_else(|| {
+        LemmaError::engine(
+            "Grammar error: fact_definition missing fact_value",
+            span.clone(),
+            attribute,
+            Arc::from(""),
+            doc_name,
+            1,
+            None::<String>,
+        )
+    })?;
+
+    let fact = LemmaFact::new(FactReference::local(name), value).with_source_location(Source::new(
+        attribute.to_string(),
+        span,
+        doc_name.to_string(),
+    ));
+    Ok(fact)
+}
+
+pub(crate) fn parse_fact_override(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+    _types: &[TypeDef],
+) -> Result<LemmaFact, LemmaError> {
+    let span = Span::from_pest_span(pair.as_span());
+    let attribute_str = attribute;
+    let doc_name_str = doc_name;
+    let mut fact_reference_path = None;
+    let mut fact_value = None;
+
+    for inner_pair in pair.into_inner() {
+        match inner_pair.as_rule() {
+            Rule::fact_reference => {
+                fact_reference_path = Some(parse_fact_reference_path(
+                    inner_pair,
+                    attribute_str,
+                    doc_name_str,
+                )?)
+            }
+            Rule::fact_value => {
+                fact_value = Some(parse_fact_value(inner_pair, attribute_str, doc_name_str)?)
+            }
+            _ => {}
+        }
+    }
+
+    let override_ref_path = fact_reference_path.ok_or_else(|| {
+        LemmaError::engine(
+            "Grammar error: fact_override missing fact_reference",
+            span.clone(),
+            attribute,
+            Arc::from(""),
+            doc_name,
+            1,
+            None::<String>,
+        )
+    })?;
+    let value = fact_value.ok_or_else(|| {
+        LemmaError::engine(
+            "Grammar error: fact_override missing fact_value",
+            span.clone(),
+            attribute,
+            Arc::from(""),
+            doc_name,
+            1,
+            None::<String>,
+        )
+    })?;
+
+    let override_ref = FactReference::from_path(override_ref_path);
+    let fact = LemmaFact::new(override_ref, value).with_source_location(Source::new(
+        attribute.to_string(),
+        span,
+        doc_name.to_string(),
+    ));
+    Ok(fact)
+}
+
+fn parse_fact_reference_path(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<Vec<String>, LemmaError> {
+    let span = Span::from_pest_span(pair.as_span());
+    let text = pair.as_str();
+    let parts: Vec<String> = text.split('.').map(|s| s.to_string()).collect();
+    if parts.is_empty() {
+        return Err(LemmaError::engine(
+            "Grammar error: fact_reference has no segments",
+            span,
+            attribute,
+            Arc::from(text),
+            doc_name,
+            1,
+            None::<String>,
+        ));
+    }
+    Ok(parts)
+}
+
+fn parse_fact_value(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<FactValue, LemmaError> {
+    let span = Span::from_pest_span(pair.as_span());
+    let pair_str = pair.as_str();
+    for inner_pair in pair.into_inner() {
+        match inner_pair.as_rule() {
+            Rule::type_declaration => {
+                return parse_type_declaration(inner_pair, attribute, doc_name)
+            }
+            Rule::inline_type_definition => {
+                return parse_inline_type_definition(inner_pair, attribute, doc_name)
+            }
+            Rule::doc_reference => {
+                return parse_fact_document_reference(inner_pair, attribute, doc_name)
+            }
+            Rule::literal => return parse_fact_literal(inner_pair, attribute, doc_name),
+            _ => {}
+        }
+    }
+    Err(LemmaError::engine(
+        "Grammar error: fact_value must contain literal, type_declaration, inline_type_definition, or doc_reference",
+        span,
+        attribute,
+        Arc::from(pair_str),
+        doc_name,
+        1,
+        None::<String>,
+    ))
+}
+
+/// Parse a type declaration: `[type_name]` - a reference to a named type
+///
+/// This handles cases like `fact price = [money]` where `money` is a named type.
+/// No resolution happens during parsing - that's deferred to the planning phase.
+fn parse_type_declaration(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<FactValue, LemmaError> {
+    let span = Span::from_pest_span(pair.as_span());
+    let pair_str = pair.as_str();
+    let type_name_def = pair.into_inner().next().ok_or_else(|| {
+        LemmaError::engine(
+            "Grammar error: type_declaration must contain type_name_def",
+            span,
+            attribute,
+            Arc::from(pair_str),
+            doc_name,
+            1,
+            None::<String>,
+        )
+    })?;
+
+    let type_name = type_name_def.as_str().to_string();
+
+    // Just store the name - no resolution during parsing
+    Ok(FactValue::TypeDeclaration {
+        base: type_name,
+        overrides: None,
+        from: None,
+    })
+}
+
+/// Parse an inline type definition: `[type_arrow_chain]` - an inline type with commands
+///
+/// This handles cases like `fact price = [number -> minimum 0]` or `fact buyin = [money -> minimal 100]`.
+/// No resolution happens during parsing - that's deferred to the planning phase.
+fn parse_inline_type_definition(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<FactValue, LemmaError> {
+    let span = Span::from_pest_span(pair.as_span());
+    let pair_str = pair.as_str();
+    let type_arrow_chain = pair.into_inner().next().ok_or_else(|| {
+        LemmaError::engine(
+            "Grammar error: inline_type_definition must contain type_arrow_chain",
+            span,
+            attribute,
+            Arc::from(pair_str),
+            doc_name,
+            1,
+            None::<String>,
+        )
+    })?;
+
+    let (parent_name, inline_overrides, from_doc) =
+        types::parse_type_arrow_chain_with_commands(type_arrow_chain)?;
+
+    // Just store the base name, overrides, and from - no resolution during parsing
+    Ok(FactValue::TypeDeclaration {
+        base: parent_name,
+        overrides: inline_overrides,
+        from: from_doc,
+    })
+}
+
+fn parse_fact_document_reference(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<FactValue, LemmaError> {
+    let span = Span::from_pest_span(pair.as_span());
+    let pair_str = pair.as_str();
+    let doc_name = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| {
+            LemmaError::engine(
+                "Grammar error: doc_reference must contain doc_name",
+                span,
+                attribute,
+                Arc::from(pair_str),
+                doc_name,
+                1,
+                None::<String>,
+            )
+        })?
+        .as_str()
+        .to_string();
+
+    Ok(FactValue::DocumentReference(doc_name))
+}
+
+fn parse_fact_literal(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<FactValue, LemmaError> {
+    let span = Span::from_pest_span(pair.as_span());
+    let pair_str = pair.as_str();
+    let mut inner = pair.into_inner();
+    let literal_pair = inner.next().ok_or_else(|| {
+        LemmaError::engine(
+            "Grammar error: literal must contain a literal value",
+            span,
+            attribute,
+            Arc::from(pair_str),
+            doc_name,
+            1,
+            None::<String>,
+        )
+    })?;
+
+    let literal_value = crate::parsing::literals::parse_literal(literal_pair)?;
+    Ok(FactValue::Literal(literal_value))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parsing::parse;
+    use crate::FactValue;
+
+    #[test]
+    fn test_parse_simple_document_reference() {
+        let input = r#"doc person
+fact name = "John"
+fact contract = doc employment_contract"#;
+        let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].facts.len(), 2);
+
+        if let FactValue::DocumentReference(doc_name) = &result[0].facts[1].value {
+            assert_eq!(doc_name, "employment_contract");
+        } else {
+            panic!("Expected DocumentReference");
+        }
+    }
+
+    #[test]
+    fn test_parse_fact_overrides() {
+        let input = r#"doc person
+fact contract = doc employment_contract
+fact contract.start_date = 2024-02-01
+fact contract.end_date = [date]
+fact contract.employment_type = "contractor"
+fact contract.base = doc base_contract
+fact contract.base.rate = 100"#;
+        let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].facts.len(), 6);
+
+        assert_eq!(
+            result[0].facts[0].reference,
+            crate::FactReference::from_path(vec!["contract".to_string()])
+        );
+        if let FactValue::DocumentReference(doc_name) = &result[0].facts[0].value {
+            assert_eq!(doc_name, "employment_contract");
+        } else {
+            panic!("Expected DocumentReference");
+        }
+
+        assert_eq!(
+            result[0].facts[1].reference,
+            crate::FactReference::from_path(vec!["contract".to_string(), "start_date".to_string()])
+        );
+        match &result[0].facts[1].value {
+            FactValue::Literal(lit) => {
+                assert!(
+                    matches!(&lit.value, crate::Value::Date(_)),
+                    "Expected Date literal"
+                );
+            }
+            _ => panic!("Expected Date literal"),
+        }
+
+        assert_eq!(
+            result[0].facts[2].reference,
+            crate::FactReference::from_path(vec!["contract".to_string(), "end_date".to_string()])
+        );
+        assert!(
+            matches!(&result[0].facts[2].value, FactValue::TypeDeclaration { .. }),
+            "Expected TypeDeclaration"
+        );
+
+        assert_eq!(
+            result[0].facts[3].reference,
+            crate::FactReference::from_path(vec![
+                "contract".to_string(),
+                "employment_type".to_string()
+            ])
+        );
+        if let FactValue::Literal(lit) = &result[0].facts[3].value {
+            if let crate::Value::Text(s) = &lit.value {
+                assert_eq!(s, "contractor");
+            } else {
+                panic!("Expected Text literal");
+            }
+        } else {
+            panic!("Expected Literal fact");
+        }
+
+        assert_eq!(
+            result[0].facts[4].reference,
+            crate::FactReference::from_path(vec!["contract".to_string(), "base".to_string()])
+        );
+        if let FactValue::DocumentReference(doc_name) = &result[0].facts[4].value {
+            assert_eq!(doc_name, "base_contract");
+        } else {
+            panic!("Expected DocumentReference");
+        }
+
+        assert_eq!(
+            result[0].facts[5].reference,
+            crate::FactReference::from_path(vec![
+                "contract".to_string(),
+                "base".to_string(),
+                "rate".to_string()
+            ])
+        );
+        if let FactValue::Literal(lit) = &result[0].facts[5].value {
+            if let crate::Value::Number(n) = &lit.value {
+                assert_eq!(*n, rust_decimal::Decimal::new(100, 0));
+            } else {
+                panic!("Expected Number literal");
+            }
+        } else {
+            panic!("Expected Literal fact");
+        }
+    }
+
+    #[test]
+    fn parse_type_annotations_in_facts_collects_all_facts() {
+        let input = r#"doc test
+fact name = [text]
+fact age = [number]
+fact birth_date = [date]
+fact is_active = [boolean]
+fact discount = [percent]
+fact duration = [duration]"#;
+
+        let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].facts.len(), 6);
+    }
+
+    #[test]
+    fn parse_standard_type_annotations_in_facts_collects_all_facts() {
+        let input = r#"doc test
+fact duration = [duration]
+fact number = [number]
+fact text = [text]
+fact date = [date]
+fact boolean = [boolean]
+fact percentage = [percent]"#;
+
+        let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].facts.len(), 6);
+    }
+}

@@ -16,30 +16,35 @@ pub fn format_error(error: &LemmaError) -> String {
                 _ => unreachable!(),
             };
 
-            let doc_line = if details.span.line >= details.doc_start_line {
-                details.span.line - details.doc_start_line + 1
+            let doc_line = if details.source_location.span.line >= details.doc_start_line {
+                details.source_location.span.line - details.doc_start_line + 1
             } else {
-                details.span.line
+                details.source_location.span.line
             };
 
             let enhanced_message = format!(
-                "{}: {} (in doc '{}' at line {}, file {}:{})",
-                error_type,
+                "{error_type}: {} (in doc '{}' at line {}, file {}:{})",
                 details.message,
-                details.doc_name,
+                details.source_location.doc_name,
                 doc_line,
-                details.source_id,
-                details.span.line
+                details.source_location.attribute,
+                details.source_location.span.line
             );
 
-            let mut report =
-                Report::build(ReportKind::Error, &details.source_id, details.span.start)
-                    .with_message(enhanced_message)
-                    .with_label(
-                        Label::new((&details.source_id, details.span.start..details.span.end))
-                            .with_message("")
-                            .with_color(Color::Red),
-                    );
+            let mut report = Report::build(
+                ReportKind::Error,
+                &details.source_location.attribute,
+                details.source_location.span.start,
+            )
+            .with_message(enhanced_message)
+            .with_label(
+                Label::new((
+                    &details.source_location.attribute,
+                    details.source_location.span.start..details.source_location.span.end,
+                ))
+                .with_message("")
+                .with_color(Color::Red),
+            );
 
             if let Some(suggestion) = &details.suggestion {
                 report = report.with_help(suggestion);
@@ -47,7 +52,7 @@ pub fn format_error(error: &LemmaError) -> String {
 
             match report.finish().write(
                 (
-                    &details.source_id,
+                    &details.source_location.attribute,
                     Source::from(details.source_text.as_ref()),
                 ),
                 &mut output,
@@ -59,8 +64,11 @@ pub fn format_error(error: &LemmaError) -> String {
                 }
             }
         }
-        LemmaError::Engine(msg) => format!("Engine error: {}", msg),
-        LemmaError::CircularDependency(msg) => format!("Circular dependency: {}", msg),
+        LemmaError::Engine(details) => format!("Engine error: {}", details.message),
+        LemmaError::MissingFact(details) => format!("Missing fact: {}", details.message),
+        LemmaError::CircularDependency { details, .. } => {
+            format!("Circular dependency: {}", details.message)
+        }
         LemmaError::ResourceLimitExceeded {
             limit_name,
             limit_value,
@@ -68,8 +76,7 @@ pub fn format_error(error: &LemmaError) -> String {
             suggestion,
         } => {
             format!(
-                "Resource limit exceeded: {}\n  Limit: {}\n  Actual: {}\n  {}",
-                limit_name, limit_value, actual_value, suggestion
+                "Resource limit exceeded: {limit_name}\n  Limit: {limit_value}\n  Actual: {actual_value}\n  {suggestion}"
             )
         }
         LemmaError::MultipleErrors(errors) => {

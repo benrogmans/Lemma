@@ -29,7 +29,6 @@ pub mod http {
     #[derive(Debug, Serialize)]
     struct EvaluateResponse {
         results: Vec<RuleResultJson>,
-        warnings: Vec<String>,
     }
 
     #[derive(Debug, Serialize)]
@@ -63,7 +62,7 @@ pub mod http {
             .layer(CorsLayer::permissive())
             .with_state(shared_engine);
 
-        let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
+        let addr: SocketAddr = format!("{host}:{port}").parse()?;
         info!("Lemma server listening on {}", addr);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -91,41 +90,20 @@ pub mod http {
             return Err((
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: format!("Document '{}' not found", doc_name),
+                    error: format!("Document '{doc_name}' not found"),
                 }),
             ));
         }
 
-        let facts: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
-        let fact_refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
-        let parsed_facts = if !fact_refs.is_empty() {
-            match lemma::parse_facts(&fact_refs) {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    error!("Failed to parse facts: {}", e);
-                    return Err((
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            error: format!("Failed to parse facts: {}", e),
-                        }),
-                    ));
-                }
-            }
-        } else {
-            None
-        };
-
-        let response: Response = engine
-            .evaluate(&doc_name, None, parsed_facts)
-            .map_err(|e| {
-                error!("Evaluation failed: {}", e);
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: format!("Evaluation failed: {}", e),
-                    }),
-                )
-            })?;
+        let response: Response = engine.evaluate(&doc_name, vec![], params).map_err(|e| {
+            error!("Evaluation failed: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Evaluation failed: {e}"),
+                }),
+            )
+        })?;
 
         let results = convert_results(&response);
         info!(
@@ -134,10 +112,7 @@ pub mod http {
             results.len()
         );
 
-        Ok(Json(EvaluateResponse {
-            results,
-            warnings: response.warnings,
-        }))
+        Ok(Json(EvaluateResponse { results }))
     }
 
     async fn evaluate_post(
@@ -163,58 +138,38 @@ pub mod http {
                 (
                     StatusCode::BAD_REQUEST,
                     Json(ErrorResponse {
-                        error: format!("Failed to parse code: {}", e),
+                        error: format!("Failed to parse code: {e}"),
                     }),
                 )
             })?;
 
         let documents = temp_engine.list_documents();
-        if documents.is_empty() {
-            return Err((
+        let doc_name = documents.first().ok_or_else(|| {
+            (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: "No document found in provided code".to_string(),
                 }),
-            ));
-        }
+            )
+        })?;
 
-        let doc_name = &documents[0];
-
-        let facts: Vec<String> = payload
+        let fact_overrides: HashMap<String, String> = payload
             .facts
             .iter()
-            .map(|(k, v)| format!("{}={}", k, json_value_to_lemma(v)))
+            .map(|(k, v)| (k.clone(), json_value_to_string(v)))
             .collect();
-        let fact_refs: Vec<&str> = facts.iter().map(|s| s.as_str()).collect();
-        let parsed_facts = if !fact_refs.is_empty() {
-            match lemma::parse_facts(&fact_refs) {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    error!("Failed to parse facts: {}", e);
-                    return Err((
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            error: format!("Failed to parse facts: {}", e),
-                        }),
-                    ));
-                }
-            }
-        } else {
-            None
-        };
 
-        let response: Response =
-            temp_engine
-                .evaluate(doc_name, None, parsed_facts)
-                .map_err(|e| {
-                    error!("Evaluation failed: {}", e);
-                    (
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            error: format!("Evaluation failed: {}", e),
-                        }),
-                    )
-                })?;
+        let response: Response = temp_engine
+            .evaluate(doc_name, vec![], fact_overrides)
+            .map_err(|e| {
+                error!("Evaluation failed: {}", e);
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: format!("Evaluation failed: {e}"),
+                    }),
+                )
+            })?;
 
         let results = convert_results(&response);
 
@@ -224,30 +179,34 @@ pub mod http {
             results.len()
         );
 
-        Ok(Json(EvaluateResponse {
-            results,
-            warnings: response.warnings,
-        }))
+        Ok(Json(EvaluateResponse { results }))
     }
 
     fn convert_results(response: &Response) -> Vec<RuleResultJson> {
         response
             .results
-            .iter()
-            .map(|r| RuleResultJson {
-                name: r.rule_name.clone(),
-                value: r.result.as_ref().map(|v| v.to_string()),
-                veto_reason: r.veto_message.clone(),
+            .values()
+            .map(|r| {
+                let (value, veto_reason) = match &r.result {
+                    lemma::OperationResult::Value(v) => (Some(v.to_string()), None),
+                    lemma::OperationResult::Veto(msg) => (None, msg.clone()),
+                };
+                RuleResultJson {
+                    name: r.rule.name.clone(),
+                    value,
+                    veto_reason,
+                }
             })
             .collect()
     }
 
-    fn json_value_to_lemma(value: &serde_json::Value) -> String {
+    fn json_value_to_string(value: &serde_json::Value) -> String {
         match value {
-            serde_json::Value::String(s) => format!("\"{}\"", s.replace("\"", "\\\"")),
+            serde_json::Value::String(s) => s.clone(),
             serde_json::Value::Number(n) => n.to_string(),
             serde_json::Value::Bool(b) => b.to_string(),
-            _ => format!("\"{}\"", value.to_string().replace("\"", "\\\"")),
+            serde_json::Value::Null => String::new(),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => value.to_string(),
         }
     }
 }

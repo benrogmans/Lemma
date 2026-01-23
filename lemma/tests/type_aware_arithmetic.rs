@@ -1,4 +1,5 @@
 use lemma::Engine;
+use std::collections::HashMap;
 
 #[test]
 fn test_money_minus_percentage() {
@@ -18,25 +19,17 @@ rule test_passes = price_after_discount? == expected?
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
-        .evaluate("test_money_minus_percentage", None, None)
+        .evaluate("test_money_minus_percentage", vec![], HashMap::new())
         .unwrap();
 
-    let price_after_discount = response
-        .results
-        .iter()
-        .find(|r| r.rule_name == "price_after_discount")
-        .unwrap();
+    let price_after_discount = response.results.get("price_after_discount").unwrap();
     assert_eq!(
-        price_after_discount.result.as_ref().unwrap().to_string(),
+        price_after_discount.result.value().unwrap().to_string(),
         "150"
     );
 
-    let test_passes = response
-        .results
-        .iter()
-        .find(|r| r.rule_name == "test_passes")
-        .unwrap();
-    assert_eq!(test_passes.result.as_ref().unwrap().to_string(), "true");
+    let test_passes = response.results.get("test_passes").unwrap();
+    assert_eq!(test_passes.result.value().unwrap().to_string(), "true");
 }
 
 #[test]
@@ -57,25 +50,14 @@ rule test_passes = price_with_markup? == expected?
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
-        .evaluate("test_money_plus_percentage", None, None)
+        .evaluate("test_money_plus_percentage", vec![], HashMap::new())
         .unwrap();
 
-    let price_with_markup = response
-        .results
-        .iter()
-        .find(|r| r.rule_name == "price_with_markup")
-        .unwrap();
-    assert_eq!(
-        price_with_markup.result.as_ref().unwrap().to_string(),
-        "110"
-    );
+    let price_with_markup = response.results.get("price_with_markup").unwrap();
+    assert_eq!(price_with_markup.result.value().unwrap().to_string(), "110");
 
-    let test_passes = response
-        .results
-        .iter()
-        .find(|r| r.rule_name == "test_passes")
-        .unwrap();
-    assert_eq!(test_passes.result.as_ref().unwrap().to_string(), "true");
+    let test_passes = response.results.get("test_passes").unwrap();
+    assert_eq!(test_passes.result.value().unwrap().to_string(), "true");
 }
 
 #[test]
@@ -96,22 +78,14 @@ rule test_passes = result? == expected?
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
-        .evaluate("test_number_times_percentage", None, None)
+        .evaluate("test_number_times_percentage", vec![], HashMap::new())
         .unwrap();
 
-    let result = response
-        .results
-        .iter()
-        .find(|r| r.rule_name == "result")
-        .unwrap();
-    assert_eq!(result.result.as_ref().unwrap().to_string(), "150");
+    let result = response.results.get("result").unwrap();
+    assert_eq!(result.result.value().unwrap().to_string(), "150");
 
-    let test_passes = response
-        .results
-        .iter()
-        .find(|r| r.rule_name == "test_passes")
-        .unwrap();
-    assert_eq!(test_passes.result.as_ref().unwrap().to_string(), "true");
+    let test_passes = response.results.get("test_passes").unwrap();
+    assert_eq!(test_passes.result.value().unwrap().to_string(), "true");
 }
 
 #[test]
@@ -133,22 +107,14 @@ rule test_passes = final_price? == expected?
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
-        .evaluate("test_with_rule_reference", None, None)
+        .evaluate("test_with_rule_reference", vec![], HashMap::new())
         .unwrap();
 
-    let discount_amount = response
-        .results
-        .iter()
-        .find(|r| r.rule_name == "discount_amount")
-        .unwrap();
-    assert_eq!(discount_amount.result.as_ref().unwrap().to_string(), "50");
+    let discount_amount = response.results.get("discount_amount").unwrap();
+    assert_eq!(discount_amount.result.value().unwrap().to_string(), "50");
 
-    let final_price = response
-        .results
-        .iter()
-        .find(|r| r.rule_name == "final_price")
-        .unwrap();
-    assert_eq!(final_price.result.as_ref().unwrap().to_string(), "150");
+    let final_price = response.results.get("final_price").unwrap();
+    assert_eq!(final_price.result.value().unwrap().to_string(), "150");
 }
 
 #[test]
@@ -172,20 +138,12 @@ rule test_passes = after_second? == expected?
 
     engine.add_lemma_code(code, "test").unwrap();
     let response = engine
-        .evaluate("test_chained_percentages", None, None)
+        .evaluate("test_chained_percentages", vec![], HashMap::new())
         .unwrap();
 
-    let after_first = response
-        .results
-        .iter()
-        .find(|r| r.rule_name == "after_first")
-        .unwrap();
-    assert_eq!(after_first.result.as_ref().unwrap().to_string(), "80");
+    let after_first = response.results.get("after_first").unwrap();
+    assert_eq!(after_first.result.value().unwrap().to_string(), "80");
 
-    let after_second = response
-        .results
-        .iter()
-        .find(|r| r.rule_name == "after_second")
-        .unwrap();
-    assert_eq!(after_second.result.as_ref().unwrap().to_string(), "72");
+    let after_second = response.results.get("after_second").unwrap();
+    assert_eq!(after_second.result.value().unwrap().to_string(), "72");
 }

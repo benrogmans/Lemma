@@ -20,19 +20,19 @@ After installation the `lemma` binary is available on your PATH.
 
 ```bash
 # Evaluate a document (all rules)
-lemma run examples/shipping
+lemma run shipping
 
 # Evaluate specific rules
-lemma run examples/tax_calculation:tax_owed
+lemma run tax_calculation:tax_owed
 
 # Override facts at runtime
-lemma run examples/tax_calculation income=75000 filing_status="married"
+lemma run tax_calculation income=75000 filing_status="married"
 
 # Explore documents interactively
 lemma run --interactive
 
 # Show document structure
-lemma show examples/pricing
+lemma show pricing
 
 # List available documents
 lemma list ./documentation/examples
@@ -57,13 +57,13 @@ Each command supports `--help` for full usage details.
 ## Example session
 
 ```bash
-lemma run examples/shipping
+lemma run shipping
 
 # Output:
 # ┌───────────────┬──────────────────────────────────────────────────────┐
 # │ Rule          ┆ Evaluation                                           │
 # ╞═══════════════╪══════════════════════════════════════════════════════╡
-# │ express_fee   ┆ 4.99 USD                                             │
+# │ express_fee   ┆ 4.99                                             │
 # │               ┆    ...                                               │
 # └───────────────┴──────────────────────────────────────────────────────┘
 ```
@@ -71,7 +71,7 @@ lemma run examples/shipping
 Enable raw mode to pipe results:
 
 ```bash
-lemma run examples/shipping --raw > output.json
+lemma run shipping --raw > output.json
 ```
 
 ## Documentation

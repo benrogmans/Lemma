@@ -5,7 +5,7 @@ title: Language Reference
 
 # Lemma Language Reference
 
-Quick reference for all operators, units, and types in Lemma.
+Quick reference for all operators and types in Lemma.
 
 ## Operators
 
@@ -37,9 +37,6 @@ Quick reference for all operators, units, and types in Lemma.
 | `and` | Logical AND | `is_valid and not is_blocked` |
 | `or` | Logical OR | `is_admin or is_manager` |
 | `not` | Logical NOT | `not is_suspended` |
-| `have` | Has value | `have user.email` |
-| `have not` | Doesn't have value | `have not user.middle_name` |
-| `not have` | Doesn't have value | `not have document.signature` |
 
 ### Mathematical
 | Operator | Description | Example |
@@ -60,122 +57,104 @@ Note: Mathematical operators are prefix operators, not functions. Parentheses ar
 ### Unit Conversion
 | Operator | Description | Example |
 |----------|-------------|---------|
-| `in` | Convert units | `weight in pounds` |
+| `in` | Convert units | `duration in hours`, `price in usd` |
 
-## Unit Types
-
-### Money
-**Currencies:** `USD`, `EUR`, `GBP`, `JPY`, `CNY`
-
-```lemma
-fact price = 100
-fact budget = 50000
-```
-
-### Mass
-**Units:** `kilogram`, `gram`, `milligram`, `pound`, `ounce`
-
-**Plural forms:** `kilograms`, `grams`, `milligrams`, `pounds`, `ounces`
+The `in` operator converts between units:
+- **Duration units** (built-in): `duration in hours`, `duration in days`
+- **User-defined scale types**: Units must be defined in the same type
+- **Number to ratio**: `0.5 in percent` converts to `50 percent`
 
 ```lemma
-fact weight = 10 kilograms
-fact portion = 250 grams
-```
+type money = scale -> unit eur 1.00 -> unit usd 1.10
 
-### Length
-**Units:** `kilometer`, `meter`, `centimeter`, `millimeter`, `foot`, `inch`
+fact price = 100 eur
+rule price_usd = price in usd  // Converts to 110 usd
 
-**Plural forms:** `kilometers`, `meters`, `centimeters`, `millimeters`, `feet`, `inches`
-
-```lemma
-fact distance = 5 kilometers
-fact height = 180 centimeters
-```
-
-### Duration
-**Units:** `year`, `month`, `week`, `day`, `hour`, `minute`, `second`
-
-**Plural forms:** `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds`
-
-```lemma
 fact workweek = 40 hours
-fact vacation = 3 weeks
-fact tenure = 5 years
+rule workweek_days = workweek in days  // Converts to ~1.67 days
 ```
 
-### Temperature
-**Units:** `celsius`, `fahrenheit`, `kelvin`
+## Standard Types
+
+Lemma provides these standard primitive types:
+
+- **`boolean`** - true/false values
+- **`number`** - dimensionless numeric values (no units)
+- **`scale`** - numeric values that can have units
+- **`text`** - string values
+- **`date`** - ISO 8601 dates
+- **`time`** - time values
+- **`duration`** - time periods (hours, days, weeks, etc.)
+- **`ratio`** - proportional values (percent, permille)
+
+## User-Defined Types
+
+Define custom types with units, constraints, and validation:
+
+### Basic Type Definition
 
 ```lemma
-fact room_temp = 22 celsius
-fact body_temp = 98.6 fahrenheit
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.10
+  -> decimals 2
+  -> minimum 0
 ```
 
-### Volume
-**Units:** `liter`, `gallon`
+### Type Commands
 
-**Plural forms:** `liters`, `gallons`
+**For `scale` and `number` types:**
+- `unit <name> <value>` - Define a unit (scale only)
+- `decimals <n>` - Set decimal precision (0-255)
+- `minimum <value>` - Set minimum value
+- `maximum <value>` - Set maximum value
+- `precision <value>` - Set precision value
+- `help "<text>"` - Add help text
+- `default <value>` - Set default value
+
+**For `ratio` type:**
+- `unit <name> <value>` - Define custom ratio units
+- `minimum <value>` - Set minimum value
+- `maximum <value>` - Set maximum value
+- `help "<text>"` - Add help text
+- `default <value>` - Set default value
+
+**For `text` type:**
+- `option "<value>"` - Add a single allowed option
+- `options "<value1>" "<value2>" ...` - Add multiple allowed options
+- `minimum <n>` - Minimum string length
+- `maximum <n>` - Maximum string length
+- `length <n>` - Exact string length
+- `help "<text>"` - Add help text
+- `default "<value>"` - Set default value
+
+**For `date` and `time` types:**
+- `minimum <value>` - Minimum date/time
+- `maximum <value>` - Maximum date/time
+- `help "<text>"` - Add help text
+- `default <value>` - Set default value
+
+**For `boolean` and `duration` types:**
+- `help "<text>"` - Add help text
+- `default <value>` - Set default value
+
+### Type Imports
+
+Import types from other documents:
 
 ```lemma
-fact capacity = 50 liters
-fact tank_size = 15 gallons
+type currency from base_types
+type discount_rate from pricing -> maximum 0.5
 ```
 
-### Power
-**Units:** `watt`, `kilowatt`, `megawatt`, `horsepower`
+### Inline Type Definitions
 
-**Plural forms:** `watts`, `kilowatts`, `megawatts`
-
-```lemma
-fact consumption = 1500 watts
-fact output = 5 kilowatts
-```
-
-### Force
-**Units:** `newton`, `kilonewton`, `lbf`
-
-**Plural forms:** `newtons`, `kilonewtons`
+Define types inline in fact declarations:
 
 ```lemma
-fact thrust = 500 newtons
-```
-
-### Pressure
-**Units:** `pascal`, `kilopascal`, `megapascal`, `bar`, `psi`
-
-**Plural forms:** `pascals`, `kilopascals`, `megapascals`, `bars`
-
-```lemma
-fact tire_pressure = 32 psi
-fact atmospheric = 1 bar
-```
-
-### Energy
-**Units:** `joule`, `kilojoule`, `megajoule`, `kilowatthour`, `calorie`, `kilocalorie`
-
-**Plural forms:** `joules`, `kilojoules`, `megajoules`, `kilowatthours`, `calories`, `kilocalories`
-
-```lemma
-fact energy_used = 100 kilowatthours
-fact food_energy = 2000 kilocalories
-```
-
-### Frequency
-**Units:** `hertz`, `kilohertz`, `megahertz`, `gigahertz`
-
-```lemma
-fact cpu_speed = 3.5 gigahertz
-fact signal = 100 megahertz
-```
-
-### Data Size
-**Units:** `byte`, `kilobyte`, `megabyte`, `gigabyte`, `terabyte`
-
-**Plural forms:** `bytes`, `kilobytes`, `megabytes`, `gigabytes`, `terabytes`
-
-```lemma
-fact file_size = 10 megabytes
-fact storage = 1 terabyte
+fact age = [number -> minimum 0 -> maximum 120]
+fact price = [scale -> unit eur 1.00 -> unit usd 1.10]
+fact status = [text -> option "active" -> option "inactive"]
 ```
 
 ## Type Annotations
@@ -183,13 +162,21 @@ fact storage = 1 terabyte
 Declare expected types without specifying values:
 
 ```lemma
+type mass = scale -> unit kilogram 1.0 -> unit pound 0.453592
+
 fact unknown_date = [date]
 fact optional_field = [text]
 fact user_age = [number]
 fact is_active = [boolean]
-fact distance = [length]
 fact weight = [mass]
 fact duration = [duration]
+```
+
+You can also use inline type definitions:
+
+```lemma
+fact age = [number -> minimum 0 -> maximum 120]
+fact price = [scale -> unit eur 1.00 -> decimals 2]
 ```
 
 ## Boolean Literals
@@ -221,14 +208,6 @@ rule result = value
 
 Not a boolean - prevents any valid verdict from the rule.
 
-### Have Operator
-Checks if a fact has any value:
-
-```lemma
-rule has_email = have user.email
-rule missing_phone = not have user.phone
-```
-
 ## Date Formats
 
 ISO 8601 format:
@@ -239,30 +218,41 @@ fact date_time = 2024-01-15T14:30:00Z
 fact with_timezone = 2024-01-15T14:30:00+01:00
 ```
 
-## Regex Patterns
+## Ratios
 
-Standard regex syntax between forward slashes:
+Ratio values represent proportions. The `ratio` type includes `percent` and `permille` units by default.
 
-```lemma
-fact email_pattern = /^[\w]+@[\w]+\.[\w]+$/
-fact phone_pattern = /\d{3}-\d{3}-\d{4}/
-fact code_pattern = /[A-Z]{3}-\d{4}/
-```
-
-## Percentages
-
-Literal percentage values (0-100 range):
+**Literal syntax:**
+- `15 percent` or `15%` - 15 percent (0.15 as ratio)
+- `5 permille` or `5%%` - 5 permille (0.005 as ratio)
 
 ```lemma
-fact tax_rate = 15%
+fact tax_rate = 15 percent
 fact discount = 20%
-fact completion = 87.5%
+fact completion = 87.5 percent
+fact error_rate = 2 permille
 ```
 
-Use in calculations:
+**Custom ratio types:**
+
+```lemma
+type discount_ratio = ratio
+  -> minimum 0
+  -> maximum 1
+
+fact discount = 0.25  // 25% as decimal ratio
+```
+
+**Use in calculations:**
 
 ```lemma
 rule discount_amount = price * discount_rate
 rule after_discount = price * (1 - discount_rate)
+```
+
+**Number to ratio conversion:**
+
+```lemma
+rule discount_as_percent = 0.25 in percent  // Converts to 25 percent
 ```
 

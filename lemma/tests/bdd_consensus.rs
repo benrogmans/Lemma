@@ -1,5 +1,4 @@
 use lemma::{Engine, LiteralValue, Target};
-use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 #[test]
@@ -24,10 +23,10 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let solutions = engine
-        .invert(
+        .invert_strict(
             "shop_consensus",
             "target",
-            Target::value(LiteralValue::Number(Decimal::from(1))),
+            Target::value(LiteralValue::number(1)),
             HashMap::new(),
         )
         .expect("invert should succeed");

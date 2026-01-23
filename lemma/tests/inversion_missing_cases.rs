@@ -1,17 +1,13 @@
-use lemma::{Engine, LiteralValue, MoneyUnit, NumericUnit, Target, TargetOp};
+use lemma::{Engine, FactPath, LiteralValue, Target, TargetOp};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
-
-fn usd(amount: i64) -> LiteralValue {
-    LiteralValue::Unit(NumericUnit::Money(Decimal::from(amount), MoneyUnit::Usd))
-}
 
 /// Test TargetOp::Gt (Greater Than)
 #[test]
 fn target_operator_greater_than() {
     let code = r#"
         doc pricing
-        fact base_price = [money]
+        fact base_price = [number]
         fact markup_rate = 1.5
 
         rule final_price = base_price * markup_rate
@@ -22,22 +18,27 @@ fn target_operator_greater_than() {
 
     // Question: "What base prices result in final price > $100?"
     let solutions = engine
-        .invert(
+        .invert_strict(
             "pricing",
             "final_price",
-            Target::with_op(TargetOp::Gt, lemma::OperationResult::Value(usd(100))),
+            Target::with_op(
+                TargetOp::Gt,
+                lemma::OperationResult::Value(LiteralValue::number(100)),
+            ),
             HashMap::new(),
         )
         .expect("should invert successfully");
 
-    // Should have at least one solution solution
+    // Should have at least one solution
     assert!(!solutions.is_empty(), "should have solutions");
 
     // Should track base_price in domain
+    let base_price_path = FactPath::local("base_price".to_string());
     assert!(
         solutions
+            .domains
             .iter()
-            .any(|r| r.keys().any(|k| k.reference.join(".") == "base_price")),
+            .any(|d| d.contains_key(&base_price_path)),
         "base_price should be in domains"
     );
 }
@@ -47,7 +48,7 @@ fn target_operator_greater_than() {
 fn target_operator_less_than_or_equal() {
     let code = r#"
         doc budget
-        fact monthly_cost = [money]
+        fact monthly_cost = [number]
         fact months = 12
 
         rule annual_cost = monthly_cost * months
@@ -58,19 +59,23 @@ fn target_operator_less_than_or_equal() {
 
     // Question: "What monthly costs keep annual cost <= $50,000?"
     let solutions = engine
-        .invert(
+        .invert_strict(
             "budget",
             "annual_cost",
-            Target::with_op(TargetOp::Lte, lemma::OperationResult::Value(usd(50000))),
+            Target::with_op(
+                TargetOp::Lte,
+                lemma::OperationResult::Value(LiteralValue::number(50000)),
+            ),
             HashMap::new(),
         )
         .expect("should invert successfully");
 
+    let monthly_cost_path = FactPath::local("monthly_cost".to_string());
     assert!(
         solutions
+            .domains
             .iter()
-            .flat_map(|r| r.keys())
-            .any(|v| v.reference.join(".") == "monthly_cost"),
+            .any(|d| d.contains_key(&monthly_cost_path)),
         "monthly_cost should be a free variable"
     );
 }
@@ -80,7 +85,7 @@ fn target_operator_less_than_or_equal() {
 fn target_operator_greater_than_or_equal() {
     let code = r#"
         doc compensation
-        fact base_salary = [money]
+        fact base_salary = [number]
         fact bonus_rate = 0.20
 
         rule total_comp = base_salary * (1 + bonus_rate)
@@ -91,19 +96,23 @@ fn target_operator_greater_than_or_equal() {
 
     // Question: "What base salaries give total comp >= $120,000?"
     let solutions = engine
-        .invert(
+        .invert_strict(
             "compensation",
             "total_comp",
-            Target::with_op(TargetOp::Gte, lemma::OperationResult::Value(usd(120000))),
+            Target::with_op(
+                TargetOp::Gte,
+                lemma::OperationResult::Value(LiteralValue::number(120000)),
+            ),
             HashMap::new(),
         )
         .expect("should invert successfully");
 
+    let base_salary_path = FactPath::local("base_salary".to_string());
     assert!(
         solutions
+            .domains
             .iter()
-            .flat_map(|r| r.keys())
-            .any(|v| v.reference.join(".") == "base_salary"),
+            .any(|d| d.contains_key(&base_salary_path)),
         "base_salary should be a free variable"
     );
 }
@@ -126,7 +135,7 @@ fn boolean_not_operator() {
 
     // Question: "What conditions trigger veto?"
     let solutions = engine
-        .invert(
+        .invert_strict(
             "eligibility",
             "can_access",
             Target::any_veto(),
@@ -134,15 +143,15 @@ fn boolean_not_operator() {
         )
         .expect("should invert successfully");
 
-    // Should have solution solutions
+    // Should have solutions
     assert!(!solutions.is_empty(), "should have solutions");
 
     // Should track boolean variables in domains
     assert!(
-        solutions.iter().any(|r| r.keys().any(|k| {
-            let s = k.reference.join(".");
-            s.contains("is_suspended") || s.contains("has_membership")
-        })),
+        solutions.domains.iter().any(|d| {
+            d.keys()
+                .any(|k| k.fact.contains("is_suspended") || k.fact.contains("has_membership"))
+        }),
         "should track boolean condition variables"
     );
 }
@@ -158,7 +167,7 @@ fn cross_document_simple() {
     let derived_doc = r#"
         doc derived
         fact base = doc base
-        fact order_total = [money]
+        fact order_total = [number]
 
         rule discount = order_total * base.discount_rate
         rule final_total = order_total - discount?
@@ -170,22 +179,22 @@ fn cross_document_simple() {
 
     // Question: "What order_total gives final_total of $85?"
     let solutions = engine
-        .invert(
+        .invert_strict(
             "derived",
             "final_total",
-            Target::value(usd(85)),
+            Target::value(LiteralValue::number(85)),
             HashMap::new(),
         )
         .expect("should invert successfully");
 
     // Should solve algebraically: order_total = 85 / 0.85 = 100
-    // With the new Shape structure, check if order_total is referenced
+    let order_total_path = FactPath::local("order_total".to_string());
     assert!(
-        solutions.iter().all(|r| r.is_empty())
+        solutions.domains.iter().all(|d| d.is_empty())
             || solutions
+                .domains
                 .iter()
-                .flat_map(|r| r.keys())
-                .any(|v| v.reference.join(".") == "order_total"),
+                .any(|d| d.contains_key(&order_total_path)),
         "order_total should be referenced or fully solved"
     );
 }
@@ -195,7 +204,7 @@ fn cross_document_simple() {
 fn cross_document_rule_references() {
     let config_doc = r#"
         doc config
-        fact min_threshold = 1000 USD
+        fact min_threshold = 1000
 
         rule eligibility_threshold = min_threshold * 2
     "#;
@@ -203,7 +212,7 @@ fn cross_document_rule_references() {
     let order_doc = r#"
         doc order
         fact settings = doc config
-        fact customer_lifetime_value = [money]
+        fact customer_lifetime_value = [number]
 
         rule is_vip = customer_lifetime_value >= settings.eligibility_threshold?
     "#;
@@ -213,23 +222,25 @@ fn cross_document_rule_references() {
     engine.add_lemma_code(order_doc, "order").unwrap();
 
     let mut given = HashMap::new();
-    given.insert("config.min_threshold".to_string(), usd(1000));
+    given.insert(
+        "settings.min_threshold".to_string(),
+        LiteralValue::number(1000),
+    );
 
     // Question: "What customer_lifetime_value makes is_vip true?" (>= 2000)
     let solutions = engine
-        .invert(
+        .invert_strict(
             "order",
             "is_vip",
-            Target::value(LiteralValue::Boolean(true)),
+            Target::value(LiteralValue::boolean(lemma::BooleanValue::True)),
             given,
         )
         .expect("should invert successfully");
 
     // Should identify customer_lifetime_value in domains
+    let clv_path = FactPath::local("customer_lifetime_value".to_string());
     assert!(
-        solutions.iter().any(|r| r
-            .keys()
-            .any(|k| k.reference.join(".") == "customer_lifetime_value")),
+        solutions.domains.iter().any(|d| d.contains_key(&clv_path)),
         "customer_lifetime_value should be in domains"
     );
 }
@@ -242,51 +253,57 @@ fn cross_document_multi_level() {
         fact base_rate = 0.10
     "#;
 
-    let solutional_doc = r#"
-        doc solutional
+    let regional_doc = r#"
+        doc regional
         fact global_config = doc global
-        fact solutional_multiplier = 1.5
+        fact regional_multiplier = 1.5
 
-        rule effective_rate = global_config.base_rate * solutional_multiplier
+        rule effective_rate = global_config.base_rate * regional_multiplier
     "#;
 
     let transaction_doc = r#"
         doc transaction
-        fact solutional = doc solutional
-        fact amount = [money]
+        fact regional = doc regional
+        fact amount = [number]
 
-        rule fee = amount * solutional.effective_rate?
+        rule fee = amount * regional.effective_rate?
     "#;
 
     let mut engine = Engine::new();
     engine.add_lemma_code(global_doc, "global").unwrap();
-    engine.add_lemma_code(solutional_doc, "solutional").unwrap();
+    engine.add_lemma_code(regional_doc, "regional").unwrap();
     engine
         .add_lemma_code(transaction_doc, "transaction")
         .unwrap();
 
     let mut given = HashMap::new();
     given.insert(
-        "global.base_rate".to_string(),
-        LiteralValue::Number(Decimal::from_str_exact("0.10").unwrap()),
+        "regional.global_config.base_rate".to_string(),
+        LiteralValue::number(Decimal::from_str_exact("0.10").unwrap()),
     );
     given.insert(
-        "solutional.solutional_multiplier".to_string(),
-        LiteralValue::Number(Decimal::from_str_exact("1.5").unwrap()),
+        "regional.regional_multiplier".to_string(),
+        LiteralValue::number(Decimal::from_str_exact("1.5").unwrap()),
     );
 
     // Question: "What amount gives $15 fee?"
     let solutions = engine
-        .invert("transaction", "fee", Target::value(usd(15)), given)
+        .invert_strict(
+            "transaction",
+            "fee",
+            Target::value(LiteralValue::number(15)),
+            given,
+        )
         .expect("should invert successfully");
 
     // Should solve: amount = 15 / 0.15 = 100
-    // Check if amount is in domains or solutions are empty (fully solved)
+    let amount_path = FactPath::local("amount".to_string());
     assert!(
-        solutions.iter().all(|r| r.is_empty())
+        solutions.domains.iter().all(|d| d.is_empty())
             || solutions
+                .domains
                 .iter()
-                .any(|r| r.keys().any(|k| k.reference.join(".") == "amount")),
+                .any(|d| d.contains_key(&amount_path)),
         "amount should be in domains or fully solved"
     );
 }
@@ -307,7 +324,7 @@ fn cross_document_piecewise() {
     let pricing_doc = r#"
         doc pricing
         fact customer = doc base
-        fact subtotal = [money]
+        fact subtotal = [number]
 
         rule discount = subtotal * customer.discount_rate?
         rule total = subtotal - discount?
@@ -318,22 +335,26 @@ fn cross_document_piecewise() {
     engine.add_lemma_code(pricing_doc, "pricing").unwrap();
 
     let mut given = HashMap::new();
-    given.insert("pricing.subtotal".to_string(), usd(100));
+    given.insert("subtotal".to_string(), LiteralValue::number(100));
 
     // Question: "What tier gives $80 total?" (i.e., 20% discount)
     let solutions = engine
-        .invert("pricing", "total", Target::value(usd(80)), given)
+        .invert_strict(
+            "pricing",
+            "total",
+            Target::value(LiteralValue::number(80)),
+            given,
+        )
         .expect("should invert successfully");
 
     // Should identify tier as the free variable (or solve it exactly)
-    // Successfully inverted - good!
     assert!(!solutions.is_empty(), "should have branches");
     // Either tier is free, or it was fully solved (no free vars means solved)
     let has_tier = solutions
+        .domains
         .iter()
-        .flat_map(|r| r.keys())
-        .any(|v| v.reference.join(".").contains("tier"));
-    let fully_solved = solutions.iter().all(|r| r.is_empty());
+        .any(|d| d.keys().any(|v| v.fact.contains("tier")));
+    let fully_solved = solutions.domains.iter().all(|d| d.is_empty());
     assert!(
         has_tier || fully_solved,
         "tier should be involved or fully solved"
@@ -361,17 +382,18 @@ fn complex_boolean_not_and_combination() {
 
     // Question: "What conditions cause veto?"
     let solutions = engine
-        .invert("shipping", "can_ship", Target::any_veto(), HashMap::new())
+        .invert_strict("shipping", "can_ship", Target::any_veto(), HashMap::new())
         .expect("should invert successfully");
 
-    // Should have solution solutions
+    // Should have solutions
     assert!(!solutions.is_empty(), "should have solutions");
 
     // Should track all boolean variables in domains
     assert!(
-        solutions.iter().any(|r| r.keys().any(|k| {
-            let s = k.reference.join(".");
-            s.contains("is_domestic") || s.contains("has_po_box") || s.contains("is_oversized")
+        solutions.domains.iter().any(|d| d.keys().any(|k| {
+            k.fact.contains("is_domestic")
+                || k.fact.contains("has_po_box")
+                || k.fact.contains("is_oversized")
         })),
         "should track condition variables"
     );
@@ -382,7 +404,7 @@ fn complex_boolean_not_and_combination() {
 fn target_operator_not_equal() {
     let code = r#"
         doc validation
-        fact status = "pending"
+        fact status = [text]
 
         rule is_complete = status is "complete"
     "#;
@@ -391,28 +413,23 @@ fn target_operator_not_equal() {
     engine.add_lemma_code(code, "test").unwrap();
 
     // Question: "What status values are NOT complete?"
-    let result = engine.invert(
+    let result = engine.invert_strict(
         "validation",
         "is_complete",
         Target::with_op(
             TargetOp::Neq,
-            lemma::OperationResult::Value(LiteralValue::Boolean(true)),
+            lemma::OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::True)),
         ),
         HashMap::new(),
     );
 
-    // This might not be implemented yet - that's ok
-    match result {
-        Ok(solutions) => {
-            assert!(
-                solutions
-                    .iter()
-                    .any(|r| r.keys().any(|k| k.reference.join(".") == "status")),
-                "status should be in domains"
-            );
-        }
-        Err(_) => {
-            // Neq might not be supported yet - test documents the expected behavior
-        }
-    }
+    let solutions = result.expect("Neq should be supported");
+    let status_path = FactPath::local("status".to_string());
+    assert!(
+        solutions
+            .domains
+            .iter()
+            .any(|d| d.contains_key(&status_path)),
+        "status should be in domains"
+    );
 }

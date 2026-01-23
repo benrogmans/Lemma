@@ -3,49 +3,7 @@
 /// These tests ensure that the engine correctly validates that fact overrides
 /// match the expected types declared in the document, preventing type confusion bugs.
 use lemma::Engine;
-
-#[test]
-fn test_money_type_validation_rejects_number() {
-    let code = r#"
-doc test
-fact price = [money]
-rule total = price * 1.1
-"#;
-
-    let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
-
-    // This should fail - money fact cannot be overridden with a number
-    let facts = lemma::parse_facts(&["price=100"]).unwrap();
-    let result = engine.evaluate("test", None, Some(facts));
-
-    assert!(result.is_err());
-    let error = result.unwrap_err().to_string();
-    assert!(error.contains("Type mismatch for fact 'price'"));
-    assert!(error.contains("expected money"));
-    assert!(error.contains("got number"));
-}
-
-#[test]
-fn test_money_type_validation_accepts_money() {
-    let code = r#"
-doc test
-fact price = [money]
-rule total = price * 1.1
-"#;
-
-    let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
-
-    // This should succeed - money fact with money override
-    let facts = lemma::parse_facts(&["price=100 USD"]).unwrap();
-    let result = engine.evaluate("test", None, Some(facts));
-
-    assert!(result.is_ok());
-    let response = result.unwrap();
-    assert_eq!(response.results.len(), 1);
-    assert_eq!(response.results[0].rule_name, "total");
-}
+use std::collections::HashMap;
 
 #[test]
 fn test_number_type_validation_rejects_text() {
@@ -58,22 +16,25 @@ rule doubled = age * 2
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    // This should fail - number fact cannot be overridden with text
-    let facts = lemma::parse_facts(&["age=\"twenty\""]).unwrap();
-    let result = engine.evaluate("test", None, Some(facts));
+    let mut facts = HashMap::new();
+    facts.insert("age".to_string(), "twenty".to_string());
 
-    assert!(result.is_err());
+    let result = engine.evaluate("test", vec![], facts);
+
+    assert!(result.is_err(), "Expected error but got: {:?}", result);
     let error = result.unwrap_err().to_string();
-    assert!(error.contains("Type mismatch for fact 'age'"));
-    assert!(error.contains("expected number"));
-    assert!(error.contains("got text"));
+    assert!(
+        error.contains("Failed to parse fact 'age'"),
+        "Error was: {}",
+        error
+    );
 }
 
 #[test]
 fn test_multiple_type_validations() {
     let code = r#"
 doc test
-fact price = [money]
+fact price = [number]
 fact quantity = [number]
 fact active = [boolean]
 rule total = price * quantity
@@ -82,36 +43,48 @@ rule total = price * quantity
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    // Test money type mismatch
-    let facts = lemma::parse_facts(&["price=100", "quantity=5", "active=true"]).unwrap();
-    let result = engine.evaluate("test", None, Some(facts));
+    let mut facts = HashMap::new();
+    facts.insert("price".to_string(), "expensive".to_string());
+    facts.insert("quantity".to_string(), "5".to_string());
+    facts.insert("active".to_string(), "true".to_string());
+
+    let result = engine.evaluate("test", vec![], facts);
+    assert!(result.is_err(), "Expected type mismatch error");
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Failed to parse fact 'price'"));
+
+    let mut facts = HashMap::new();
+    facts.insert("price".to_string(), "100".to_string());
+    facts.insert("quantity".to_string(), "five".to_string());
+    facts.insert("active".to_string(), "true".to_string());
+
+    let result = engine.evaluate("test", vec![], facts);
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
         .to_string()
-        .contains("Type mismatch for fact 'price'"));
+        .contains("Failed to parse fact 'quantity'"));
 
-    // Test number type mismatch
-    let facts = lemma::parse_facts(&["price=100 USD", "quantity=\"five\"", "active=true"]).unwrap();
-    let result = engine.evaluate("test", None, Some(facts));
+    let mut facts = HashMap::new();
+    facts.insert("price".to_string(), "100".to_string());
+    facts.insert("quantity".to_string(), "5".to_string());
+    facts.insert("active".to_string(), "maybe".to_string());
+
+    let result = engine.evaluate("test", vec![], facts);
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
         .to_string()
-        .contains("Type mismatch for fact 'quantity'"));
+        .contains("Failed to parse fact 'active'"));
 
-    // Test boolean type mismatch
-    let facts = lemma::parse_facts(&["price=100 USD", "quantity=5", "active=\"yes\""]).unwrap();
-    let result = engine.evaluate("test", None, Some(facts));
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Type mismatch for fact 'active'"));
+    let mut facts = HashMap::new();
+    facts.insert("price".to_string(), "100".to_string());
+    facts.insert("quantity".to_string(), "5".to_string());
+    facts.insert("active".to_string(), "true".to_string());
 
-    // Test all correct types
-    let facts = lemma::parse_facts(&["price=100 USD", "quantity=5", "active=true"]).unwrap();
-    let result = engine.evaluate("test", None, Some(facts));
+    let result = engine.evaluate("test", vec![], facts);
     assert!(result.is_ok());
 }
 
@@ -119,41 +92,77 @@ rule total = price * quantity
 fn test_literal_fact_type_validation() {
     let code = r#"
 doc test
-fact base_price = 50 USD
+fact base_price = 50
 rule total = base_price * 1.2
 "#;
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    // Should reject number override for money literal
-    let facts = lemma::parse_facts(&["base_price=60"]).unwrap();
-    let result = engine.evaluate("test", None, Some(facts));
+    let mut facts = HashMap::new();
+    facts.insert("base_price".to_string(), "sixty".to_string());
+
+    let result = engine.evaluate("test", vec![], facts);
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
         .to_string()
-        .contains("Type mismatch for fact 'base_price'"));
+        .contains("Failed to parse fact 'base_price'"));
 
-    // Should accept money override for money literal
-    let facts = lemma::parse_facts(&["base_price=60 USD"]).unwrap();
-    let result = engine.evaluate("test", None, Some(facts));
+    let mut facts = HashMap::new();
+    facts.insert("base_price".to_string(), "60".to_string());
+
+    let result = engine.evaluate("test", vec![], facts);
     assert!(result.is_ok());
 }
 
 #[test]
-fn test_unknown_fact_override_allowed() {
+fn test_unknown_fact_override_rejected() {
     let code = r#"
 doc test
-fact price = [money]
+fact price = [number]
 rule total = price * 1.1
 "#;
 
     let mut engine = Engine::new();
     engine.add_lemma_code(code, "test.lemma").unwrap();
 
-    // Should allow override for fact not declared in document
-    let facts = lemma::parse_facts(&["price=100 USD", "unknown_fact=42"]).unwrap();
-    let result = engine.evaluate("test", None, Some(facts));
-    assert!(result.is_ok());
+    let mut facts = HashMap::new();
+    facts.insert("price".to_string(), "100".to_string());
+    facts.insert("unknown_fact".to_string(), "42".to_string());
+
+    let result = engine.evaluate("test", vec![], facts);
+    assert!(result.is_err(), "Expected error for unknown fact override");
+    assert!(result.unwrap_err().to_string().contains("unknown_fact"));
+}
+
+#[test]
+fn test_fact_override_with_type_definition_should_fail() {
+    let code = r#"
+doc base
+fact quantity = [number -> minimum 0 -> default 10]
+rule total = quantity * 2
+
+doc test
+fact line = doc base
+fact line.quantity = [number -> minimum 0 -> default 5]
+rule result = line.total?
+"#;
+
+    let mut engine = Engine::new();
+    let result = engine.add_lemma_code(code, "test.lemma");
+
+    assert!(
+        result.is_err(),
+        "Expected error when overriding typed fact with type definition"
+    );
+
+    let error_msg = result.unwrap_err().to_string();
+    assert!(
+        error_msg.contains("quantity")
+            || error_msg.contains("type")
+            || error_msg.contains("override"),
+        "Error message should mention the problematic fact or type override. Got: {}",
+        error_msg
+    );
 }

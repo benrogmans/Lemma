@@ -1,20 +1,15 @@
-use lemma::{Engine, LiteralValue, MoneyUnit, NumericUnit, Target};
-use rust_decimal::Decimal;
+use lemma::{Engine, LiteralValue, Target};
 use std::collections::HashMap;
-
-fn money_eur(amount: i32) -> LiteralValue {
-    LiteralValue::Unit(NumericUnit::Money(Decimal::from(amount), MoneyUnit::Eur))
-}
 
 #[test]
 fn test_better_error_for_invalid_value() {
     let code = r#"
         doc shipping
-        fact weight = [mass]
+        fact weight = [number]
 
-        rule shipping_cost = 5 EUR
-          unless weight >= 10 kilograms then 10 EUR
-          unless weight >= 50 kilograms then 25 EUR
+        rule shipping_cost = 5
+          unless weight >= 10 then 10
+          unless weight >= 50 then 25
     "#;
 
     let mut engine = Engine::new();
@@ -22,35 +17,19 @@ fn test_better_error_for_invalid_value() {
         .add_lemma_code(code, "test")
         .expect("Failed to parse");
 
-    // Try to invert for a value that doesn't exist (15 EUR)
-    let result = engine.invert(
+    // Try to invert for a value that doesn't exist (15)
+    let result = engine.invert_strict(
         "shipping",
         "shipping_cost",
-        Target::value(money_eur(15)),
+        Target::value(LiteralValue::number(15)),
         HashMap::new(),
     );
 
-    assert!(result.is_err(), "Should fail for non-producible value");
-
-    let err = result.unwrap_err();
-    let err_msg = format!("{}", err);
-
-    // Error message should mention what values ARE available
+    // No matching solutions should exist
+    let response = result.expect("Should succeed");
     assert!(
-        err_msg.contains("Cannot invert"),
-        "Should explain the problem"
-    );
-    assert!(err_msg.contains("shipping_cost"), "Should mention the rule");
-    assert!(
-        err_msg.contains("This rule can produce"),
-        "Should list available outcomes"
-    );
-
-    // Should mention the actual producible values
-    assert!(
-        err_msg.contains("5") || err_msg.contains("EUR"),
-        "Should mention at least one available value: {}",
-        err_msg
+        response.is_empty(),
+        "Should have no solutions for value 15 (rule only produces 5, 10, or 25)"
     );
 }
 
@@ -71,26 +50,18 @@ fn test_better_error_for_veto_mismatch() {
         .expect("Failed to parse");
 
     // Try to find a veto that doesn't exist
-    let result = engine.invert(
+    let result = engine.invert_strict(
         "validation",
         "eligibility",
         Target::veto(Some("not a real veto".to_string())),
         HashMap::new(),
     );
 
-    assert!(result.is_err(), "Should fail for non-existent veto");
-
-    let err = result.unwrap_err();
-    let err_msg = format!("{}", err);
-
-    // Should be helpful about what vetos DO exist
+    // No matching veto should exist
+    let response = result.expect("Should succeed");
     assert!(
-        err_msg.contains("Cannot invert"),
-        "Should explain the problem"
-    );
-    assert!(
-        err_msg.contains("This rule can produce"),
-        "Should list what's available"
+        response.is_empty(),
+        "Should have no solutions for veto 'not a real veto'"
     );
 }
 
@@ -112,14 +83,14 @@ fn test_error_with_no_satisfiable_branches() {
 
     // Give facts that make all branches false
     let mut given = HashMap::new();
-    given.insert("x".to_string(), LiteralValue::Number(Decimal::from(5)));
-    given.insert("y".to_string(), LiteralValue::Number(Decimal::from(3)));
+    given.insert("x".to_string(), LiteralValue::number(5));
+    given.insert("y".to_string(), LiteralValue::number(3));
 
     // Even though result = 200 exists as a branch, x > 10 is false with given facts
-    let result = engine.invert(
+    let result = engine.invert_strict(
         "test",
         "result",
-        Target::value(LiteralValue::Number(Decimal::from(200))),
+        Target::value(LiteralValue::number(200)),
         given,
     );
 
