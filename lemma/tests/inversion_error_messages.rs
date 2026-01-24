@@ -18,7 +18,7 @@ fn test_better_error_for_invalid_value() {
         .expect("Failed to parse");
 
     // Try to invert for a value that doesn't exist (15)
-    let result = engine.invert_strict(
+    let result = engine.invert(
         "shipping",
         "shipping_cost",
         Target::value(LiteralValue::number(15)),
@@ -50,7 +50,7 @@ fn test_better_error_for_veto_mismatch() {
         .expect("Failed to parse");
 
     // Try to find a veto that doesn't exist
-    let result = engine.invert_strict(
+    let result = engine.invert(
         "validation",
         "eligibility",
         Target::veto(Some("not a real veto".to_string())),
@@ -83,11 +83,11 @@ fn test_error_with_no_satisfiable_branches() {
 
     // Give facts that make all branches false
     let mut given = HashMap::new();
-    given.insert("x".to_string(), LiteralValue::number(5));
-    given.insert("y".to_string(), LiteralValue::number(3));
+    given.insert("x".to_string(), "5".to_string());
+    given.insert("y".to_string(), "3".to_string());
 
     // Even though result = 200 exists as a branch, x > 10 is false with given facts
-    let result = engine.invert_strict(
+    let result = engine.invert(
         "test",
         "result",
         Target::value(LiteralValue::number(200)),

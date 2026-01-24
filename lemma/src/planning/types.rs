@@ -52,6 +52,7 @@ impl TypeRegistry {
 
     /// Register a user-defined type for a given document
     pub fn register_type(&mut self, doc: &str, def: TypeDef) -> Result<(), LemmaError> {
+        let def_loc = def.source_location().clone();
         match &def {
             TypeDef::Regular { name, .. } | TypeDef::Import { name, .. } => {
                 // Named type
@@ -61,15 +62,10 @@ impl TypeRegistry {
                 if doc_types.contains_key(name) {
                     return Err(LemmaError::engine(
                         format!("Type '{}' is already defined in document '{}'", name, doc),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        def_loc.span.clone(),
+                        &def_loc.attribute,
                         Arc::from(""),
-                        doc,
+                        &def_loc.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -92,15 +88,10 @@ impl TypeRegistry {
                             "Inline type definition for fact '{}' is already defined in document '{}'",
                             fact_ref.fact, doc
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        def_loc.span.clone(),
+                        &def_loc.attribute,
                         Arc::from(""),
-                        doc,
+                        &def_loc.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -148,17 +139,10 @@ impl TypeRegistry {
                         named_types.insert(type_name.clone(), resolved_type);
                     }
                     None => {
-                        // Type was registered but couldn't be resolved - this is an error
-                        // (should not happen for named types that are in the registry)
-                        return Err(LemmaError::engine(
-                            format!("Type '{}' is registered but could not be resolved. This indicates an internal error.", type_name),
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
-                            Arc::from(""),
-                            doc,
-                            1,
-                            None::<String>,
-                        ));
+                        unreachable!(
+                            "BUG: registered named type '{}' could not be resolved (doc='{}')",
+                            type_name, doc
+                        );
                     }
                 }
                 visited.clear();
@@ -180,16 +164,10 @@ impl TypeRegistry {
                             inline_type_definitions.insert(fact_ref.clone(), resolved_type);
                         }
                         None => {
-                            // Inline type definition was registered but couldn't be resolved - this is an error
-                            return Err(LemmaError::engine(
-                                format!("Inline type definition for fact '{}' is registered but could not be resolved. This indicates an internal error.", fact_ref),
-                                Span { start: 0, end: 0, line: 1, col: 0 },
-                                "<unknown>",
-                                Arc::from(""),
-                                doc,
-                                1,
-                                None::<String>,
-                            ));
+                            unreachable!(
+                                "BUG: registered inline type definition for fact '{}' could not be resolved (doc='{}')",
+                                fact_ref, doc
+                            );
                         }
                     }
                 }
@@ -233,6 +211,7 @@ impl TypeRegistry {
                     LemmaError::CircularDependency { details, .. } => details.message.clone(),
                     LemmaError::Parse(details) => details.message.clone(),
                     LemmaError::Semantic(details) => details.message.clone(),
+                    LemmaError::Inversion(details) => details.message.clone(),
                     LemmaError::Runtime(details) => details.message.clone(),
                     LemmaError::MissingFact(details) => details.message.clone(),
                     LemmaError::ResourceLimitExceeded {
@@ -255,6 +234,7 @@ impl TypeRegistry {
                             }
                             LemmaError::Parse(details) => details.message.clone(),
                             LemmaError::Semantic(details) => details.message.clone(),
+                            LemmaError::Inversion(details) => details.message.clone(),
                             LemmaError::Runtime(details) => details.message.clone(),
                             LemmaError::MissingFact(details) => details.message.clone(),
                             LemmaError::ResourceLimitExceeded {
@@ -283,7 +263,7 @@ impl TypeRegistry {
                     line: 1,
                     col: 0,
                 },
-                "<unknown>",
+                "<internal>",
                 Arc::from(""),
                 doc,
                 1,
@@ -316,9 +296,9 @@ impl TypeRegistry {
                     line: 1,
                     col: 0,
                 },
-                "<unknown>",
+                "<internal>",
                 std::sync::Arc::from(""),
-                "<unknown>",
+                doc,
                 1,
                 vec![],
                 None::<String>,
@@ -341,12 +321,14 @@ impl TypeRegistry {
                 name,
                 parent,
                 overrides,
+                ..
             } => (parent.clone(), None, overrides.clone(), name.clone()),
             TypeDef::Import {
                 name,
                 source_type,
                 from,
                 overrides,
+                ..
             } => (
                 source_type.clone(),
                 Some(from.clone()),
@@ -360,7 +342,13 @@ impl TypeRegistry {
             }
         };
 
-        let parent_specs = match self.resolve_parent(doc, &parent, &from, visited) {
+        let parent_specs = match self.resolve_parent(
+            doc,
+            &parent,
+            &from,
+            visited,
+            type_def.source_location(),
+        ) {
             Ok(Some(specs)) => specs,
             Ok(None) => {
                 // Parent type not found - this is an error for named types
@@ -369,7 +357,7 @@ impl TypeRegistry {
                 return Err(LemmaError::engine(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid standard types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                     Span { start: 0, end: 0, line: 1, col: 0 },
-                    "<unknown>",
+                    "<internal>",
                     Arc::from(""),
                     doc,
                     1,
@@ -384,7 +372,7 @@ impl TypeRegistry {
 
         // Apply overrides from the TypeDef
         let final_specs = if let Some(overrides) = &overrides {
-            match self.apply_overrides(parent_specs, overrides) {
+            match self.apply_overrides(parent_specs, overrides, type_def.source_location()) {
                 Ok(specs) => specs,
                 Err(errors) => {
                     visited.remove(&key);
@@ -397,6 +385,7 @@ impl TypeRegistry {
                             LemmaError::CircularDependency { details, .. } => details.message.clone(),
                             LemmaError::Parse(details) => details.message.clone(),
                             LemmaError::Semantic(details) => details.message.clone(),
+                            LemmaError::Inversion(details) => details.message.clone(),
                             LemmaError::Runtime(details) => details.message.clone(),
                             LemmaError::MissingFact(details) => details.message.clone(),
                             LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
@@ -408,6 +397,7 @@ impl TypeRegistry {
                                     LemmaError::CircularDependency { details, .. } => details.message.clone(),
                                     LemmaError::Parse(details) => details.message.clone(),
                                     LemmaError::Semantic(details) => details.message.clone(),
+                                    LemmaError::Inversion(details) => details.message.clone(),
                                     LemmaError::Runtime(details) => details.message.clone(),
                                     LemmaError::MissingFact(details) => details.message.clone(),
                                     LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
@@ -427,7 +417,7 @@ impl TypeRegistry {
                             line: 1,
                             col: 0,
                         },
-                        "<unknown>",
+                        &type_def.source_location().attribute,
                         Arc::from(""),
                         doc,
                         1,
@@ -454,6 +444,7 @@ impl TypeRegistry {
         parent: &str,
         from: &Option<String>,
         visited: &mut HashSet<String>,
+        source: &crate::Source,
     ) -> Result<Option<TypeSpecification>, LemmaError> {
         // Try standard types first
         if let Some(specs) = self.resolve_standard_type(parent) {
@@ -476,10 +467,10 @@ impl TypeRegistry {
                     // Type was never registered - invalid parent type
                     Err(LemmaError::engine(
                         format!("Unknown type: '{}'. Type must be defined before use. Valid standard types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
-                        Span { start: 0, end: 0, line: 1, col: 0 },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        doc,
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ))
@@ -524,6 +515,7 @@ impl TypeRegistry {
         &self,
         mut specs: TypeSpecification,
         overrides: &[(String, Vec<String>)],
+        source: &crate::Source,
     ) -> Result<TypeSpecification, Vec<LemmaError>> {
         // Extract existing units from parent type before applying overrides
         let mut existing_units: Vec<String> = match &specs {
@@ -546,10 +538,10 @@ impl TypeRegistry {
                 if existing_units.iter().any(|u| u == unit_name) {
                     errors.push(LemmaError::engine(
                         format!("Unit '{}' already exists in parent type. Use a different unit name (e.g., 'my_{}') if you need another unit factor.", unit_name, unit_name),
-                        Span { start: 0, end: 0, line: 1, col: 0 },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -577,15 +569,10 @@ impl TypeRegistry {
                 Err(e) => {
                     errors.push(LemmaError::engine(
                         format!("Failed to apply override '{}': {}", command, e),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -610,27 +597,29 @@ impl TypeRegistry {
         type_def: &TypeDef,
         visited: &mut HashSet<String>,
     ) -> Result<Option<LemmaType>, LemmaError> {
+        let def_loc = type_def.source_location().clone();
         let TypeDef::Inline {
             parent,
             overrides,
             fact_ref: _,
             from,
+            ..
         } = type_def
         else {
             return Ok(None);
         };
 
-        let parent_specs = match self.resolve_parent(doc, parent, from, visited) {
+        let parent_specs = match self.resolve_parent(doc, parent, from, visited, &def_loc) {
             Ok(Some(specs)) => specs,
             Ok(None) => {
                 // Parent type not found - this is an error for inline type definitions too
                 // Inline type definitions should have valid parent types
                 return Err(LemmaError::engine(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid standard types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
-                    Span { start: 0, end: 0, line: 1, col: 0 },
-                    "<unknown>",
+                    def_loc.span.clone(),
+                    &def_loc.attribute,
                     Arc::from(""),
-                    doc,
+                    &def_loc.doc_name,
                     1,
                     None::<String>,
                 ));
@@ -639,7 +628,7 @@ impl TypeRegistry {
         };
 
         let final_specs = if let Some(overrides) = overrides {
-            match self.apply_overrides(parent_specs, overrides) {
+            match self.apply_overrides(parent_specs, overrides, &def_loc) {
                 Ok(specs) => specs,
                 Err(errors) => {
                     // Combine all errors into a single error message for now
@@ -651,6 +640,7 @@ impl TypeRegistry {
                             LemmaError::CircularDependency { details, .. } => details.message.clone(),
                             LemmaError::Parse(details) => details.message.clone(),
                             LemmaError::Semantic(details) => details.message.clone(),
+                            LemmaError::Inversion(details) => details.message.clone(),
                             LemmaError::Runtime(details) => details.message.clone(),
                             LemmaError::MissingFact(details) => details.message.clone(),
                             LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
@@ -662,6 +652,7 @@ impl TypeRegistry {
                                     LemmaError::CircularDependency { details, .. } => details.message.clone(),
                                     LemmaError::Parse(details) => details.message.clone(),
                                     LemmaError::Semantic(details) => details.message.clone(),
+                                    LemmaError::Inversion(details) => details.message.clone(),
                                     LemmaError::Runtime(details) => details.message.clone(),
                                     LemmaError::MissingFact(details) => details.message.clone(),
                                     LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
@@ -681,9 +672,9 @@ impl TypeRegistry {
                             line: 1,
                             col: 0,
                         },
-                        "<unknown>",
+                        &def_loc.attribute,
                         Arc::from(""),
-                        doc,
+                        &def_loc.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -839,12 +830,25 @@ impl TypeRegistry {
                     continue;
                 }
 
+                let source = self
+                    .named_types
+                    .get(doc)
+                    .and_then(|defs| defs.get(&current_name))
+                    .map(|def| def.source_location());
+
                 return Err(LemmaError::engine(
                     format!("Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}", unit, doc, existing_name, current_name),
-                    Span { start: 0, end: 0, line: 1, col: 0 },
-                    "<unknown>",
+                    source
+                        .map(|s| s.span.clone())
+                        .unwrap_or(Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        }),
+                    source.map(|s| s.attribute.as_str()).unwrap_or("<input>"),
                     Arc::from(""),
-                    doc,
+                    source.map(|s| s.doc_name.as_str()).unwrap_or(doc),
                     1,
                     None::<String>,
                 ));
@@ -909,6 +913,16 @@ mod tests {
     fn test_register_named_type() {
         let mut registry = TypeRegistry::new();
         let type_def = TypeDef::Regular {
+            source_location: crate::Source::new(
+                "<test>",
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "test_doc",
+            ),
             name: "money".to_string(),
             parent: "number".to_string(),
             overrides: None,
@@ -924,6 +938,16 @@ mod tests {
         let mut registry = TypeRegistry::new();
         let fact_ref = FactReference::local("age".to_string());
         let type_def = TypeDef::Inline {
+            source_location: crate::Source::new(
+                "<test>",
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "test_doc",
+            ),
             parent: "number".to_string(),
             overrides: Some(vec![
                 ("minimum".to_string(), vec!["0".to_string()]),
@@ -948,6 +972,16 @@ mod tests {
     fn test_register_duplicate_type_fails() {
         let mut registry = TypeRegistry::new();
         let type_def = TypeDef::Regular {
+            source_location: crate::Source::new(
+                "<test>",
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "test_doc",
+            ),
             name: "money".to_string(),
             parent: "number".to_string(),
             overrides: None,
@@ -964,6 +998,16 @@ mod tests {
     fn test_resolve_custom_type_from_standard() {
         let mut registry = TypeRegistry::new();
         let type_def = TypeDef::Regular {
+            source_location: crate::Source::new(
+                "<test>",
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "test_doc",
+            ),
             name: "money".to_string(),
             parent: "number".to_string(),
             overrides: None,

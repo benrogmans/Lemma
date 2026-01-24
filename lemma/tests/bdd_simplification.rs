@@ -21,7 +21,7 @@ fn bdd_unification_simplifies_to_single_atom() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let solutions = engine
-        .invert_strict(
+        .invert(
             "shop_bdd",
             "target",
             Target::value(LiteralValue::number(1)),

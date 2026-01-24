@@ -211,7 +211,10 @@ power           = { factor ~ (SPACE* ~ op_pow ~ SPACE* ~ power)? }
 term            = { power ~ (SPACE* ~ (op_mul | op_div | op_mod) ~ SPACE* ~ power)* }
 base_expression = { term ~ (SPACE* ~ (op_add | op_sub) ~ SPACE* ~ term)* }
 
-conversion_expression = { base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ duration_unit }
+// Note: conversion targets are validated after parsing (domain-level error),
+// so we accept any identifier here.
+conversion_target_name = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+conversion_expression = { base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ conversion_target_name }
 
 // Duration units for conversion
 duration_unit = {

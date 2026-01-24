@@ -6,12 +6,14 @@ pub fn format_error(error: &LemmaError) -> String {
     match error {
         LemmaError::Parse(details)
         | LemmaError::Semantic(details)
+        | LemmaError::Inversion(details)
         | LemmaError::Runtime(details) => {
             let mut output = Vec::new();
 
             let error_type = match error {
                 LemmaError::Parse(_) => "Parse error",
                 LemmaError::Semantic(_) => "Semantic error",
+                LemmaError::Inversion(_) => "Inversion error",
                 LemmaError::Runtime(_) => "Runtime error",
                 _ => unreachable!(),
             };

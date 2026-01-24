@@ -9,49 +9,72 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::sync::Arc;
 
-pub(crate) fn parse_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
+pub(crate) fn parse_literal(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<LiteralValue, LemmaError> {
     match pair.as_rule() {
-        Rule::number_literal => parse_number_literal(pair),
+        Rule::number_literal => parse_number_literal(pair, attribute, doc_name),
         Rule::text_literal => parse_string_literal(pair),
-        Rule::boolean_literal => parse_boolean_literal(pair),
-        Rule::percent_literal => parse_percent_literal(pair),
-        Rule::date_time_literal => parse_datetime_literal(pair),
-        Rule::time_literal => parse_time_literal(pair),
-        Rule::duration_literal => parse_duration_literal(pair),
+        Rule::boolean_literal => parse_boolean_literal(pair, attribute, doc_name),
+        Rule::percent_literal => parse_percent_literal(pair, attribute, doc_name),
+        Rule::date_time_literal => parse_datetime_literal(pair, attribute, doc_name),
+        Rule::time_literal => parse_time_literal(pair, attribute, doc_name),
+        Rule::duration_literal => parse_duration_literal(pair, attribute, doc_name),
         _ => Err(LemmaError::engine(
             format!("Unsupported literal type: {:?}", pair.as_rule()),
             Span::from_pest_span(pair.as_span()),
-            "<unknown>",
+            attribute,
             Arc::from(pair.as_str()),
-            "<unknown>",
+            doc_name,
             1,
             None::<String>,
         )),
     }
 }
 
-fn parse_number_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
+fn parse_number_literal(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<LiteralValue, LemmaError> {
     let pair_str = pair.as_str();
     let span = Span::from_pest_span(pair.as_span());
     let mut inner = pair.into_inner();
 
     let number = match inner.next() {
         Some(inner_pair) => match inner_pair.as_rule() {
-            Rule::scientific_number => parse_scientific_number(inner_pair)?,
-            Rule::decimal_number => parse_decimal_number(inner_pair.as_str())?,
+            Rule::scientific_number => parse_scientific_number(inner_pair, attribute, doc_name)?,
+            Rule::decimal_number => {
+                let inner_span = Span::from_pest_span(inner_pair.as_span());
+                parse_decimal_number(
+                    inner_pair.as_str(),
+                    inner_span,
+                    attribute,
+                    doc_name,
+                    Arc::from(pair_str),
+                )?
+            }
             _ => {
                 return Err(LemmaError::engine(
                     "Unexpected number literal structure",
                     span,
-                    "<unknown>",
+                    attribute,
                     Arc::from(pair_str),
-                    "<unknown>",
+                    doc_name,
                     1,
                     None::<String>,
                 ));
             }
         },
-        None => parse_decimal_number(pair_str)?,
+        None => parse_decimal_number(
+            pair_str,
+            span.clone(),
+            attribute,
+            doc_name,
+            Arc::from(pair_str),
+        )?,
     };
 
     Ok(LiteralValue::number(number))
@@ -63,7 +86,11 @@ fn parse_string_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
     Ok(LiteralValue::text(unquoted.to_string()))
 }
 
-fn parse_boolean_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
+fn parse_boolean_literal(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<LiteralValue, LemmaError> {
     use crate::BooleanValue;
 
     let boolean_value = match pair.as_str() {
@@ -78,9 +105,9 @@ fn parse_boolean_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
             return Err(LemmaError::engine(
                 format!("Invalid boolean: '{}'\n             Expected one of: true, false, yes, no, accept, reject", pair.as_str()),
                 span,
-                "<unknown>",
+                attribute,
                 Arc::from(pair.as_str()),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             ));
@@ -90,13 +117,17 @@ fn parse_boolean_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
     Ok(LiteralValue::boolean(boolean_value))
 }
 
-fn parse_percent_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
+fn parse_percent_literal(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<LiteralValue, LemmaError> {
     let pair_str = pair.as_str();
     let pair_span = Span::from_pest_span(pair.as_span());
     for inner_pair in pair.into_inner() {
         if inner_pair.as_rule() == Rule::number_literal {
             let inner_span = Span::from_pest_span(inner_pair.as_span());
-            let percentage = parse_number_literal(inner_pair)?;
+            let percentage = parse_number_literal(inner_pair, attribute, doc_name)?;
             match &percentage.value {
                 Value::Number(n) => {
                     // Convert percent (50) to ratio (0.50) for storage
@@ -112,9 +143,9 @@ fn parse_percent_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
                     return Err(LemmaError::engine(
                         "Expected number in percent literal",
                         inner_span,
-                        "<unknown>",
+                        attribute,
                         Arc::from(pair_str),
-                        "<unknown>",
+                        doc_name,
                         1,
                         None::<String>,
                     ));
@@ -125,15 +156,19 @@ fn parse_percent_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
     Err(LemmaError::engine(
         "Invalid percent literal: missing number",
         pair_span,
-        "<unknown>",
+        attribute,
         Arc::from(pair_str),
-        "<unknown>",
+        doc_name,
         1,
         None::<String>,
     ))
 }
 
-fn parse_duration_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
+fn parse_duration_literal(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<LiteralValue, LemmaError> {
     let pair_str = pair.as_str();
     let pair_span = Span::from_pest_span(pair.as_span());
     let mut number = None;
@@ -143,16 +178,16 @@ fn parse_duration_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> 
         match inner_pair.as_rule() {
             Rule::number_literal => {
                 let inner_span = Span::from_pest_span(inner_pair.as_span());
-                let lit = parse_number_literal(inner_pair)?;
+                let lit = parse_number_literal(inner_pair, attribute, doc_name)?;
                 match &lit.value {
                     Value::Number(n) => number = Some(*n),
                     _ => {
                         return Err(LemmaError::engine(
                             "Expected number in duration literal",
                             inner_span,
-                            "<unknown>",
+                            attribute,
                             Arc::from(pair_str),
-                            "<unknown>",
+                            doc_name,
                             1,
                             None::<String>,
                         ));
@@ -171,9 +206,9 @@ fn parse_duration_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> 
         LemmaError::engine(
             "Missing number in duration literal",
             span.clone(),
-            "<unknown>",
+            attribute,
             Arc::from(pair_str),
-            "<unknown>",
+            doc_name,
             1,
             None::<String>,
         )
@@ -182,21 +217,30 @@ fn parse_duration_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> 
         LemmaError::engine(
             "Missing unit in duration literal",
             span,
-            "<unknown>",
+            attribute,
             Arc::from(pair_str),
-            "<unknown>",
+            doc_name,
             1,
             None::<String>,
         )
     })?;
 
-    super::units::resolve_unit(value, unit)
+    super::units::resolve_unit(
+        value,
+        unit,
+        pair_span,
+        attribute,
+        doc_name,
+        Arc::from(pair_str),
+    )
 }
 
 /// Parse a number+unit literal (e.g., "5 celsius")
 /// Returns (number, unit_name) tuple for later resolution during semantic analysis
 pub(crate) fn parse_number_unit_literal(
     pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
 ) -> Result<(rust_decimal::Decimal, String), LemmaError> {
     let pair_str = pair.as_str();
     let pair_span = Span::from_pest_span(pair.as_span());
@@ -207,16 +251,16 @@ pub(crate) fn parse_number_unit_literal(
         match inner_pair.as_rule() {
             Rule::number_literal => {
                 let inner_span = Span::from_pest_span(inner_pair.as_span());
-                let lit = parse_number_literal(inner_pair)?;
+                let lit = parse_number_literal(inner_pair, attribute, doc_name)?;
                 match &lit.value {
                     Value::Number(n) => number = Some(*n),
                     _ => {
                         return Err(LemmaError::engine(
                             "Expected number in number+unit literal",
                             inner_span,
-                            "<unknown>",
+                            attribute,
                             Arc::from(pair_str),
-                            "<unknown>",
+                            doc_name,
                             1,
                             None::<String>,
                         ));
@@ -235,9 +279,9 @@ pub(crate) fn parse_number_unit_literal(
         LemmaError::engine(
             "Missing number in number+unit literal",
             span.clone(),
-            "<unknown>",
+            attribute,
             Arc::from(pair_str),
-            "<unknown>",
+            doc_name,
             1,
             None::<String>,
         )
@@ -246,9 +290,9 @@ pub(crate) fn parse_number_unit_literal(
         LemmaError::engine(
             "Missing unit name in number+unit literal",
             pair_span,
-            "<unknown>",
+            attribute,
             Arc::from(pair_str),
-            "<unknown>",
+            doc_name,
             1,
             None::<String>,
         )
@@ -257,7 +301,11 @@ pub(crate) fn parse_number_unit_literal(
     Ok((value, unit))
 }
 
-fn parse_datetime_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
+fn parse_datetime_literal(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<LiteralValue, LemmaError> {
     let datetime_str = pair.as_str();
 
     if let Ok(dt) = datetime_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
@@ -303,15 +351,19 @@ fn parse_datetime_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> 
     Err(LemmaError::engine(
         format!("Invalid date/time format: '{}'\n         Expected one of:\n         - Date: YYYY-MM-DD (e.g., 2024-01-15)\n         - DateTime: YYYY-MM-DDTHH:MM:SS (e.g., 2024-01-15T14:30:00)\n         - With timezone: YYYY-MM-DDTHH:MM:SSZ or +HH:MM (e.g., 2024-01-15T14:30:00Z)\n         Note: Month must be 1-12, day must be valid for the month (no Feb 30), hours 0-23, minutes/seconds 0-59", datetime_str),
         Span::from_pest_span(pair.as_span()),
-        "<unknown>",
+        attribute,
         Arc::from(datetime_str),
-        "<unknown>",
+        doc_name,
         1,
         None::<String>,
     ))
 }
 
-fn parse_time_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
+fn parse_time_literal(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<LiteralValue, LemmaError> {
     let time_str = pair.as_str();
 
     if let Ok(t) = time_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
@@ -339,9 +391,9 @@ fn parse_time_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
     Err(LemmaError::engine(
         format!("Invalid time format: '{}'\n         Expected: HH:MM or HH:MM:SS (e.g., 14:30 or 14:30:00)\n         With timezone: HH:MM:SSZ or +HH:MM (e.g., 14:30:00Z or 14:30:00+01:00)\n         Note: Hours must be 0-23, minutes and seconds must be 0-59", time_str),
         Span::from_pest_span(pair.as_span()),
-        "<unknown>",
+        attribute,
         Arc::from(time_str),
-        "<unknown>",
+        doc_name,
         1,
         None::<String>,
     ))
@@ -349,7 +401,11 @@ fn parse_time_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
 
 const MAX_DECIMAL_EXPONENT: i32 = 28;
 
-fn parse_scientific_number(pair: Pair<Rule>) -> Result<Decimal, LemmaError> {
+fn parse_scientific_number(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<Decimal, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
     let pair_str = pair.as_str();
     let mut inner = pair.into_inner();
@@ -358,9 +414,9 @@ fn parse_scientific_number(pair: Pair<Rule>) -> Result<Decimal, LemmaError> {
         LemmaError::engine(
             "Missing mantissa in scientific notation",
             span.clone(),
-            "<unknown>",
+            attribute,
             Arc::from(pair_str),
-            "<unknown>",
+            doc_name,
             1,
             None::<String>,
         )
@@ -369,15 +425,21 @@ fn parse_scientific_number(pair: Pair<Rule>) -> Result<Decimal, LemmaError> {
         LemmaError::engine(
             "Missing exponent in scientific notation",
             span.clone(),
-            "<unknown>",
+            attribute,
             Arc::from(pair_str),
-            "<unknown>",
+            doc_name,
             1,
             None::<String>,
         )
     })?;
 
-    let mantissa = parse_decimal_number(mantissa_pair.as_str())?;
+    let mantissa = parse_decimal_number(
+        mantissa_pair.as_str(),
+        Span::from_pest_span(mantissa_pair.as_span()),
+        attribute,
+        doc_name,
+        Arc::from(pair_str),
+    )?;
     let exponent_span = Span::from_pest_span(exponent_pair.as_span());
     let exponent: i32 = exponent_pair.as_str().parse().map_err(|_| {
         LemmaError::engine(
@@ -388,9 +450,9 @@ fn parse_scientific_number(pair: Pair<Rule>) -> Result<Decimal, LemmaError> {
                 MAX_DECIMAL_EXPONENT
             ),
             exponent_span.clone(),
-            "<unknown>",
+            attribute,
             Arc::from(exponent_pair.as_str()),
-            "<unknown>",
+            doc_name,
             1,
             None::<String>,
         )
@@ -400,9 +462,9 @@ fn parse_scientific_number(pair: Pair<Rule>) -> Result<Decimal, LemmaError> {
         LemmaError::engine(
             format!("Exponent {} is out of range\n             Maximum supported exponent is ±{} (values up to ~10^28)", exponent, MAX_DECIMAL_EXPONENT),
             exponent_span,
-            "<unknown>",
+            attribute,
             Arc::from(exponent_pair.as_str()),
-            "<unknown>",
+            doc_name,
             1,
             None::<String>,
         )
@@ -416,9 +478,9 @@ fn parse_scientific_number(pair: Pair<Rule>) -> Result<Decimal, LemmaError> {
                     mantissa, exponent
                 ),
                 span,
-                "<unknown>",
+                attribute,
                 Arc::from(pair_str),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             )
@@ -431,9 +493,9 @@ fn parse_scientific_number(pair: Pair<Rule>) -> Result<Decimal, LemmaError> {
                     mantissa, exponent
                 ),
                 span,
-                "<unknown>",
+                attribute,
                 Arc::from(pair_str),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             )
@@ -457,15 +519,21 @@ fn decimal_pow10(exp: i32) -> Option<Decimal> {
     Some(result)
 }
 
-fn parse_decimal_number(number_str: &str) -> Result<Decimal, LemmaError> {
+fn parse_decimal_number(
+    number_str: &str,
+    span: Span,
+    attribute: &str,
+    doc_name: &str,
+    source_text: Arc<str>,
+) -> Result<Decimal, LemmaError> {
     let clean_number = number_str.replace(['_', ','], "");
     Decimal::from_str(&clean_number).map_err(|_| {
         LemmaError::engine(
             format!("Invalid number: '{}'\n             Expected a valid decimal number (e.g., 42, 3.14, 1_000_000, 1,000,000)\n             Note: Use underscores or commas as thousand separators if needed", number_str),
-            Span { start: 0, end: 0, line: 1, col: 0 },
-            "<unknown>",
-            Arc::from(number_str),
-            "<unknown>",
+            span,
+            attribute,
+            source_text,
+            doc_name,
             1,
             None::<String>,
         )

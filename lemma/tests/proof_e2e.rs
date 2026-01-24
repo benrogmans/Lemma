@@ -417,10 +417,10 @@ rule use_doubled = base_ref.doubled? + 10
         .expect("use_doubled result not found");
     let proof_tree = &use_doubled_result["proof"]["tree"];
 
-    // The tree should be a Computation variant with operands
-    let computation = proof_tree["Computation"].as_object().unwrap_or_else(|| {
+    // The tree should be a `computation` node with operands
+    let computation = proof_tree["computation"].as_object().unwrap_or_else(|| {
         panic!(
-            "Expected Computation variant in proof tree. JSON:\n{}",
+            "Expected computation node in proof tree. JSON:\n{}",
             json_str
         )
     });
@@ -439,12 +439,12 @@ rule use_doubled = base_ref.doubled? + 10
 
     let rule_ref_node = &operands[0];
 
-    // The ProofNode is serialized as tagged enum, so it's {"RuleReference": {...}}
-    let rule_ref = rule_ref_node["RuleReference"]
+    // The ProofNode is serialized as a tagged enum, so it's {"rule_reference": {...}}
+    let rule_ref = rule_ref_node["rule_reference"]
         .as_object()
         .unwrap_or_else(|| {
             panic!(
-                "Expected RuleReference variant. Got:\n{}",
+                "Expected rule_reference variant. Got:\n{}",
                 serde_json::to_string_pretty(rule_ref_node).unwrap()
             )
         });

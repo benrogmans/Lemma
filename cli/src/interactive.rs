@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use inquire::validator::Validation;
 use inquire::{DateSelect, MultiSelect, Select, Text};
-use lemma::{Engine, FactValue, LemmaType, TypeSpecification};
+use lemma::{Engine, LemmaType, TypeSpecification};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -68,7 +68,10 @@ fn select_document(engine: &Engine) -> Result<String> {
     let display_options: Vec<String> = documents
         .iter()
         .map(|doc_name| {
-            let facts_count = engine.get_document_facts(doc_name).len();
+            let facts_count = engine
+                .get_facts(doc_name, &[])
+                .map(|f| f.len())
+                .unwrap_or(0);
             let rules_count = engine.get_document_rules(doc_name).len();
             format!(
                 "{} ({} facts, {} rules)",
@@ -180,24 +183,14 @@ fn prompt_facts(
     rule_names: &Option<Vec<String>>,
     provided_facts: &HashMap<String, String>,
 ) -> Result<HashMap<String, String>> {
-    let doc_facts = engine.get_document_facts(doc_name);
     let selected_rules: Vec<String> = rule_names.clone().unwrap_or_default();
-    let required_fact_names = engine.get_required_fact_names(doc_name, &selected_rules);
+    let necessary_facts = engine
+        .get_facts(doc_name, &selected_rules)
+        .context("Failed to get facts")?;
 
-    let promptable_facts: Vec<_> = doc_facts
+    let promptable_facts: Vec<_> = necessary_facts
         .into_iter()
-        .filter(|f| {
-            let fact_name = f.reference.to_string();
-            let is_document_reference = matches!(f.value, FactValue::DocumentReference(_));
-            if is_document_reference || provided_facts.contains_key(&fact_name) {
-                return false;
-            }
-
-            match &required_fact_names {
-                Some(required) => required.contains(&fact_name),
-                None => true, // Fallback if we can't determine dependencies
-            }
-        })
+        .filter(|(path, _)| !provided_facts.contains_key(&path.to_string()))
         .collect();
 
     if promptable_facts.is_empty() {
@@ -208,23 +201,9 @@ fn prompt_facts(
 
     println!("\nEnter values for facts (press Enter to accept defaults):");
 
-    for fact in promptable_facts {
-        let fact_name = fact.reference.to_string();
-
-        // Use authoritative resolved schema types from the Engine execution plan.
-        // This supports user-defined types (including `from` imports) transparently.
-        let Some(lemma_type) = engine.get_fact_schema_type(doc_name, &fact_name) else {
-            eprintln!(
-                "Warning: fact '{}' not found in resolved schema; skipping prompt",
-                fact_name
-            );
-            continue;
-        };
-
-        let default_value = match &fact.value {
-            FactValue::Literal(lit) => Some(lit.to_string()),
-            _ => default_value_from_type(&lemma_type),
-        };
+    for (fact_path, lemma_type) in promptable_facts {
+        let fact_name = fact_path.to_string();
+        let default_value = default_value_from_type(&lemma_type);
 
         let input_value = prompt_value_for_type(&fact_name, &lemma_type, default_value.as_deref())?;
         facts.insert(fact_name, input_value);

@@ -26,7 +26,8 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        shell: bash
+        run: curl -sSfL https://drager.github.io/wasm-pack/installer/init.sh | bash
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

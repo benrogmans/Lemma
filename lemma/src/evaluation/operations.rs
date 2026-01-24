@@ -8,6 +8,7 @@ use serde::Serialize;
 
 /// Result of an operation (evaluating a rule or expression)
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OperationResult {
     /// Operation produced a value
     Value(LiteralValue),

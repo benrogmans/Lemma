@@ -22,19 +22,43 @@
         {
           className: 'type',
           begin: /\[/,
-          end: /\]/
+          end: /\]/,
+          contains: [
+            {
+              className: 'built_in',
+              begin: /\b(boolean|scale|number|percent|ratio|text|date|time|duration)\b/
+            },
+            {
+              className: 'keyword',
+              begin: /\b(from|with|minimum|maximum|minimal|decimals|precision|unit|units|options|length|default|help)\b/
+            },
+            {
+              className: 'symbol',
+              begin: /->/
+            },
+            {
+              className: 'number',
+              begin: /\b\d+([_,]\d+)*(\.\d+)?([eE][+-]?\d+)?%?/
+            },
+            {
+              className: 'string',
+              begin: /"/,
+              end: /"/,
+              contains: [hljs.BACKSLASH_ESCAPE]
+            }
+          ]
         },
         {
           className: 'keyword',
-          begin: /\b(doc|fact|rule)\b/
+          begin: /\b(doc|fact|rule|type)\b/
         },
         {
           className: 'built_in',
-          begin: /\b(unless|then|veto|and|or|not|in)\b/
+          begin: /\b(unless|then|veto|and|or|not|in|from|with)\b/
         },
         {
           className: 'symbol',
-          begin: /==|!=|>=|<=|>|<|is not|\bis\b/
+          begin: /->|==|!=|>=|<=|>|<|is not|\bis\b/
         },
         {
           className: 'symbol',

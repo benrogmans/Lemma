@@ -40,7 +40,17 @@ const lemmaLanguage = StreamLanguage.define({
     if (stream.eatSpace()) return null;
 
     // Keywords
-    if (stream.match(/^(doc|fact|rule|unless|then|and|or|not|veto|in|is)\b/)) {
+    if (stream.match(/^(doc|fact|rule|type|unless|then|and|or|not|veto|in|is|from|with)\b/)) {
+      return 'keyword';
+    }
+
+    // Built-in types
+    if (stream.match(/^(boolean|scale|number|percent|ratio|text|date|time|duration)\b/)) {
+      return 'typeName';
+    }
+
+    // Type override/constraint commands
+    if (stream.match(/^(minimum|maximum|minimal|decimals|precision|unit|units|options|length|default|help)\b/)) {
       return 'keyword';
     }
 
@@ -105,6 +115,11 @@ const lemmaLanguage = StreamLanguage.define({
       return 'typeName';
     }
 
+    // Arrow operator (type override chain)
+    if (stream.match(/^->/)) {
+      return 'operator';
+    }
+
     // Comparison operators
     if (stream.match(/^(==|!=|>=|<=|>|<|is not)/)) {
       return 'operator';
@@ -113,6 +128,11 @@ const lemmaLanguage = StreamLanguage.define({
     // Arithmetic operators
     if (stream.match(/^[+\-*/%^=]/)) {
       return 'operator';
+    }
+
+    // Doc/module paths (e.g. lemma/std)
+    if (stream.match(/^[a-zA-Z_][a-zA-Z0-9_.-]*(?:\/[a-zA-Z_][a-zA-Z0-9_.-]*)+/)) {
+      return 'string.special';
     }
 
     // Rule references (with ?)

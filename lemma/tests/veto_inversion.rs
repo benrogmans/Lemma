@@ -16,7 +16,7 @@ fn veto_query_specific_message() {
 
     // Query: "What weight values trigger 'too heavy' veto?"
     let response = engine
-        .invert_strict(
+        .invert(
             "shipping",
             "shipping_cost",
             Target::veto(Some("too heavy".to_string())),
@@ -50,7 +50,7 @@ fn veto_query_any_veto() {
 
     // Query: "What weight values trigger ANY veto?"
     let response = engine
-        .invert_strict(
+        .invert(
             "shipping",
             "shipping_cost",
             Target::any_veto(),
@@ -88,7 +88,7 @@ fn veto_query_with_value_branches_filters_correctly() {
 
     // Query: "What discount values trigger any veto?"
     let response = engine
-        .invert_strict(
+        .invert(
             "pricing",
             "final_price",
             Target::any_veto(),
@@ -181,7 +181,7 @@ fn veto_non_veto_value_queries_exclude_vetoes() {
 
     // Query: "What discount values give final_price = 90?"
     let response = engine
-        .invert_strict(
+        .invert(
             "pricing",
             "final_price",
             Target::value(LiteralValue::number(90)),
@@ -217,7 +217,7 @@ fn veto_multiple_facts_multiple_vetoes() {
 
     // Query: "What conditions trigger any veto?"
     let response = engine
-        .invert_strict(
+        .invert(
             "shipping",
             "can_ship",
             Target::any_veto(),

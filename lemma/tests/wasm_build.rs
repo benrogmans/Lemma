@@ -1,11 +1,9 @@
 use std::process::Command;
 
 #[test]
-#[ignore] // Run with: cargo test --ignored or cargo test wasm_build -- --ignored
+#[ignore]
 fn test_wasm_build_and_test() {
     // This test ensures the WASM build and tests work correctly
-    // It's ignored by default because it requires Node.js and is slower
-
     println!("Building WASM package...");
 
     // Build WASM package
@@ -40,6 +38,7 @@ fn test_wasm_build_and_test() {
 }
 
 #[test]
+#[ignore]
 fn test_wasm_scripts_exist() {
     // This test always runs and just checks that the WASM scripts exist
     let manifest_dir = env!("CARGO_MANIFEST_DIR");

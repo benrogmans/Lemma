@@ -1,5 +1,4 @@
 use lemma::{Engine, FactPath, LiteralValue, Target, TargetOp};
-use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 /// Test TargetOp::Gt (Greater Than)
@@ -18,7 +17,7 @@ fn target_operator_greater_than() {
 
     // Question: "What base prices result in final price > $100?"
     let solutions = engine
-        .invert_strict(
+        .invert(
             "pricing",
             "final_price",
             Target::with_op(
@@ -59,7 +58,7 @@ fn target_operator_less_than_or_equal() {
 
     // Question: "What monthly costs keep annual cost <= $50,000?"
     let solutions = engine
-        .invert_strict(
+        .invert(
             "budget",
             "annual_cost",
             Target::with_op(
@@ -96,7 +95,7 @@ fn target_operator_greater_than_or_equal() {
 
     // Question: "What base salaries give total comp >= $120,000?"
     let solutions = engine
-        .invert_strict(
+        .invert(
             "compensation",
             "total_comp",
             Target::with_op(
@@ -135,7 +134,7 @@ fn boolean_not_operator() {
 
     // Question: "What conditions trigger veto?"
     let solutions = engine
-        .invert_strict(
+        .invert(
             "eligibility",
             "can_access",
             Target::any_veto(),
@@ -179,7 +178,7 @@ fn cross_document_simple() {
 
     // Question: "What order_total gives final_total of $85?"
     let solutions = engine
-        .invert_strict(
+        .invert(
             "derived",
             "final_total",
             Target::value(LiteralValue::number(85)),
@@ -222,14 +221,11 @@ fn cross_document_rule_references() {
     engine.add_lemma_code(order_doc, "order").unwrap();
 
     let mut given = HashMap::new();
-    given.insert(
-        "settings.min_threshold".to_string(),
-        LiteralValue::number(1000),
-    );
+    given.insert("settings.min_threshold".to_string(), "1000".to_string());
 
     // Question: "What customer_lifetime_value makes is_vip true?" (>= 2000)
     let solutions = engine
-        .invert_strict(
+        .invert(
             "order",
             "is_vip",
             Target::value(LiteralValue::boolean(lemma::BooleanValue::True)),
@@ -279,16 +275,16 @@ fn cross_document_multi_level() {
     let mut given = HashMap::new();
     given.insert(
         "regional.global_config.base_rate".to_string(),
-        LiteralValue::number(Decimal::from_str_exact("0.10").unwrap()),
+        "0.10".to_string(),
     );
     given.insert(
         "regional.regional_multiplier".to_string(),
-        LiteralValue::number(Decimal::from_str_exact("1.5").unwrap()),
+        "1.5".to_string(),
     );
 
     // Question: "What amount gives $15 fee?"
     let solutions = engine
-        .invert_strict(
+        .invert(
             "transaction",
             "fee",
             Target::value(LiteralValue::number(15)),
@@ -335,11 +331,11 @@ fn cross_document_piecewise() {
     engine.add_lemma_code(pricing_doc, "pricing").unwrap();
 
     let mut given = HashMap::new();
-    given.insert("subtotal".to_string(), LiteralValue::number(100));
+    given.insert("subtotal".to_string(), "100".to_string());
 
     // Question: "What tier gives $80 total?" (i.e., 20% discount)
     let solutions = engine
-        .invert_strict(
+        .invert(
             "pricing",
             "total",
             Target::value(LiteralValue::number(80)),
@@ -382,7 +378,7 @@ fn complex_boolean_not_and_combination() {
 
     // Question: "What conditions cause veto?"
     let solutions = engine
-        .invert_strict("shipping", "can_ship", Target::any_veto(), HashMap::new())
+        .invert("shipping", "can_ship", Target::any_veto(), HashMap::new())
         .expect("should invert successfully");
 
     // Should have solutions
@@ -413,7 +409,7 @@ fn target_operator_not_equal() {
     engine.add_lemma_code(code, "test").unwrap();
 
     // Question: "What status values are NOT complete?"
-    let result = engine.invert_strict(
+    let result = engine.invert(
         "validation",
         "is_complete",
         Target::with_op(

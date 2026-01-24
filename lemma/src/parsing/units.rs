@@ -4,7 +4,14 @@ use crate::semantic::{ConversionTarget, DurationUnit, LiteralValue};
 use rust_decimal::Decimal;
 use std::sync::Arc;
 
-pub fn resolve_unit(value: Decimal, unit_str: &str) -> Result<LiteralValue, LemmaError> {
+pub fn resolve_unit(
+    value: Decimal,
+    unit_str: &str,
+    span: Span,
+    attribute: &str,
+    doc_name: &str,
+    source_text: Arc<str>,
+) -> Result<LiteralValue, LemmaError> {
     let unit_lower = unit_str.to_lowercase();
 
     if let Some(unit) = try_parse_duration_unit(&unit_lower) {
@@ -13,10 +20,10 @@ pub fn resolve_unit(value: Decimal, unit_str: &str) -> Result<LiteralValue, Lemm
 
     Err(LemmaError::engine(
         format!("Unknown duration unit: '{}'. Expected one of: years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds", unit_str),
-        Span { start: 0, end: 0, line: 1, col: 0 },
-        "<unknown>",
-        Arc::from(unit_str),
-        "<unknown>",
+        span,
+        attribute,
+        source_text,
+        doc_name,
         1,
         None::<String>,
     ))
@@ -48,13 +55,5 @@ pub fn resolve_conversion_target(unit_str: &str) -> Result<ConversionTarget, Lem
         return Ok(ConversionTarget::Duration(unit));
     }
 
-    Err(LemmaError::engine(
-        format!("Unknown conversion target: '{}'. Expected one of: percent, years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds", unit_str),
-        Span { start: 0, end: 0, line: 1, col: 0 },
-        "<unknown>",
-        Arc::from(unit_str),
-        "<unknown>",
-        1,
-        None::<String>,
-    ))
+    Ok(ConversionTarget::ScaleUnit(unit_lower))
 }

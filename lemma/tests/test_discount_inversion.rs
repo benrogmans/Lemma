@@ -20,7 +20,7 @@ fn discount_multiple_paths_to_same_value() {
 
     // Query: "What gives me 30% discount?"
     let solutions = engine
-        .invert_strict(
+        .invert(
             "shop",
             "discount",
             Target::value(LiteralValue::number(

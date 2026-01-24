@@ -22,6 +22,9 @@ pub enum LemmaError {
     /// Semantic validation error with source location
     Semantic(Box<ErrorDetails>),
 
+    /// Inversion error (valid Lemma, but unsupported by inversion) with source location
+    Inversion(Box<ErrorDetails>),
+
     /// Runtime error during evaluation with source location
     Runtime(Box<ErrorDetails>),
 
@@ -120,6 +123,46 @@ impl LemmaError {
         suggestion: impl Into<String>,
     ) -> Self {
         Self::semantic(
+            message,
+            span,
+            attribute,
+            source_text,
+            doc_name,
+            doc_start_line,
+            Some(suggestion),
+        )
+    }
+
+    /// Create an inversion error with source information
+    pub fn inversion(
+        message: impl Into<String>,
+        span: Span,
+        attribute: impl Into<String>,
+        source_text: Arc<str>,
+        doc_name: impl Into<String>,
+        doc_start_line: usize,
+        suggestion: Option<impl Into<String>>,
+    ) -> Self {
+        Self::Inversion(Box::new(ErrorDetails {
+            message: message.into(),
+            source_location: Source::new(attribute, span, doc_name),
+            source_text,
+            doc_start_line,
+            suggestion: suggestion.map(Into::into),
+        }))
+    }
+
+    /// Create an inversion error with suggestion
+    pub fn inversion_with_suggestion(
+        message: impl Into<String>,
+        span: Span,
+        attribute: impl Into<String>,
+        source_text: Arc<str>,
+        doc_name: impl Into<String>,
+        doc_start_line: usize,
+        suggestion: impl Into<String>,
+    ) -> Self {
+        Self::inversion(
             message,
             span,
             attribute,
@@ -279,6 +322,19 @@ impl fmt::Display for LemmaError {
                     details.source_location.span.col
                 )
             }
+            LemmaError::Inversion(details) => {
+                write!(f, "Inversion error: {}", details.message)?;
+                if let Some(suggestion) = &details.suggestion {
+                    write!(f, " (suggestion: {suggestion})")?;
+                }
+                write!(
+                    f,
+                    " at {}:{}:{}",
+                    details.source_location.attribute,
+                    details.source_location.span.line,
+                    details.source_location.span.col
+                )
+            }
             LemmaError::Runtime(details) => {
                 write!(f, "Runtime error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
@@ -369,9 +425,9 @@ impl From<std::fmt::Error> for LemmaError {
                 line: 1,
                 col: 0,
             },
-            "<internal>",
+            "<format-error>",
             Arc::from(""),
-            "<unknown>",
+            "<format-error>",
             1,
             None::<String>,
         )
@@ -384,6 +440,7 @@ impl LemmaError {
         match self {
             LemmaError::Parse(details)
             | LemmaError::Semantic(details)
+            | LemmaError::Inversion(details)
             | LemmaError::Runtime(details)
             | LemmaError::Engine(details)
             | LemmaError::MissingFact(details) => &details.message,
@@ -398,6 +455,7 @@ impl LemmaError {
         match self {
             LemmaError::Parse(details)
             | LemmaError::Semantic(details)
+            | LemmaError::Inversion(details)
             | LemmaError::Runtime(details)
             | LemmaError::Engine(details)
             | LemmaError::MissingFact(details) => Some(&details.source_location),
@@ -411,6 +469,7 @@ impl LemmaError {
         match self {
             LemmaError::Parse(details)
             | LemmaError::Semantic(details)
+            | LemmaError::Inversion(details)
             | LemmaError::Runtime(details)
             | LemmaError::Engine(details)
             | LemmaError::MissingFact(details) => Some(&details.source_text),
@@ -424,6 +483,7 @@ impl LemmaError {
         match self {
             LemmaError::Parse(details)
             | LemmaError::Semantic(details)
+            | LemmaError::Inversion(details)
             | LemmaError::Runtime(details)
             | LemmaError::Engine(details)
             | LemmaError::MissingFact(details) => details.suggestion.as_deref(),

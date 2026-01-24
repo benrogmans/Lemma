@@ -18,7 +18,7 @@ fn test_recursive_rule_reference_expansion_enables_solving() {
         .expect("Failed to parse lemma code");
 
     // Invert: total = 122
-    let result = engine.invert_strict(
+    let result = engine.invert(
         "pricing",
         "total",
         Target::value(LiteralValue::number(122)),

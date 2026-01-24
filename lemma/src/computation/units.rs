@@ -1,30 +1,29 @@
 //! Unit conversion system
 //!
-//! Handles conversions between duration units.
-//! Returns OperationResult with Veto for errors instead of Result.
+//! Handles conversions between duration units and scale units.
 
 use crate::evaluation::OperationResult;
-use crate::semantic::{DurationUnit, LiteralValue, Value};
+use crate::semantic::{DurationUnit, LiteralValue, TypeSpecification, Unit, Value};
 use crate::ConversionTarget;
 use rust_decimal::Decimal;
 
 /// Convert a value to a target unit (for `in` operator).
 ///
-/// Returns OperationResult with Veto for errors.
 pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> OperationResult {
     match &value.value {
         Value::Duration(v, from) => match target {
-            ConversionTarget::Duration(to) => match convert_duration(*v, from, to) {
-                Ok(val) => OperationResult::Value(LiteralValue::duration_with_type(
+            ConversionTarget::Duration(to) => {
+                let val = convert_duration(*v, from, to);
+                OperationResult::Value(LiteralValue::duration_with_type(
                     val,
                     to.clone(),
                     value.lemma_type.clone(),
-                )),
-                Err(msg) => OperationResult::Veto(Some(msg)),
-            },
-            ConversionTarget::Percentage => {
-                OperationResult::Veto(Some("Cannot convert duration to percent".to_string()))
+                ))
             }
+            ConversionTarget::Percentage | ConversionTarget::ScaleUnit(_) => unreachable!(
+                "BUG: invalid conversion target {:?} for duration; this should be rejected during planning",
+                target
+            ),
         },
 
         Value::Number(n) => match target {
@@ -40,6 +39,9 @@ pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> Operatio
                     standard_ratio().clone(),
                 ))
             }
+            ConversionTarget::ScaleUnit(_) => unreachable!(
+                "BUG: converting number to scale unit should be rejected during planning"
+            ),
         },
 
         Value::Ratio(r, unit_opt) => match target {
@@ -48,25 +50,82 @@ pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> Operatio
                 unit_opt.clone().or(Some("percent".to_string())),
                 value.lemma_type.clone(),
             )),
-            _ => OperationResult::Veto(Some("Cannot convert ratio to unit".to_string())),
+            ConversionTarget::Duration(_) | ConversionTarget::ScaleUnit(_) => unreachable!(
+                "BUG: invalid conversion target {:?} for ratio; this should be rejected during planning",
+                target
+            ),
         },
 
-        _ => OperationResult::Veto(Some(format!("Cannot convert {} to {}", value, target))),
+        Value::Scale(v, from_unit) => match target {
+            ConversionTarget::ScaleUnit(to_unit) => {
+                let from_unit = match from_unit {
+                    Some(u) => u,
+                    None => {
+                        unreachable!(
+                            "BUG: cannot convert scale value without a unit; unit must be provided by parsing/input validation"
+                        );
+                    }
+                };
+
+                let from_factor = scale_unit_factor(&value.lemma_type, from_unit);
+                let to_factor = scale_unit_factor(&value.lemma_type, to_unit);
+
+                let converted = (*v) * (to_factor / from_factor);
+
+                OperationResult::Value(LiteralValue::scale_with_type(
+                    converted,
+                    Some(to_unit.clone()),
+                    value.lemma_type.clone(),
+                ))
+            }
+            ConversionTarget::Duration(_) | ConversionTarget::Percentage => unreachable!(
+                "BUG: invalid conversion target {:?} for scale; this should be rejected during planning",
+                target
+            ),
+        },
+
+        _ => unreachable!(
+            "BUG: unsupported unit conversion during evaluation: {} -> {}",
+            value,
+            target
+        ),
+    }
+}
+
+fn scale_unit_factor(lemma_type: &crate::semantic::LemmaType, unit_name: &str) -> Decimal {
+    let units = match &lemma_type.specifications {
+        TypeSpecification::Scale { units, .. } => units,
+        _ => unreachable!(
+            "BUG: scale_unit_factor called with non-scale type {}",
+            lemma_type.name()
+        ),
+    };
+
+    match units
+        .iter()
+        .find(|u| u.name.eq_ignore_ascii_case(unit_name))
+    {
+        Some(Unit { value, .. }) => *value,
+        None => {
+            let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
+            unreachable!(
+                "BUG: unknown unit '{}' for scale type {}. Valid units: {}",
+                unit_name,
+                lemma_type.name(),
+                valid.join(", ")
+            );
+        }
     }
 }
 
 /// Convert a duration value between units
-fn convert_duration(
-    value: Decimal,
-    from: &DurationUnit,
-    to: &DurationUnit,
-) -> Result<Decimal, String> {
+fn convert_duration(value: Decimal, from: &DurationUnit, to: &DurationUnit) -> Decimal {
     if from == to {
-        return Ok(value);
+        return value;
     }
 
     let seconds = duration_to_seconds(value, from);
-    Ok(seconds_to_duration(seconds, to))
+    seconds_to_duration(seconds, to)
 }
 
 /// Convert a duration value to seconds (base unit)
@@ -106,7 +165,7 @@ mod tests {
     #[test]
     fn duration_conversion() {
         let result = convert_duration(Decimal::from(2), &DurationUnit::Hour, &DurationUnit::Minute);
-        assert_eq!(result, Ok(Decimal::from(120)));
+        assert_eq!(result, Decimal::from(120));
     }
 
     #[test]

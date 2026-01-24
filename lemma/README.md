@@ -22,7 +22,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.7.1"
+lemma-engine = "0.7.2"
 ```
 
 ### Minimal example
@@ -133,25 +133,7 @@ let response = engine.invert(
 )?;
 ```
 
-**2. `invert_strict()` - Pre-typed values (programmatic)**
-
-Accepts pre-parsed `LiteralValue` types. Use this for strongly-typed interfaces:
-
-```rust
-use lemma::LiteralValue;
-
-let mut values = HashMap::new();
-values.insert("is_vip".to_string(), LiteralValue::Boolean(lemma::BooleanValue::True));
-
-let response = engine.invert_strict(
-    "pricing",
-    "discount",
-    Target::value(LiteralValue::Percentage(Decimal::from(25))),
-    values
-)?;
-```
-
-**3. `invert_json()` - JSON input (convenience)**
+**2. `invert_json()` - JSON input (convenience)**
 
 Accepts JSON bytes directly:
 

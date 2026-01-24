@@ -26,7 +26,7 @@ fn invert_exp_simple() {
 
     // y = e^2 ≈ 7.38905609893065
     let solutions = engine
-        .invert_strict(
+        .invert(
             "math",
             "y",
             Target::value(LiteralValue::number(dec("7.38905609893065"))),
@@ -46,7 +46,7 @@ fn invert_power_exponent_unknown() {
     "#;
     let engine = setup_engine(code);
     let solutions = engine
-        .invert_strict(
+        .invert(
             "math",
             "y",
             Target::value(LiteralValue::number(8)),
@@ -66,7 +66,7 @@ fn invert_power_base_unknown() {
     "#;
     let engine = setup_engine(code);
     let solutions = engine
-        .invert_strict(
+        .invert(
             "math",
             "y",
             Target::value(LiteralValue::number(9)),

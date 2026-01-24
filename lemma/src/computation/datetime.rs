@@ -309,6 +309,43 @@ pub fn datetime_comparison(
     }
 }
 
+/// Perform time comparisons, returning OperationResult (Veto on error)
+pub fn time_comparison(
+    left: &LiteralValue,
+    op: &ComparisonComputation,
+    right: &LiteralValue,
+) -> OperationResult {
+    match (&left.value, &right.value) {
+        (Value::Time(l), Value::Time(r)) => {
+            let l_dt = match time_value_to_chrono_datetime(l) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let r_dt = match time_value_to_chrono_datetime(r) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            let l_utc = l_dt.naive_utc();
+            let r_utc = r_dt.naive_utc();
+
+            let result = match op {
+                ComparisonComputation::GreaterThan => l_utc > r_utc,
+                ComparisonComputation::LessThan => l_utc < r_utc,
+                ComparisonComputation::GreaterThanOrEqual => l_utc >= r_utc,
+                ComparisonComputation::LessThanOrEqual => l_utc <= r_utc,
+                ComparisonComputation::Equal | ComparisonComputation::Is => l_utc == r_utc,
+                ComparisonComputation::NotEqual | ComparisonComputation::IsNot => l_utc != r_utc,
+            };
+
+            OperationResult::Value(LiteralValue::boolean(result.into()))
+        }
+        _ => unreachable!(
+            "BUG: time_comparison called with non-time operands; this should be enforced by planning and dispatch"
+        ),
+    }
+}
+
 /// Perform time arithmetic operations, returning OperationResult (Veto on error)
 pub fn time_arithmetic(
     left: &LiteralValue,

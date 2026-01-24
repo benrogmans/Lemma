@@ -12,14 +12,43 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROJECT_ROOT = join(__dirname, '..');
 
+function opIsVeto(op) {
+  return op && Object.prototype.hasOwnProperty.call(op, 'veto');
+}
+
+function opIsValue(op) {
+  return op && Object.prototype.hasOwnProperty.call(op, 'value');
+}
+
+function literalStandardType(lit) {
+  if (!lit || !lit.value || typeof lit.value !== 'object') return null;
+  const keys = Object.keys(lit.value);
+  return keys.length === 1 ? keys[0] : null;
+}
+
+function literalNumberValue(lit) {
+  const t = literalStandardType(lit);
+  if (t !== 'number') return null;
+  const v = lit.value.number;
+  return typeof v === 'string' ? Number(v) : v;
+}
+
+function literalScaleValue(lit) {
+  const t = literalStandardType(lit);
+  if (t !== 'scale') return null;
+  const v = lit.value.scale;
+  if (!Array.isArray(v) || v.length !== 2) return null;
+  const amount = typeof v[0] === 'string' ? Number(v[0]) : v[0];
+  const unit = v[1];
+  if (typeof unit !== 'string') return null;
+  return { amount, unit };
+}
+
 /**
  * Test WASM package
  */
 export async function test() {
   console.log('Testing Lemma WASM...');
-
-  // Suppress deprecation warnings
-  process.removeAllListeners('warning');
 
   try {
     // Check if pkg directory exists
@@ -140,12 +169,17 @@ export async function test() {
     if (!doubleRule) {
       throw new Error('double_number rule not found in results');
     }
-    // The rule should have used the overridden value (50 * 2 = 100)
-    if (!doubleRule.result || doubleRule.result.value !== 100) {
-      throw new Error(`Expected double_number to be 100 (50*2), got ${doubleRule.result?.value}`);
+    if (!doubleRule.result || !opIsValue(doubleRule.result)) {
+      throw new Error(`Expected double_number to be a value result, got ${JSON.stringify(doubleRule.result)}`);
     }
-    if (doubleRule.result.type !== "number") {
-      throw new Error(`Expected type to be number, got ${doubleRule.result.type}`);
+    const lit = doubleRule.result.value;
+    const type = literalStandardType(lit);
+    if (type !== 'number') {
+      throw new Error(`Expected type to be number, got ${type}`);
+    }
+    const num = literalNumberValue(lit);
+    if (num !== 100) {
+      throw new Error(`Expected double_number to be 100 (50*2), got ${num}`);
     }
     console.log('✓ Type handling in facts object successful');
 
@@ -195,8 +229,8 @@ export async function test() {
     if (!badSqrtRule) {
       throw new Error('bad_sqrt rule not found in results');
     }
-    if (badSqrtRule.result?.type !== "veto") {
-      throw new Error('Expected veto result type, got: ' + JSON.stringify(badSqrtRule.result));
+    if (!badSqrtRule.result || !opIsVeto(badSqrtRule.result)) {
+      throw new Error('Expected veto result, got: ' + JSON.stringify(badSqrtRule.result));
     }
     console.log('✓ Veto handling successful');
 
@@ -221,11 +255,12 @@ export async function test() {
       throw new Error('sum rule not found in results');
     }
     // If fact 'y' is missing, the rule should be vetoed with a message
-    if (sumRule.result?.type !== "veto") {
+    if (!sumRule.result || !opIsVeto(sumRule.result)) {
       throw new Error('Expected veto result due to missing fact, got: ' + JSON.stringify(sumRule.result));
     }
-    if (!sumRule.result?.message || !sumRule.result.message.includes('y')) {
-      throw new Error('Expected veto message to mention missing fact "y", got: ' + JSON.stringify(sumRule.result?.message));
+    const vetoMsg = sumRule.result.veto;
+    if (typeof vetoMsg !== 'string' || !vetoMsg.includes('y')) {
+      throw new Error('Expected veto message to mention missing fact "y", got: ' + JSON.stringify(vetoMsg));
     }
     console.log('✓ Missing facts handling successful');
 
@@ -268,7 +303,41 @@ export async function test() {
     }
     console.log('✓ Units and percentages handling successful');
 
-    // Test 15: Empty facts object vs empty string
+    // Test 15: Scale unit conversion via `in`
+    const scaleConvDoc = engine.addLemmaCode(`
+      doc scale_conv
+      type money = scale
+        -> unit eur 1
+        -> unit usd 1.19
+
+      rule price_usd = 100 eur in usd
+    `, 'scale_conv.lemma');
+    const scaleConvParsed = JSON.parse(scaleConvDoc);
+    if (!scaleConvParsed.success) {
+      throw new Error('Failed to add scale conversion doc: ' + JSON.stringify(scaleConvParsed));
+    }
+    const scaleConvEval = JSON.parse(engine.evaluate('scale_conv', '{}'));
+    if (!scaleConvEval.success) {
+      throw new Error('Failed to evaluate scale conversion doc: ' + JSON.stringify(scaleConvEval));
+    }
+    const priceUsdRule = scaleConvEval.response?.results?.price_usd;
+    if (!priceUsdRule || !priceUsdRule.result || !opIsValue(priceUsdRule.result)) {
+      throw new Error('Expected price_usd to be a value result, got: ' + JSON.stringify(priceUsdRule));
+    }
+    const scaleLit = priceUsdRule.result.value;
+    const scaleParsed = literalScaleValue(scaleLit);
+    if (!scaleParsed) {
+      throw new Error('Expected scale literal, got: ' + JSON.stringify(scaleLit));
+    }
+    if (scaleParsed.unit !== 'usd') {
+      throw new Error(`Expected unit usd, got ${scaleParsed.unit}`);
+    }
+    if (scaleParsed.amount !== 119) {
+      throw new Error(`Expected amount 119, got ${scaleParsed.amount}`);
+    }
+    console.log('✓ Scale unit conversion via `in` works');
+
+    // Test 16: Empty facts object vs empty string
     const emptyFacts1 = engine.evaluate('test', '{}');
     const emptyFacts2 = engine.evaluate('test', '');
     const emptyParsed1 = JSON.parse(emptyFacts1);
@@ -278,7 +347,7 @@ export async function test() {
     }
     console.log('✓ Empty facts handling successful');
 
-    // Test 16: Multiple documents
+    // Test 17: Multiple documents
     const doc1Result = engine.addLemmaCode('doc doc1\nfact x = 1', 'doc1.lemma');
     const doc2Result = engine.addLemmaCode('doc doc2\nfact y = 2', 'doc2.lemma');
     if (!JSON.parse(doc1Result).success || !JSON.parse(doc2Result).success) {

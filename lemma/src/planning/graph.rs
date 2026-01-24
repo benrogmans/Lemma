@@ -75,10 +75,12 @@ impl Graph {
     ///
     /// # Arguments
     /// * `type_decl` - The TypeDeclaration to resolve
+    /// * `decl_source` - The source location for error messages
     /// * `context_doc` - The document context where this type is being used
     pub(crate) fn resolve_type_declaration(
         &self,
         type_decl: &FactValue,
+        decl_source: &Source,
         context_doc: &str,
     ) -> Result<LemmaType, LemmaError> {
         let FactValue::TypeDeclaration {
@@ -87,20 +89,7 @@ impl Graph {
             from,
         } = type_decl
         else {
-            return Err(LemmaError::engine(
-                "Expected TypeDeclaration",
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
-                Arc::from(""),
-                context_doc,
-                1,
-                None::<String>,
-            ));
+            unreachable!("BUG: resolve_type_declaration called with non-TypeDeclaration FactValue");
         };
 
         // Get resolved types for the source document
@@ -116,16 +105,11 @@ impl Graph {
             let document_types = self.resolved_types.get(source_doc).ok_or_else(|| {
                 LemmaError::engine(
                     format!("Resolved types not found for document '{}'", source_doc),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(""),
-                    context_doc,
-                    1,
+                    decl_source.span.clone(),
+                    decl_source.attribute.clone(),
+                    self.source_text_for(decl_source),
+                    decl_source.doc_name.clone(),
+                    self.doc_start_line_for(decl_source),
                     None::<String>,
                 )
             })?;
@@ -136,16 +120,11 @@ impl Graph {
                 .ok_or_else(|| {
                     LemmaError::engine(
                         format!("Unknown type: '{}'. Type must be defined before use.", base),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        context_doc,
-                        1,
+                        decl_source.span.clone(),
+                        decl_source.attribute.clone(),
+                        self.source_text_for(decl_source),
+                        decl_source.doc_name.clone(),
+                        self.doc_start_line_for(decl_source),
                         None::<String>,
                     )
                 })?
@@ -159,16 +138,11 @@ impl Graph {
                 specs = specs.apply_override(command, args).map_err(|e| {
                     LemmaError::engine(
                         format!("Invalid command '{}' for type '{}': {}", command, base, e),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        context_doc,
-                        1,
+                        decl_source.span.clone(),
+                        decl_source.attribute.clone(),
+                        self.source_text_for(decl_source),
+                        decl_source.doc_name.clone(),
+                        self.doc_start_line_for(decl_source),
                         None::<String>,
                     )
                 })?;
@@ -184,6 +158,28 @@ impl Graph {
         };
 
         Ok(lemma_type)
+    }
+
+    fn source_text_for(&self, source: &Source) -> Arc<str> {
+        let source_text = self.sources.get(&source.attribute).unwrap_or_else(|| {
+            unreachable!(
+                "BUG: missing sources entry for attribute '{}' (doc '{}')",
+                source.attribute, source.doc_name
+            )
+        });
+        Arc::from(source_text.as_str())
+    }
+
+    fn doc_start_line_for(&self, source: &Source) -> usize {
+        self.all_docs
+            .get(&source.doc_name)
+            .map(|d| d.start_line)
+            .unwrap_or_else(|| {
+                unreachable!(
+                    "BUG: missing document '{}' while computing error doc_start_line",
+                    source.doc_name
+                )
+            })
     }
 
     fn topological_sort(&self) -> Result<Vec<RulePath>, Vec<LemmaError>> {
@@ -238,6 +234,18 @@ impl Graph {
                 .filter(|rule| !result.contains(rule))
                 .cloned()
                 .collect();
+            let cycle: Vec<Source> = missing
+                .iter()
+                .filter_map(|rule| self.rules.get(rule).map(|n| n.source.clone()))
+                .collect();
+
+            let Some(first_source) = cycle.first() else {
+                unreachable!(
+                    "BUG: circular dependency detected but no sources could be collected ({} missing rules)",
+                    missing.len()
+                );
+            };
+
             return Err(vec![LemmaError::circular_dependency(
                 format!(
                     "Circular dependency detected. Rules involved: {}",
@@ -247,17 +255,12 @@ impl Graph {
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
-                std::sync::Arc::from(""),
-                "<unknown>",
-                1,
-                vec![],
+                first_source.span.clone(),
+                first_source.attribute.clone(),
+                self.source_text_for(first_source),
+                first_source.doc_name.clone(),
+                self.doc_start_line_for(first_source),
+                cycle,
                 None::<String>,
             )]);
         }
@@ -326,8 +329,21 @@ impl Graph {
                 Ok(document_types) => {
                     // Validate type specifications for all resolved named types
                     for (type_name, lemma_type) in &document_types.named_types {
-                        let mut spec_errors =
-                            validate_type_specifications(&lemma_type.specifications, type_name);
+                        let source = Source::new(
+                            "<type>",
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: doc.start_line,
+                                col: 0,
+                            },
+                            doc.name.clone(),
+                        );
+                        let mut spec_errors = validate_type_specifications(
+                            &lemma_type.specifications,
+                            type_name,
+                            &source,
+                        );
                         builder.errors.append(&mut spec_errors);
                     }
                     builder
@@ -395,6 +411,40 @@ impl Graph {
 }
 
 impl<'a> GraphBuilder<'a> {
+    fn source_text_for(&self, source: &Source) -> Arc<str> {
+        let source_text = self.sources.get(&source.attribute).unwrap_or_else(|| {
+            unreachable!(
+                "BUG: missing sources entry for attribute '{}' (doc '{}')",
+                source.attribute, source.doc_name
+            )
+        });
+        Arc::from(source_text.as_str())
+    }
+
+    fn doc_start_line_for(&self, source: &Source) -> usize {
+        self.all_docs
+            .get(&source.doc_name)
+            .map(|d| d.start_line)
+            .unwrap_or_else(|| {
+                unreachable!(
+                    "BUG: missing document '{}' while computing error doc_start_line",
+                    source.doc_name
+                )
+            })
+    }
+
+    fn engine_error(&self, message: impl Into<String>, source: &Source) -> LemmaError {
+        LemmaError::engine(
+            message.into(),
+            source.span.clone(),
+            source.attribute.clone(),
+            self.source_text_for(source),
+            source.doc_name.clone(),
+            self.doc_start_line_for(source),
+            None::<String>,
+        )
+    }
+
     fn build_document(
         &mut self,
         doc: &'a LemmaDoc,
@@ -407,31 +457,23 @@ impl<'a> GraphBuilder<'a> {
     fn resolve_path_segments_with_overrides(
         &mut self,
         segments: &[String],
+        reference_source: &Source,
         mut current_facts_map: HashMap<String, &'a LemmaFact>,
         mut path_segments: Vec<PathSegment>,
         effective_doc_refs: &HashMap<String, String>,
     ) -> Option<Vec<PathSegment>> {
         for (index, segment) in segments.iter().enumerate() {
-            let fact_ref = match current_facts_map.get(segment) {
-                Some(f) => f,
-                None => {
-                    self.errors.push(LemmaError::engine(
-                        format!("Fact '{}' not found", segment),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    ));
-                    return None;
-                }
-            };
+            let fact_ref =
+                match current_facts_map.get(segment) {
+                    Some(f) => f,
+                    None => {
+                        self.errors.push(self.engine_error(
+                            format!("Fact '{}' not found", segment),
+                            reference_source,
+                        ));
+                        return None;
+                    }
+                };
 
             if let FactValue::DocumentReference(original_doc_name) = &fact_ref.value {
                 // Only use effective_doc_refs for the FIRST segment
@@ -445,19 +487,9 @@ impl<'a> GraphBuilder<'a> {
                 let next_doc = match self.all_docs.get(doc_name) {
                     Some(d) => d,
                     None => {
-                        self.errors.push(LemmaError::engine(
+                        self.errors.push(self.engine_error(
                             format!("Document '{}' not found", doc_name),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
+                            reference_source,
                         ));
                         return None;
                     }
@@ -472,19 +504,9 @@ impl<'a> GraphBuilder<'a> {
                     .map(|f| (f.reference.fact.clone(), f))
                     .collect();
             } else {
-                self.errors.push(LemmaError::engine(
+                self.errors.push(self.engine_error(
                     format!("Fact '{}' is not a document reference", segment),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
+                    reference_source,
                 ));
                 return None;
             }
@@ -514,32 +536,15 @@ impl<'a> GraphBuilder<'a> {
 
         // Check for duplicates
         if self.facts.contains_key(&fact_path) {
-            self.errors.push(LemmaError::engine(
-                format!("Duplicate fact '{}'", fact_path.fact),
-                fact.source_location
-                    .as_ref()
-                    .map(|s| s.span.clone())
-                    .unwrap_or(Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    }),
-                fact.source_location
-                    .as_ref()
-                    .map(|s| s.attribute.as_str())
-                    .unwrap_or("<unknown>"),
-                fact.source_location
-                    .as_ref()
-                    .map(|s| Arc::from(s.doc_name.as_str()))
-                    .unwrap_or_else(|| Arc::from("")),
-                fact.source_location
-                    .as_ref()
-                    .map(|s| s.doc_name.as_str())
-                    .unwrap_or("<unknown>"),
-                1,
-                None::<String>,
-            ));
+            let fact_source = fact.source_location.as_ref().unwrap_or_else(|| {
+                unreachable!(
+                    "BUG: fact '{}' missing source_location",
+                    fact.reference.fact
+                )
+            });
+            self.errors.push(
+                self.engine_error(format!("Duplicate fact '{}'", fact_path.fact), fact_source),
+            );
             return;
         }
 
@@ -587,7 +592,14 @@ impl<'a> GraphBuilder<'a> {
                 if is_inline_type_definition && current_segments.is_empty() {
                     // Register inline type definition in TypeRegistry
                     // Create a TypeDef for this inline type definition
+                    let source_location = fact.source_location.clone().unwrap_or_else(|| {
+                        unreachable!(
+                            "BUG: inline type definition fact '{}' missing source_location",
+                            fact.reference.fact
+                        )
+                    });
                     let inline_type_def = TypeDef::Inline {
+                        source_location,
                         parent: base.clone(),
                         overrides: inline_overrides.clone(),
                         fact_ref: fact.reference.clone(),
@@ -629,8 +641,15 @@ impl<'a> GraphBuilder<'a> {
                 self.facts.insert(fact_path, stored_fact);
             }
             FactValue::DocumentReference(doc_name) => {
+                let fact_source = fact.source_location.as_ref().unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: document reference fact '{}' missing source_location",
+                        fact.reference.fact
+                    )
+                });
+
                 // Check if there's an override for this document reference
-                let effective_doc_name = if let Some(overrides) =
+                let (effective_doc_name, effective_source) = if let Some(overrides) =
                     pending_overrides.get(&fact.reference.fact)
                 {
                     // An override applies when we've traversed all its segments from the entry point
@@ -639,33 +658,30 @@ impl<'a> GraphBuilder<'a> {
                             && o.reference.fact == fact.reference.fact
                     }) {
                         if let FactValue::DocumentReference(override_doc) = &override_fact.value {
-                            override_doc.clone()
+                            let override_source =
+                                override_fact.source_location.as_ref().unwrap_or_else(|| {
+                                    unreachable!(
+                                        "BUG: override fact '{}' missing source_location",
+                                        override_fact.reference.fact
+                                    )
+                                });
+                            (override_doc.clone(), override_source)
                         } else {
-                            doc_name.clone()
+                            (doc_name.clone(), fact_source)
                         }
                     } else {
-                        doc_name.clone()
+                        (doc_name.clone(), fact_source)
                     }
                 } else {
-                    doc_name.clone()
+                    (doc_name.clone(), fact_source)
                 };
 
                 let nested_doc = match self.all_docs.get(&effective_doc_name) {
                     Some(d) => d,
                     None => {
-                        self.errors.push(LemmaError::engine(
+                        self.errors.push(self.engine_error(
                             format!("Document '{}' not found", effective_doc_name),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
+                            effective_source,
                         ));
                         return;
                     }
@@ -798,8 +814,24 @@ impl<'a> GraphBuilder<'a> {
                 // Validate type specifications for inline type definitions
                 for (fact_ref, lemma_type) in &document_types.inline_type_definitions {
                     let type_name = format!("{} (inline)", fact_ref.fact);
-                    let mut spec_errors =
-                        validate_type_specifications(&lemma_type.specifications, &type_name);
+                    let fact = doc.facts.iter().find(|f| &f.reference == fact_ref).unwrap_or_else(|| {
+                        unreachable!(
+                            "BUG: inline type definition for '{}' has no corresponding fact in document '{}'",
+                            fact_ref.fact,
+                            doc.name
+                        )
+                    });
+                    let source = fact.source_location.as_ref().unwrap_or_else(|| {
+                        unreachable!(
+                            "BUG: inline type definition fact '{}' missing source_location",
+                            fact_ref.fact
+                        )
+                    });
+                    let mut spec_errors = validate_type_specifications(
+                        &lemma_type.specifications,
+                        &type_name,
+                        source,
+                    );
                     self.errors.append(&mut spec_errors);
                 }
                 // Always overwrite: inline type definitions may have been registered while processing facts.
@@ -839,20 +871,12 @@ impl<'a> GraphBuilder<'a> {
         };
 
         if self.rules.contains_key(&rule_path) {
-            self.errors.push(LemmaError::engine(
-                format!("Duplicate rule '{}'", rule_path.rule),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
-                Arc::from(""),
-                "<unknown>",
-                1,
-                None::<String>,
-            ));
+            let rule_source = rule.source_location.as_ref().unwrap_or_else(|| {
+                unreachable!("BUG: rule '{}' missing source_location", rule.name)
+            });
+            self.errors.push(
+                self.engine_error(format!("Duplicate rule '{}'", rule_path.rule), rule_source),
+            );
             return;
         }
 
@@ -901,16 +925,7 @@ impl<'a> GraphBuilder<'a> {
         let rule_node = RuleNode {
             branches,
             source: rule.source_location.clone().unwrap_or_else(|| {
-                Source::new(
-                    "",
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 0,
-                        col: 0,
-                    },
-                    "",
-                )
+                unreachable!("BUG: rule '{}' missing source_location", rule.name)
             }),
             depends_on_rules,
             rule_type: LemmaType::veto_type(), // Initialized to veto_type; actual type computed in compute_all_rule_types during validation
@@ -975,6 +990,13 @@ impl<'a> GraphBuilder<'a> {
                 )
             }
             ExpressionKind::UnresolvedUnitLiteral(number, unit_name) => {
+                let expr_source = expr.source_location.as_ref().unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: UnresolvedUnitLiteral expression missing source_location for unit '{}'",
+                        unit_name
+                    )
+                });
+
                 // Get resolved types for current document from self.resolved_types
                 // Types must be resolved by this point (after facts, before rules)
                 // Even empty documents get resolved types (with empty maps) - so get() should never fail
@@ -989,22 +1011,12 @@ impl<'a> GraphBuilder<'a> {
                 let lemma_type = match document_types.unit_index.get(unit_name) {
                     Some(lemma_type) => lemma_type.clone(),
                     None => {
-                        self.errors.push(LemmaError::engine(
+                        self.errors.push(self.engine_error(
                             format!(
                                 "Unknown unit '{}' in document '{}'",
                                 unit_name, current_doc.name
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
+                            expr_source,
                         ));
                         return None;
                     }
@@ -1065,8 +1077,15 @@ impl<'a> GraphBuilder<'a> {
                 }
             }
             ExpressionKind::FactReference(fact_ref) => {
+                let expr_source = expr.source_location.as_ref().unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: FactReference expression missing source_location for '{}'",
+                        fact_ref.fact
+                    )
+                });
                 let segments = self.resolve_path_segments_with_overrides(
                     &fact_ref.segments,
+                    expr_source,
                     facts_map.clone(),
                     current_segments.to_vec(),
                     effective_doc_refs,
@@ -1079,37 +1098,17 @@ impl<'a> GraphBuilder<'a> {
                     // Check if this is actually a rule name - provide helpful error message
                     let is_rule = current_doc.rules.iter().any(|r| r.name == fact_ref.fact);
                     if is_rule {
-                        self.errors.push(LemmaError::engine(
+                        self.errors.push(self.engine_error(
                             format!(
                                 "'{}' is a rule, not a fact. Use '{}?' to reference rules",
                                 fact_ref.fact, fact_ref.fact
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
+                            expr_source,
                         ));
                     } else {
-                        self.errors.push(LemmaError::engine(
+                        self.errors.push(self.engine_error(
                             format!("Fact '{}' not found", fact_ref.fact),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
+                            expr_source,
                         ));
                     }
                     return None;
@@ -1127,8 +1126,15 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ExpressionKind::RuleReference(rule_ref) => {
+                let expr_source = expr.source_location.as_ref().unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: RuleReference expression missing source_location for '{}?'",
+                        rule_ref.rule
+                    )
+                });
                 let segments = self.resolve_path_segments_with_overrides(
                     &rule_ref.segments,
+                    expr_source,
                     facts_map.clone(),
                     current_segments.to_vec(),
                     effective_doc_refs,
@@ -1312,21 +1318,25 @@ fn compute_all_rule_types(
                 let condition_type =
                     compute_expression_type(condition_expression, graph, &computed_types, errors);
                 if !condition_type.is_boolean() {
+                    let condition_source = condition_expression
+                        .source_location
+                        .as_ref()
+                        .unwrap_or_else(|| {
+                            unreachable!(
+                                "BUG: unless clause condition in rule '{}' missing source_location",
+                                rule_path.rule
+                            )
+                        });
                     errors.push(LemmaError::engine(
                         format!(
                             "Unless clause condition in rule '{}' must be boolean, got {:?}",
                             rule_path.rule, condition_type
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
+                        condition_source.span.clone(),
+                        condition_source.attribute.clone(),
+                        graph.source_text_for(condition_source),
+                        condition_source.doc_name.clone(),
+                        graph.doc_start_line_for(condition_source),
                         None::<String>,
                     ));
                 }
@@ -1378,9 +1388,9 @@ fn compute_all_rule_types(
                             result_type.name()),
                             rule_source.span.clone(),
                             rule_source.attribute.clone(),
-                            std::sync::Arc::from(""),
+                            graph.source_text_for(rule_source),
                             rule_source.doc_name.clone(),
-                            1,
+                            graph.doc_start_line_for(rule_source),
                             None::<String>,
                         ));
                     }
@@ -1428,9 +1438,9 @@ fn compute_all_rule_types(
                     result_type.name()),
                     rule_source.span.clone(),
                     rule_source.attribute.clone(),
-                    std::sync::Arc::from(""),
+                    graph.source_text_for(rule_source),
                     rule_source.doc_name.clone(),
-                    1,
+                    graph.doc_start_line_for(rule_source),
                     None::<String>,
                 ));
             }
@@ -1460,7 +1470,10 @@ fn compute_expression_type(
     match &expression.kind {
         ExpressionKind::Literal(literal_value) => literal_value.get_type().clone(),
         ExpressionKind::FactPath(fact_path) => {
-            compute_fact_type(fact_path, graph, computed_rule_types, errors)
+            let expr_source = expression.source_location.as_ref().unwrap_or_else(|| {
+                unreachable!("BUG: fact path expression missing source_location")
+            });
+            compute_fact_type(fact_path, graph, expr_source, errors)
         }
         ExpressionKind::RulePath(rule_path) => computed_rule_types
             .get(rule_path)
@@ -1472,37 +1485,67 @@ fn compute_expression_type(
                 )
             }),
         ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
+            let expr_source = expression
+                .source_location
+                .as_ref()
+                .unwrap_or_else(|| unreachable!("BUG: logical expression missing source_location"));
             let left_type = compute_expression_type(left, graph, computed_rule_types, errors);
             let right_type = compute_expression_type(right, graph, computed_rule_types, errors);
-            validate_logical_operands(&left_type, &right_type, errors);
+            validate_logical_operands(&left_type, &right_type, graph, expr_source, errors);
             standard_boolean().clone()
         }
         ExpressionKind::LogicalNegation(operand, _) => {
+            let expr_source = expression.source_location.as_ref().unwrap_or_else(|| {
+                unreachable!("BUG: logical negation expression missing source_location")
+            });
             let operand_type = compute_expression_type(operand, graph, computed_rule_types, errors);
-            validate_logical_operand(&operand_type, errors);
+            validate_logical_operand(&operand_type, graph, expr_source, errors);
             standard_boolean().clone()
         }
-        ExpressionKind::Comparison(left, _, right) => {
+        ExpressionKind::Comparison(left, op, right) => {
+            let expr_source = expression.source_location.as_ref().unwrap_or_else(|| {
+                unreachable!("BUG: comparison expression missing source_location")
+            });
             let left_type = compute_expression_type(left, graph, computed_rule_types, errors);
             let right_type = compute_expression_type(right, graph, computed_rule_types, errors);
-            validate_comparison_types(&left_type, &right_type, errors);
+            validate_comparison_types(&left_type, op, &right_type, graph, expr_source, errors);
             standard_boolean().clone()
         }
         ExpressionKind::Arithmetic(left, operator, right) => {
+            let expr_source = expression.source_location.as_ref().unwrap_or_else(|| {
+                unreachable!("BUG: arithmetic expression missing source_location")
+            });
             let left_type = compute_expression_type(left, graph, computed_rule_types, errors);
             let right_type = compute_expression_type(right, graph, computed_rule_types, errors);
-            validate_arithmetic_types(&left_type, &right_type, operator, errors);
+            validate_arithmetic_types(
+                &left_type,
+                &right_type,
+                operator,
+                graph,
+                expr_source,
+                errors,
+            );
             compute_arithmetic_result_type(left_type, right_type, operator)
         }
         ExpressionKind::UnitConversion(source_expression, target) => {
+            let expr_source = expression.source_location.as_ref().unwrap_or_else(|| {
+                unreachable!("BUG: unit conversion expression missing source_location")
+            });
             let source_type =
                 compute_expression_type(source_expression, graph, computed_rule_types, errors);
-            validate_unit_conversion_types(&source_type, target, errors);
-            conversion_target_to_type(target)
+            validate_unit_conversion_types(&source_type, target, graph, expr_source, errors);
+            match target {
+                ConversionTarget::Duration(_) => standard_duration().clone(),
+                ConversionTarget::Percentage => standard_ratio().clone(),
+                ConversionTarget::ScaleUnit(_) => source_type,
+            }
         }
         ExpressionKind::MathematicalComputation(_, operand) => {
+            let expr_source = expression.source_location.as_ref().unwrap_or_else(|| {
+                unreachable!("BUG: mathematical computation expression missing source_location")
+            });
             let operand_type = compute_expression_type(operand, graph, computed_rule_types, errors);
-            validate_mathematical_operand(&operand_type, errors);
+            validate_mathematical_operand(&operand_type, graph, expr_source, errors);
             standard_number().clone()
         }
         ExpressionKind::Veto(_) => LemmaType::veto_type(),
@@ -1519,136 +1562,177 @@ fn compute_expression_type(
     }
 }
 
+fn push_engine_error_at(
+    errors: &mut Vec<LemmaError>,
+    graph: &Graph,
+    source: &Source,
+    message: impl Into<String>,
+) {
+    errors.push(LemmaError::engine(
+        message.into(),
+        source.span.clone(),
+        source.attribute.clone(),
+        graph.source_text_for(source),
+        source.doc_name.clone(),
+        graph.doc_start_line_for(source),
+        None::<String>,
+    ));
+}
+
 fn validate_logical_operands(
     left_type: &LemmaType,
     right_type: &LemmaType,
+    graph: &Graph,
+    source: &Source,
     errors: &mut Vec<LemmaError>,
 ) {
     if !left_type.is_boolean() {
-        errors.push(LemmaError::engine(
+        push_engine_error_at(
+            errors,
+            graph,
+            source,
             format!(
                 "Logical operation requires boolean operands, got {:?} for left operand",
                 left_type
             ),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        ));
+        );
     }
     if !right_type.is_boolean() {
-        errors.push(LemmaError::engine(
+        push_engine_error_at(
+            errors,
+            graph,
+            source,
             format!(
                 "Logical operation requires boolean operands, got {:?} for right operand",
                 right_type
             ),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        ));
+        );
     }
 }
 
-fn validate_logical_operand(operand_type: &LemmaType, errors: &mut Vec<LemmaError>) {
+fn validate_logical_operand(
+    operand_type: &LemmaType,
+    graph: &Graph,
+    source: &Source,
+    errors: &mut Vec<LemmaError>,
+) {
     if !operand_type.is_boolean() {
-        errors.push(LemmaError::engine(
+        push_engine_error_at(
+            errors,
+            graph,
+            source,
             format!(
                 "Logical negation requires boolean operand, got {:?}",
                 operand_type
             ),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        ));
+        );
     }
 }
 
 fn validate_comparison_types(
     left_type: &LemmaType,
+    op: &crate::ComparisonComputation,
     right_type: &LemmaType,
+    graph: &Graph,
+    source: &Source,
     errors: &mut Vec<LemmaError>,
 ) {
-    if left_type == right_type {
+    let is_equality_only = matches!(
+        op,
+        crate::ComparisonComputation::Equal
+            | crate::ComparisonComputation::NotEqual
+            | crate::ComparisonComputation::Is
+            | crate::ComparisonComputation::IsNot
+    );
+
+    // Boolean comparisons: only equality operators.
+    if left_type.is_boolean() && right_type.is_boolean() {
+        if !is_equality_only {
+            push_engine_error_at(
+                errors,
+                graph,
+                source,
+                format!("Can only use == and != with booleans (got {})", op),
+            );
+        }
         return;
     }
 
-    // CRITICAL: If both operands are different Scale types, reject ALL comparisons
-    if left_type.is_scale() && right_type.is_scale() && left_type.name != right_type.name {
-        errors.push(LemmaError::engine(
-            format!("Cannot compare different scale types: {} and {}. Operations between different scale types produce ambiguous result units.", left_type.name(), right_type.name()),
-            Span { start: 0, end: 0, line: 1, col: 0 },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        ));
-        return;
-    }
-
-    // Allow comparison between compatible numeric types (Scale, Number, Ratio, Duration)
-    // Scale and Number are both numeric and can be compared with each other
-    // But different Scale types are rejected above
-    if (left_type.is_scale()
-        || left_type.is_number()
-        || left_type.is_duration()
-        || left_type.is_ratio())
-        && (right_type.is_scale()
-            || right_type.is_number()
-            || right_type.is_duration()
-            || right_type.is_ratio())
-    {
-        return;
-    }
-    // Allow comparison between text types (including inline type definitions with their base type)
-    // Inline type definitions extending a base text type are comparable with that base type
-    // Options validation happens at runtime, not during type checking
+    // Text comparisons: only equality operators.
     if left_type.is_text() && right_type.is_text() {
+        if !is_equality_only {
+            push_engine_error_at(
+                errors,
+                graph,
+                source,
+                format!("Can only use == and != with text (got {})", op),
+            );
+        }
         return;
     }
-    errors.push(LemmaError::engine(
-        format!("Cannot compare {:?} with {:?}", left_type, right_type),
-        Span {
-            start: 0,
-            end: 0,
-            line: 1,
-            col: 0,
-        },
-        "<unknown>",
-        Arc::from(""),
-        "<unknown>",
-        1,
-        None::<String>,
-    ));
+
+    // Numbers compare with numbers only.
+    if left_type.is_number() && right_type.is_number() {
+        return;
+    }
+
+    // Ratios compare with ratios only.
+    if left_type.is_ratio() && right_type.is_ratio() {
+        return;
+    }
+
+    // Dates compare with dates only.
+    if left_type.is_date() && right_type.is_date() {
+        return;
+    }
+
+    // Times compare with times only.
+    if left_type.is_time() && right_type.is_time() {
+        return;
+    }
+
+    // Scales compare with scales of the same scale type only.
+    if left_type.is_scale() && right_type.is_scale() {
+        if left_type.name != right_type.name {
+            push_engine_error_at(
+                errors,
+                graph,
+                source,
+                format!(
+                    "Cannot compare different scale types: {} and {}",
+                    left_type.name(),
+                    right_type.name()
+                ),
+            );
+        }
+        return;
+    }
+
+    // Duration compares with duration and (for now) plain numbers.
+    if left_type.is_duration() && right_type.is_duration() {
+        return;
+    }
+    if left_type.is_duration() && right_type.is_number() {
+        return;
+    }
+    if left_type.is_number() && right_type.is_duration() {
+        return;
+    }
+
+    push_engine_error_at(
+        errors,
+        graph,
+        source,
+        format!("Cannot compare {:?} with {:?}", left_type, right_type,),
+    );
 }
 
 fn validate_arithmetic_types(
     left_type: &LemmaType,
     right_type: &LemmaType,
     operator: &ArithmeticComputation,
+    graph: &Graph,
+    source: &Source,
     errors: &mut Vec<LemmaError>,
 ) {
     // Check for temporal arithmetic (Date/Time)
@@ -1664,30 +1748,25 @@ fn validate_arithmetic_types(
                 ArithmeticComputation::Subtract | ArithmeticComputation::Add
             )
         {
-            errors.push(LemmaError::engine(
+            push_engine_error_at(
+                errors,
+                graph,
+                source,
                 format!(
                     "Invalid date/time arithmetic: {:?} {:?} {:?}",
                     left_type, operator, right_type
                 ),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
-                Arc::from(""),
-                "<unknown>",
-                1,
-                None::<String>,
-            ));
+            );
         }
         return;
     }
 
     // CRITICAL: If both operands are different Scale types, reject ALL arithmetic operations
     if left_type.is_scale() && right_type.is_scale() && left_type.name != right_type.name {
-        errors.push(LemmaError::engine(
+        push_engine_error_at(
+            errors,
+            graph,
+            source,
             format!("Cannot {} different scale types: {} and {}. Operations between different scale types produce ambiguous result units.",
                 match operator {
                     ArithmeticComputation::Add => "add",
@@ -1700,13 +1779,7 @@ fn validate_arithmetic_types(
                 left_type.name(),
                 right_type.name()
             ),
-            Span { start: 0, end: 0, line: 1, col: 0 },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        ));
+        );
         return;
     }
 
@@ -1723,75 +1796,55 @@ fn validate_arithmetic_types(
         || right_type.is_ratio();
 
     if !left_valid {
-        errors.push(LemmaError::engine(
+        push_engine_error_at(
+            errors,
+            graph,
+            source,
             format!(
                 "Arithmetic operation requires numeric operands, got {:?} for left operand",
                 left_type
             ),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        ));
+        );
         return;
     }
     if !right_valid {
-        errors.push(LemmaError::engine(
+        push_engine_error_at(
+            errors,
+            graph,
+            source,
             format!(
                 "Arithmetic operation requires numeric operands, got {:?} for right operand",
                 right_type
             ),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        ));
+        );
         return;
     }
 
-    validate_arithmetic_operator_constraints(left_type, right_type, operator, errors);
+    validate_arithmetic_operator_constraints(
+        left_type, right_type, operator, graph, source, errors,
+    );
 }
 
 fn validate_arithmetic_operator_constraints(
     left_type: &LemmaType,
     right_type: &LemmaType,
     operator: &ArithmeticComputation,
+    graph: &Graph,
+    source: &Source,
     errors: &mut Vec<LemmaError>,
 ) {
     match operator {
         ArithmeticComputation::Modulo => {
             if left_type.is_duration() || right_type.is_duration() {
-                errors.push(LemmaError::engine(
+                push_engine_error_at(
+                    errors,
+                    graph,
+                    source,
                     format!(
                         "Modulo operation not supported for duration types: {:?} % {:?}",
                         left_type, right_type
                     ),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                ));
+                );
             } else if !right_type.is_number() {
                 // Modulo: dividend % divisor
                 // Dividend can be Scale or Number (custom or standard)
@@ -1800,23 +1853,15 @@ fn validate_arithmetic_operator_constraints(
                 // Allow: Number % Number → result is Number
                 // Error: Scale % Scale (divisor must be dimensionless)
                 // Error: Number % Scale (divisor must be dimensionless)
-                errors.push(LemmaError::engine(
+                push_engine_error_at(
+                    errors,
+                    graph,
+                    source,
                     format!(
                         "Modulo divisor must be a dimensionless number (not a scale type), got {}",
                         right_type.name()
                     ),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                ));
+                );
             }
             // If right is Number, allow it (left can be Scale or Number)
         }
@@ -1858,33 +1903,27 @@ fn validate_arithmetic_operator_constraints(
                         && left_type.is_number()
                         && right_type.is_duration()
                     {
-                        errors.push(LemmaError::engine(
+                        push_engine_error_at(
+                            errors,
+                            graph,
+                            source,
                             "Cannot divide number by duration. Duration can only be multiplied by number or divided by number.".to_string(),
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
-                        ));
+                        );
                     }
                     // Otherwise, Duration * Number or Number * Duration (Multiply) or Duration / Number (Divide) are allowed
                 } else if !is_scale_number && !is_scale_ratio && !is_number_ratio {
                     // Not the special case - types are incompatible
-                    errors.push(LemmaError::engine(
+                    push_engine_error_at(
+                        errors,
+                        graph,
+                        source,
                         format!(
                             "Cannot apply '{}' to values with different types: {} and {}. '*'/'/' require the same standard type, scale * number (or number * scale), scale * ratio (or ratio * scale), number * ratio (or ratio * number), or duration * number (or number * duration) for multiply, or duration / number for divide.",
                             operator,
                             left_type.name(),
                             right_type.name()
                         ),
-                        Span { start: 0, end: 0, line: 1, col: 0 },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    ));
+                    );
                 }
             } else {
                 // Types have the same standard type - always allowed (even with different constraints)
@@ -1914,20 +1953,17 @@ fn validate_arithmetic_operator_constraints(
 
                 if !is_scale_number && !is_scale_ratio && !is_number_ratio {
                     // Not the special case - types are incompatible
-                    errors.push(LemmaError::engine(
+                    push_engine_error_at(
+                        errors,
+                        graph,
+                        source,
                         format!(
                             "Cannot apply '{}' to values with different types: {} and {}. '+'/'-' require the same standard type, scale + number (or number + scale), scale + ratio (or ratio + scale), or number + ratio (or ratio + number).",
                             operator,
                             left_type.name(),
                             right_type.name()
                         ),
-                        Span { start: 0, end: 0, line: 1, col: 0 },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                        ));
+                    );
                 }
             } else {
                 // Types have the same standard type - always allowed (even with different constraints)
@@ -1942,23 +1978,15 @@ fn validate_arithmetic_operator_constraints(
             // Error: Scale ^ Scale (exponent must be dimensionless)
             // Error: Number ^ Scale (exponent must be dimensionless)
             if !right_type.is_number() && !right_type.is_ratio() {
-                errors.push(LemmaError::engine(
+                push_engine_error_at(
+                    errors,
+                    graph,
+                    source,
                     format!(
                         "Power exponent must be a dimensionless number (not a scale type), got {}",
                         right_type.name()
                     ),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                ));
+                );
             }
             // If right is Number or Ratio, allow it (left can be Scale or Number)
         }
@@ -1968,104 +1996,138 @@ fn validate_arithmetic_operator_constraints(
 fn validate_unit_conversion_types(
     source_type: &LemmaType,
     target: &ConversionTarget,
+    graph: &Graph,
+    source: &Source,
     errors: &mut Vec<LemmaError>,
 ) {
-    let target_type = conversion_target_to_type(target);
-    // Allow conversion from Scale/Number to compatible numeric types
-    // Scale and Number are both numeric and can be converted to each other
-    if source_type.specifications != target_type.specifications
-        && !source_type.is_scale()
-        && !source_type.is_number()
-    {
-        errors.push(LemmaError::engine(
-            format!("Cannot convert {:?} to {:?}", source_type, target_type),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        ));
+    match target {
+        ConversionTarget::ScaleUnit(unit_name) => {
+            if !source_type.is_scale() {
+                push_engine_error_at(
+                    errors,
+                    graph,
+                    source,
+                    format!(
+                        "Cannot convert {} to scale unit '{}': source is not a scale type",
+                        source_type.name(),
+                        unit_name
+                    ),
+                );
+                return;
+            }
+
+            let units = match &source_type.specifications {
+                crate::semantic::TypeSpecification::Scale { units, .. } => units,
+                _ => unreachable!("BUG: is_scale() but not TypeSpecification::Scale"),
+            };
+
+            if units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name)) {
+                return;
+            }
+
+            let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
+            push_engine_error_at(
+                errors,
+                graph,
+                source,
+                format!(
+                    "Unknown unit '{}' for scale type {}. Valid units: {}",
+                    unit_name,
+                    source_type.name(),
+                    valid.join(", ")
+                ),
+            );
+        }
+        ConversionTarget::Duration(_) | ConversionTarget::Percentage => {
+            let target_type = match target {
+                ConversionTarget::Duration(_) => standard_duration().clone(),
+                ConversionTarget::Percentage => standard_ratio().clone(),
+                ConversionTarget::ScaleUnit(_) => unreachable!("handled above"),
+            };
+
+            // Allow conversion from Scale/Number to compatible numeric types
+            // Scale and Number are both numeric and can be converted to each other
+            if source_type.specifications != target_type.specifications
+                && !source_type.is_scale()
+                && !source_type.is_number()
+            {
+                push_engine_error_at(
+                    errors,
+                    graph,
+                    source,
+                    format!("Cannot convert {:?} to {:?}", source_type, target_type),
+                );
+            }
+        }
     }
 }
 
-fn validate_mathematical_operand(operand_type: &LemmaType, errors: &mut Vec<LemmaError>) {
+fn validate_mathematical_operand(
+    operand_type: &LemmaType,
+    graph: &Graph,
+    source: &Source,
+    errors: &mut Vec<LemmaError>,
+) {
     // Mathematical functions work on Scale and Number (not Ratio or Duration)
     // Both Scale and Number are numeric types suitable for mathematical operations
     if !operand_type.is_scale() && !operand_type.is_number() {
-        errors.push(LemmaError::engine(
+        push_engine_error_at(
+            errors,
+            graph,
+            source,
             format!(
                 "Mathematical function requires numeric operand (scale or number), got {:?}",
                 operand_type
             ),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        ));
+        );
     }
 }
 
 fn compute_fact_type(
     fact_path: &FactPath,
     graph: &Graph,
-    _computed_rule_types: &HashMap<RulePath, LemmaType>,
+    fact_source: &Source,
     errors: &mut Vec<LemmaError>,
 ) -> LemmaType {
     let fact = match graph.facts().get(fact_path) {
         Some(fact) => fact,
         None => {
-            let potential_rule_path = RulePath {
+            // This can happen when a rule is referenced without `?` and ends up as a FactPath
+            // (e.g. `employee.annual`). Do not panic: report a semantic error at the source span.
+            let maybe_rule_path = RulePath {
                 segments: fact_path.segments.clone(),
                 rule: fact_path.fact.clone(),
             };
-            if graph.rules().contains_key(&potential_rule_path) {
-                errors.push(LemmaError::engine(
+
+            if graph.rules().contains_key(&maybe_rule_path) {
+                errors.push(LemmaError::semantic(
                     format!(
-                        "'{}' is a rule, not a fact. Use '{}?' to reference rules",
-                        fact_path.fact, fact_path.fact
+                        "Rule reference '{}' must use '?' (did you mean '{}?')",
+                        fact_path, fact_path
                     ),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(""),
-                    "<unknown>",
-                    1,
+                    fact_source.span.clone(),
+                    fact_source.attribute.clone(),
+                    graph.source_text_for(fact_source),
+                    fact_source.doc_name.clone(),
+                    graph.doc_start_line_for(fact_source),
                     None::<String>,
                 ));
             } else {
-                errors.push(LemmaError::engine(
-                    format!("Fact '{}' not found", fact_path),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(""),
-                    "<unknown>",
-                    1,
+                // If it isn't a rule either, then this is user code referencing something
+                // that doesn't exist. That's a semantic error.
+                errors.push(LemmaError::semantic(
+                    format!("Unknown fact reference '{}'", fact_path),
+                    fact_source.span.clone(),
+                    fact_source.attribute.clone(),
+                    graph.source_text_for(fact_source),
+                    fact_source.doc_name.clone(),
+                    graph.doc_start_line_for(fact_source),
                     None::<String>,
                 ));
             }
-            return LemmaType::veto_type();
+
+            // Benign fallback type to avoid cascaded panics.
+            return crate::semantic::standard_text().clone();
         }
     };
     match &fact.value {
@@ -2118,29 +2180,22 @@ fn compute_fact_type(
                 }) {
                     doc
                 } else {
-                    // This should not happen - all facts should have document context
-                    // But if it does, return an error rather than panicking
-                    errors.push(LemmaError::engine(
-                        format!("Cannot determine document context for fact '{}'", fact_path),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    ));
-                    return LemmaType::veto_type();
+                    unreachable!(
+                        "BUG: cannot determine document context for fact '{}' during planning",
+                        fact_path
+                    );
                 }
             };
 
             // Use Graph::resolve_type_declaration which uses TypeRegistry
             // For direct type references [coffee] (from=None, overrides=None), this looks up the named type directly
-            match graph.resolve_type_declaration(&fact.value, context_doc) {
+            let fact_source = fact.source_location.as_ref().unwrap_or_else(|| {
+                unreachable!(
+                    "BUG: type declaration fact '{}' missing source_location",
+                    fact.reference.fact
+                )
+            });
+            match graph.resolve_type_declaration(&fact.value, fact_source, context_doc) {
                 Ok(lemma_type) => {
                     // For direct type references, we should get the actual named type back
                     lemma_type
@@ -2152,23 +2207,21 @@ fn compute_fact_type(
             }
         }
         FactValue::DocumentReference(_) => {
-            errors.push(LemmaError::engine(
+            let fact_source = fact.source_location.as_ref().unwrap_or_else(|| {
+                unreachable!(
+                    "BUG: document reference fact '{}' missing source_location",
+                    fact.reference.fact
+                )
+            });
+            push_engine_error_at(
+                errors,
+                graph,
+                fact_source,
                 format!(
                     "Cannot compute type for document reference fact '{}'",
                     fact_path
                 ),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
-                Arc::from(""),
-                "<unknown>",
-                1,
-                None::<String>,
-            ));
+            );
             LemmaType::veto_type()
         }
     }
@@ -2318,35 +2371,20 @@ fn compute_temporal_arithmetic_result_type(
     standard_duration().clone()
 }
 
-fn conversion_target_to_type(target: &ConversionTarget) -> LemmaType {
-    match target {
-        ConversionTarget::Duration(_) => standard_duration().clone(),
-        ConversionTarget::Percentage => standard_ratio().clone(),
-    }
-}
-
 fn validate_all_rule_references_exist(graph: &Graph, errors: &mut Vec<LemmaError>) {
     let existing_rules: HashSet<&RulePath> = graph.rules().keys().collect();
     for (rule_path, rule_node) in graph.rules() {
         for dependency in &rule_node.depends_on_rules {
             if !existing_rules.contains(dependency) {
-                errors.push(LemmaError::engine(
+                push_engine_error_at(
+                    errors,
+                    graph,
+                    &rule_node.source,
                     format!(
                         "Rule '{}' references non-existent rule '{}'",
                         rule_path.rule, dependency.rule
                     ),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                ));
+                );
             }
         }
     }
@@ -2354,10 +2392,17 @@ fn validate_all_rule_references_exist(graph: &Graph, errors: &mut Vec<LemmaError
 
 fn validate_fact_override_paths_target_document_facts(graph: &Graph, errors: &mut Vec<LemmaError>) {
     // For any fact path like `a.b.c`, each segment (`a`, `a.b`, ...) must be a document reference.
-    for (fact_path, _fact) in graph.facts() {
+    for (fact_path, fact) in graph.facts() {
         if fact_path.segments.is_empty() {
             continue;
         }
+
+        let fact_source = fact.source_location.as_ref().unwrap_or_else(|| {
+            unreachable!(
+                "BUG: fact '{}' missing source_location while validating override paths",
+                fact.reference.fact
+            )
+        });
 
         for i in 0..fact_path.segments.len() {
             let seg = &fact_path.segments[i];
@@ -2367,41 +2412,25 @@ fn validate_fact_override_paths_target_document_facts(graph: &Graph, errors: &mu
             match graph.facts().get(&seg_fact_path) {
                 Some(seg_fact) => match &seg_fact.value {
                     FactValue::DocumentReference(_) => {}
-                    _ => errors.push(LemmaError::engine(
+                    _ => push_engine_error_at(
+                        errors,
+                        graph,
+                        fact_source,
                         format!(
                             "Invalid fact override path '{}': '{}' is not a document reference",
                             fact_path, seg_fact_path
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )),
+                    ),
                 },
-                None => errors.push(LemmaError::engine(
+                None => push_engine_error_at(
+                    errors,
+                    graph,
+                    fact_source,
                     format!(
                         "Invalid fact override path '{}': missing document reference '{}'",
                         fact_path, seg_fact_path
                     ),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                )),
+                ),
             }
         }
     }
@@ -2419,6 +2448,14 @@ fn validate_fact_override_paths_target_document_facts(graph: &Graph, errors: &mu
                 continue;
             }
 
+            let fact_source = fact.source_location.as_ref().unwrap_or_else(|| {
+                unreachable!(
+                    "BUG: override fact '{}.{}' missing source_location",
+                    fact.reference.segments.join("."),
+                    fact.reference.fact
+                )
+            });
+
             let mut current_doc_name = doc.name.clone();
             let mut prefix: Vec<String> = Vec::new();
             let mut path_valid = true;
@@ -2429,25 +2466,17 @@ fn validate_fact_override_paths_target_document_facts(graph: &Graph, errors: &mu
                 let current_doc = match graph.all_docs.get(&current_doc_name) {
                     Some(d) => d,
                     None => {
-                        errors.push(LemmaError::engine(
+                        push_engine_error_at(
+                            errors,
+                            graph,
+                            fact_source,
                             format!(
                                 "Invalid fact override path '{}.{}': document '{}' not found",
                                 prefix.join("."),
                                 fact.reference.fact,
                                 current_doc_name
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
-                        ));
+                        );
                         path_valid = false;
                         break;
                     }
@@ -2458,25 +2487,17 @@ fn validate_fact_override_paths_target_document_facts(graph: &Graph, errors: &mu
                     .iter()
                     .find(|f| f.reference.segments.is_empty() && f.reference.fact == *seg)
                 else {
-                    errors.push(LemmaError::engine(
+                    push_engine_error_at(
+                        errors,
+                        graph,
+                        fact_source,
                         format!(
                             "Invalid fact override path '{}.{}': missing document reference '{}'",
                             prefix.join("."),
                             fact.reference.fact,
                             prefix.join(".")
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    ));
+                    );
                     path_valid = false;
                     break;
                 };
@@ -2486,25 +2507,17 @@ fn validate_fact_override_paths_target_document_facts(graph: &Graph, errors: &mu
                         current_doc_name = next_doc.clone();
                     }
                     _ => {
-                        errors.push(LemmaError::engine(
+                        push_engine_error_at(
+                            errors,
+                            graph,
+                            fact_source,
                             format!(
                                 "Invalid fact override path '{}.{}': '{}' is not a document reference",
                                 prefix.join("."),
                                 fact.reference.fact,
                                 prefix.join(".")
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
-                        ));
+                        );
                         path_valid = false;
                         break;
                     }
@@ -2530,35 +2543,15 @@ fn validate_fact_override_paths_target_document_facts(graph: &Graph, errors: &mu
                                     fact.reference.fact
                                 )
                             };
-                            errors.push(LemmaError::engine(
+                            push_engine_error_at(
+                                errors,
+                                graph,
+                                fact_source,
                                 format!(
                                     "Cannot override typed fact '{}' with type definition. Use a concrete value instead.",
                                     override_path
                                 ),
-                                fact.source_location
-                                    .as_ref()
-                                    .map(|s| s.span.clone())
-                                    .unwrap_or(Span {
-                                        start: 0,
-                                        end: 0,
-                                        line: 1,
-                                        col: 0,
-                                    }),
-                                fact.source_location
-                                    .as_ref()
-                                    .map(|s| s.attribute.as_str())
-                                    .unwrap_or("<unknown>"),
-                                fact.source_location
-                                    .as_ref()
-                                    .map(|s| Arc::from(s.doc_name.as_str()))
-                                    .unwrap_or_else(|| Arc::from("")),
-                                fact.source_location
-                                    .as_ref()
-                                    .map(|s| s.doc_name.as_str())
-                                    .unwrap_or("<unknown>"),
-                                1,
-                                None::<String>,
-                            ));
+                            );
                         }
                     }
                 }
@@ -2572,23 +2565,21 @@ fn validate_fact_and_rule_name_collisions(graph: &Graph, errors: &mut Vec<LemmaE
     for rule_path in graph.rules().keys() {
         let fact_path = FactPath::new(rule_path.segments.clone(), rule_path.rule.clone());
         if graph.facts().contains_key(&fact_path) {
-            errors.push(LemmaError::engine(
+            let rule_node = graph.rules().get(rule_path).unwrap_or_else(|| {
+                unreachable!(
+                    "BUG: rule '{}' missing from graph while validating name collisions",
+                    rule_path.rule
+                )
+            });
+            push_engine_error_at(
+                errors,
+                graph,
+                &rule_node.source,
                 format!(
                     "Name collision: '{}' is defined as both a fact and a rule",
                     fact_path
                 ),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
-                Arc::from(""),
-                "<unknown>",
-                1,
-                None::<String>,
-            ));
+            );
         }
     }
 }
@@ -2631,23 +2622,21 @@ fn validate_document_interfaces(
                     doc.rules.iter().map(|rule| rule.name.clone()).collect();
                 for required_rule in required_rules {
                     if !doc_rule_names.contains(required_rule) {
-                        errors.push(LemmaError::engine(
+                        let fact_source = fact.source_location.as_ref().unwrap_or_else(|| {
+                            unreachable!(
+                                "BUG: document reference fact '{}' missing source_location",
+                                fact.reference.fact
+                            )
+                        });
+                        push_engine_error_at(
+                            errors,
+                            graph,
+                            fact_source,
                             format!(
                                 "Document '{}' referenced by '{}' is missing required rule '{}'",
                                 doc_name, fact_path, required_rule
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
-                        ));
+                        );
                     }
                 }
             }
@@ -2661,6 +2650,25 @@ mod tests {
 
     use crate::semantic::{FactReference, LiteralValue, RuleReference};
 
+    fn test_source() -> Option<Source> {
+        Some(Source::new(
+            "test.lemma",
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "test",
+        ))
+    }
+
+    fn test_sources() -> HashMap<String, String> {
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), "doc test\n".to_string());
+        sources
+    }
+
     fn create_test_doc(name: &str) -> LemmaDoc {
         LemmaDoc::new(name.to_string())
     }
@@ -2672,14 +2680,14 @@ mod tests {
                 fact: name.to_string(),
             },
             value: FactValue::Literal(value),
-            source_location: None,
+            source_location: test_source(),
         }
     }
 
     fn create_literal_expr(value: LiteralValue) -> Expression {
         Expression {
             kind: ExpressionKind::Literal(value),
-            source_location: None,
+            source_location: test_source(),
         }
     }
 
@@ -2695,7 +2703,7 @@ mod tests {
             LiteralValue::text("John".to_string()),
         ));
 
-        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        let result = Graph::build(&doc, &[doc.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -2716,18 +2724,18 @@ mod tests {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source_location: None,
+            source_location: test_source(),
         };
 
         let rule = LemmaRule {
             name: "is_adult".to_string(),
             expression: age_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source_location: test_source(),
         };
         doc = doc.add_rule(rule);
 
-        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        let result = Graph::build(&doc, &[doc.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -2748,10 +2756,10 @@ mod tests {
         doc = doc.add_fact(LemmaFact {
             reference: FactReference::from_path(vec!["x".to_string(), "y".to_string()]),
             value: FactValue::Literal(LiteralValue::number(2)),
-            source_location: None,
+            source_location: test_source(),
         });
 
-        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        let result = Graph::build(&doc, &[doc.clone()], test_sources());
         assert!(
             result.is_err(),
             "Overriding x.y must fail when x is not a document reference"
@@ -2770,10 +2778,10 @@ mod tests {
             name: "x".to_string(),
             expression: create_literal_expr(LiteralValue::number(2)),
             unless_clauses: Vec::new(),
-            source_location: None,
+            source_location: test_source(),
         });
 
-        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        let result = Graph::build(&doc, &[doc.clone()], test_sources());
         assert!(
             result.is_err(),
             "Fact and rule name collisions should be rejected"
@@ -2792,7 +2800,7 @@ mod tests {
             LiteralValue::number(rust_decimal::Decimal::from(30)),
         ));
 
-        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        let result = Graph::build(&doc, &[doc.clone()], test_sources());
         assert!(result.is_err(), "Should detect duplicate fact");
 
         let errors = result.unwrap_err();
@@ -2809,19 +2817,19 @@ mod tests {
             name: "test_rule".to_string(),
             expression: create_literal_expr(LiteralValue::boolean(true.into())),
             unless_clauses: Vec::new(),
-            source_location: None,
+            source_location: test_source(),
         };
         let rule2 = LemmaRule {
             name: "test_rule".to_string(),
             expression: create_literal_expr(LiteralValue::boolean(false.into())),
             unless_clauses: Vec::new(),
-            source_location: None,
+            source_location: test_source(),
         };
 
         doc = doc.add_rule(rule1);
         doc = doc.add_rule(rule2);
 
-        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        let result = Graph::build(&doc, &[doc.clone()], test_sources());
         assert!(result.is_err(), "Should detect duplicate rule");
 
         let errors = result.unwrap_err();
@@ -2839,18 +2847,18 @@ mod tests {
                 segments: Vec::new(),
                 fact: "nonexistent".to_string(),
             }),
-            source_location: None,
+            source_location: test_source(),
         };
 
         let rule = LemmaRule {
             name: "test_rule".to_string(),
             expression: missing_fact_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source_location: test_source(),
         };
         doc = doc.add_rule(rule);
 
-        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        let result = Graph::build(&doc, &[doc.clone()], test_sources());
         assert!(result.is_err(), "Should detect missing fact");
 
         let errors = result.unwrap_err();
@@ -2869,11 +2877,11 @@ mod tests {
                 fact: "contract".to_string(),
             },
             value: FactValue::DocumentReference("nonexistent".to_string()),
-            source_location: None,
+            source_location: test_source(),
         };
         doc = doc.add_fact(fact);
 
-        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        let result = Graph::build(&doc, &[doc.clone()], test_sources());
         assert!(result.is_err(), "Should detect missing document");
 
         let errors = result.unwrap_err();
@@ -2895,18 +2903,18 @@ mod tests {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source_location: None,
+            source_location: test_source(),
         };
 
         let rule = LemmaRule {
             name: "test_rule".to_string(),
             expression: age_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source_location: test_source(),
         };
         doc = doc.add_rule(rule);
 
-        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        let result = Graph::build(&doc, &[doc.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -2927,14 +2935,14 @@ mod tests {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source_location: None,
+            source_location: test_source(),
         };
 
         let rule1 = LemmaRule {
             name: "rule1".to_string(),
             expression: rule1_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source_location: test_source(),
         };
         doc = doc.add_rule(rule1);
 
@@ -2943,14 +2951,14 @@ mod tests {
                 segments: Vec::new(),
                 rule: "rule1".to_string(),
             }),
-            source_location: None,
+            source_location: test_source(),
         };
 
         let rule2 = LemmaRule {
             name: "rule2".to_string(),
             expression: rule2_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source_location: test_source(),
         };
         doc = doc.add_rule(rule2);
 
@@ -2959,7 +2967,7 @@ mod tests {
             LiteralValue::number(rust_decimal::Decimal::from(25)),
         ));
 
-        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        let result = Graph::build(&doc, &[doc.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -2995,18 +3003,18 @@ mod tests {
                 segments: Vec::new(),
                 fact: "nonexistent".to_string(),
             }),
-            source_location: None,
+            source_location: test_source(),
         };
 
         let rule = LemmaRule {
             name: "test_rule".to_string(),
             expression: missing_fact_expr,
             unless_clauses: Vec::new(),
-            source_location: None,
+            source_location: test_source(),
         };
         doc = doc.add_rule(rule);
 
-        let result = Graph::build(&doc, &[doc.clone()], HashMap::new());
+        let result = Graph::build(&doc, &[doc.clone()], test_sources());
         assert!(result.is_err(), "Should collect multiple errors");
 
         let errors = result.unwrap_err();

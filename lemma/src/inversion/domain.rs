@@ -5,11 +5,9 @@
 //! - Domain operations: intersection, union, normalization
 //! - `extract_domains_from_constraint()`: extracts domains from constraints
 
-use crate::computation::comparison_operation;
-use crate::parsing::ast::Span;
 use crate::{
-    BooleanValue, ComparisonComputation, FactPath, LemmaError, LemmaResult, LiteralValue,
-    OperationResult, Value,
+    BooleanValue, ComparisonComputation, FactPath, LemmaResult, LiteralValue, OperationResult,
+    Value,
 };
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::cmp::Ordering;
@@ -340,23 +338,10 @@ fn comparison_to_domain(op: &ComparisonComputation, value: &LiteralValue) -> Lem
             min: Bound::Inclusive(Arc::new(value.clone())),
             max: Bound::Unbounded,
         }),
-        _ => Err(LemmaError::engine(
-            format!(
-                "Unsupported comparison operator for domain extraction: {:?}",
-                op
-            ),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        )),
+        _ => unreachable!(
+            "BUG: unsupported comparison operator for domain extraction: {:?}",
+            op
+        ),
     }
 }
 
@@ -477,19 +462,110 @@ fn union_optional_domains(a: Option<Domain>, b: Option<Domain>) -> Option<Domain
 }
 
 fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
-    if let OperationResult::Value(lit) =
-        comparison_operation(a, &ComparisonComputation::LessThan, b)
-    {
-        if let Value::Boolean(BooleanValue::True) = &lit.value {
-            return -1;
+    use std::cmp::Ordering;
+
+    match (&a.value, &b.value) {
+        (Value::Number(la), Value::Number(lb)) => match la.cmp(lb) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        },
+
+        (Value::Boolean(la), Value::Boolean(lb)) => match bool::from(la).cmp(&bool::from(lb)) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        },
+
+        (Value::Text(la), Value::Text(lb)) => match la.cmp(lb) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        },
+
+        (Value::Date(la), Value::Date(lb)) => match la.cmp(lb) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        },
+
+        (Value::Time(la), Value::Time(lb)) => match la.cmp(lb) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        },
+
+        (Value::Duration(la, lua), Value::Duration(lb, lub)) => {
+            let a_sec = crate::computation::units::duration_to_seconds(*la, lua);
+            let b_sec = crate::computation::units::duration_to_seconds(*lb, lub);
+            match a_sec.cmp(&b_sec) {
+                Ordering::Less => -1,
+                Ordering::Equal => 0,
+                Ordering::Greater => 1,
+            }
         }
-    }
-    if let OperationResult::Value(lit) = comparison_operation(a, &ComparisonComputation::Equal, b) {
-        if let Value::Boolean(BooleanValue::True) = &lit.value {
-            return 0;
+
+        (Value::Ratio(la, _), Value::Ratio(lb, _)) => match la.cmp(lb) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        },
+
+        (Value::Scale(la, lua), Value::Scale(lb, lub)) => {
+            if a.lemma_type != b.lemma_type {
+                unreachable!(
+                    "BUG: lit_cmp compared different scale types ({} vs {})",
+                    a.lemma_type.name(),
+                    b.lemma_type.name()
+                );
+            }
+
+            match (lua, lub) {
+                (None, None) => match la.cmp(lb) {
+                    Ordering::Less => -1,
+                    Ordering::Equal => 0,
+                    Ordering::Greater => 1,
+                },
+                (Some(lua), Some(lub)) => {
+                    if lua.eq_ignore_ascii_case(lub) {
+                        return match la.cmp(lb) {
+                            Ordering::Less => -1,
+                            Ordering::Equal => 0,
+                            Ordering::Greater => 1,
+                        };
+                    }
+
+                    let target = crate::semantic::ConversionTarget::ScaleUnit(lua.clone());
+                    let converted = crate::computation::convert_unit(b, &target);
+                    let converted_value = match converted {
+                        OperationResult::Value(lit) => match lit.value {
+                            Value::Scale(v, _) => v,
+                            _ => {
+                                unreachable!("BUG: scale unit conversion returned non-scale value")
+                            }
+                        },
+                        OperationResult::Veto(msg) => unreachable!(
+                            "BUG: scale unit conversion vetoed unexpectedly: {:?}",
+                            msg
+                        ),
+                    };
+
+                    match la.cmp(&converted_value) {
+                        Ordering::Less => -1,
+                        Ordering::Equal => 0,
+                        Ordering::Greater => 1,
+                    }
+                }
+                _ => unreachable!("BUG: lit_cmp saw scale value missing unit on one side"),
+            }
         }
+
+        _ => unreachable!(
+            "BUG: lit_cmp cannot compare different literal kinds ({:?} vs {:?})",
+            a.get_type(),
+            b.get_type()
+        ),
     }
-    1
 }
 
 fn value_within(v: &LiteralValue, min: &Bound, max: &Bound) -> bool {

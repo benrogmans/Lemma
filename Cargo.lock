@@ -916,7 +916,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lemma-cli"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-engine"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "boolean_expression",
  "chrono",

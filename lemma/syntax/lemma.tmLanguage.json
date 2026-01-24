@@ -34,7 +34,7 @@
     "keywords": {
       "patterns": [
         {
-          "match": "\\b(doc|fact|rule)\\b",
+          "match": "\\b(doc|fact|rule|type)\\b",
           "name": "variable.name"
         },
         {
@@ -52,6 +52,18 @@
         {
           "match": "\\b(and|or|not|in)\\b",
           "name": "keyword.control.lemma"
+        },
+        {
+          "match": "\\b(from|with)\\b",
+          "name": "keyword.control.lemma"
+        },
+        {
+          "match": "\\b(boolean|scale|number|percent|ratio|text|date|time|duration)\\b",
+          "name": "storage.type.lemma"
+        },
+        {
+          "match": "\\b(minimum|maximum|minimal|decimals|precision|unit|units|options|length|default|help)\\b",
+          "name": "keyword.other.lemma"
         }
       ]
     },
@@ -96,6 +108,10 @@
     "operators": {
       "patterns": [
         {
+          "match": "->",
+          "name": "keyword.operator.arrow.lemma"
+        },
+        {
           "match": "(==|!=|>=|<=|>|<|is not|\\bis\\b)",
           "name": "keyword.operator.comparison.lemma"
         },
@@ -112,19 +128,41 @@
     "type_annotations": {
       "patterns": [
         {
-          "match": "(\\[)([^\\]]+)(\\])",
-          "captures": {
-            "1": {
-              "name": "string"
-            },
-            "2": {
-              "name": "string"
-            },
-            "3": {
-              "name": "string"
+          "begin": "\\[",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.type.annotation.begin.lemma"
             }
           },
-          "name": "string"
+          "end": "\\]",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.type.annotation.end.lemma"
+            }
+          },
+          "name": "meta.type.annotation.lemma",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#keywords"
+            },
+            {
+              "include": "#operators"
+            },
+            {
+              "include": "#literals"
+            },
+            {
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_-]*(/[a-zA-Z_][a-zA-Z0-9_\\-.]*)*\\b",
+              "name": "string.unquoted.docpath.lemma"
+            },
+            {
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
+              "name": "entity.name.type.lemma"
+            }
+          ]
         }
       ]
     },
@@ -174,11 +212,30 @@
               "name": "variable.language"
             }
           ]
+        },
+        {
+          "begin": "\\b(type)\\s+",
+          "beginCaptures": {
+            "1": {
+              "name": "markup"
+            }
+          },
+          "end": "(?=\\s*(=|\\bfrom\\b|$))",
+          "patterns": [
+            {
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
+              "name": "variable.language"
+            }
+          ]
         }
       ]
     },
     "references": {
       "patterns": [
+        {
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_\\-.]*(/[a-zA-Z_][a-zA-Z0-9_\\-.]*)+\\b",
+          "name": "string.unquoted.docpath.lemma"
+        },
         {
           "match": "\\?",
           "name": "variable.language"

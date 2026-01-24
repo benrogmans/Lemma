@@ -8,6 +8,7 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 permissions:
+  id-token: write
   contents: write
 
 jobs:
@@ -106,24 +107,23 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        shell: bash
+        run: curl -sSfL https://drager.github.io/wasm-pack/installer/init.sh | bash
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Build WASM
         run: |
           cd lemma
           node wasm/build.js
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-
       - name: Publish to NPM
         working-directory: lemma/pkg
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create tag
         run: |

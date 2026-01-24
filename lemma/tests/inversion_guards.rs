@@ -15,7 +15,7 @@ fn piecewise_value_guard_pruning_equality() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let solutions = engine
-        .invert_strict(
+        .invert(
             "shipping",
             "shipping_cost",
             Target::value(LiteralValue::number(10)),
@@ -45,7 +45,7 @@ fn piecewise_value_guard_pruning_inequality() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let solutions = engine
-        .invert_strict(
+        .invert(
             "shipping",
             "shipping_cost",
             Target::with_op(

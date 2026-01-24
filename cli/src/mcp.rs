@@ -363,12 +363,12 @@ pub mod server {
                 ));
             }
 
-            self.engine.get_document(document).ok_or_else(|| {
+            let doc = self.engine.get_document(document).ok_or_else(|| {
                 McpError::invalid_params(format!("Document '{document}' not found"))
             })?;
 
-            let facts = self.engine.get_document_facts(document);
-            let rules = self.engine.get_document_rules(document);
+            let facts = &doc.facts;
+            let rules = &doc.rules;
 
             let mut output = String::default();
             output.push_str(&format!("# Document: {document}\n\n"));
@@ -377,7 +377,7 @@ pub mod server {
             if facts.is_empty() {
                 output.push_str("(none)\n");
             } else {
-                for fact in &facts {
+                for fact in facts {
                     let fact_name = fact.reference.to_string();
                     output.push_str(&format!("- **{fact_name}**: {}\n", fact.value));
                 }
@@ -387,7 +387,7 @@ pub mod server {
             if rules.is_empty() {
                 output.push_str("(none)\n");
             } else {
-                for rule in &rules {
+                for rule in rules {
                     output.push_str(&format!("- **{}**\n", rule.name));
                 }
             }

@@ -27,8 +27,8 @@ rule quotient = price1 / price2"#;
         .expect("Should parse");
 
     let mut facts = HashMap::new();
-    facts.insert("price1".to_string(), "10".to_string());
-    facts.insert("price2".to_string(), "5".to_string());
+    facts.insert("price1".to_string(), "10 eur".to_string());
+    facts.insert("price2".to_string(), "5 eur".to_string());
 
     let response = engine
         .evaluate("test", vec![], facts)
@@ -92,7 +92,7 @@ rule divided = price / multiplier"#;
         .expect("Should parse");
 
     let mut facts = HashMap::new();
-    facts.insert("price".to_string(), "10".to_string());
+    facts.insert("price".to_string(), "10 eur".to_string());
     facts.insert("multiplier".to_string(), "2".to_string());
 
     let response = engine
@@ -123,7 +123,7 @@ rule divided = multiplier / price"#;
 
     let mut facts = HashMap::new();
     facts.insert("multiplier".to_string(), "2".to_string());
-    facts.insert("price".to_string(), "10".to_string());
+    facts.insert("price".to_string(), "10 eur".to_string());
 
     let response = engine
         .evaluate("test", vec![], facts)
@@ -204,7 +204,7 @@ rule result = ratio_value * price"#;
 
     let mut facts = HashMap::new();
     facts.insert("ratio_value".to_string(), "0.5".to_string());
-    facts.insert("price".to_string(), "10".to_string());
+    facts.insert("price".to_string(), "10 eur".to_string());
 
     let response = engine
         .evaluate("test", vec![], facts)
@@ -231,7 +231,7 @@ rule result = price * ratio_value"#;
         .expect("Should parse");
 
     let mut facts = HashMap::new();
-    facts.insert("price".to_string(), "10".to_string());
+    facts.insert("price".to_string(), "10 eur".to_string());
     facts.insert("ratio_value".to_string(), "0.5".to_string());
 
     let response = engine
@@ -260,8 +260,8 @@ rule is_equal = price1 == price2"#;
         .expect("Should parse");
 
     let mut facts = HashMap::new();
-    facts.insert("price1".to_string(), "10".to_string());
-    facts.insert("price2".to_string(), "5".to_string());
+    facts.insert("price1".to_string(), "10 eur".to_string());
+    facts.insert("price2".to_string(), "5 eur".to_string());
 
     let response = engine
         .evaluate("test", vec![], facts)
@@ -303,8 +303,8 @@ rule invalid = price > distance"#;
 }
 
 #[test]
-fn test_scale_comparison_with_number_allowed() {
-    // Test that comparing Scale with Number is allowed
+fn test_scale_comparison_with_number_rejected() {
+    // Comparing Scale with Number is ambiguous (Number has no unit) and must be rejected.
     let code = r#"doc test
 type money = scale
   -> unit eur 1.00
@@ -315,19 +315,8 @@ fact threshold = [number]
 rule is_above = price > threshold"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
-
-    let mut facts = HashMap::new();
-    facts.insert("price".to_string(), "10".to_string());
-    facts.insert("threshold".to_string(), "5".to_string());
-
-    let response = engine
-        .evaluate("test", vec![], facts)
-        .expect("Should evaluate");
-
-    assert!(response.results.get("is_above").is_some());
+    let result = engine.add_lemma_code(code, "test.lemma");
+    assert!(result.is_err(), "Should reject scale vs number comparison");
 }
 
 #[test]
@@ -356,8 +345,8 @@ rule power = a ^ exponent"#;
         .expect("Should parse");
 
     let mut facts = HashMap::new();
-    facts.insert("a".to_string(), "10".to_string());
-    facts.insert("b".to_string(), "3".to_string());
+    facts.insert("a".to_string(), "10 eur".to_string());
+    facts.insert("b".to_string(), "3 eur".to_string());
     facts.insert("divisor".to_string(), "3".to_string());
     facts.insert("exponent".to_string(), "2".to_string());
 
@@ -462,8 +451,8 @@ rule total = price1 + price2"#;
         .expect("Should parse");
 
     let mut facts = HashMap::new();
-    facts.insert("price1".to_string(), "10".to_string());
-    facts.insert("price2".to_string(), "5".to_string());
+    facts.insert("price1".to_string(), "10 eur".to_string());
+    facts.insert("price2".to_string(), "5 eur".to_string());
 
     let response = engine
         .evaluate("test", vec![], facts)
@@ -506,7 +495,7 @@ rule result = price * multiplier"#;
         .expect("Should parse");
 
     let mut facts = HashMap::new();
-    facts.insert("price".to_string(), "10".to_string());
+    facts.insert("price".to_string(), "10 eur".to_string());
     facts.insert("multiplier".to_string(), "2".to_string());
 
     let response = engine
@@ -616,7 +605,7 @@ rule result = ratio_value * price"#;
 
     let mut facts = HashMap::new();
     facts.insert("ratio_value".to_string(), "0.5".to_string());
-    facts.insert("price".to_string(), "10".to_string());
+    facts.insert("price".to_string(), "10 eur".to_string());
 
     let response = engine
         .evaluate("test", vec![], facts)
@@ -652,7 +641,7 @@ rule total = with_tax? * quantity"#;
         .expect("Should parse");
 
     let mut facts = HashMap::new();
-    facts.insert("base_price".to_string(), "100".to_string());
+    facts.insert("base_price".to_string(), "100 eur".to_string());
     facts.insert("discount_ratio".to_string(), "0.9".to_string());
     facts.insert("tax_multiplier".to_string(), "1.2".to_string());
     facts.insert("quantity".to_string(), "5".to_string());
