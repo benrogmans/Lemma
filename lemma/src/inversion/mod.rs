@@ -158,7 +158,7 @@ pub fn invert(
                 line: 1,
                 col: 0,
             },
-            "<unknown>",
+            "<inversion>",
             std::sync::Arc::from(""),
             plan.doc_name.clone(),
             1,
@@ -566,7 +566,7 @@ rule another = base?
         engine.add_lemma_code(code, "test.lemma").unwrap();
 
         let inv = engine
-            .invert_strict(
+            .invert(
                 "example",
                 "another",
                 Target::value(LiteralValue::number(3)),
@@ -607,7 +607,7 @@ rule another = base?
         engine.add_lemma_code(code, "test.lemma").unwrap();
 
         let inv = engine
-            .invert_strict(
+            .invert(
                 "example",
                 "another",
                 Target::value(LiteralValue::number(7)),
@@ -638,7 +638,7 @@ rule another = base?
         engine.add_lemma_code(code, "test.lemma").unwrap();
 
         let inv = engine
-            .invert_strict(
+            .invert(
                 "example",
                 "another",
                 Target::veto(Some("way too much".to_string())),
@@ -664,7 +664,7 @@ rule another = base?
             match d {
                 Domain::Range { min, max } => {
                     assert!(
-                        matches!(min, Bound::Exclusive(v) if **v == five),
+                        matches!(min, Bound::Exclusive(v) if v.as_ref() == &five),
                         "Expected min bound to be (5), got: {}",
                         d
                     );
@@ -706,7 +706,7 @@ rule another = base?
         engine.add_lemma_code(code, "test.lemma").unwrap();
 
         let inv = engine
-            .invert_strict("example", "another", Target::any_veto(), HashMap::new())
+            .invert("example", "another", Target::any_veto(), HashMap::new())
             .expect("inversion should succeed");
 
         assert!(!inv.is_empty(), "expected solutions for any-veto query");
@@ -744,7 +744,7 @@ rule another = base?
                                 d
                             );
                             assert!(
-                                matches!(max, Bound::Exclusive(v) if **v == zero),
+                                matches!(max, Bound::Exclusive(v) if v.as_ref() == &zero),
                                 "Expected max bound to be (0) for 'too little', got: {}",
                                 d
                             );
@@ -769,12 +769,12 @@ rule another = base?
                     match d {
                         Domain::Range { min, max } => {
                             assert!(
-                                matches!(min, Bound::Exclusive(v) if **v == three),
+                                matches!(min, Bound::Exclusive(v) if v.as_ref() == &three),
                                 "Expected min bound to be (3) for 'too much', got: {}",
                                 d
                             );
                             assert!(
-                                matches!(max, Bound::Inclusive(v) if **v == five),
+                                matches!(max, Bound::Inclusive(v) if v.as_ref() == &five),
                                 "Expected max bound to be [5] for 'too much', got: {}",
                                 d
                             );
@@ -809,7 +809,7 @@ rule another = base?
                     match d {
                         Domain::Range { min, max } => {
                             assert!(
-                                matches!(min, Bound::Exclusive(v) if **v == five),
+                                matches!(min, Bound::Exclusive(v) if v.as_ref() == &five),
                                 "Expected min bound to be (5) for 'way too much', got: {}",
                                 d
                             );

@@ -6,6 +6,7 @@
 use crate::parsing::ast::Span;
 use crate::semantic::{DateTimeValue, FactValue, LemmaDoc, TimeValue, TypeSpecification};
 use crate::LemmaError;
+use crate::Source;
 use rust_decimal::Decimal;
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -31,17 +32,23 @@ pub fn validate_types(
         {
             // Basic validation - check that base is not empty
             if base.is_empty() {
-                errors.push(LemmaError::engine(
-                    "TypeDeclaration base cannot be empty",
+                let fallback = Source::new(
+                    "<validation>",
                     Span {
                         start: 0,
                         end: 0,
                         line: 1,
                         col: 0,
                     },
-                    "<unknown>",
+                    &document.name,
+                );
+                let src = fact.source_location.as_ref().unwrap_or(&fallback);
+                errors.push(LemmaError::engine(
+                    "TypeDeclaration base cannot be empty",
+                    src.span.clone(),
+                    &src.attribute,
                     Arc::from(""),
-                    "<unknown>",
+                    &src.doc_name,
                     1,
                     None::<String>,
                 ));
@@ -65,7 +72,11 @@ pub fn validate_types(
 /// - precision/decimals are within valid ranges
 ///
 /// Returns a vector of errors (empty if valid)
-pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) -> Vec<LemmaError> {
+pub fn validate_type_specifications(
+    specs: &TypeSpecification,
+    type_name: &str,
+    source: &Source,
+) -> Vec<LemmaError> {
     let mut errors = Vec::new();
 
     match specs {
@@ -86,15 +97,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -109,15 +115,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -132,15 +133,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -162,15 +158,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -182,15 +173,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default value {} {} is less than minimum {}",
                                 type_name, def_value, def_unit, min
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -203,15 +189,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default value {} {} is greater than maximum {}",
                                 type_name, def_value, def_unit, max
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -231,15 +212,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -253,10 +229,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                     {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -268,10 +244,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                     if unit.value <= Decimal::ZERO {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -295,15 +271,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -318,15 +289,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -341,15 +307,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -365,15 +326,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -386,15 +342,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -419,15 +370,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -443,15 +389,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -464,15 +405,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -493,15 +429,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -515,10 +446,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                     {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -530,10 +461,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                     if unit.value <= Decimal::ZERO {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -555,10 +486,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                 if min > max {
                     errors.push(LemmaError::engine(
                         format!("Type '{}' has invalid range: minimum length {} is greater than maximum length {}", type_name, min, max),
-                        Span { start: 0, end: 0, line: 1, col: 0 },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -571,10 +502,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                     if *len < *min {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has inconsistent length constraint: length {} is less than minimum {}", type_name, len, min),
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -584,10 +515,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                     if *len > *max {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has inconsistent length constraint: length {} is greater than maximum {}", type_name, len, max),
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -606,15 +537,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default value length {} is less than minimum {}",
                                 type_name, def_len, min
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -627,15 +553,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default value length {} is greater than maximum {}",
                                 type_name, def_len, max
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -645,10 +566,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                     if def_len != *len {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' default value length {} does not match required length {}", type_name, def_len, len),
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -660,15 +581,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                             "Type '{}' default value '{}' is not in allowed options: {:?}",
                             type_name, def, options
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -690,15 +606,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                             "Type '{}' has invalid date range: minimum {} is after maximum {}",
                             type_name, min, max
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -714,15 +625,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default date {} is before minimum {}",
                                 type_name, def, min
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -735,15 +641,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default date {} is after maximum {}",
                                 type_name, def, max
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -766,15 +667,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                             "Type '{}' has invalid time range: minimum {} is after maximum {}",
                             type_name, min, max
                         ),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
+                        source.span.clone(),
+                        &source.attribute,
                         Arc::from(""),
-                        "<unknown>",
+                        &source.doc_name,
                         1,
                         None::<String>,
                     ));
@@ -790,15 +686,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default time {} is before minimum {}",
                                 type_name, def, min
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -811,15 +702,10 @@ pub fn validate_type_specifications(specs: &TypeSpecification, type_name: &str) 
                                 "Type '{}' default time {} is after maximum {}",
                                 type_name, def, max
                             ),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            "<unknown>",
+                            source.span.clone(),
+                            &source.attribute,
                             Arc::from(""),
-                            "<unknown>",
+                            &source.doc_name,
                             1,
                             None::<String>,
                         ));
@@ -867,6 +753,19 @@ mod tests {
     use crate::semantic::{FactReference, FactValue, LemmaFact, LiteralValue, TypeSpecification};
     use rust_decimal::Decimal;
 
+    fn test_source(doc_name: &str) -> Source {
+        Source::new(
+            "<test>",
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            doc_name,
+        )
+    }
+
     fn make_doc(name: &str) -> LemmaDoc {
         LemmaDoc::new(name.to_string())
     }
@@ -898,7 +797,8 @@ mod tests {
             .apply_override("maximum", &["50".to_string()])
             .unwrap();
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -913,7 +813,8 @@ mod tests {
             .apply_override("maximum", &["100".to_string()])
             .unwrap();
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
 
@@ -928,7 +829,8 @@ mod tests {
             default: Some(Decimal::from(5)),
         };
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -946,7 +848,8 @@ mod tests {
             default: Some(Decimal::from(150)),
         };
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -964,7 +867,8 @@ mod tests {
             default: Some(Decimal::from(50)),
         };
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
 
@@ -978,7 +882,8 @@ mod tests {
             .apply_override("maximum", &["50".to_string()])
             .unwrap();
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -993,7 +898,8 @@ mod tests {
             .unwrap();
         specs = specs.apply_override("length", &["5".to_string()]).unwrap();
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1011,7 +917,8 @@ mod tests {
             default: Some("green".to_string()),
         };
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1029,7 +936,8 @@ mod tests {
             default: Some("red".to_string()),
         };
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
 
@@ -1043,7 +951,8 @@ mod tests {
             default: None,
         };
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1060,7 +969,8 @@ mod tests {
             .apply_override("maximum", &["2024-01-01".to_string()])
             .unwrap();
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].to_string().contains("minimum")
@@ -1078,7 +988,8 @@ mod tests {
             .apply_override("maximum", &["2024-12-31".to_string()])
             .unwrap();
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
 
@@ -1092,7 +1003,8 @@ mod tests {
             .apply_override("maximum", &["10:00:00".to_string()])
             .unwrap();
 
-        let errors = validate_type_specifications(&specs, "test");
+        let src = test_source("test");
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].to_string().contains("minimum")
@@ -1109,6 +1021,16 @@ mod tests {
         use crate::semantic::TypeDef;
 
         let type_def = TypeDef::Regular {
+            source_location: crate::Source::new(
+                "<test>",
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "test",
+            ),
             name: "invalid_money".to_string(),
             parent: "number".to_string(),
             overrides: Some(vec![
@@ -1131,7 +1053,9 @@ mod tests {
             .named_types
             .get("invalid_money")
             .expect("Should have invalid_money type");
-        let errors = validate_type_specifications(&lemma_type.specifications, "invalid_money");
+        let src = test_source("test");
+        let errors =
+            validate_type_specifications(&lemma_type.specifications, "invalid_money", &src);
         assert!(!errors.is_empty());
         assert!(errors.iter().any(|e| e
             .to_string()

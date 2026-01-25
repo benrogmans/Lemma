@@ -23,7 +23,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
     engine.add_lemma_code(code, "test").unwrap();
 
     let solutions = engine
-        .invert_strict(
+        .invert(
             "shop_consensus",
             "target",
             Target::value(LiteralValue::number(1)),

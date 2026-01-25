@@ -16,7 +16,13 @@ export function registerLemmaLanguage(monaco) {
         [/"""[^"]*"""/, 'comment'],
         
         // Keywords
-        [/\b(doc|fact|rule|unless|then|and|or|not|veto|in|is)\b/, 'keyword'],
+        [/\b(doc|fact|rule|type|unless|then|and|or|not|veto|in|is|from|with)\b/, 'keyword'],
+        
+        // Built-in types
+        [/\b(boolean|scale|number|percent|ratio|text|date|time|duration)\b/, 'type'],
+        
+        // Type override/constraint commands
+        [/\b(minimum|maximum|minimal|decimals|precision|unit|units|options|length|default|help)\b/, 'keyword'],
         
         // Functions
         [/\b(sqrt|sin|cos|tan|asin|acos|atan|log|exp|abs|floor|ceil|round)\b/, 'function'],
@@ -47,6 +53,12 @@ export function registerLemmaLanguage(monaco) {
         
         // Type annotations
         [/\[[^\]]+\]/, 'type'],
+
+        // Doc/module paths (e.g. lemma/std)
+        [/\b[a-zA-Z_][a-zA-Z0-9_.-]*(\/[a-zA-Z_][a-zA-Z0-9_.-]*)+\b/, 'string'],
+        
+        // Arrow operator (type override chain)
+        [/->/, 'operator'],
         
         // Comparison operators
         [/==|!=|>=|<=|>|<|is not/, 'operator'],
@@ -90,7 +102,7 @@ export function registerLemmaLanguage(monaco) {
       { open: '/', close: '/' }
     ],
     indentationRules: {
-      increaseIndentPattern: /^\s*(rule|fact|unless).*$/,
+      increaseIndentPattern: /^\s*(rule|fact|type|unless).*$/,
       decreaseIndentPattern: /^\s*(then|unless).*$/
     }
   });

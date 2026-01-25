@@ -236,8 +236,8 @@ fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
     load_workspace(&mut engine, workdir)?;
 
     if let Some(doc) = engine.get_document(doc_name) {
-        let facts = engine.get_document_facts(doc_name);
-        let rules = engine.get_document_rules(doc_name);
+        let facts: Vec<&lemma::LemmaFact> = doc.facts.iter().collect();
+        let rules: Vec<&lemma::LemmaRule> = doc.rules.iter().collect();
 
         let formatter = Formatter;
         print!(
@@ -271,8 +271,9 @@ fn list_command(root: &PathBuf) -> Result<()> {
     let mut doc_stats: Vec<(String, usize, usize)> = documents
         .iter()
         .map(|doc_name| {
-            let facts_count = engine.get_document_facts(doc_name).len();
-            let rules_count = engine.get_document_rules(doc_name).len();
+            let doc = engine.get_document(doc_name);
+            let facts_count = doc.map(|d| d.facts.len()).unwrap_or(0);
+            let rules_count = doc.map(|d| d.rules.len()).unwrap_or(0);
             (doc_name.clone(), facts_count, rules_count)
         })
         .collect();

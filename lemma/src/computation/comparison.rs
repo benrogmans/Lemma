@@ -26,7 +26,10 @@ pub fn comparison_operation(
                     lemma_type: standard_boolean().clone(),
                 })
             }
-            _ => OperationResult::Veto(Some("Can only use == and != with booleans".to_string())),
+            _ => unreachable!(
+                "BUG: invalid boolean comparison operator {}; this should be rejected during planning",
+                op
+            ),
         },
 
         (Value::Text(l), Value::Text(r)) => match op {
@@ -39,17 +42,61 @@ pub fn comparison_operation(
                     lemma_type: standard_boolean().clone(),
                 })
             }
-            _ => OperationResult::Veto(Some("Can only use == and != with text".to_string())),
+            _ => unreachable!(
+                "BUG: invalid text comparison operator {}; this should be rejected during planning",
+                op
+            ),
         },
 
         (Value::Ratio(l, _), Value::Ratio(r, _)) => {
             OperationResult::Value(LiteralValue::boolean(compare_decimals(*l, op, r).into()))
         }
-        (Value::Scale(l, _), Value::Scale(r, _)) => {
-            OperationResult::Value(LiteralValue::boolean(compare_decimals(*l, op, r).into()))
+        (Value::Scale(l, lu_opt), Value::Scale(r, ru_opt)) => {
+            if left.lemma_type != right.lemma_type {
+                unreachable!(
+                    "BUG: compared different scale types ({} vs {}); this should be rejected during planning",
+                    left.lemma_type.name(),
+                    right.lemma_type.name()
+                );
+            }
+
+            match (lu_opt, ru_opt) {
+                (Some(lu), Some(ru)) => {
+                    if lu.eq_ignore_ascii_case(ru) {
+                        return OperationResult::Value(LiteralValue::boolean(
+                            compare_decimals(*l, op, r).into(),
+                        ));
+                    }
+
+                    let target = crate::semantic::ConversionTarget::ScaleUnit(lu.clone());
+                    match super::units::convert_unit(right, &target) {
+                        OperationResult::Value(converted) => match converted.value {
+                            Value::Scale(converted_value, _) => OperationResult::Value(
+                                LiteralValue::boolean(compare_decimals(*l, op, &converted_value).into()),
+                            ),
+                            _ => unreachable!(
+                                "BUG: scale unit conversion returned non-scale value"
+                            ),
+                        },
+                        OperationResult::Veto(msg) => unreachable!(
+                            "BUG: scale unit conversion vetoed unexpectedly: {:?}",
+                            msg
+                        ),
+                    }
+                }
+                (None, None) => OperationResult::Value(LiteralValue::boolean(
+                    compare_decimals(*l, op, r).into(),
+                )),
+                (Some(_), None) | (None, Some(_)) => unreachable!(
+                    "BUG: scale value missing unit (left={:?}, right={:?}); this should be rejected during input validation/planning",
+                    lu_opt,
+                    ru_opt
+                ),
+            }
         }
 
         (Value::Date(_), Value::Date(_)) => super::datetime::datetime_comparison(left, op, right),
+        (Value::Time(_), Value::Time(_)) => super::datetime::time_comparison(left, op, right),
 
         // Duration comparison
         (Value::Duration(l, lu), Value::Duration(r, ru)) => {
@@ -68,12 +115,12 @@ pub fn comparison_operation(
             LiteralValue::boolean(compare_decimals(*n, op, value).into()),
         ),
 
-        _ => OperationResult::Veto(Some(format!(
-            "Comparison {:?} not supported for types {:?} and {:?}",
-            op,
+        _ => unreachable!(
+            "BUG: unsupported comparison during evaluation: {} {} {}",
             type_name(left),
+            op,
             type_name(right)
-        ))),
+        ),
     }
 }
 

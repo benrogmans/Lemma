@@ -47,8 +47,11 @@ fn parse_literal_expression(
 
     // Handle number+unit literals specially - they create UnresolvedUnitLiteral expressions
     if literal_pair.as_rule() == Rule::number_unit_literal {
-        let (number, unit_name) =
-            crate::parsing::literals::parse_number_unit_literal(literal_pair.clone())?;
+        let (number, unit_name) = crate::parsing::literals::parse_number_unit_literal(
+            literal_pair.clone(),
+            attribute,
+            doc_name,
+        )?;
         return Ok(create_expression_with_location(
             ExpressionKind::UnresolvedUnitLiteral(number, unit_name),
             &literal_pair,
@@ -57,7 +60,8 @@ fn parse_literal_expression(
         ));
     }
 
-    let literal_value = crate::parsing::literals::parse_literal(literal_pair.clone())?;
+    let literal_value =
+        crate::parsing::literals::parse_literal(literal_pair.clone(), attribute, doc_name)?;
 
     Ok(create_expression_with_location(
         ExpressionKind::Literal(literal_value),
@@ -565,7 +569,7 @@ fn parse_conversion_expression(
                     doc_name,
                 )?);
             }
-            Rule::duration_unit => {
+            Rule::conversion_target_name => {
                 unit = Some(inner.as_str().to_string());
             }
             _ => {}
@@ -596,34 +600,7 @@ fn parse_conversion_expression(
         )
     })?;
 
-    let lower = unit_name.to_ascii_lowercase();
-    let target = match lower.as_str() {
-        "percent" => ConversionTarget::Percentage,
-        "year" | "years" => ConversionTarget::Duration(DurationUnit::Year),
-        "month" | "months" => ConversionTarget::Duration(DurationUnit::Month),
-        "week" | "weeks" => ConversionTarget::Duration(DurationUnit::Week),
-        "day" | "days" => ConversionTarget::Duration(DurationUnit::Day),
-        "hour" | "hours" => ConversionTarget::Duration(DurationUnit::Hour),
-        "minute" | "minutes" => ConversionTarget::Duration(DurationUnit::Minute),
-        "second" | "seconds" => ConversionTarget::Duration(DurationUnit::Second),
-        "millisecond" | "milliseconds" => ConversionTarget::Duration(DurationUnit::Millisecond),
-        "microsecond" | "microseconds" => ConversionTarget::Duration(DurationUnit::Microsecond),
-        _ => {
-            let span = Span::from_pest_span(original_pair.as_span());
-            return Err(LemmaError::engine(
-                format!(
-                    "Unknown conversion target: '{}'. Expected one of: percent, years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds",
-                    unit_name
-                ),
-                span,
-                attribute,
-                Arc::from(""),
-                doc_name,
-                1,
-                None::<String>,
-            ));
-        }
-    };
+    let target = crate::parsing::units::resolve_conversion_target(&unit_name)?;
 
     let kind = ExpressionKind::UnitConversion(Arc::new(base_expr), target);
 

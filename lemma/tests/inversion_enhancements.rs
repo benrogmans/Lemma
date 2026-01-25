@@ -17,7 +17,7 @@ fn test_rule_reference_expansion_simple_constant() {
         .expect("Failed to parse");
 
     // Invert for total_price = 121, given no facts
-    let result = engine.invert_strict(
+    let result = engine.invert(
         "pricing",
         "total_price",
         Target::value(LiteralValue::number(121)),
@@ -51,7 +51,7 @@ fn test_enhanced_error_message_lists_values() {
         .expect("Failed to parse");
 
     // Try to invert for a value that doesn't exist in the rule outputs
-    let result = engine.invert_strict(
+    let result = engine.invert(
         "test",
         "result",
         Target::value(LiteralValue::number(15)),

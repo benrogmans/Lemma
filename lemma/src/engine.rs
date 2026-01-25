@@ -1,7 +1,7 @@
 use crate::evaluation::Evaluator;
 use crate::parsing::ast::Span;
 use crate::planning::plan;
-use crate::{parse, LemmaDoc, LemmaError, LemmaResult, ResourceLimits, Response};
+use crate::{parse, LemmaDoc, LemmaError, LemmaResult, LemmaType, ResourceLimits, Response};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -129,12 +129,12 @@ impl Engine {
         self.documents.get(doc_name)
     }
 
-    pub fn get_document_facts(&self, doc_name: &str) -> Vec<&crate::LemmaFact> {
-        if let Some(doc) = self.documents.get(doc_name) {
-            doc.facts.iter().collect()
-        } else {
-            Vec::new()
-        }
+    /// Get the execution plan for a document.
+    ///
+    /// The execution plan contains the resolved fact schema, default values,
+    /// and topologically sorted rules ready for evaluation.
+    pub fn get_execution_plan(&self, doc_name: &str) -> Option<&crate::planning::ExecutionPlan> {
+        self.execution_plans.get(doc_name)
     }
 
     pub fn get_document_rules(&self, doc_name: &str) -> Vec<&crate::LemmaRule> {
@@ -145,52 +145,73 @@ impl Engine {
         }
     }
 
-    /// Get the resolved schema type for a fact in a document (including imported/custom types).
+    /// Get the facts (with types) required to evaluate a document's rules.
     ///
-    /// This uses the document's compiled execution plan, so it reflects the authoritative schema
-    /// after type resolution and overrides.
-    pub fn get_fact_schema_type(
-        &self,
-        doc_name: &str,
-        fact_name: &str,
-    ) -> Option<crate::LemmaType> {
-        let plan = self.execution_plans.get(doc_name)?;
-        let fact_path = plan.get_fact_path_by_str(fact_name)?;
-        plan.fact_schema.get(fact_path).cloned()
-    }
-
-    /// Get the set of fact names required to evaluate a document's rules.
+    /// - If `rule_names` is empty, returns facts for **all local** rules in the document.
+    /// - Otherwise, returns facts for the specified rules (by name).
     ///
-    /// - If `rule_names` is empty, returns required facts for **all** rules in the document.
-    /// - Otherwise, returns required facts for the specified local rules (by name).
-    ///
-    /// Returned names match `FactReference::to_string()` / `FactPath::to_string()` (e.g. "age",
-    /// "order.price", etc.), so they can be used by UIs to decide what to prompt for.
-    pub fn get_required_fact_names(
+    /// Returns a map from FactPath to resolved LemmaType.
+    /// This is the authoritative API for determining what inputs a rule needs.
+    pub fn get_facts(
         &self,
         doc_name: &str,
         rule_names: &[String],
-    ) -> Option<HashSet<String>> {
-        let plan = self.execution_plans.get(doc_name)?;
-        let mut required: HashSet<String> = HashSet::new();
+    ) -> LemmaResult<HashMap<crate::FactPath, LemmaType>> {
+        let plan = self.execution_plans.get(doc_name).ok_or_else(|| {
+            LemmaError::engine(
+                format!("Document '{}' not found", doc_name),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<engine>",
+                Arc::from(""),
+                doc_name,
+                1,
+                None::<String>,
+            )
+        })?;
+
+        let mut fact_paths = HashSet::new();
 
         if rule_names.is_empty() {
-            for rule in &plan.rules {
-                for fact in &rule.needs_facts {
-                    required.insert(fact.to_string());
-                }
+            // Default behavior: facts for all local rules.
+            for rule in plan.rules.iter().filter(|r| r.path.segments.is_empty()) {
+                fact_paths.extend(rule.needs_facts.iter().cloned());
             }
-            return Some(required);
+        } else {
+            for rule_name in rule_names {
+                let rule = plan.get_rule(rule_name).ok_or_else(|| {
+                    LemmaError::engine(
+                        format!("Rule '{}' not found in document '{}'", rule_name, doc_name),
+                        Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<engine>",
+                        Arc::from(""),
+                        doc_name,
+                        1,
+                        None::<String>,
+                    )
+                })?;
+                fact_paths.extend(rule.needs_facts.iter().cloned());
+            }
         }
 
-        for rule_name in rule_names {
-            let rule = plan.get_rule(rule_name)?;
-            for fact in &rule.needs_facts {
-                required.insert(fact.to_string());
+        // Build result map with types from fact_schema
+        let mut result = HashMap::new();
+        for fact_path in fact_paths {
+            if let Some(lemma_type) = plan.fact_schema.get(&fact_path) {
+                result.insert(fact_path, lemma_type.clone());
             }
         }
 
-        Some(required)
+        Ok(result)
     }
 
     /// Evaluate rules in a document with JSON values for facts.
@@ -218,17 +239,18 @@ impl Engine {
                     line: 1,
                     col: 0,
                 },
-                "<unknown>",
+                "<engine>",
                 Arc::from(""),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             )
         })?;
 
         let values = crate::serialization::from_json(json, base_plan)?;
+        let plan = base_plan.clone().with_values(values, &self.limits)?;
 
-        self.evaluate_strict(doc_name, rule_names, values)
+        self.evaluate_plan(plan, rule_names)
     }
 
     /// Evaluate rules in a document with string values for facts.
@@ -257,9 +279,9 @@ impl Engine {
                     line: 1,
                     col: 0,
                 },
-                "<unknown>",
+                "<engine>",
                 Arc::from(""),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             )
@@ -270,53 +292,7 @@ impl Engine {
         self.evaluate_plan(plan, rule_names)
     }
 
-    /// Evaluate rules in a document with typed values for facts.
-    ///
-    /// This is the strict API that accepts pre-typed LiteralValue values.
-    /// Use this for programmatic APIs, protobuf, msgpack, FFI, and other
-    /// strongly-typed interfaces where values are already parsed.
-    ///
-    /// If `rule_names` is empty, evaluates all rules.
-    /// Otherwise, only returns results for the specified rules (dependencies still computed).
-    ///
-    /// Values are provided as name -> LiteralValue pairs (e.g., "age" -> Number(25)).
-    pub fn evaluate_strict(
-        &self,
-        doc_name: &str,
-        rule_names: Vec<String>,
-        values: HashMap<String, crate::LiteralValue>,
-    ) -> LemmaResult<Response> {
-        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
-            LemmaError::engine(
-                format!("Document '{}' not found", doc_name),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
-                Arc::from(""),
-                "<unknown>",
-                1,
-                None::<String>,
-            )
-        })?;
-
-        let plan = base_plan.clone().with_typed_values(values, &self.limits)?;
-
-        self.evaluate_plan(plan, rule_names)
-    }
-
     /// Invert a rule to find input domains that produce a desired outcome with JSON values.
-    ///
-    /// This is a convenience method that accepts JSON directly and converts it
-    /// to typed values using the document's fact type declarations.
-    ///
-    /// Returns an InversionResponse containing:
-    /// - `solutions`: Concrete domain constraints for each free variable
-    /// - `undetermined_facts`: Facts that are not fully determined
-    /// - `is_determined`: Whether all facts have concrete values
     ///
     /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
     /// They are automatically parsed to the expected type based on the document schema.
@@ -336,28 +312,19 @@ impl Engine {
                     line: 1,
                     col: 0,
                 },
-                "<unknown>",
+                "<engine>",
                 Arc::from(""),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             )
         })?;
 
         let values = crate::serialization::from_json(json, base_plan)?;
-
-        self.invert_strict(doc_name, rule_name, target, values)
+        self.invert(doc_name, rule_name, target, values)
     }
 
     /// Invert a rule to find input domains that produce a desired outcome.
-    ///
-    /// This is the user-friendly API that accepts raw string values and parses them
-    /// to the appropriate types based on the document's fact type declarations.
-    ///
-    /// Returns an InversionResponse containing:
-    /// - `solutions`: Concrete domain constraints for each free variable
-    /// - `undetermined_facts`: Facts that are not fully determined
-    /// - `is_determined`: Whether all facts have concrete values
     ///
     /// Values are provided as name -> value string pairs (e.g., "quantity" -> "5").
     /// They are automatically parsed to the expected type based on the document schema.
@@ -377,61 +344,15 @@ impl Engine {
                     line: 1,
                     col: 0,
                 },
-                "<unknown>",
+                "<engine>",
                 Arc::from(""),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             )
         })?;
 
         let plan = base_plan.clone().with_values(values, &self.limits)?;
-
-        // Collect provided fact paths
-        let provided_facts = plan.fact_values.keys().cloned().collect();
-
-        crate::inversion::invert(rule_name, target, &plan, &provided_facts)
-    }
-
-    /// Invert a rule to find input domains that produce a desired outcome.
-    ///
-    /// This is the strict API that accepts pre-typed LiteralValue values.
-    /// Use this for programmatic APIs, protobuf, msgpack, FFI, and other
-    /// strongly-typed interfaces where values are already parsed.
-    ///
-    /// Returns an InversionResponse containing:
-    /// - `solutions`: Concrete domain constraints for each free variable
-    /// - `undetermined_facts`: Facts that are not fully determined
-    /// - `is_determined`: Whether all facts have concrete values
-    ///
-    /// Values are provided as name -> LiteralValue pairs (e.g., "quantity" -> Number(5)).
-    pub fn invert_strict(
-        &self,
-        doc_name: &str,
-        rule_name: &str,
-        target: crate::inversion::Target,
-        values: HashMap<String, crate::LiteralValue>,
-    ) -> LemmaResult<crate::InversionResponse> {
-        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
-            LemmaError::engine(
-                format!("Document '{}' not found", doc_name),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
-                Arc::from(""),
-                "<unknown>",
-                1,
-                None::<String>,
-            )
-        })?;
-
-        let plan = base_plan.clone().with_typed_values(values, &self.limits)?;
-
-        // Collect provided fact paths
         let provided_facts = plan.fact_values.keys().cloned().collect();
 
         crate::inversion::invert(rule_name, target, &plan, &provided_facts)

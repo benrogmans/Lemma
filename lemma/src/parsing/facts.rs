@@ -232,7 +232,7 @@ fn parse_inline_type_definition(
     })?;
 
     let (parent_name, inline_overrides, from_doc) =
-        types::parse_type_arrow_chain_with_commands(type_arrow_chain)?;
+        types::parse_type_arrow_chain_with_commands(type_arrow_chain, attribute, doc_name)?;
 
     // Just store the base name, overrides, and from - no resolution during parsing
     Ok(FactValue::TypeDeclaration {
@@ -289,7 +289,7 @@ fn parse_fact_literal(
         )
     })?;
 
-    let literal_value = crate::parsing::literals::parse_literal(literal_pair)?;
+    let literal_value = crate::parsing::literals::parse_literal(literal_pair, attribute, doc_name)?;
     Ok(FactValue::Literal(literal_value))
 }
 

@@ -135,6 +135,7 @@ impl Hash for Expression {
 
 /// The kind/type of expression
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExpressionKind {
     Literal(LiteralValue),
     /// Unresolved reference from parser (resolved during planning)
@@ -381,6 +382,7 @@ impl RuleReference {
 
 /// Arithmetic computations
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ArithmeticComputation {
     Add,
     Subtract,
@@ -420,6 +422,7 @@ impl ArithmeticComputation {
 
 /// Comparison computations
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ComparisonComputation {
     GreaterThan,
     LessThan,
@@ -483,9 +486,11 @@ impl ComparisonComputation {
 
 /// The target unit for unit conversion expressions
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ConversionTarget {
     Duration(DurationUnit),
     Percentage,
+    ScaleUnit(String),
 }
 
 /// Types of logical negation
@@ -496,6 +501,7 @@ pub enum NegationType {
 
 /// Logical computations
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LogicalComputation {
     And,
     Or,
@@ -522,6 +528,7 @@ impl VetoExpression {
 
 /// Mathematical computations
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MathematicalComputation {
     Sqrt,
     Sin,
@@ -539,6 +546,7 @@ pub enum MathematicalComputation {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FactValue {
     Literal(LiteralValue),
     DocumentReference(String),
@@ -624,6 +632,7 @@ impl std::ops::Not for &BooleanValue {
 
 /// The actual value data (without type information)
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Value {
     Number(Decimal),
     Scale(Decimal, Option<String>), // value, optional unit name (e.g., "eur", "usd", "kilogram")
@@ -856,7 +865,9 @@ impl LiteralValue {
 }
 
 /// A time value
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, serde::Deserialize,
+)]
 pub struct TimeValue {
     pub hour: u8,
     pub minute: u8,
@@ -865,14 +876,14 @@ pub struct TimeValue {
 }
 
 /// A timezone value
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize)]
 pub struct TimezoneValue {
     pub offset_hours: i8,
     pub offset_minutes: u8,
 }
 
 /// A datetime value that preserves timezone information
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize)]
 pub struct DateTimeValue {
     pub year: i32,
     pub month: u32,
@@ -1388,6 +1399,7 @@ impl fmt::Display for ConversionTarget {
         match self {
             ConversionTarget::Duration(unit) => write!(f, "{}", unit),
             ConversionTarget::Percentage => write!(f, "percent"),
+            ConversionTarget::ScaleUnit(unit) => write!(f, "{}", unit),
         }
     }
 }
@@ -1988,8 +2000,14 @@ impl TypeSpecification {
                     let arg = args
                         .first()
                         .ok_or_else(|| "default requires an argument".to_string())?;
+                    let span = Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    };
                     let Value::Date(date) = &standard_date()
-                        .parse_value(arg)
+                        .parse_value(arg, span.clone(), "<internal>", "<internal>")
                         .map_err(|_| format!("invalid default date value: {}", arg))?
                         .value
                     else {
@@ -2001,8 +2019,14 @@ impl TypeSpecification {
                     let arg = args
                         .first()
                         .ok_or_else(|| "default requires an argument".to_string())?;
+                    let span = Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    };
                     let Value::Date(date) = standard_date()
-                        .parse_value(arg)
+                        .parse_value(arg, span, "<internal>", "<internal>")
                         .map_err(|_| format!("invalid default date value: {}", arg))?
                         .value
                     else {
@@ -2015,8 +2039,14 @@ impl TypeSpecification {
                     let arg = args
                         .first()
                         .ok_or_else(|| "default requires an argument".to_string())?;
+                    let span = Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    };
                     let Value::Date(date) = standard_date()
-                        .parse_value(arg)
+                        .parse_value(arg, span, "<internal>", "<internal>")
                         .map_err(|_| format!("invalid default date value: {}", arg))?
                         .value
                     else {
@@ -2041,8 +2071,14 @@ impl TypeSpecification {
                     let arg = args
                         .first()
                         .ok_or_else(|| "minimum requires an argument".to_string())?;
+                    let span = Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    };
                     let Value::Time(time) = &standard_time()
-                        .parse_value(arg)
+                        .parse_value(arg, span.clone(), "<internal>", "<internal>")
                         .map_err(|_| format!("invalid minimum time value: {}", arg))?
                         .value
                     else {
@@ -2054,8 +2090,14 @@ impl TypeSpecification {
                     let arg = args
                         .first()
                         .ok_or_else(|| "maximum requires an argument".to_string())?;
+                    let span = Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    };
                     let Value::Time(time) = &standard_time()
-                        .parse_value(arg)
+                        .parse_value(arg, span.clone(), "<internal>", "<internal>")
                         .map_err(|_| format!("invalid maximum time value: {}", arg))?
                         .value
                     else {
@@ -2068,8 +2110,14 @@ impl TypeSpecification {
                     let arg = args
                         .first()
                         .ok_or_else(|| "default requires an argument".to_string())?;
+                    let span = Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    };
                     let Value::Time(time) = &standard_time()
-                        .parse_value(arg)
+                        .parse_value(arg, span, "<internal>", "<internal>")
                         .map_err(|_| format!("invalid default time value: {}", arg))?
                         .value
                     else {
@@ -2126,6 +2174,7 @@ pub enum TypeDef {
     /// Regular named type definition
     /// Example: `type money = number -> decimals 2`
     Regular {
+        source_location: Source,
         name: String,
         parent: String,
         overrides: Option<Vec<(String, Vec<String>)>>,
@@ -2133,6 +2182,7 @@ pub enum TypeDef {
     /// Imported type from another document
     /// Example: `type currency from lemma` or `type currency from lemma -> maximum 1000`
     Import {
+        source_location: Source,
         name: String,
         source_type: String,
         from: String,
@@ -2143,11 +2193,28 @@ pub enum TypeDef {
     /// Example: `fact age = [age from lemma]`
     /// Example: `fact age = [age from lemma -> minimum 18]`
     Inline {
+        source_location: Source,
         parent: String,
         overrides: Option<Vec<(String, Vec<String>)>>,
         fact_ref: FactReference,
         from: Option<String>,
     },
+}
+
+impl TypeDef {
+    pub fn source_location(&self) -> &Source {
+        match self {
+            TypeDef::Regular {
+                source_location, ..
+            }
+            | TypeDef::Import {
+                source_location, ..
+            }
+            | TypeDef::Inline {
+                source_location, ..
+            } => source_location,
+        }
+    }
 }
 
 /// A fully resolved type used during evaluation
@@ -2302,29 +2369,46 @@ impl LemmaType {
         }
     }
 
-    /// Parse a raw string value into a LiteralValue according to this type
-    pub fn parse_value(&self, raw: &str) -> Result<LiteralValue, LemmaError> {
+    /// Parse a raw string value into a LiteralValue according to this type.
+    ///
+    /// Parsing errors are anchored to the provided source location (`span`, `attribute`, `doc_name`).
+    pub fn parse_value(
+        &self,
+        raw: &str,
+        span: Span,
+        attribute: &str,
+        doc_name: &str,
+    ) -> Result<LiteralValue, LemmaError> {
         let value = match &self.specifications {
-            TypeSpecification::Boolean { .. } => Self::parse_boolean_value(raw)?,
-            TypeSpecification::Scale { .. } => Self::parse_scale_value(raw, self)?,
-            TypeSpecification::Number { .. } => Self::parse_number_value(raw)?,
+            TypeSpecification::Boolean { .. } => {
+                Self::parse_boolean_value(raw, span.clone(), attribute, doc_name)?
+            }
+            TypeSpecification::Scale { .. } => {
+                Self::parse_scale_value(raw, self, span.clone(), attribute, doc_name)?
+            }
+            TypeSpecification::Number { .. } => {
+                Self::parse_number_value(raw, span.clone(), attribute, doc_name)?
+            }
             TypeSpecification::Text { .. } => Self::parse_text_value(raw)?,
-            TypeSpecification::Date { .. } => Self::parse_date_value(raw)?,
-            TypeSpecification::Time { .. } => Self::parse_time_value(raw)?,
-            TypeSpecification::Duration { .. } => Self::parse_duration_value(raw)?,
-            TypeSpecification::Ratio { .. } => Self::parse_ratio_value(raw)?,
+            TypeSpecification::Date { .. } => {
+                Self::parse_date_value(raw, span.clone(), attribute, doc_name)?
+            }
+            TypeSpecification::Time { .. } => {
+                Self::parse_time_value(raw, span.clone(), attribute, doc_name)?
+            }
+            TypeSpecification::Duration { .. } => {
+                Self::parse_duration_value(raw, span.clone(), attribute, doc_name)?
+            }
+            TypeSpecification::Ratio { .. } => {
+                Self::parse_ratio_value(raw, span.clone(), attribute, doc_name)?
+            }
             TypeSpecification::Veto { .. } => {
                 return Err(LemmaError::engine(
                     "Cannot parse value for veto type - veto is not a user-declarable type",
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(""),
-                    "<unknown>",
+                    span,
+                    attribute,
+                    Arc::from(raw),
+                    doc_name,
                     1,
                     None::<String>,
                 ));
@@ -2347,7 +2431,13 @@ impl LemmaType {
         Ok(Value::Text(raw.to_string()))
     }
 
-    fn parse_scale_value(raw: &str, lemma_type: &LemmaType) -> Result<Value, LemmaError> {
+    fn parse_scale_value(
+        raw: &str,
+        lemma_type: &LemmaType,
+        span: Span,
+        attribute: &str,
+        doc_name: &str,
+    ) -> Result<Value, LemmaError> {
         let trimmed = raw.trim();
 
         // Parse number and optional unit from string
@@ -2393,15 +2483,10 @@ impl LemmaType {
         let decimal = Decimal::from_str(&clean_number).map_err(|_| {
             LemmaError::engine(
                 format!("Invalid scale string: '{}' is not a valid number", raw),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
+                span.clone(),
+                attribute,
                 Arc::from(raw),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             )
@@ -2410,31 +2495,31 @@ impl LemmaType {
         // Validate unit against type definition
         let allowed_units = match &lemma_type.specifications {
             TypeSpecification::Scale { units, .. } => units,
-            _ => {
-                return Err(LemmaError::engine(
-                    format!(
-                        "Internal error: expected a scale type but got {}",
-                        lemma_type.name()
-                    ),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(raw),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                ));
-            }
+            _ => unreachable!(
+                "BUG: parse_scale_value called with non-scale type {}",
+                lemma_type.name()
+            ),
         };
+
+        if unit_part.is_empty() && !allowed_units.is_empty() {
+            let valid: Vec<String> = allowed_units.iter().map(|u| u.name.clone()).collect();
+            return Err(LemmaError::engine(
+                format!(
+                    "Missing unit for scale type. Valid units: {}",
+                    valid.join(", ")
+                ),
+                span.clone(),
+                attribute,
+                Arc::from(raw),
+                doc_name,
+                1,
+                None::<String>,
+            ));
+        }
 
         let unit = if unit_part.is_empty() {
             None
         } else {
-            // Validate that the unit exists in the type definition
             let unit_matched = allowed_units
                 .iter()
                 .find(|u| u.name.eq_ignore_ascii_case(unit_part));
@@ -2449,15 +2534,10 @@ impl LemmaType {
                         unit_part,
                         valid.join(", ")
                     ),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
+                    span,
+                    attribute,
                     Arc::from(raw),
-                    "<unknown>",
+                    doc_name,
                     1,
                     None::<String>,
                 ));
@@ -2467,15 +2547,20 @@ impl LemmaType {
         Ok(Value::Scale(decimal, unit))
     }
 
-    fn parse_number_value(raw: &str) -> Result<Value, LemmaError> {
+    fn parse_number_value(
+        raw: &str,
+        span: Span,
+        attribute: &str,
+        doc_name: &str,
+    ) -> Result<Value, LemmaError> {
         let clean_number = raw.replace(['_', ','], "");
         let decimal = Decimal::from_str(&clean_number).map_err(|_| {
             LemmaError::engine(
                 format!("Invalid number: '{}'. Expected a valid decimal number (e.g., 42, 3.14, 1_000_000)", raw),
-                Span { start: 0, end: 0, line: 1, col: 0 },
-                "<unknown>",
+                span,
+                attribute,
                 Arc::from(raw),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             )
@@ -2483,22 +2568,22 @@ impl LemmaType {
         Ok(Value::Number(decimal))
     }
 
-    fn parse_boolean_value(raw: &str) -> Result<Value, LemmaError> {
+    fn parse_boolean_value(
+        raw: &str,
+        span: Span,
+        attribute: &str,
+        doc_name: &str,
+    ) -> Result<Value, LemmaError> {
         let boolean_value: BooleanValue = raw.parse().map_err(|_| {
             LemmaError::engine(
                 format!(
                     "Invalid boolean: '{}'. Expected one of: true, false, yes, no, accept, reject",
                     raw
                 ),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
+                span,
+                attribute,
                 Arc::from(raw),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             )
@@ -2506,7 +2591,12 @@ impl LemmaType {
         Ok(Value::Boolean(boolean_value))
     }
 
-    fn parse_date_value(raw: &str) -> Result<Value, LemmaError> {
+    fn parse_date_value(
+        raw: &str,
+        span: Span,
+        attribute: &str,
+        doc_name: &str,
+    ) -> Result<Value, LemmaError> {
         let datetime_str = raw.trim();
 
         if let Ok(dt) = datetime_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
@@ -2551,16 +2641,21 @@ impl LemmaType {
 
         Err(LemmaError::engine(
             format!("Invalid date/time format: '{}'. Expected one of: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, or YYYY-MM-DDTHH:MM:SSZ", raw),
-            Span { start: 0, end: 0, line: 1, col: 0 },
-            "<unknown>",
+            span,
+            attribute,
             Arc::from(raw),
-            "<unknown>",
+            doc_name,
             1,
             None::<String>,
         ))
     }
 
-    fn parse_time_value(raw: &str) -> Result<Value, LemmaError> {
+    fn parse_time_value(
+        raw: &str,
+        span: Span,
+        attribute: &str,
+        doc_name: &str,
+    ) -> Result<Value, LemmaError> {
         let time_str = raw.trim();
 
         // Try parsing with timezone (HH:MM:SSZ or HH:MM:SS+HH:MM)
@@ -2595,7 +2690,21 @@ impl LemmaType {
             {
                 if hour_u32 < 24 && minute_u32 < 60 {
                     let second_u32 = if parts.len() == 3 {
-                        parts[2].parse::<u32>().unwrap_or(0)
+                        let Ok(s) = parts[2].parse::<u32>() else {
+                            return Err(LemmaError::engine(
+                                format!(
+                                    "Invalid time format: '{}'. Expected: HH:MM or HH:MM:SS (e.g., 14:30 or 14:30:00)",
+                                    raw
+                                ),
+                                span.clone(),
+                                attribute,
+                                Arc::from(raw),
+                                doc_name,
+                                1,
+                                None::<String>,
+                            ));
+                        };
+                        s
                     } else {
                         0
                     };
@@ -2616,21 +2725,21 @@ impl LemmaType {
                 "Invalid time format: '{}'. Expected: HH:MM or HH:MM:SS (e.g., 14:30 or 14:30:00)",
                 raw
             ),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
+            span,
+            attribute,
             Arc::from(raw),
-            "<unknown>",
+            doc_name,
             1,
             None::<String>,
         ))
     }
 
-    fn parse_duration_value(raw: &str) -> Result<Value, LemmaError> {
+    fn parse_duration_value(
+        raw: &str,
+        span: Span,
+        attribute: &str,
+        doc_name: &str,
+    ) -> Result<Value, LemmaError> {
         // Parse duration like "90 minutes" or "2 hours"
         let parts: Vec<&str> = raw.split_whitespace().collect();
         if parts.len() != 2 {
@@ -2639,15 +2748,10 @@ impl LemmaType {
                     "Invalid duration: '{}'. Expected format: NUMBER UNIT (e.g., '90 minutes')",
                     raw
                 ),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
+                span.clone(),
+                attribute,
                 Arc::from(raw),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             ));
@@ -2657,15 +2761,10 @@ impl LemmaType {
         let value = Decimal::from_str(&number_str).map_err(|_| {
             LemmaError::engine(
                 format!("Invalid number in duration: '{}'", parts[0]),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
+                span.clone(),
+                attribute,
                 Arc::from(raw),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             )
@@ -2687,10 +2786,10 @@ impl LemmaType {
             _ => {
                 return Err(LemmaError::engine(
                     format!("Unknown duration unit: '{}'. Expected one of: years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds", unit),
-                    Span { start: 0, end: 0, line: 1, col: 0 },
-                    "<unknown>",
+                    span,
+                    attribute,
                     Arc::from(raw),
-                    "<unknown>",
+                    doc_name,
                     1,
                     None::<String>,
                 ));
@@ -2699,21 +2798,21 @@ impl LemmaType {
         Ok(Value::Duration(value, duration_unit))
     }
 
-    fn parse_ratio_value(raw: &str) -> Result<Value, LemmaError> {
+    fn parse_ratio_value(
+        raw: &str,
+        span: Span,
+        attribute: &str,
+        doc_name: &str,
+    ) -> Result<Value, LemmaError> {
         // Parse ratio as a decimal number
         let clean_number = raw.replace(['_', ','], "");
         let decimal = Decimal::from_str(&clean_number).map_err(|_| {
             LemmaError::engine(
                 format!("Invalid ratio: '{}'. Expected a valid decimal number", raw),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
+                span,
+                attribute,
                 Arc::from(raw),
-                "<unknown>",
+                doc_name,
                 1,
                 None::<String>,
             )
@@ -2997,6 +3096,10 @@ mod tests {
         assert_eq!(
             format!("{}", ConversionTarget::Duration(DurationUnit::Hour)),
             "hours"
+        );
+        assert_eq!(
+            format!("{}", ConversionTarget::ScaleUnit("usd".to_string())),
+            "usd"
         );
     }
 

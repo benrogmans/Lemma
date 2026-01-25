@@ -12,6 +12,7 @@ pub struct Proof {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProofNode {
     Value {
         value: LiteralValue,
@@ -51,6 +52,7 @@ pub enum ProofNode {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ValueSource {
     Fact { fact_ref: FactPath },
     Literal,

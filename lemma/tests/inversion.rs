@@ -21,7 +21,7 @@ fn test_inversion_simple_arithmetic() {
 
     // Invert: total = 100 with no facts provided
     // Should return a solution with shape (price * quantity) = 100
-    let result = engine.invert_strict(
+    let result = engine.invert(
         "pricing",
         "total",
         Target::value(LiteralValue::number(100)),
@@ -56,7 +56,7 @@ fn test_inversion_veto_query() {
     let engine = setup_engine(code);
 
     // Query for "too heavy" veto
-    let result = engine.invert_strict(
+    let result = engine.invert(
         "shipping",
         "shipping_cost",
         Target::veto(Some("too heavy".to_string())),

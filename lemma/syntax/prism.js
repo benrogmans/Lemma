@@ -15,10 +15,24 @@
     },
     'type-annotation': {
       pattern: /\[[^\]]+\]/,
-      greedy: true
+      greedy: true,
+      inside: {
+        'punctuation': /^\[|\]$/,
+        'arrow-operator': /->/,
+        'conditional-keyword': /\b(from|with)\b/,
+        'builtin-type': /\b(boolean|scale|number|percent|ratio|text|date|time|duration)\b/,
+        'type-command': /\b(minimum|maximum|minimal|decimals|precision|unit|units|options|length|default|help)\b/,
+        'number': /\b\d+([_,]\d+)*(\.\d+)?([eE][+-]?\d+)?%?\b/,
+        'string': /"[^"]*"/,
+        'doc-path': /\b[a-zA-Z_][a-zA-Z0-9_.-]*(?:\/[a-zA-Z_][a-zA-Z0-9_.-]*)+\b/,
+        'identifier': /\b[a-zA-Z_][a-zA-Z0-9_]*\b/
+      }
     },
-    'declaration-keyword': /\b(doc|fact|rule)\b/,
-    'conditional-keyword': /\b(unless|then|veto|and|or|not|in)\b/,
+    'declaration-keyword': /\b(doc|fact|rule|type)\b/,
+    'conditional-keyword': /\b(unless|then|veto|and|or|not|in|from|with)\b/,
+    'builtin-type': /\b(boolean|scale|number|percent|ratio|text|date|time|duration)\b/,
+    'type-command': /\b(minimum|maximum|minimal|decimals|precision|unit|units|options|length|default|help)\b/,
+    'arrow-operator': /->/,
     'comparison-operator': /==|!=|>=|<=|>|<|is not|\bis\b/,
     'arithmetic-operator': /[+\-*/%^=]/,
     'math-function': /\b(sqrt|sin|cos|tan|asin|acos|atan|log|exp|abs|floor|ceil|round)\b/,
@@ -46,6 +60,7 @@
       pattern: /\/[^\/]*\//,
       greedy: true
     },
+    'doc-path': /\b[a-zA-Z_][a-zA-Z0-9_.-]*(?:\/[a-zA-Z_][a-zA-Z0-9_.-]*)+\b/,
     'reference': /\b[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*\??/
   };
 })(typeof Prism !== 'undefined' ? Prism : {});

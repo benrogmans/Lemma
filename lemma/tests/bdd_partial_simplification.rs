@@ -29,7 +29,7 @@ fn bdd_partial_simplification_on_large_expression() {
     engine.add_lemma_code(&code, "gen").unwrap();
 
     let solutions = engine
-        .invert_strict(
+        .invert(
             "shop_partial",
             "target",
             Target::value(LiteralValue::number(1)),

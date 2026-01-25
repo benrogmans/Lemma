@@ -9,7 +9,10 @@
 //! For semantic analysis (e.g., `x == A and x != B`), use domain extraction.
 
 use crate::parsing::ast::Span;
-use crate::{ComparisonComputation, FactPath, LemmaError, LemmaResult, LiteralValue, Value};
+use crate::{
+    ArithmeticComputation, ComparisonComputation, ConversionTarget, FactPath, LemmaError,
+    LemmaResult, LiteralValue, OperationResult, Value,
+};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::fmt;
 use std::sync::Arc;
@@ -159,8 +162,8 @@ impl Constraint {
                                     line: 1,
                                     col: 0,
                                 },
-                                "<unknown>".to_string(),
-                                "<unknown>".to_string(),
+                                "<inversion>".to_string(),
+                                "<inversion>".to_string(),
                             )
                         });
 
@@ -236,8 +239,8 @@ impl Constraint {
                                             line: 1,
                                             col: 0,
                                         },
-                                        "<unknown>".to_string(),
-                                        "<unknown>".to_string(),
+                                        "<inversion>".to_string(),
+                                        "<inversion>".to_string(),
                                     )
                                 });
                             return Err(LemmaError::engine(
@@ -295,6 +298,40 @@ impl Constraint {
     ) -> LemmaResult<Constraint> {
         use crate::BooleanValue;
         use crate::ExpressionKind;
+
+        fn expr_source(expr: &crate::Expression) -> Option<(Span, String, String)> {
+            expr.source_location
+                .as_ref()
+                .map(|s| (s.span.clone(), s.attribute.clone(), s.doc_name.clone()))
+        }
+
+        fn inversion_err_for(
+            left: &crate::Expression,
+            right: &crate::Expression,
+            message: impl Into<String>,
+            suggestion: Option<String>,
+        ) -> LemmaError {
+            let (span, attribute, doc_name) =
+                expr_source(left).or_else(|| expr_source(right)).unwrap_or((
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<inversion>".to_string(),
+                    "<inversion>".to_string(),
+                ));
+            LemmaError::inversion(
+                message,
+                span,
+                attribute,
+                Arc::from(""),
+                doc_name,
+                1,
+                suggestion,
+            )
+        }
 
         // Case 1: fact op literal (e.g., age > 18)
         if let ExpressionKind::FactPath(fact_path) = &left.kind {
@@ -392,22 +429,23 @@ impl Constraint {
             });
         }
 
-        Err(LemmaError::engine(
+        // Extended: try to rewrite richer comparison shapes into an atomic
+        // `fact op literal` constraint by isolating a single unknown fact.
+        if let Some(rewritten) = try_rewrite_comparison_to_atomic(left, op, right) {
+            return Ok(rewritten);
+        }
+
+        Err(inversion_err_for(
+            left,
+            right,
             format!(
-                "Cannot convert comparison to constraint: {} {} {}",
+                "Cannot invert condition yet: unsupported comparison shape: {} {} {}",
                 left, op, right
             ),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
+            Some(
+                "Try rewriting the unless condition into a simple comparison between a single fact and a literal (e.g. x > 10)."
+                    .to_string(),
+            ),
         ))
     }
 
@@ -438,6 +476,416 @@ impl Constraint {
         facts.sort_by_key(|a| a.to_string());
         facts.dedup();
         facts
+    }
+}
+
+// =============================================================================
+// Comparison rewriting for inversion (Option B)
+// =============================================================================
+
+fn try_rewrite_comparison_to_atomic(
+    left: &crate::Expression,
+    op: &ComparisonComputation,
+    right: &crate::Expression,
+) -> Option<Constraint> {
+    use crate::ExpressionKind;
+
+    // Prefer constant-folding to reduce expression complexity.
+    let left = constant_fold_expression(left).unwrap_or_else(|| left.clone());
+    let right = constant_fold_expression(right).unwrap_or_else(|| right.clone());
+
+    // Strip a top-level unit conversion wrapper when comparing against a literal.
+    // This is safe because scale/duration comparisons are unit-normalized during evaluation/domain checks.
+    let (left, right) = match (&left.kind, &right.kind) {
+        (ExpressionKind::UnitConversion(inner, target), ExpressionKind::Literal(_)) => {
+            if is_monotone_unit_conversion_target(target) {
+                ((**inner).clone(), right.clone())
+            } else {
+                (left.clone(), right.clone())
+            }
+        }
+        (ExpressionKind::Literal(_), ExpressionKind::UnitConversion(inner, target)) => {
+            if is_monotone_unit_conversion_target(target) {
+                (left.clone(), (**inner).clone())
+            } else {
+                (left.clone(), right.clone())
+            }
+        }
+        _ => (left.clone(), right.clone()),
+    };
+
+    // We can only rewrite comparisons where one side is a literal and the other side contains facts.
+    let (expr, mut op_norm, lit) = match (&left.kind, &right.kind) {
+        (ExpressionKind::Literal(l), _) => {
+            // literal op expr  =>  expr flip(op) literal
+            let flipped = flip_comparison_operator(op);
+            (right.clone(), flipped, l.clone())
+        }
+        (_, ExpressionKind::Literal(r)) => (left.clone(), op.clone(), r.clone()),
+        _ => return None,
+    };
+
+    // Identify the single unknown fact.
+    let mut facts = Vec::new();
+    collect_fact_paths(&expr, &mut facts);
+    facts.sort_by_key(|fp| fp.to_string());
+    facts.dedup();
+    if facts.len() != 1 {
+        return None;
+    }
+    let fact = facts[0].clone();
+
+    // Try to isolate the fact for this comparison.
+    let (new_op, new_value) = isolate_linear_comparison(&expr, &fact, &op_norm, &lit)?;
+    op_norm = new_op;
+
+    Some(Constraint::Comparison {
+        fact,
+        op: op_norm,
+        value: Arc::new(new_value),
+    })
+}
+
+fn is_monotone_unit_conversion_target(target: &ConversionTarget) -> bool {
+    matches!(
+        target,
+        ConversionTarget::Duration(_) | ConversionTarget::ScaleUnit(_)
+    )
+}
+
+fn collect_fact_paths(expr: &crate::Expression, out: &mut Vec<FactPath>) {
+    use crate::ExpressionKind;
+    let mut stack: Vec<&crate::Expression> = vec![expr];
+    while let Some(e) = stack.pop() {
+        match &e.kind {
+            ExpressionKind::FactPath(fp) => out.push(fp.clone()),
+            ExpressionKind::Arithmetic(l, _, r)
+            | ExpressionKind::Comparison(l, _, r)
+            | ExpressionKind::LogicalAnd(l, r)
+            | ExpressionKind::LogicalOr(l, r) => {
+                stack.push(l.as_ref());
+                stack.push(r.as_ref());
+            }
+            ExpressionKind::LogicalNegation(inner, _)
+            | ExpressionKind::UnitConversion(inner, _)
+            | ExpressionKind::MathematicalComputation(_, inner) => {
+                stack.push(inner.as_ref());
+            }
+            ExpressionKind::Literal(_)
+            | ExpressionKind::Veto(_)
+            | ExpressionKind::Reference(_)
+            | ExpressionKind::UnresolvedUnitLiteral(_, _)
+            | ExpressionKind::FactReference(_)
+            | ExpressionKind::RuleReference(_)
+            | ExpressionKind::RulePath(_) => {}
+        }
+    }
+}
+
+fn contains_fact(expr: &crate::Expression, fact: &FactPath) -> bool {
+    let mut found = false;
+    let mut facts = Vec::new();
+    collect_fact_paths(expr, &mut facts);
+    for fp in facts {
+        if &fp == fact {
+            found = true;
+            break;
+        }
+    }
+    found
+}
+
+fn constant_fold_expression(expr: &crate::Expression) -> Option<crate::Expression> {
+    use crate::ExpressionKind;
+
+    match &expr.kind {
+        ExpressionKind::Literal(_) => Some(expr.clone()),
+        ExpressionKind::FactPath(_) => None,
+
+        ExpressionKind::UnitConversion(inner, target) => {
+            let folded_inner = constant_fold_expression(inner)?;
+            if let ExpressionKind::Literal(lit) = &folded_inner.kind {
+                match crate::computation::convert_unit(lit, target) {
+                    OperationResult::Value(v) => Some(crate::Expression::new(
+                        ExpressionKind::Literal(v),
+                        expr.source_location.clone(),
+                    )),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
+        ExpressionKind::Arithmetic(left, op, right) => {
+            let left_folded = constant_fold_expression(left)?;
+            let right_folded = constant_fold_expression(right)?;
+            match (&left_folded.kind, &right_folded.kind) {
+                (ExpressionKind::Literal(l), ExpressionKind::Literal(r)) => {
+                    match crate::computation::arithmetic_operation(l, op, r) {
+                        OperationResult::Value(v) => Some(crate::Expression::new(
+                            ExpressionKind::Literal(v),
+                            expr.source_location.clone(),
+                        )),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        }
+
+        // We only need folding for arithmetic/unit conversion for Option B.
+        _ => None,
+    }
+}
+
+fn flip_inequality(op: &ComparisonComputation) -> ComparisonComputation {
+    match op {
+        ComparisonComputation::GreaterThan => ComparisonComputation::LessThan,
+        ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThanOrEqual,
+        ComparisonComputation::LessThan => ComparisonComputation::GreaterThan,
+        ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThanOrEqual,
+        ComparisonComputation::Equal | ComparisonComputation::Is => op.clone(),
+        ComparisonComputation::NotEqual | ComparisonComputation::IsNot => op.clone(),
+    }
+}
+
+fn isolate_linear_comparison(
+    expr: &crate::Expression,
+    unknown: &FactPath,
+    op: &ComparisonComputation,
+    bound: &LiteralValue,
+) -> Option<(ComparisonComputation, LiteralValue)> {
+    use crate::ExpressionKind;
+
+    match &expr.kind {
+        ExpressionKind::FactPath(fp) if fp == unknown => Some((op.clone(), bound.clone())),
+
+        // Strip top-level monotone unit conversion wrappers.
+        ExpressionKind::UnitConversion(inner, target)
+            if is_monotone_unit_conversion_target(target) =>
+        {
+            isolate_linear_comparison(inner, unknown, op, bound)
+        }
+
+        ExpressionKind::Arithmetic(left, arithmetic_op, right) => {
+            let left_contains = contains_fact(left, unknown);
+            let right_contains = contains_fact(right, unknown);
+            if left_contains && right_contains {
+                return None;
+            }
+
+            // Fold the non-unknown side to a literal.
+            if left_contains {
+                let right_lit = constant_fold_expression(right)?;
+                let ExpressionKind::Literal(c) = right_lit.kind else {
+                    return None;
+                };
+                isolate_through_arithmetic_left(left, arithmetic_op, &c, op, bound, unknown)
+            } else if right_contains {
+                let left_lit = constant_fold_expression(left)?;
+                let ExpressionKind::Literal(c) = left_lit.kind else {
+                    return None;
+                };
+                isolate_through_arithmetic_right(right, arithmetic_op, &c, op, bound, unknown)
+            } else {
+                None
+            }
+        }
+
+        _ => None,
+    }
+}
+
+fn isolate_through_arithmetic_left(
+    inner_with_unknown: &crate::Expression,
+    operation: &ArithmeticComputation,
+    constant: &LiteralValue,
+    op: &ComparisonComputation,
+    bound: &LiteralValue,
+    unknown: &FactPath,
+) -> Option<(ComparisonComputation, LiteralValue)> {
+    match operation {
+        ArithmeticComputation::Add => {
+            // (x + c) op b  =>  x op (b - c)
+            let new_bound = lit_sub(bound, constant)?;
+            isolate_linear_comparison(inner_with_unknown, unknown, op, &new_bound)
+        }
+        ArithmeticComputation::Subtract => {
+            // (x - c) op b  =>  x op (b + c)
+            let new_bound = lit_add(bound, constant)?;
+            isolate_linear_comparison(inner_with_unknown, unknown, op, &new_bound)
+        }
+        ArithmeticComputation::Multiply => {
+            // (x * c) op b  =>  x op' (b / c)
+            let c = constant_as_number(constant)?;
+            if c.is_zero() {
+                return None;
+            }
+            let mut new_op = op.clone();
+            if c.is_sign_negative() && !op.is_equal() && !op.is_not_equal() {
+                new_op = flip_inequality(&new_op);
+            }
+            let new_bound = lit_div_number(bound, c)?;
+            isolate_linear_comparison(inner_with_unknown, unknown, &new_op, &new_bound)
+        }
+        ArithmeticComputation::Divide => {
+            // (x / c) op b  =>  x op' (b * c)
+            let c = constant_as_number(constant)?;
+            if c.is_zero() {
+                return None;
+            }
+            let mut new_op = op.clone();
+            if c.is_sign_negative() && !op.is_equal() && !op.is_not_equal() {
+                new_op = flip_inequality(&new_op);
+            }
+            let new_bound = lit_mul_number(bound, c)?;
+            isolate_linear_comparison(inner_with_unknown, unknown, &new_op, &new_bound)
+        }
+        _ => None,
+    }
+}
+
+fn isolate_through_arithmetic_right(
+    inner_with_unknown: &crate::Expression,
+    operation: &ArithmeticComputation,
+    constant: &LiteralValue,
+    op: &ComparisonComputation,
+    bound: &LiteralValue,
+    unknown: &FactPath,
+) -> Option<(ComparisonComputation, LiteralValue)> {
+    match operation {
+        ArithmeticComputation::Add => {
+            // (c + x) op b  =>  x op (b - c)
+            let new_bound = lit_sub(bound, constant)?;
+            isolate_linear_comparison(inner_with_unknown, unknown, op, &new_bound)
+        }
+        ArithmeticComputation::Subtract => {
+            // (c - x) op b  =>  x op' (c - b)
+            let new_bound = lit_sub(constant, bound)?;
+            let new_op = if op.is_equal() || op.is_not_equal() {
+                op.clone()
+            } else {
+                flip_inequality(op)
+            };
+            isolate_linear_comparison(inner_with_unknown, unknown, &new_op, &new_bound)
+        }
+        ArithmeticComputation::Multiply => {
+            // (c * x) op b  =>  x op' (b / c)
+            let c = constant_as_number(constant)?;
+            if c.is_zero() {
+                return None;
+            }
+            let mut new_op = op.clone();
+            if c.is_sign_negative() && !op.is_equal() && !op.is_not_equal() {
+                new_op = flip_inequality(&new_op);
+            }
+            let new_bound = lit_div_number(bound, c)?;
+            isolate_linear_comparison(inner_with_unknown, unknown, &new_op, &new_bound)
+        }
+        // (c / x) is non-linear (reciprocal)
+        ArithmeticComputation::Divide => None,
+        _ => None,
+    }
+}
+
+fn constant_as_number(lit: &LiteralValue) -> Option<rust_decimal::Decimal> {
+    match &lit.value {
+        Value::Number(n) => Some(*n),
+        _ => None,
+    }
+}
+
+fn lit_add(a: &LiteralValue, b: &LiteralValue) -> Option<LiteralValue> {
+    match (&a.value, &b.value) {
+        (Value::Number(la), Value::Number(lb)) => Some(LiteralValue::number_with_type(
+            *la + *lb,
+            a.lemma_type.clone(),
+        )),
+        (Value::Scale(la, lua), Value::Scale(lb, lub))
+            if a.lemma_type == b.lemma_type && lua == lub =>
+        {
+            Some(LiteralValue::scale_with_type(
+                *la + *lb,
+                lua.clone(),
+                a.lemma_type.clone(),
+            ))
+        }
+        (Value::Duration(la, lua), Value::Duration(lb, lub))
+            if a.lemma_type == b.lemma_type && lua == lub =>
+        {
+            Some(LiteralValue::duration_with_type(
+                *la + *lb,
+                lua.clone(),
+                a.lemma_type.clone(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn lit_sub(a: &LiteralValue, b: &LiteralValue) -> Option<LiteralValue> {
+    match (&a.value, &b.value) {
+        (Value::Number(la), Value::Number(lb)) => Some(LiteralValue::number_with_type(
+            *la - *lb,
+            a.lemma_type.clone(),
+        )),
+        (Value::Scale(la, lua), Value::Scale(lb, lub))
+            if a.lemma_type == b.lemma_type && lua == lub =>
+        {
+            Some(LiteralValue::scale_with_type(
+                *la - *lb,
+                lua.clone(),
+                a.lemma_type.clone(),
+            ))
+        }
+        (Value::Duration(la, lua), Value::Duration(lb, lub))
+            if a.lemma_type == b.lemma_type && lua == lub =>
+        {
+            Some(LiteralValue::duration_with_type(
+                *la - *lb,
+                lua.clone(),
+                a.lemma_type.clone(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn lit_mul_number(a: &LiteralValue, c: rust_decimal::Decimal) -> Option<LiteralValue> {
+    match &a.value {
+        Value::Number(n) => Some(LiteralValue::number_with_type(*n * c, a.lemma_type.clone())),
+        Value::Scale(n, u) => Some(LiteralValue::scale_with_type(
+            *n * c,
+            u.clone(),
+            a.lemma_type.clone(),
+        )),
+        Value::Duration(n, u) => Some(LiteralValue::duration_with_type(
+            *n * c,
+            u.clone(),
+            a.lemma_type.clone(),
+        )),
+        _ => None,
+    }
+}
+
+fn lit_div_number(a: &LiteralValue, c: rust_decimal::Decimal) -> Option<LiteralValue> {
+    if c.is_zero() {
+        return None;
+    }
+    match &a.value {
+        Value::Number(n) => Some(LiteralValue::number_with_type(*n / c, a.lemma_type.clone())),
+        Value::Scale(n, u) => Some(LiteralValue::scale_with_type(
+            *n / c,
+            u.clone(),
+            a.lemma_type.clone(),
+        )),
+        Value::Duration(n, u) => Some(LiteralValue::duration_with_type(
+            *n / c,
+            u.clone(),
+            a.lemma_type.clone(),
+        )),
+        _ => None,
     }
 }
 

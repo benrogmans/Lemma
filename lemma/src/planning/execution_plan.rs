@@ -4,7 +4,6 @@
 //! The plan contains all facts, rules flattened into executable branches,
 //! and execution order - no document structure needed during evaluation.
 
-use crate::parsing::ast::Span;
 use crate::planning::graph::Graph;
 use crate::semantic::{
     Expression, FactPath, FactReference, FactValue, LemmaType, LiteralValue, RulePath,
@@ -162,8 +161,17 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
                             // Found the original fact - check if it has a type declaration
                             if let FactValue::TypeDeclaration { .. } = &orig_fact.value {
                                 // Resolve the type from the original fact
-                                match graph.resolve_type_declaration(&orig_fact.value, context_doc)
-                                {
+                                let orig_source = orig_fact.source_location.as_ref().unwrap_or_else(|| {
+                                    unreachable!(
+                                        "BUG: fact '{}' missing source_location during type resolution",
+                                        orig_fact.reference.fact
+                                    )
+                                });
+                                match graph.resolve_type_declaration(
+                                    &orig_fact.value,
+                                    orig_source,
+                                    context_doc,
+                                ) {
                                     Ok(lemma_type) => {
                                         fact_schema.insert(path.clone(), lemma_type);
                                     }
@@ -245,7 +253,13 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
                     })
                 };
 
-                match graph.resolve_type_declaration(&fact.value, context_doc) {
+                let fact_source = fact.source_location.as_ref().unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: fact '{}' missing source_location during type resolution",
+                        fact.reference.fact
+                    )
+                });
+                match graph.resolve_type_declaration(&fact.value, fact_source, context_doc) {
                     Ok(lemma_type) => {
                         fact_schema.insert(path.clone(), lemma_type);
                     }
@@ -369,11 +383,6 @@ fn coerce_literal_to_schema_type(
             Ok(out)
         }
 
-        // Allow a bare numeric literal to satisfy a Scale type (interpreted as base unit).
-        (TypeSpecification::Scale { .. }, Value::Number(n)) => {
-            Ok(LiteralValue::scale_with_type(*n, None, schema_type.clone()))
-        }
-
         // Allow a bare numeric literal to satisfy a Ratio type (unitless ratio).
         (TypeSpecification::Ratio { .. }, Value::Number(n)) => {
             Ok(LiteralValue::ratio_with_type(*n, None, schema_type.clone()))
@@ -388,28 +397,56 @@ fn coerce_literal_to_schema_type(
 }
 
 fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
-    let mut rule_facts: HashMap<RulePath, HashSet<FactPath>> = HashMap::new();
-
-    for rule in rules.iter_mut() {
+    // Compute direct fact references per rule.
+    let mut direct: HashMap<RulePath, HashSet<FactPath>> = HashMap::new();
+    for rule in rules.iter() {
         let mut facts = HashSet::new();
-
         for branch in &rule.branches {
             if let Some(cond) = &branch.condition {
                 cond.collect_fact_paths(&mut facts);
             }
             branch.result.collect_fact_paths(&mut facts);
         }
+        direct.insert(rule.path.clone(), facts);
+    }
 
-        if let Some(rule_node) = graph.rules().get(&rule.path) {
-            for dep_rule in &rule_node.depends_on_rules {
-                if let Some(dep_facts) = rule_facts.get(dep_rule) {
-                    facts.extend(dep_facts.iter().cloned());
+    // Compute transitive closure over rule dependencies (order-independent).
+    fn compute_all_facts(
+        rule_path: &RulePath,
+        graph: &Graph,
+        direct: &HashMap<RulePath, HashSet<FactPath>>,
+        memo: &mut HashMap<RulePath, HashSet<FactPath>>,
+        visiting: &mut HashSet<RulePath>,
+    ) -> HashSet<FactPath> {
+        if let Some(cached) = memo.get(rule_path) {
+            return cached.clone();
+        }
+
+        // Defensive: graph is expected to be acyclic after validation.
+        if !visiting.insert(rule_path.clone()) {
+            return direct.get(rule_path).cloned().unwrap_or_default();
+        }
+
+        let mut out = direct.get(rule_path).cloned().unwrap_or_default();
+        if let Some(node) = graph.rules().get(rule_path) {
+            for dep in &node.depends_on_rules {
+                // Only include dependencies that exist in the executable set.
+                if direct.contains_key(dep) {
+                    out.extend(compute_all_facts(dep, graph, direct, memo, visiting));
                 }
             }
         }
 
-        rule.needs_facts = facts.clone();
-        rule_facts.insert(rule.path.clone(), facts);
+        visiting.remove(rule_path);
+        memo.insert(rule_path.clone(), out.clone());
+        out
+    }
+
+    let mut memo: HashMap<RulePath, HashSet<FactPath>> = HashMap::new();
+    let mut visiting: HashSet<RulePath> = HashSet::new();
+
+    for rule in rules.iter_mut() {
+        rule.needs_facts = compute_all_facts(&rule.path, graph, &direct, &mut memo, &mut visiting);
     }
 }
 
@@ -438,34 +475,113 @@ impl ExecutionPlan {
         self.fact_values.get(path)
     }
 
-    /// Provide string values for facts by parsing them to their expected types.
+    /// Provide string values for facts.
     ///
-    /// This is the main entry point for providing user-supplied string values.
-    /// It parses each string value to the expected type, checks resource limits,
-    /// and applies the values to the plan.
+    /// Parses each string to its expected type, validates constraints, and applies to the plan.
     pub fn with_values(
-        self,
+        mut self,
         values: HashMap<String, String>,
         limits: &ResourceLimits,
     ) -> Result<Self, LemmaError> {
-        if values.is_empty() {
-            return Ok(self);
-        }
+        for (name, raw_value) in values {
+            let fact_path = self.get_fact_path_by_str(&name).ok_or_else(|| {
+                let available: Vec<String> =
+                    self.fact_schema.keys().map(|p| p.to_string()).collect();
+                LemmaError::engine(
+                    format!(
+                        "Fact '{}' not found. Available facts: {}",
+                        name,
+                        available.join(", ")
+                    ),
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<input>",
+                    std::sync::Arc::from(""),
+                    &self.doc_name,
+                    1,
+                    None::<String>,
+                )
+            })?;
+            let fact_path = fact_path.clone();
 
-        let typed = self.parse_values(values)?;
-        self.with_typed_values(typed, limits)
-    }
+            let fact_source = self
+                .fact_sources
+                .get(&fact_path)
+                .cloned()
+                .ok_or_else(|| {
+                    LemmaError::engine(
+                        format!(
+                            "Invalid execution plan: missing source location for fact '{}'. \
+                             This plan is incomplete/corrupted (missing ExecutionPlan.fact_sources entry).",
+                            name
+                        ),
+                        crate::parsing::ast::Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<execution-plan>",
+                        std::sync::Arc::from(""),
+                        &self.doc_name,
+                        1,
+                        None::<String>,
+                    )
+                })?;
+            let source_text: Arc<str> = self
+                .sources
+                .get(&fact_source.attribute)
+                .map(|s| Arc::from(s.as_str()))
+                .unwrap_or_else(|| Arc::from(""));
 
-    /// Provide pre-typed values for facts with resource limit checking.
-    ///
-    /// Use this for programmatic APIs where values are already parsed.
-    pub fn with_typed_values(
-        mut self,
-        values: HashMap<String, LiteralValue>,
-        limits: &ResourceLimits,
-    ) -> Result<Self, LemmaError> {
-        for (name, value) in &values {
-            let size = value.byte_size();
+            let expected_type = self.fact_schema.get(&fact_path).cloned().ok_or_else(|| {
+                LemmaError::engine(
+                    format!("Unknown fact: {}", name),
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    "<input>",
+                    std::sync::Arc::from(""),
+                    &self.doc_name,
+                    1,
+                    None::<String>,
+                )
+            })?;
+
+            // Parse string to typed value
+            let literal_value = expected_type
+                .parse_value(
+                    &raw_value,
+                    fact_source.span.clone(),
+                    &fact_source.attribute,
+                    &fact_source.doc_name,
+                )
+                .map_err(|e| {
+                    LemmaError::engine(
+                        format!(
+                            "Failed to parse fact '{}' as {}: {}",
+                            name,
+                            expected_type.name(),
+                            e
+                        ),
+                        fact_source.span.clone(),
+                        &fact_source.attribute,
+                        source_text.clone(),
+                        &fact_source.doc_name,
+                        1,
+                        None::<String>,
+                    )
+                })?;
+
+            // Check resource limits
+            let size = literal_value.byte_size();
             if size > limits.max_fact_value_bytes {
                 return Err(LemmaError::ResourceLimitExceeded {
                     limit_name: "max_fact_value_bytes".to_string(),
@@ -478,64 +594,8 @@ impl ExecutionPlan {
                 });
             }
 
-            let fact_path = self.get_fact_path_by_str(name).ok_or_else(|| {
-                LemmaError::engine(
-                    format!("Unknown fact: {}", name),
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    std::sync::Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                )
-            })?;
-            let fact_path = fact_path.clone();
-
-            let expected_type = self.fact_schema.get(&fact_path).cloned().ok_or_else(|| {
-                LemmaError::engine(
-                    format!("Unknown fact: {}", name),
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    std::sync::Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                )
-            })?;
-            // Strict type checking: the actual type must match the expected type exactly
-            if value.lemma_type.specifications != expected_type.specifications {
-                return Err(LemmaError::engine(
-                    format!(
-                        "Type mismatch for fact {}: expected {}, got {}",
-                        name,
-                        expected_type.name(),
-                        value.lemma_type.name()
-                    ),
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    std::sync::Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                ));
-            }
-
-            validate_value_against_type(&expected_type, value).map_err(|msg| {
+            // Validate constraints
+            validate_value_against_type(&expected_type, &literal_value).map_err(|msg| {
                 LemmaError::engine(
                     format!(
                         "Invalid value for fact {} (expected {}): {}",
@@ -543,98 +603,19 @@ impl ExecutionPlan {
                         expected_type.name(),
                         msg
                     ),
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    std::sync::Arc::from(""),
-                    "<unknown>",
+                    fact_source.span.clone(),
+                    &fact_source.attribute,
+                    source_text.clone(),
+                    &fact_source.doc_name,
                     1,
                     None::<String>,
                 )
             })?;
 
-            self.fact_values.insert(fact_path, value.clone());
+            self.fact_values.insert(fact_path, literal_value);
         }
 
         Ok(self)
-    }
-
-    fn parse_values(
-        &self,
-        values: HashMap<String, String>,
-    ) -> Result<HashMap<String, LiteralValue>, LemmaError> {
-        let mut typed = HashMap::new();
-
-        for (fact_key, raw_value) in values {
-            let fact_path = self.get_fact_path_by_str(&fact_key).ok_or_else(|| {
-                let available: Vec<String> =
-                    self.fact_schema.keys().map(|p| p.to_string()).collect();
-                LemmaError::engine(
-                    format!(
-                        "Fact '{}' not found. Available facts: {}",
-                        fact_key,
-                        available.join(", ")
-                    ),
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    std::sync::Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                )
-            })?;
-            let expected_type = self.fact_schema.get(fact_path).cloned().ok_or_else(|| {
-                LemmaError::engine(
-                    format!("Fact '{}' not found", fact_key),
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    std::sync::Arc::from(""),
-                    "<unknown>",
-                    1,
-                    None::<String>,
-                )
-            })?;
-
-            let literal_value = expected_type.parse_value(&raw_value).map_err(|e| {
-                LemmaError::engine(
-                    format!(
-                        "Failed to parse fact '{}' as {}: {}",
-                        fact_key,
-                        expected_type.name(),
-                        e
-                    ),
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<unknown>",
-                    Arc::from(""),
-                    &self.doc_name,
-                    1,
-                    None::<String>,
-                )
-            })?;
-
-            typed.insert(fact_key, literal_value);
-        }
-
-        Ok(typed)
     }
 }
 
@@ -724,6 +705,35 @@ pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<
         };
 
         if let Err(msg) = validate_value_against_type(expected_type, lit) {
+            let (span, attribute, source_text, doc_name) = plan
+                .fact_sources
+                .get(fact_path)
+                .map(|s| {
+                    let source_text: Arc<str> = plan
+                        .sources
+                        .get(&s.attribute)
+                        .map(|t| Arc::from(t.as_str()))
+                        .unwrap_or_else(|| Arc::from(""));
+                    (
+                        s.span.clone(),
+                        s.attribute.as_str(),
+                        source_text,
+                        s.doc_name.as_str(),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    (
+                        crate::parsing::ast::Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        "<input>",
+                        Arc::from(""),
+                        plan.doc_name.as_str(),
+                    )
+                });
             errors.push(LemmaError::engine(
                 format!(
                     "Invalid value for fact {} (expected {}): {}",
@@ -731,15 +741,10 @@ pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<
                     expected_type.name(),
                     msg
                 ),
-                crate::parsing::ast::Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
-                std::sync::Arc::from(""),
-                "<unknown>",
+                span,
+                attribute,
+                source_text,
+                doc_name,
                 1,
                 None::<String>,
             ));
@@ -753,6 +758,7 @@ pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<
 mod tests {
     use super::*;
     use crate::semantic::{BooleanValue, Expression, FactPath, LiteralValue, RulePath, Value};
+    use crate::Engine;
     use serde_json;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -762,124 +768,106 @@ mod tests {
     }
 
     #[test]
-    fn test_with_typed_values() {
-        let fact_path = FactPath {
-            segments: vec![],
-            fact: "age".to_string(),
-        };
-        let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            fact_schema: {
-                let mut s = HashMap::new();
-                s.insert(
-                    fact_path.clone(),
-                    crate::semantic::standard_number().clone(),
-                );
-                s
-            },
-            fact_values: {
-                let mut v = HashMap::new();
-                v.insert(fact_path.clone(), create_number_literal(25.into()));
-                v
-            },
-            doc_refs: HashMap::new(),
-            fact_sources: HashMap::new(),
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+    fn test_with_raw_values() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+                doc test
+                fact age = [number -> default 25]
+                "#,
+                "test.lemma",
+            )
+            .unwrap();
+
+        let plan = engine.get_execution_plan("test").unwrap().clone();
+        let fact_path = FactPath::local("age".to_string());
 
         let mut values = HashMap::new();
-        values.insert("age".to_string(), create_number_literal(30.into()));
+        values.insert("age".to_string(), "30".to_string());
 
-        let updated_plan = plan.with_typed_values(values, &default_limits()).unwrap();
+        let updated_plan = plan.with_values(values, &default_limits()).unwrap();
         let updated_value = updated_plan.fact_values.get(&fact_path).unwrap();
         match &updated_value.value {
-            Value::Number(n) => assert_eq!(*n, 30.into()),
+            Value::Number(n) => assert_eq!(n, &rust_decimal::Decimal::from(30)),
             other => panic!("Expected number literal, got {:?}", other),
         }
     }
 
     #[test]
-    fn test_with_typed_values_type_mismatch() {
-        let fact_path = FactPath {
-            segments: vec![],
-            fact: "age".to_string(),
-        };
-        let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            fact_schema: {
-                let mut s = HashMap::new();
-                s.insert(fact_path, crate::semantic::standard_number().clone());
-                s
-            },
-            fact_values: HashMap::new(),
-            doc_refs: HashMap::new(),
-            fact_sources: HashMap::new(),
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+    fn test_with_raw_values_type_mismatch() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+                doc test
+                fact age = [number]
+                "#,
+                "test.lemma",
+            )
+            .unwrap();
+
+        let plan = engine.get_execution_plan("test").unwrap().clone();
 
         let mut values = HashMap::new();
-        values.insert("age".to_string(), create_text_literal("thirty".to_string()));
+        values.insert("age".to_string(), "thirty".to_string());
 
-        assert!(plan.with_typed_values(values, &default_limits()).is_err());
+        assert!(plan.with_values(values, &default_limits()).is_err());
     }
 
     #[test]
-    fn test_with_typed_values_unknown_fact() {
-        let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            fact_schema: HashMap::new(),
-            fact_values: HashMap::new(),
-            doc_refs: HashMap::new(),
-            fact_sources: HashMap::new(),
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
+    fn test_with_raw_values_unknown_fact() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+                doc test
+                fact known = [number]
+                "#,
+                "test.lemma",
+            )
+            .unwrap();
+
+        let plan = engine.get_execution_plan("test").unwrap().clone();
 
         let mut values = HashMap::new();
-        values.insert("unknown".to_string(), create_number_literal(30.into()));
+        values.insert("unknown".to_string(), "30".to_string());
 
-        assert!(plan.with_typed_values(values, &default_limits()).is_err());
+        assert!(plan.with_values(values, &default_limits()).is_err());
     }
 
     #[test]
-    fn test_with_nested_typed_values() {
-        use crate::semantic::PathSegment;
+    fn test_with_raw_values_nested() {
+        let mut engine = Engine::new();
+        engine
+            .add_lemma_code(
+                r#"
+                doc private
+                fact base_price = [number]
+
+                doc test
+                fact rules = doc private
+                "#,
+                "test.lemma",
+            )
+            .unwrap();
+
+        let plan = engine.get_execution_plan("test").unwrap().clone();
+
+        let mut values = HashMap::new();
+        values.insert("rules.base_price".to_string(), "100".to_string());
+
+        let updated_plan = plan.with_values(values, &default_limits()).unwrap();
         let fact_path = FactPath {
-            segments: vec![PathSegment {
+            segments: vec![crate::semantic::PathSegment {
                 fact: "rules".to_string(),
                 doc: "private".to_string(),
             }],
             fact: "base_price".to_string(),
         };
-        let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
-            fact_schema: {
-                let mut types = HashMap::new();
-                types.insert(
-                    fact_path.clone(),
-                    crate::semantic::standard_number().clone(),
-                );
-                types
-            },
-            fact_values: HashMap::new(),
-            doc_refs: HashMap::new(),
-            fact_sources: HashMap::new(),
-            rules: Vec::new(),
-            sources: HashMap::new(),
-        };
-
-        let mut values = HashMap::new();
-        values.insert(
-            "rules.base_price".to_string(),
-            create_number_literal(100.into()),
-        );
-
-        let updated_plan = plan.with_typed_values(values, &default_limits()).unwrap();
         let updated_value = updated_plan.fact_values.get(&fact_path).unwrap();
         match &updated_value.value {
-            Value::Number(n) => assert_eq!(*n, 100.into()),
+            Value::Number(n) => assert_eq!(n, &rust_decimal::Decimal::from(100)),
             other => panic!("Expected number literal, got {:?}", other),
         }
     }
@@ -917,15 +905,28 @@ mod tests {
             default: None,
         });
         fact_schema.insert(fact_path.clone(), max10.clone());
+        let fact_sources = HashMap::from([(
+            fact_path.clone(),
+            Source::new(
+                "<test>",
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "test",
+            ),
+        )]);
 
         let plan = ExecutionPlan {
             doc_name: "test".to_string(),
             fact_schema,
             fact_values: HashMap::new(),
             doc_refs: HashMap::new(),
-            fact_sources: HashMap::new(),
+            fact_sources,
             rules: Vec::new(),
-            sources: HashMap::new(),
+            sources: HashMap::from([("<test>".to_string(), "".to_string())]),
         };
 
         let mut values = HashMap::new();
@@ -952,15 +953,28 @@ mod tests {
             default: None,
         });
         fact_schema.insert(fact_path.clone(), tier.clone());
+        let fact_sources = HashMap::from([(
+            fact_path.clone(),
+            Source::new(
+                "<test>",
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "test",
+            ),
+        )]);
 
         let plan = ExecutionPlan {
             doc_name: "test".to_string(),
             fact_schema,
             fact_values: HashMap::new(),
             doc_refs: HashMap::new(),
-            fact_sources: HashMap::new(),
+            fact_sources,
             rules: Vec::new(),
-            sources: HashMap::new(),
+            sources: HashMap::from([("<test>".to_string(), "".to_string())]),
         };
 
         let mut values = HashMap::new();
@@ -992,15 +1006,28 @@ mod tests {
             default: None,
         });
         fact_schema.insert(fact_path.clone(), money.clone());
+        let fact_sources = HashMap::from([(
+            fact_path.clone(),
+            Source::new(
+                "<test>",
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "test",
+            ),
+        )]);
 
         let plan = ExecutionPlan {
             doc_name: "test".to_string(),
             fact_schema,
             fact_values: HashMap::new(),
             doc_refs: HashMap::new(),
-            fact_sources: HashMap::new(),
+            fact_sources,
             rules: Vec::new(),
-            sources: HashMap::new(),
+            sources: HashMap::from([("<test>".to_string(), "".to_string())]),
         };
 
         let mut values = HashMap::new();

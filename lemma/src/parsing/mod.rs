@@ -76,7 +76,7 @@ pub fn parse(
             };
 
             Err(LemmaError::parse(
-                format!("Parse error: {}", e.variant),
+                e.variant.to_string(),
                 pest_span,
                 attribute,
                 Arc::from(content),
@@ -133,9 +133,9 @@ fn parse_doc(
                 line: 1,
                 col: 0,
             },
-            "<unknown>",
+            attribute,
             std::sync::Arc::from(""),
-            "<unknown>",
+            "<parse-error>",
             1,
             None::<String>,
         )
@@ -151,11 +151,14 @@ fn parse_doc(
             for body_item in inner_pair.into_inner() {
                 match body_item.as_rule() {
                     Rule::type_definition => {
-                        let type_def = crate::parsing::types::parse_type_definition(body_item)?;
+                        let type_def = crate::parsing::types::parse_type_definition(
+                            body_item, attribute, &name,
+                        )?;
                         types.push(type_def);
                     }
                     Rule::type_import => {
-                        let type_def = crate::parsing::types::parse_type_import(body_item)?;
+                        let type_def =
+                            crate::parsing::types::parse_type_import(body_item, attribute, &name)?;
                         types.push(type_def);
                     }
                     _ => {}

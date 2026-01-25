@@ -23,6 +23,11 @@
             border-radius: 5px;
             background: #f9f9f9;
         }
+        .hint {
+            margin-top: 8px;
+            color: #666;
+            font-size: 13px;
+        }
         #lemmaCodeEditor {
             width: 100%;
             height: 300px;
@@ -55,6 +60,12 @@
         }
         button:hover {
             background: #0056b3;
+        }
+        button.secondary {
+            background: #6c757d;
+        }
+        button.secondary:hover {
+            background: #5a6268;
         }
         .result {
             margin-top: 15px;
@@ -103,260 +114,698 @@
         .success {
             background: #d4edda;
         }
-        #status {
-            padding: 10px;
-            margin: 10px 0;
-            border-radius: 3px;
+        .floating-status {
+            position: fixed;
+            right: 18px;
+            bottom: 18px;
+            width: min(520px, calc(100vw - 36px));
+            max-height: min(45vh, 420px);
+            overflow: auto;
+            padding: 12px 12px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            background: rgba(255, 255, 255, 0.98);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.14);
+            z-index: 9999;
+        }
+        .floating-status.hidden {
+            display: none;
+        }
+        .floating-status .title {
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .floating-status .message {
+            white-space: pre-wrap;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+        .floating-status.ok {
+            border-color: #28a745;
+            background: rgba(212, 237, 218, 0.96);
+        }
+        .floating-status.err {
+            border-color: #dc3545;
+            background: rgba(248, 215, 218, 0.96);
+        }
+        .floating-status.warn {
+            border-color: #ffc107;
+            background: rgba(255, 243, 205, 0.96);
+        }
+
+        .doc-card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 12px;
+        }
+        .doc-card h3 {
+            margin: 0 0 10px 0;
+            font-size: 16px;
+        }
+        .facts-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+        .fact-row {
+            display: grid;
+            grid-template-columns: 220px 1fr;
+            gap: 10px;
+            align-items: center;
+        }
+        .fact-row .label {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 13px;
+            color: #111;
+        }
+        .fact-row .label .required {
+            color: #dc3545;
+            font-weight: 700;
+            margin-left: 6px;
+        }
+        .fact-row .input {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .fact-row select, .fact-row input {
+            width: 100%;
+        }
+        .fact-row input[type="checkbox"] {
+            width: auto;
+            transform: translateY(1px);
+        }
+        .fact-help {
+            grid-column: 2 / 3;
+            color: #666;
+            font-size: 12px;
+            margin-top: -6px;
+        }
+        .doc-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-top: 10px;
+        }
+        .doc-result {
+            margin-top: 10px;
+        }
+        @media (max-width: 740px) {
+            .fact-row {
+                grid-template-columns: 1fr;
+            }
+            .fact-help {
+                grid-column: 1 / 2;
+                margin-top: -2px;
+            }
         }
     </style>
 </head>
 <body>
-    <h1>Lemma WASM Test Interface</h1>
-
-    <div id="status">Loading WASM module...</div>
-
-    <div class="section">
-        <h2>1. Load Lemma Document</h2>
-        <div id="lemmaCodeEditor"></div>
-        <button onclick="loadDocument()">Load Document</button>
-        <div id="loadResult"></div>
+    <h1>Lemma WASM Playground</h1>
+    <div id="floatingStatus" class="floating-status warn">
+        <div class="title">Loading…</div>
+        <div class="message">Initializing WASM module…</div>
     </div>
 
     <div class="section">
-        <h2>2. Evaluate with Facts</h2>
-        <label>Document Name:</label>
-        <input type="text" id="docName" value="pricing" />
+        <h2>Lemma code</h2>
+        <div id="lemmaCodeEditor"></div>
+        <div class="hint">Edits auto-load. Errors are shown in the floating panel (bottom-right).</div>
+    </div>
 
-        <label>Facts (JSON object):</label>
-        <textarea id="facts" placeholder='{"quantity": 25, "is_member": true}'>{"quantity": 25, "is_member": true}</textarea>
+    <div class="section">
+        <h2>Evaluate</h2>
+        <div id="docsContainer"></div>
+    </div>
 
-        <button onclick="evaluateDocument()">Evaluate</button>
+    <div class="section">
+        <h2>Last evaluation</h2>
         <div id="evalResultSummary"></div>
         <div id="evalResult"></div>
     </div>
 
-    <div class="section">
-        <h2>3. List Documents</h2>
-        <button onclick="listDocuments()">List All Documents</button>
-        <div id="listResult"></div>
-    </div>
-
     <script type="module">
         import init, { WasmEngine } from '../pkg/lemma.js';
+        import { registerLemmaLanguage } from '../syntax/monaco.js';
 
         let engine = null;
         let lemmaEditor = null;
+        let isEditorReady = false;
+        let pendingLoadTimer = null;
 
         require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
-        
+
         require(['vs/editor/editor.main'], function() {
-            monaco.languages.register({ id: 'lemma' });
-
-            monaco.languages.setMonarchTokensProvider('lemma', {
-                tokenizer: {
-                    root: [
-                        [/"""[^"]*"""/, 'comment'],
-                        [/\b(doc|fact|rule|unless|then|and|or|not|have|veto|in|is)\b/, 'keyword'],
-                        [/\b(sqrt|sin|cos|tan|asin|acos|atan|log|exp|abs|floor|ceil|round)\b/, 'function'],
-                        [/\b(true|false|yes|no|accept|reject)\b/, 'constant'],
-                        [/\b\d+([_,]\d+)*(\.\d+)?([eE][+-]?\d+)?\b/, 'number'],
-                        [/\b\d+([_,]\d+)*(\.\d+)?([eE][+-]?\d+)?%\b/, 'number'],
-                        [/"[^"]*"/, 'string'],
-                        [/\/[^\/]*\//, 'string.regexp'],
-                        [/\b\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?([+-]\d{2}:\d{2}|Z)?)?\b/, 'constant'],
-                        [/\b\d{2}:\d{2}(:\d{2})?([+-]\d{2}:\d{2}|Z)?\b/, 'constant'],
-                        [/\b\d+([_,]\d+)*(\.\d+)?([eE][+-]?\d+)?\s+(kilograms?|grams?|pounds?|ounces?|tons?|mass|weight|meters?|kilometers?|miles?|feet?|inches?|yards?|centimeters?|millimeters?|length|distance|liters?|gallons?|milliliters?|volume|hours?|minutes?|seconds?|days?|weeks?|months?|years?|duration|time|degrees?|celsius|fahrenheit|kelvin|temperature|watts?|kilowatts?|power|joules?|kilojoules?|energy|newtons?|force|pascals?|pressure|hertz?|frequency|bytes?|kilobytes?|megabytes?|gigabytes?|terabytes?|data_size|data)\b/, 'number'],
-                        [/\[[^\]]+\]/, 'type'],
-                        [/==|!=|>=|<=|>|<|is not/, 'operator'],
-                        [/[+\-*/%^=]/, 'operator'],
-                        [/\b\w+(\.[\w]+)*\?/, 'variable'],
-                        [/\b\w+(\.[\w]+)+/, 'variable.name'],
-                        [/\b[a-zA-Z_][a-zA-Z0-9_]*\b/, 'identifier'],
-                        [/\s+/, 'white']
-                    ]
-                }
-            });
-
-            monaco.languages.setLanguageConfiguration('lemma', {
-                comments: {
-                    blockComment: ['"""', '"""']
-                },
-                brackets: [
-                    ['(', ')'],
-                    ['[', ']']
-                ],
-                autoClosingPairs: [
-                    { open: '(', close: ')' },
-                    { open: '[', close: ']' },
-                    { open: '"', close: '"' },
-                    { open: '/', close: '/' }
-                ],
-                surroundingPairs: [
-                    { open: '(', close: ')' },
-                    { open: '[', close: ']' },
-                    { open: '"', close: '"' },
-                    { open: '/', close: '/' }
-                ],
-                indentationRules: {
-                    increaseIndentPattern: /^\s*(rule|fact|unless).*$/,
-                    decreaseIndentPattern: /^\s*(then|unless).*$/
-                }
-            });
+            // Use the canonical Lemma syntax rules from `lemma/syntax/monaco.js`
+            // so this page stays in sync with the language.
+            registerLemmaLanguage(monaco);
 
             lemmaEditor = monaco.editor.create(document.getElementById('lemmaCodeEditor'), {
                 value: `doc pricing
 
+type money = scale
+  -> unit eur 1
+  -> unit usd 1.19
+
+type x = number
+  -> minimum 0
+  -> maximum 100
+
 fact quantity = 10
 fact is_member = false
+fact price = [money]
 
 rule discount = 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
   unless is_member then 15%
 
-rule price = 100 - discount?`,
+rule total = price - discount?
+  unless price > 100 usd then veto "This price is too high."`,
                 language: 'lemma',
                 theme: 'vs',
                 automaticLayout: true,
                 minimap: { enabled: false },
                 scrollBeyondLastLine: false
             });
+
+            // Debounced auto-load on edits (Monaco change events are better than DOM keyup).
+            lemmaEditor.onDidChangeModelContent(() => scheduleAutoLoad());
+            isEditorReady = true;
+            scheduleAutoLoad(true);
         });
+
+        function setFloatingStatus(kind, title, message) {
+            const el = document.getElementById('floatingStatus');
+            el.classList.remove('ok', 'err', 'warn', 'hidden');
+            if (kind === 'ok') el.classList.add('ok');
+            else if (kind === 'err') el.classList.add('err');
+            else el.classList.add('warn');
+            el.querySelector('.title').textContent = title;
+            el.querySelector('.message').textContent = message || '';
+        }
+
+        function scheduleAutoLoad(immediate = false) {
+            if (!engine || !isEditorReady) return;
+            if (pendingLoadTimer) {
+                clearTimeout(pendingLoadTimer);
+                pendingLoadTimer = null;
+            }
+            const delay = immediate ? 0 : 250;
+            pendingLoadTimer = setTimeout(() => {
+                pendingLoadTimer = null;
+                loadFromEditor();
+            }, delay);
+        }
 
         async function initializeWasm() {
             try {
                 await init();
                 engine = new WasmEngine();
 
-                const status = document.getElementById('status');
-                status.textContent = '✓ WASM module loaded successfully';
-                status.className = 'success';
-
                 window.engine = engine;
-                window.loadDocument = loadDocument;
-                window.evaluateDocument = evaluateDocument;
-                window.listDocuments = listDocuments;
+                window.evaluateDoc = evaluateDoc;
+
+                if (typeof engine.getDocumentSchema !== 'function') {
+                    setFloatingStatus(
+                        'warn',
+                        'WASM ready (UI needs rebuild)',
+                        'This page expects `getDocumentSchema()` to exist on WasmEngine.\nRebuild the WASM pkg (wasm-bindgen output) and reload.'
+                    );
+                } else {
+                    setFloatingStatus('ok', 'WASM ready', 'Auto-loading Lemma code…');
+                }
+                scheduleAutoLoad(true);
             } catch (error) {
-                const status = document.getElementById('status');
-                status.textContent = '✗ Failed to load WASM: ' + error.message;
-                status.className = 'error';
+                setFloatingStatus('err', 'Failed to load WASM', error?.message || String(error));
             }
         }
 
-        function loadDocument() {
+        function loadFromEditor() {
             const code = lemmaEditor ? lemmaEditor.getValue() : '';
-            const resultDiv = document.getElementById('loadResult');
-
             try {
-                const result = JSON.parse(engine.addLemmaCode(code, 'test.lemma'));
+                const result = JSON.parse(engine.addLemmaCode(code, 'wasm.lemma'));
 
                 if (result.success) {
-                    resultDiv.className = 'result success';
-                    resultDiv.textContent = '✓ ' + (result.message || 'Document added successfully');
+                    setFloatingStatus('ok', 'Loaded', 'Documents compiled successfully.');
+                    refreshDocsUI();
                 } else {
-                    resultDiv.className = 'result error';
-                    resultDiv.textContent = '✗ Error: ' + result.error;
+                    setFloatingStatus('err', 'Error while loading', result.error || 'Unknown error');
                 }
             } catch (error) {
-                resultDiv.className = 'result error';
-                resultDiv.textContent = '✗ Exception: ' + error.message;
+                setFloatingStatus('err', 'Exception while loading', error?.message || String(error));
             }
         }
 
-        function evaluateDocument() {
-            const docName = document.getElementById('docName').value;
-            const factsText = document.getElementById('facts').value;
+        function safeJsonParse(str) {
+            try {
+                return JSON.parse(str);
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function schemaSpecKind(schemaType) {
+            const specs = schemaType?.specifications;
+            if (!specs || typeof specs !== 'object') return null;
+            const keys = Object.keys(specs);
+            return keys.length === 1 ? keys[0] : null;
+        }
+
+        function schemaSpecData(schemaType) {
+            const kind = schemaSpecKind(schemaType);
+            if (!kind) return null;
+            return schemaType.specifications[kind] || null;
+        }
+
+        function suggestedDefault(schemaType) {
+            const kind = schemaSpecKind(schemaType);
+            const data = schemaSpecData(schemaType);
+            if (!kind || !data) return null;
+            if (kind === 'Boolean') return data.default ?? null;
+            if (kind === 'Number') return data.default ?? null;
+            if (kind === 'Text') return data.default ?? null;
+            if (kind === 'Scale') {
+                if (Array.isArray(data.default) && data.default.length === 2) {
+                    return { amount: data.default[0], unit: data.default[1] };
+                }
+                return null;
+            }
+            if (kind === 'Ratio') return data.default ?? null;
+            if (kind === 'Date') return data.default ?? null;
+            if (kind === 'Time') return data.default ?? null;
+            if (kind === 'Duration') {
+                if (Array.isArray(data.default) && data.default.length === 2) {
+                    return { amount: data.default[0], unit: data.default[1] };
+                }
+                return null;
+            }
+            return null;
+        }
+
+        function createEl(tag, attrs = {}, children = []) {
+            const el = document.createElement(tag);
+            for (const [k, v] of Object.entries(attrs)) {
+                if (k === 'className') el.className = v;
+                else if (k === 'text') el.textContent = v;
+                else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+                else el.setAttribute(k, v);
+            }
+            for (const child of children) el.appendChild(child);
+            return el;
+        }
+
+        function clearEl(el) {
+            while (el.firstChild) el.removeChild(el.firstChild);
+        }
+
+        function refreshDocsUI() {
+            const container = document.getElementById('docsContainer');
+            clearEl(container);
+
+            if (!engine || typeof engine.getDocumentSchema !== 'function') {
+                container.appendChild(createEl('div', {
+                    className: 'result error',
+                    text: 'Missing WasmEngine.getDocumentSchema(). Please rebuild the WASM package and reload this page.'
+                }));
+                return;
+            }
+
+            let listParsed = safeJsonParse(engine.listDocuments());
+            if (!listParsed || !listParsed.success) {
+                container.appendChild(createEl('div', { className: 'result error', text: 'Failed to list documents.' }));
+                return;
+            }
+
+            const docs = (listParsed.documents || []).slice().sort();
+            if (docs.length === 0) {
+                container.appendChild(createEl('div', { className: 'hint', text: 'No documents loaded yet.' }));
+                return;
+            }
+
+            for (const docName of docs) {
+                const schemaParsed = (typeof engine.getRequiredFacts === 'function')
+                    ? safeJsonParse(engine.getRequiredFacts(docName, '[]'))
+                    : safeJsonParse(engine.getDocumentSchema(docName));
+                if (!schemaParsed || !schemaParsed.success) {
+                    container.appendChild(createEl('div', { className: 'result error', text: `Failed to load schema for doc '${docName}'.` }));
+                    continue;
+                }
+                container.appendChild(renderDocCard(schemaParsed.doc));
+            }
+        }
+
+        function renderDocCard(doc) {
+            const card = createEl('div', { className: 'doc-card' });
+            card.appendChild(createEl('h3', { text: `doc ${doc.name}` }));
+
+            const facts = Array.isArray(doc.facts) ? doc.facts.slice() : [];
+            facts.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+            const grid = createEl('div', { className: 'facts-grid' });
+
+            for (const fact of facts) {
+                const row = renderFactRow(doc.name, fact);
+                if (row) grid.appendChild(row);
+            }
+
+            card.appendChild(grid);
+
+            const actions = createEl('div', { className: 'doc-actions' });
+            actions.appendChild(createEl('button', {
+                text: 'Evaluate',
+                onclick: () => evaluateDoc(doc.name)
+            }));
+            actions.appendChild(createEl('button', {
+                className: 'secondary',
+                text: 'Clear inputs',
+                onclick: () => {
+                    for (const input of card.querySelectorAll('input, select')) {
+                        if (input.dataset && input.dataset.factName) {
+                            if (input.type === 'checkbox') input.checked = false;
+                            else input.value = '';
+                        }
+                    }
+                }
+            }));
+            card.appendChild(actions);
+
+            const result = createEl('div', { className: 'doc-result', id: `docResult:${doc.name}` });
+            card.appendChild(result);
+            return card;
+        }
+
+        function renderFactRow(docName, fact) {
+            const name = fact?.name;
+            if (!name) return null;
+
+            // Don't prompt for doc references by default (they aren't "values" in JSON evaluation).
+            // Still show them as read-only context.
+            if (fact.valueKind === 'document_reference') {
+                const row = createEl('div', { className: 'fact-row' });
+                const label = createEl('div', { className: 'label', text: name });
+                row.appendChild(label);
+                row.appendChild(createEl('div', { className: 'input' }, [
+                    createEl('input', { type: 'text', value: fact.defaultValue?.doc || '', disabled: 'true' })
+                ]));
+                row.appendChild(createEl('div', { className: 'fact-help', text: 'Document reference (read-only)' }));
+                return row;
+            }
+
+            const schemaType = fact.schemaType || null;
+            const kind = schemaSpecKind(schemaType);
+            const spec = schemaSpecData(schemaType);
+
+            const row = createEl('div', { className: 'fact-row' });
+            const labelEl = createEl('div', { className: 'label' });
+            labelEl.textContent = name;
+            if (fact.required) {
+                labelEl.appendChild(createEl('span', { className: 'required', text: '*' }));
+            }
+            row.appendChild(labelEl);
+
+            const inputWrap = createEl('div', { className: 'input' });
+
+            const helpText = (spec && typeof spec.help === 'string' && spec.help.trim()) ? spec.help.trim() : null;
+
+            const typeDefault = suggestedDefault(schemaType);
+
+            // NOTE: evaluation accepts FactPath keys as strings (including dots).
+            // We store factName on each input so we can build the JSON object.
+
+            if (kind === 'Boolean') {
+                const checkbox = createEl('input', { type: 'checkbox' });
+                checkbox.dataset.factName = name;
+                if (typeof typeDefault === 'boolean') checkbox.checked = typeDefault;
+                inputWrap.appendChild(checkbox);
+            } else if (kind === 'Text') {
+                const options = Array.isArray(spec?.options) ? spec.options : [];
+                if (options.length > 0) {
+                    const select = createEl('select');
+                    select.dataset.factName = name;
+                    select.appendChild(createEl('option', { value: '', text: '' }));
+                    for (const opt of options) {
+                        select.appendChild(createEl('option', { value: opt, text: opt }));
+                    }
+                    if (typeof typeDefault === 'string') select.value = typeDefault;
+                    inputWrap.appendChild(select);
+                } else {
+                    const input = createEl('input', { type: 'text', placeholder: 'text' });
+                    input.dataset.factName = name;
+                    if (typeof typeDefault === 'string') input.value = typeDefault;
+                    inputWrap.appendChild(input);
+                }
+            } else if (kind === 'Number') {
+                const input = createEl('input', { type: 'number', step: 'any', placeholder: 'number' });
+                input.dataset.factName = name;
+                if (typeDefault !== null && typeDefault !== undefined) input.value = String(typeDefault);
+                inputWrap.appendChild(input);
+            } else if (kind === 'Scale') {
+                const units = Array.isArray(spec?.units) ? spec.units : [];
+                const amount = createEl('input', { type: 'number', step: 'any', placeholder: units.length ? 'amount' : 'number' });
+                amount.dataset.factName = name;
+                amount.dataset.factKind = 'scaleAmount';
+                inputWrap.appendChild(amount);
+
+                if (units.length) {
+                    const unitSelect = createEl('select');
+                    unitSelect.dataset.factName = name;
+                    unitSelect.dataset.factKind = 'scaleUnit';
+                    unitSelect.appendChild(createEl('option', { value: '', text: '' }));
+                    for (const u of units) {
+                        unitSelect.appendChild(createEl('option', { value: u.name, text: u.name }));
+                    }
+                    inputWrap.appendChild(unitSelect);
+
+                    if (typeDefault && typeof typeDefault === 'object') {
+                        if (typeDefault.amount !== undefined) amount.value = String(typeDefault.amount);
+                        if (typeDefault.unit) unitSelect.value = String(typeDefault.unit);
+                    }
+                } else if (typeDefault !== null && typeDefault !== undefined) {
+                    amount.value = String(typeDefault);
+                }
+            } else if (kind === 'Ratio') {
+                const input = createEl('input', { type: 'number', step: 'any', placeholder: 'e.g. 10' });
+                input.dataset.factName = name;
+                input.dataset.factKind = 'ratioAmount';
+                inputWrap.appendChild(input);
+
+                const unitSelect = createEl('select');
+                unitSelect.dataset.factName = name;
+                unitSelect.dataset.factKind = 'ratioUnit';
+                unitSelect.appendChild(createEl('option', { value: 'ratio', text: 'ratio' })); // raw 0..1
+                unitSelect.appendChild(createEl('option', { value: 'percent', text: '%' }));
+                unitSelect.appendChild(createEl('option', { value: 'permille', text: '%%' }));
+                inputWrap.appendChild(unitSelect);
+
+                if (typeDefault !== null && typeDefault !== undefined) {
+                    input.value = String(typeDefault);
+                    unitSelect.value = 'ratio';
+                }
+            } else if (kind === 'Date') {
+                const input = createEl('input', { type: 'text', placeholder: 'YYYY-MM-DD' });
+                input.dataset.factName = name;
+                if (typeDefault) input.value = String(typeDefault);
+                inputWrap.appendChild(input);
+            } else if (kind === 'Time') {
+                const input = createEl('input', { type: 'text', placeholder: 'HH:MM[:SS]' });
+                input.dataset.factName = name;
+                if (typeDefault) input.value = String(typeDefault);
+                inputWrap.appendChild(input);
+            } else if (kind === 'Duration') {
+                const input = createEl('input', { type: 'text', placeholder: 'e.g. 5 days' });
+                input.dataset.factName = name;
+                if (typeDefault && typeof typeDefault === 'object') {
+                    input.value = `${typeDefault.amount} ${typeDefault.unit}`;
+                }
+                inputWrap.appendChild(input);
+            } else {
+                const input = createEl('input', { type: 'text', placeholder: 'value' });
+                input.dataset.factName = name;
+                inputWrap.appendChild(input);
+            }
+
+            row.appendChild(inputWrap);
+
+            if (helpText) {
+                row.appendChild(createEl('div', { className: 'fact-help', text: helpText }));
+            }
+
+            return row;
+        }
+
+        function collectFactsForDoc(docName) {
+            // Find the right card by result div id (stable).
+            const resultDiv = document.getElementById(`docResult:${docName}`);
+            const root = resultDiv ? resultDiv.closest('.doc-card') : null;
+            if (!root) return {};
+
+            const values = {};
+            const cssEscape = (s) => (window.CSS && typeof CSS.escape === 'function')
+                ? CSS.escape(s)
+                : String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+
+            // Scale: needs two fields (amount + unit) when units exist.
+            const scaleAmountInputs = root.querySelectorAll('input[data-fact-kind="scaleAmount"]');
+            for (const amountInput of scaleAmountInputs) {
+                const factName = amountInput.dataset.factName;
+                const unitSelect = root.querySelector(`select[data-fact-name="${cssEscape(factName)}"][data-fact-kind="scaleUnit"]`);
+                const rawAmount = amountInput.value.trim();
+                const rawUnit = unitSelect ? unitSelect.value.trim() : '';
+                if (!rawAmount && !rawUnit) continue;
+                if (rawUnit) {
+                    values[factName] = `${rawAmount} ${rawUnit}`.trim();
+                } else if (rawAmount) {
+                    values[factName] = Number(rawAmount);
+                }
+            }
+
+            // Ratio: amount + unit mode.
+            const ratioAmountInputs = root.querySelectorAll('input[data-fact-kind="ratioAmount"]');
+            for (const amountInput of ratioAmountInputs) {
+                const factName = amountInput.dataset.factName;
+                const unitSelect = root.querySelector(`select[data-fact-name="${cssEscape(factName)}"][data-fact-kind="ratioUnit"]`);
+                const rawAmount = amountInput.value.trim();
+                if (!rawAmount) continue;
+                const mode = unitSelect ? unitSelect.value : 'ratio';
+                if (mode === 'percent') values[factName] = `${rawAmount}%`;
+                else if (mode === 'permille') values[factName] = `${rawAmount}%%`;
+                else values[factName] = Number(rawAmount);
+            }
+
+            // Everything else: single input/select.
+            const inputs = root.querySelectorAll('input[data-fact-name]:not([data-fact-kind]), select[data-fact-name]:not([data-fact-kind])');
+            for (const el of inputs) {
+                const factName = el.dataset.factName;
+                if (!factName) continue;
+                if (Object.prototype.hasOwnProperty.call(values, factName)) continue; // already set by scale/ratio logic
+
+                if (el.tagName === 'INPUT' && el.type === 'checkbox') {
+                    values[factName] = !!el.checked;
+                    continue;
+                }
+
+                const v = (el.value ?? '').toString().trim();
+                if (!v) continue;
+
+                if (el.tagName === 'INPUT' && el.type === 'number') {
+                    values[factName] = Number(v);
+                } else {
+                    values[factName] = v;
+                }
+            }
+
+            return values;
+        }
+
+        function opIsVeto(op) {
+            return op && Object.prototype.hasOwnProperty.call(op, 'veto');
+        }
+
+        function opIsValue(op) {
+            return op && Object.prototype.hasOwnProperty.call(op, 'value');
+        }
+
+        function literalStandardType(lit) {
+            if (!lit || !lit.value || typeof lit.value !== 'object') return 'unknown';
+            const keys = Object.keys(lit.value);
+            return keys.length === 1 ? keys[0] : 'unknown';
+        }
+
+        function literalDisplayValue(lit) {
+            const t = literalStandardType(lit);
+            const v = lit?.value?.[t];
+            if (t === 'scale' || t === 'ratio') {
+                if (Array.isArray(v) && v.length === 2) return `${v[0]} ${v[1]}`;
+            }
+            if (t === 'boolean') return String(v);
+            if (t === 'number') return String(v);
+            if (t === 'text') return String(v);
+            if (t === 'date' || t === 'time') return String(v);
+            if (t === 'duration') return Array.isArray(v) ? v.join(' ') : String(v);
+            return JSON.stringify(lit);
+        }
+
+        function renderEvaluationResult(result) {
             const summaryDiv = document.getElementById('evalResultSummary');
             const resultDiv = document.getElementById('evalResult');
 
-            try {
-                // Parse and validate the facts JSON
-                let factsObj = {};
-                if (factsText.trim()) {
-                    factsObj = JSON.parse(factsText);
-                }
+            summaryDiv.innerHTML = '';
+            resultDiv.className = '';
+            resultDiv.textContent = '';
 
-                const result = JSON.parse(engine.evaluate(docName, JSON.stringify(factsObj)));
-
-                if (result.success) {
-                    // Show warnings if any
-                    if (result.warnings && result.warnings.length > 0) {
-                        summaryDiv.innerHTML = `<div class="result" style="background: #fff3cd; border-color: #ffc107;">
-                            ⚠️ Warnings: ${result.warnings.join(', ')}
-                        </div>`;
-                    } else {
-                        summaryDiv.innerHTML = '';
-                    }
-
-                    // Create summary table
-                    let summaryHTML = '<table class="summary-table">';
-                    summaryHTML += '<thead><tr><th>Rule</th><th>Result</th><th>Details</th></tr></thead>';
-                    summaryHTML += '<tbody>';
-
-                    const rules = result.response?.results || {};
-                    for (const [ruleName, ruleData] of Object.entries(rules)) {
-                        summaryHTML += '<tr>';
-                        summaryHTML += `<td class="rule-name">${ruleName}</td>`;
-
-                        if (ruleData.result?.type === 'veto') {
-                            summaryHTML += `<td class="veto">Vetoed</td>`;
-                            summaryHTML += `<td class="veto">${ruleData.result.message || 'Vetoed'}</td>`;
-                        } else if (ruleData.facts && ruleData.facts.some(f => !f.value || f.value === null)) {
-                            const missingFacts = ruleData.facts
-                                .filter(f => !f.value || f.value === null)
-                                .map(f => f.reference?.fact || f.name || 'unknown');
-                            summaryHTML += `<td class="missing">-</td>`;
-                            summaryHTML += `<td class="missing">Missing: ${missingFacts.join(', ')}</td>`;
-                        } else {
-                            const resultValue = ruleData.result?.value ?? 'null';
-                            summaryHTML += `<td class="value">${resultValue}</td>`;
-                            summaryHTML += `<td style="color: #28a745">✓ Computed (${ruleData.result?.type || 'unknown'})</td>`;
-                        }
-
-                        summaryHTML += '</tr>';
-                    }
-
-                    summaryHTML += '</tbody></table>';
-                    summaryDiv.innerHTML += summaryHTML;
-
-                    // Show full JSON in details
-                    resultDiv.className = 'result success';
-                    resultDiv.textContent = '✓ Full Response (JSON):\n\n' +
-                        JSON.stringify(result, null, 2);
-                } else {
-                    summaryDiv.innerHTML = '';
-                    resultDiv.className = 'result error';
-                    resultDiv.textContent = '✗ Error: ' + result.error;
-                }
-            } catch (error) {
-                summaryDiv.innerHTML = '';
+            if (!result || !result.success) {
                 resultDiv.className = 'result error';
-                resultDiv.textContent = '✗ Exception: ' + error.message;
+                resultDiv.textContent = '✗ Error: ' + (result?.error || 'Unknown error');
+                return;
             }
+
+            // Create summary table
+            let summaryHTML = '<table class="summary-table">';
+            summaryHTML += '<thead><tr><th>Rule</th><th>Result</th><th>Details</th></tr></thead>';
+            summaryHTML += '<tbody>';
+
+            const rules = result.response?.results || {};
+            for (const [ruleName, ruleData] of Object.entries(rules)) {
+                summaryHTML += '<tr>';
+                summaryHTML += `<td class="rule-name">${ruleName}</td>`;
+
+                if (opIsVeto(ruleData.result)) {
+                    summaryHTML += `<td class="veto">Vetoed</td>`;
+                    summaryHTML += `<td class="veto">${ruleData.result.veto || 'Vetoed'}</td>`;
+                } else if (opIsValue(ruleData.result)) {
+                    const lit = ruleData.result.value;
+                    const t = literalStandardType(lit);
+                    summaryHTML += `<td class="value">${literalDisplayValue(lit)}</td>`;
+                    summaryHTML += `<td style="color: #28a745">✓ Computed (${t})</td>`;
+                } else {
+                    summaryHTML += `<td class="missing">-</td>`;
+                    summaryHTML += `<td class="missing">No result</td>`;
+                }
+
+                summaryHTML += '</tr>';
+            }
+
+            summaryHTML += '</tbody></table>';
+            summaryDiv.innerHTML = summaryHTML;
+
+            resultDiv.className = 'result success';
+            resultDiv.textContent = '✓ Full Response (JSON):\n\n' + JSON.stringify(result, null, 2);
         }
 
-        function listDocuments() {
-            const resultDiv = document.getElementById('listResult');
+        function evaluateDoc(docName) {
+            const facts = collectFactsForDoc(docName);
+            const resultEl = document.getElementById(`docResult:${docName}`);
+            if (resultEl) {
+                resultEl.className = 'result';
+                resultEl.textContent = 'Evaluating…';
+            }
 
             try {
-                const result = JSON.parse(engine.listDocuments());
+                const result = safeJsonParse(engine.evaluate(docName, JSON.stringify(facts)));
+                if (!result) throw new Error('Failed to parse evaluation response');
 
-                if (result.success) {
-                    resultDiv.className = 'result success';
-                    const docs = result.documents;
-                    if (docs.length > 0) {
-                        resultDiv.textContent = '✓ Loaded Documents:\n' +
-                            docs.map(d => '  • ' + d).join('\n');
+                if (resultEl) {
+                    if (result.success) {
+                        resultEl.className = 'result success';
+                        resultEl.textContent = `✓ Evaluated '${docName}' with facts:\n${JSON.stringify(facts, null, 2)}`;
                     } else {
-                        resultDiv.textContent = '✓ No documents loaded yet';
+                        resultEl.className = 'result error';
+                        resultEl.textContent = `✗ ${result.error || 'Error'}`;
                     }
-                } else {
-                    resultDiv.className = 'result error';
-                    resultDiv.textContent = '✗ Error: ' + result.error;
                 }
+
+                renderEvaluationResult(result);
             } catch (error) {
-                resultDiv.className = 'result error';
-                resultDiv.textContent = '✗ Exception: ' + error.message;
+                if (resultEl) {
+                    resultEl.className = 'result error';
+                    resultEl.textContent = `✗ Exception: ${error?.message || String(error)}`;
+                }
+                renderEvaluationResult({ success: false, error: error?.message || String(error) });
             }
         }
 

@@ -5,12 +5,11 @@
 //!
 //! Also includes expression substitution and hydration utilities.
 
-use crate::parsing::ast::Span;
 use crate::planning::{ExecutableRule, ExecutionPlan};
 use crate::{
     ArithmeticComputation, BooleanValue, ComparisonComputation, ConversionTarget, Expression,
-    ExpressionKind, FactPath, LemmaError, LemmaResult, LiteralValue, MathematicalComputation,
-    NegationType, OperationResult, RulePath, Value,
+    ExpressionKind, FactPath, LemmaResult, LiteralValue, MathematicalComputation, NegationType,
+    OperationResult, RulePath, Value,
 };
 use serde::ser::{Serialize, SerializeMap, Serializer};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -230,22 +229,10 @@ impl<'a> WorldEnumerator<'a> {
         }
 
         // Convert to WorldSolutions and WorldArithmeticSolutions
-        let target_rule_path = self.rules_in_order.last().ok_or_else(|| {
-            LemmaError::engine(
-                "No rules in order for world enumeration",
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<unknown>",
-                Arc::from(""),
-                "<unknown>",
-                1,
-                None::<String>,
-            )
-        })?;
+        let target_rule_path = self
+            .rules_in_order
+            .last()
+            .unwrap_or_else(|| unreachable!("BUG: no rules in order for world enumeration"));
 
         let mut literal_solutions = Vec::new();
         let mut arithmetic_solutions = Vec::new();
@@ -428,23 +415,10 @@ fn substitute_rules_in_expression(
                     ExpressionKind::RulePath(rule_path) => {
                         let visited = visited_rules_stack.last().expect("visited_rules_stack should never be empty when processing RulePath expressions");
                         if visited.contains(rule_path) {
-                            return Err(LemmaError::engine(
-                                format!(
-                                    "Circular rule reference detected during substitution: {}",
-                                    rule_path
-                                ),
-                                Span {
-                                    start: 0,
-                                    end: 0,
-                                    line: 1,
-                                    col: 0,
-                                },
-                                "<unknown>",
-                                Arc::from(""),
-                                "<unknown>",
-                                1,
-                                None::<String>,
-                            ));
+                            unreachable!(
+                                "BUG: circular rule reference detected during substitution: {}",
+                                rule_path
+                            );
                         }
 
                         if let Some(&branch_idx) = world.get(rule_path) {
@@ -469,37 +443,19 @@ fn substitute_rules_in_expression(
                         ));
                     }
                     ExpressionKind::RuleReference(_) => {
-                        return Err(LemmaError::engine(
-                            "RuleReference found during substitution - should have been converted to RulePath",
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
-                        ));
+                        unreachable!(
+                            "BUG: RuleReference found during substitution (should be RulePath)"
+                        );
                     }
                     ExpressionKind::FactReference(_) => {
-                        return Err(LemmaError::engine(
-                            "FactReference found during substitution - should have been converted to FactPath",
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
-                        ));
+                        unreachable!(
+                            "BUG: FactReference found during substitution (should be FactPath)"
+                        );
                     }
                     ExpressionKind::Reference(_) => {
-                        return Err(LemmaError::engine(
-                            "Unresolved Reference found during substitution - should have been resolved during planning",
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
-                        ));
+                        unreachable!(
+                            "BUG: unresolved Reference found during substitution (should be resolved during planning)"
+                        );
                     }
                     ExpressionKind::UnresolvedUnitLiteral(_, _) => {
                         unreachable!(
@@ -703,22 +659,9 @@ fn substitute_rules_in_expression(
         }
     }
 
-    result_pool.pop().ok_or_else(|| {
-        LemmaError::engine(
-            "Internal error: no result from substitution",
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<unknown>",
-            Arc::from(""),
-            "<unknown>",
-            1,
-            None::<String>,
-        )
-    })
+    Ok(result_pool
+        .pop()
+        .unwrap_or_else(|| unreachable!("BUG: no result from substitution")))
 }
 
 // ============================================================================
@@ -778,37 +721,19 @@ fn hydrate_facts_in_expression(
                         ));
                     }
                     ExpressionKind::FactReference(_) => {
-                        return Err(LemmaError::engine(
-                            "FactReference found during hydration - should have been converted to FactPath",
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
-                        ));
+                        unreachable!(
+                            "BUG: FactReference found during hydration (should be FactPath)"
+                        );
                     }
                     ExpressionKind::RuleReference(_) => {
-                        return Err(LemmaError::engine(
-                            "RuleReference found during hydration - should have been converted to RulePath",
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
-                        ));
+                        unreachable!(
+                            "BUG: RuleReference found during hydration (should be RulePath)"
+                        );
                     }
                     ExpressionKind::Reference(_) => {
-                        return Err(LemmaError::engine(
-                            "Unresolved Reference found during hydration - should have been resolved during planning",
-                            Span { start: 0, end: 0, line: 1, col: 0 },
-                            "<unknown>",
-                            Arc::from(""),
-                            "<unknown>",
-                            1,
-                            None::<String>,
-                        ));
+                        unreachable!(
+                            "BUG: unresolved Reference found during hydration (should be resolved during planning)"
+                        );
                     }
                     ExpressionKind::UnresolvedUnitLiteral(_, _) => {
                         unreachable!(
@@ -916,152 +841,48 @@ fn hydrate_facts_in_expression(
                 }
             }
             WorkItem::BuildArithmetic(op, source_loc) => {
-                let right = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing right expression for Arithmetic",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
-                let left = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing left expression for Arithmetic",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
+                let right = result_pool.pop().unwrap_or_else(|| {
+                    unreachable!("BUG: missing right expression for Arithmetic")
+                });
+                let left = result_pool
+                    .pop()
+                    .unwrap_or_else(|| unreachable!("BUG: missing left expression for Arithmetic"));
                 result_pool.push(Expression::new(
                     ExpressionKind::Arithmetic(Arc::new(left), op, Arc::new(right)),
                     source_loc,
                 ));
             }
             WorkItem::BuildComparison(op, source_loc) => {
-                let right = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing right expression for Comparison",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
-                let left = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing left expression for Comparison",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
+                let right = result_pool.pop().unwrap_or_else(|| {
+                    unreachable!("BUG: missing right expression for Comparison")
+                });
+                let left = result_pool
+                    .pop()
+                    .unwrap_or_else(|| unreachable!("BUG: missing left expression for Comparison"));
                 result_pool.push(Expression::new(
                     ExpressionKind::Comparison(Arc::new(left), op, Arc::new(right)),
                     source_loc,
                 ));
             }
             WorkItem::BuildLogicalAnd(source_loc) => {
-                let right = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing right expression for LogicalAnd",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
-                let left = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing left expression for LogicalAnd",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
+                let right = result_pool.pop().unwrap_or_else(|| {
+                    unreachable!("BUG: missing right expression for LogicalAnd")
+                });
+                let left = result_pool
+                    .pop()
+                    .unwrap_or_else(|| unreachable!("BUG: missing left expression for LogicalAnd"));
                 result_pool.push(Expression::new(
                     ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right)),
                     source_loc,
                 ));
             }
             WorkItem::BuildLogicalOr(source_loc) => {
-                let right = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing right expression for LogicalOr",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
-                let left = result_pool.pop().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Internal error: missing left expression for LogicalOr",
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<unknown>",
-                        Arc::from(""),
-                        "<unknown>",
-                        1,
-                        None::<String>,
-                    )
-                })?;
+                let right = result_pool
+                    .pop()
+                    .unwrap_or_else(|| unreachable!("BUG: missing right expression for LogicalOr"));
+                let left = result_pool
+                    .pop()
+                    .unwrap_or_else(|| unreachable!("BUG: missing left expression for LogicalOr"));
                 result_pool.push(Expression::new(
                     ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
                     source_loc,

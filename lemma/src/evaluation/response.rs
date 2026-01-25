@@ -1,5 +1,4 @@
 use crate::evaluation::operations::{OperationRecord, OperationResult};
-use crate::serialization::serialize_operation_result;
 use indexmap::IndexMap;
 use serde::Serialize;
 
@@ -28,7 +27,6 @@ pub struct Response {
 pub struct RuleResult {
     #[serde(skip_serializing)]
     pub rule: crate::LemmaRule,
-    #[serde(serialize_with = "serialize_operation_result")]
     pub result: OperationResult,
     pub facts: Vec<crate::LemmaFact>,
     #[serde(skip_serializing)]

@@ -19,7 +19,7 @@ fn premium_greater_than_or_equal() {
 
     // Find ages where premium >= 80
     let solutions = engine
-        .invert_strict(
+        .invert(
             "insurance",
             "premium",
             Target::with_op(
@@ -67,7 +67,7 @@ fn discount_greater_than_threshold() {
 
     // Find quantities where discount > 5%
     let solutions = engine
-        .invert_strict(
+        .invert(
             "pricing",
             "discount",
             Target::with_op(
@@ -115,7 +115,7 @@ fn price_less_than_budget() {
 
     // Find combinations where total < 100
     let solutions = engine
-        .invert_strict(
+        .invert(
             "shopping",
             "total",
             Target::with_op(
@@ -156,7 +156,7 @@ fn temperature_in_comfortable_range() {
 
     // Find temps where comfort >= 2 (most comfortable)
     let solutions = engine
-        .invert_strict(
+        .invert(
             "climate",
             "comfort_level",
             Target::with_op(
@@ -199,7 +199,7 @@ fn get_valid_domain_with_threshold() {
 
     // First, find when shipping_cost <= 0 (free shipping)
     let solutions = engine
-        .invert_strict(
+        .invert(
             "shipping",
             "shipping_cost",
             Target::with_op(
@@ -250,7 +250,7 @@ fn all_comparison_operators() {
     println!("\n=== Testing all comparison operators ===");
     for (name, op, description) in test_cases {
         let solutions = engine
-            .invert_strict(
+            .invert(
                 "test",
                 "result",
                 Target::with_op(op, OperationResult::Value(LiteralValue::number(10))),
