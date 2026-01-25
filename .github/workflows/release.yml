@@ -123,7 +123,7 @@ jobs:
 
       - name: Publish to NPM
         working-directory: lemma/pkg
-        run: npm publish --access public
+        run: npm publish --access public --provenance
 
       - name: Create tag
         run: |
