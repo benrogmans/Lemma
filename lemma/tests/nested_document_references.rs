@@ -39,7 +39,7 @@ rule line_total = pricing.final_price? * quantity
     // Should be: (100 * 1.21) * 10 = 1210
     match &line_total.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("1210").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("1210").unwrap()),
             other => panic!("Expected Number for line_total, got {:?}", other),
         },
         other => panic!("Expected Value for line_total, got {:?}", other),
@@ -85,7 +85,7 @@ rule top_calc = middle_ref.middle_calc?
 
     match &top_calc.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("250").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("250").unwrap()),
             other => panic!("Expected Number for top_calc, got {:?}", other),
         },
         other => panic!("Expected Value for top_calc, got {:?}", other),
@@ -93,10 +93,10 @@ rule top_calc = middle_ref.middle_calc?
 }
 
 /// Overriding nested document references should propagate through rule evaluations.
-/// When we override a nested document reference and reference rules through that chain,
+/// When we bind a nested document reference and reference rules through that chain,
 /// the overridden document should be used in the evaluation.
 #[test]
-fn test_nested_document_override_with_rule_reference() {
+fn test_nested_document_binding_with_rule_reference() {
     let mut engine = Engine::new();
 
     let pricing_doc = r#"
@@ -141,14 +141,14 @@ rule order_total = line.line_total?
 
     match &order_total.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("8250").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("8250").unwrap()),
             other => panic!("Expected Number for order_total, got {:?}", other),
         },
         other => panic!("Expected Value for order_total, got {:?}", other),
     }
 }
 
-/// Accessing facts through multi-level document references with nested overrides works correctly.
+/// Accessing facts through multi-level document references with nested bindings works correctly.
 #[test]
 fn test_multi_level_fact_access_through_doc_refs() {
     let mut engine = Engine::new();
@@ -184,17 +184,17 @@ rule final_value = settings.config.value * 2
     // Should be: 100 * 2 = 200 (using the overridden value from middle)
     match &final_value.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("200").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("200").unwrap()),
             other => panic!("Expected Number for final_value, got {:?}", other),
         },
         other => panic!("Expected Value for final_value, got {:?}", other),
     }
 }
 
-/// Deep nested fact overrides through multiple document layers should work.
+/// Deep nested fact bindings through multiple document layers should work.
 /// Overriding facts like order.line.pricing.tax_rate through multiple levels.
 #[test]
-fn test_deep_nested_fact_override() {
+fn test_deep_nested_fact_binding() {
     let mut engine = Engine::new();
 
     let pricing_doc = r#"
@@ -235,7 +235,7 @@ rule order_total = line.line_total?
     // (100 * 1.10) * 5 = 550
     match &order_total.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("550").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("550").unwrap()),
             other => panic!("Expected Number for order_total, got {:?}", other),
         },
         other => panic!("Expected Value for order_total, got {:?}", other),
@@ -243,7 +243,7 @@ rule order_total = line.line_total?
 }
 
 /// Different fact paths to the same base document should produce different results
-/// when overrides are applied. This tests that rule evaluation respects the specific
+/// when bindings are applied. This tests that rule evaluation respects the specific
 /// path through document references.
 #[test]
 fn test_different_paths_different_results() {
@@ -297,7 +297,7 @@ rule difference = total2? - total1?
     // path1: 100 * 1.21 = 121
     match &total1.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("121").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("121").unwrap()),
             other => panic!("Expected Number for total1, got {:?}", other),
         },
         other => panic!("Expected Value for total1, got {:?}", other),
@@ -305,7 +305,7 @@ rule difference = total2? - total1?
     // path2: 75 * 1.21 = 90.75
     match &total2.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("90.75").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("90.75").unwrap()),
             other => panic!("Expected Number for total2, got {:?}", other),
         },
         other => panic!("Expected Value for total2, got {:?}", other),
@@ -313,7 +313,7 @@ rule difference = total2? - total1?
     // difference: 90.75 - 121 = -30.25
     match &difference.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("-30.25").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("-30.25").unwrap()),
             other => panic!("Expected Number for difference, got {:?}", other),
         },
         other => panic!("Expected Value for difference, got {:?}", other),
@@ -366,7 +366,7 @@ rule product = c1.value * c2.value
     // sum: (100 * 2) + (50 * 3) = 200 + 150 = 350
     match &sum.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("350").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("350").unwrap()),
             other => panic!("Expected Number for sum, got {:?}", other),
         },
         other => panic!("Expected Value for sum, got {:?}", other),
@@ -374,7 +374,7 @@ rule product = c1.value * c2.value
     // product: 100 * 50 = 5000
     match &product.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("5000").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("5000").unwrap()),
             other => panic!("Expected Number for product, got {:?}", other),
         },
         other => panic!("Expected Value for product, got {:?}", other),
@@ -421,7 +421,7 @@ rule final_result = middle_config.x_squared_plus_ten? * 2
     // x=20 (overridden), x_squared=400, x_squared_plus_ten=410, final=820
     match &final_result.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("820").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("820").unwrap()),
             other => panic!("Expected Number for final_result, got {:?}", other),
         },
         other => panic!("Expected Value for final_result, got {:?}", other),
@@ -429,9 +429,9 @@ rule final_result = middle_config.x_squared_plus_ten? * 2
 }
 
 /// Overriding the same document reference in different ways should produce
-/// different results based on the specific override path.
+/// different results based on the specific binding path.
 #[test]
-fn test_same_doc_different_overrides() {
+fn test_same_doc_different_bindings() {
     let mut engine = Engine::new();
 
     let pricing_doc = r#"
@@ -481,7 +481,7 @@ rule price_difference = retail_final? - wholesale_final?
     // retail: 100 * (1 - 0.05) = 95
     match &retail_final.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("95").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("95").unwrap()),
             other => panic!("Expected Number for retail_final, got {:?}", other),
         },
         other => panic!("Expected Value for retail_final, got {:?}", other),
@@ -489,7 +489,7 @@ rule price_difference = retail_final? - wholesale_final?
     // wholesale: 80 * (1 - 0.15) = 68
     match &wholesale_final.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("68").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("68").unwrap()),
             other => panic!("Expected Number for wholesale_final, got {:?}", other),
         },
         other => panic!("Expected Value for wholesale_final, got {:?}", other),
@@ -497,9 +497,56 @@ rule price_difference = retail_final? - wholesale_final?
     // difference: 95 - 68 = 27
     match &price_difference.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("27").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("27").unwrap()),
             other => panic!("Expected Number for price_difference, got {:?}", other),
         },
         other => panic!("Expected Value for price_difference, got {:?}", other),
     }
+}
+
+/// Binding interface validation: binding a doc ref to a document with the same rule name
+/// but incompatible result type is rejected at the binding site.
+#[test]
+fn test_doc_ref_binding_interface_rule_type_rejected() {
+    let mut engine = Engine::new();
+
+    let doc_a = r#"
+doc a
+rule x = 5
+"#;
+
+    let doc_b = r#"
+doc b
+rule x = true
+"#;
+
+    let doc_c = r#"
+doc c
+fact aa = doc a
+rule y = aa.x? > 1
+"#;
+
+    let doc_d = r#"
+doc d
+fact cc = doc c
+fact cc.aa = doc b
+rule yy = cc.y?
+"#;
+
+    engine.add_lemma_code(doc_a, "test.lemma").unwrap();
+    engine.add_lemma_code(doc_b, "test.lemma").unwrap();
+    engine.add_lemma_code(doc_c, "test.lemma").unwrap();
+    let err = engine.add_lemma_code(doc_d, "test.lemma").unwrap_err();
+
+    let err_str = err.to_string();
+    // We must reject the bad binding. Either we report at the binding site (preferred)
+    // or the expression type checker reports the comparison error.
+    let binding_site_error = err_str.contains("Fact binding 'cc.aa'")
+        && err_str.contains("sets document reference to 'b'");
+    let comparison_error = err_str.contains("Cannot compare") && err_str.contains("Boolean");
+    assert!(
+        binding_site_error || comparison_error,
+        "expected binding-site or comparison type error for bad doc binding, got: {}",
+        err_str
+    );
 }

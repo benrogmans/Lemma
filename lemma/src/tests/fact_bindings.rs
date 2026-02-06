@@ -18,7 +18,7 @@ fact contract = doc employment_contract"#;
 }
 
 #[test]
-fn test_parse_fact_overrides() {
+fn test_parse_fact_bindings() {
     let input = r#"doc person
 fact contract = doc employment_contract
 fact contract.start_date = 2024-02-01
@@ -32,7 +32,7 @@ fact contract.base.rate = 100"#;
 
     assert_eq!(
         result[0].facts[0].reference,
-        crate::FactReference::from_path(vec!["contract".to_string()])
+        crate::parsing::ast::FactReference::from_path(vec!["contract".to_string()])
     );
     if let FactValue::DocumentReference(doc_name) = &result[0].facts[0].value {
         assert_eq!(doc_name, "employment_contract");
@@ -42,7 +42,7 @@ fact contract.base.rate = 100"#;
 
     assert_eq!(
         result[0].facts[1].reference,
-        crate::FactReference::from_path(vec!["contract".to_string(), "start_date".to_string()])
+        crate::parsing::ast::FactReference::from_path(vec!["contract".to_string(), "start_date".to_string()])
     );
     match &result[0].facts[1].value {
         FactValue::Literal(lit) => {
@@ -56,7 +56,7 @@ fact contract.base.rate = 100"#;
 
     assert_eq!(
         result[0].facts[2].reference,
-        crate::FactReference::from_path(vec!["contract".to_string(), "end_date".to_string()])
+        crate::parsing::ast::FactReference::from_path(vec!["contract".to_string(), "end_date".to_string()])
     );
     assert!(
         matches!(&result[0].facts[2].value, FactValue::TypeDeclaration { .. }),
@@ -65,7 +65,7 @@ fact contract.base.rate = 100"#;
 
     assert_eq!(
         result[0].facts[3].reference,
-        crate::FactReference::from_path(vec![
+        crate::parsing::ast::FactReference::from_path(vec![
             "contract".to_string(),
             "employment_type".to_string()
         ])
@@ -82,7 +82,7 @@ fact contract.base.rate = 100"#;
 
     assert_eq!(
         result[0].facts[4].reference,
-        crate::FactReference::from_path(vec!["contract".to_string(), "base".to_string()])
+        crate::parsing::ast::FactReference::from_path(vec!["contract".to_string(), "base".to_string()])
     );
     if let FactValue::DocumentReference(doc_name) = &result[0].facts[4].value {
         assert_eq!(doc_name, "base_contract");
@@ -92,7 +92,7 @@ fact contract.base.rate = 100"#;
 
     assert_eq!(
         result[0].facts[5].reference,
-        crate::FactReference::from_path(vec![
+        crate::parsing::ast::FactReference::from_path(vec![
             "contract".to_string(),
             "base".to_string(),
             "rate".to_string()

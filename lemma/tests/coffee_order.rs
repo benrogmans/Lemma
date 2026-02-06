@@ -1,6 +1,6 @@
 //! Integration test for coffee_order example
 //!
-//! Tests type imports, inline type declarations with overrides, and complex rule chains
+//! Tests type imports, inline type declarations with constraints, and complex rule chains
 
 use lemma::Engine;
 use rust_decimal::Decimal;
@@ -15,10 +15,10 @@ fn load_coffee_order() -> Engine {
 doc examples
 
 type money = scale
-  -> minimum 0
   -> decimals 2
   -> unit eur 1.00
   -> unit gbp 1.17
+  -> minimum 0 eur
 
 type priority = text
   -> option "low"
@@ -99,7 +99,7 @@ fn test_coffee_order_parses() {
 fn test_coffee_order_espresso_small_no_loyalty() {
     let engine = load_coffee_order();
 
-    let fact_overrides = HashMap::from([
+    let fact_values = HashMap::from([
         ("product".to_string(), "espresso".to_string()),
         ("size".to_string(), "small".to_string()),
         ("number_of_cups".to_string(), "2".to_string()),
@@ -107,7 +107,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
     ]);
 
     let response = engine
-        .evaluate("coffee_order", vec![], fact_overrides)
+        .evaluate("coffee_order", vec![], fact_values)
         .expect("Evaluation failed");
 
     // Check base_price: espresso = 2.50 usd
@@ -123,12 +123,12 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("base_price should have value");
     // base_price should be Scale with unit "eur"
     match &base_price_value.value {
-        lemma::Value::Scale(n, unit_opt) => {
+        lemma::ValueKind::Scale(n, unit) => {
             assert_eq!(
-                unit_opt.as_deref(),
-                Some("eur"),
+                unit.as_str(),
+                "eur",
                 "base_price should have unit 'eur', got: {:?}",
-                unit_opt
+                unit
             );
             // base_price preserves the numeric value as written for the unit.
             assert_eq!(
@@ -157,7 +157,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("size_multiplier should have value");
     // size_multiplier should be Number (no unit)
     match &multiplier_value.value {
-        lemma::Value::Number(n) => {
+        lemma::ValueKind::Number(n) => {
             assert_eq!(
                 *n,
                 Decimal::from_str("0.80").unwrap(),
@@ -184,12 +184,12 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("price_per_cup should have value");
     // price_per_cup should be Scale with unit "eur" (inherited from base_price)
     match &cup_price.value {
-        lemma::Value::Scale(n, unit_opt) => {
+        lemma::ValueKind::Scale(n, unit) => {
             assert_eq!(
-                unit_opt.as_deref(),
-                Some("eur"),
+                unit.as_str(),
+                "eur",
                 "price_per_cup should have unit 'eur', got: {:?}",
-                unit_opt
+                unit
             );
             // base_price = 2.50, size_multiplier = 0.80
             // price_per_cup = 2.50 * 0.80 = 2.00
@@ -216,12 +216,12 @@ fn test_coffee_order_espresso_small_no_loyalty() {
     let subtotal_value = subtotal.result.value().expect("subtotal should have value");
     // subtotal should be Scale with unit "eur" (inherited from price_per_cup)
     let subtotal_num = match &subtotal_value.value {
-        lemma::Value::Scale(n, unit_opt) => {
+        lemma::ValueKind::Scale(n, unit) => {
             assert_eq!(
-                unit_opt.as_deref(),
-                Some("eur"),
+                unit.as_str(),
+                "eur",
                 "subtotal should have unit 'eur', got: {:?}",
-                unit_opt
+                unit
             );
             *n
         }
@@ -252,7 +252,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("loyalty_discount should have value");
     // loyalty_discount: false = 0.0 (should be Number, not Ratio when 0.0)
     match &discount.value {
-        lemma::Value::Number(n) => {
+        lemma::ValueKind::Number(n) => {
             assert_eq!(
                 *n,
                 Decimal::from_str("0.00").unwrap(),
@@ -276,12 +276,12 @@ fn test_coffee_order_espresso_small_no_loyalty() {
     let total_value = total.result.value().expect("total should have value");
     // total should be Scale with unit "eur" (inherited from subtotal)
     let total_num = match &total_value.value {
-        lemma::Value::Scale(n, unit_opt) => {
+        lemma::ValueKind::Scale(n, unit) => {
             assert_eq!(
-                unit_opt.as_deref(),
-                Some("eur"),
+                unit.as_str(),
+                "eur",
                 "total should have unit 'eur', got: {:?}",
-                unit_opt
+                unit
             );
             *n
         }
@@ -300,7 +300,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
 fn test_coffee_order_latte_large_with_loyalty() {
     let engine = load_coffee_order();
 
-    let fact_overrides = HashMap::from([
+    let fact_values = HashMap::from([
         ("product".to_string(), "latte".to_string()),
         ("size".to_string(), "large".to_string()),
         ("number_of_cups".to_string(), "3".to_string()),
@@ -308,7 +308,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
     ]);
 
     let response = engine
-        .evaluate("coffee_order", vec![], fact_overrides)
+        .evaluate("coffee_order", vec![], fact_values)
         .expect("Evaluation failed");
 
     // Check base_price: latte = 3.50 usd
@@ -324,12 +324,12 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .expect("base_price should have value");
     // base_price should be Scale with unit "eur"
     match &base_price_value.value {
-        lemma::Value::Scale(n, unit_opt) => {
+        lemma::ValueKind::Scale(n, unit) => {
             assert_eq!(
-                unit_opt.as_deref(),
-                Some("eur"),
+                unit.as_str(),
+                "eur",
                 "base_price should have unit 'eur', got: {:?}",
-                unit_opt
+                unit
             );
             // base_price preserves the numeric value as written for the unit.
             assert_eq!(
@@ -358,7 +358,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .expect("size_multiplier should have value");
     // size_multiplier should be Number (no unit)
     match &multiplier_value.value {
-        lemma::Value::Number(n) => {
+        lemma::ValueKind::Number(n) => {
             assert_eq!(
                 *n,
                 Decimal::from_str("1.20").unwrap(),
@@ -386,7 +386,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .expect("loyalty_discount should have value");
     // loyalty_discount should be Number (since 0.10 is written as number, not percentage)
     match &discount.value {
-        lemma::Value::Number(n) => {
+        lemma::ValueKind::Number(n) => {
             assert_eq!(
                 *n,
                 Decimal::from_str("0.10").unwrap(),
@@ -418,12 +418,12 @@ fn test_coffee_order_latte_large_with_loyalty() {
 
     // subtotal should be Scale with unit "eur" (inherited from price_per_cup)
     let subtotal_num = match &subtotal_value.value {
-        lemma::Value::Scale(n, unit_opt) => {
+        lemma::ValueKind::Scale(n, unit) => {
             assert_eq!(
-                unit_opt.as_deref(),
-                Some("eur"),
+                unit.as_str(),
+                "eur",
                 "subtotal should have unit 'eur', got: {:?}",
-                unit_opt
+                unit
             );
             *n
         }
@@ -443,12 +443,12 @@ fn test_coffee_order_latte_large_with_loyalty() {
 
     // total should be Scale with unit "eur" (inherited from subtotal)
     let total_num = match &total_value.value {
-        lemma::Value::Scale(n, unit_opt) => {
+        lemma::ValueKind::Scale(n, unit) => {
             assert_eq!(
-                unit_opt.as_deref(),
-                Some("eur"),
+                unit.as_str(),
+                "eur",
                 "total should have unit 'eur', got: {:?}",
-                unit_opt
+                unit
             );
             *n
         }
@@ -473,10 +473,10 @@ fn test_coffee_order_ordered_priority() {
     let expected_values = ["1", "2", "3"];
 
     for (priority, expected) in priorities.iter().zip(expected_values.iter()) {
-        let fact_overrides = HashMap::from([("priority".to_string(), priority.to_string())]);
+        let fact_values = HashMap::from([("priority".to_string(), priority.to_string())]);
 
         let response = engine
-            .evaluate("coffee_order", vec![], fact_overrides)
+            .evaluate("coffee_order", vec![], fact_values)
             .expect("Evaluation failed");
 
         let ordered_priority = response
@@ -504,16 +504,16 @@ fn test_coffee_order_ordered_priority() {
 fn test_coffee_order_invalid_size_veto() {
     let engine = load_coffee_order();
 
-    // Size "extra large" is defined in the inline type override, but size_multiplier
+    // Size "extra large" is defined in the inline type constraint, but size_multiplier
     // only handles small/medium/large, so it should veto
-    let fact_overrides = HashMap::from([
+    let fact_values = HashMap::from([
         ("product".to_string(), "espresso".to_string()),
         ("size".to_string(), "extra large".to_string()),
         ("number_of_cups".to_string(), "1".to_string()),
     ]);
 
     let response = engine
-        .evaluate("coffee_order", vec![], fact_overrides)
+        .evaluate("coffee_order", vec![], fact_values)
         .expect("Evaluation should complete (even with veto)");
 
     let size_multiplier = response

@@ -52,7 +52,7 @@ rule contract_valid = is_salary_valid? and vacation_days_ok? and is_adult?
 
     match &total_comp.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("82500").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("82500").unwrap()),
             other => panic!("Expected Number for total_compensation, got {:?}", other),
         },
         other => panic!("Expected Value for total_compensation, got {:?}", other),
@@ -65,7 +65,7 @@ rule contract_valid = is_salary_valid? and vacation_days_ok? and is_adult?
         .unwrap();
     assert_eq!(
         contract_valid.result,
-        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
     );
 
     engine.remove_document("employment_terms");
@@ -113,7 +113,7 @@ rule effective_rate = (tax_amount? / income) * 100%
         .unwrap();
     match &taxable.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("70000").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("70000").unwrap()),
             other => panic!("Expected Number for taxable_income, got {:?}", other),
         },
         other => panic!("Expected Value for taxable_income, got {:?}", other),
@@ -126,7 +126,7 @@ rule effective_rate = (tax_amount? / income) * 100%
         .unwrap();
     assert_eq!(
         in_mid.result,
-        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
     );
 
     let tax_rate = response
@@ -136,17 +136,17 @@ rule effective_rate = (tax_amount? / income) * 100%
         .unwrap();
     assert_eq!(
         tax_rate.result,
-        lemma::OperationResult::Value(lemma::LiteralValue::ratio(
+        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::ratio(
             Decimal::from_str("0.2").unwrap(),
             Some("percent".to_string())
-        ))
+        )))
     );
 
     engine.remove_document("tax_calculation");
 }
 
 #[test]
-fn test_cli_fact_overrides_integration() {
+fn test_cli_fact_values_integration() {
     let mut engine = Engine::new();
 
     let config_doc = r#"
@@ -244,7 +244,7 @@ rule is_on_schedule = elapsed_time? <= phase1_duration + phase2_duration
         .unwrap();
     assert_eq!(
         phase2_complete.result,
-        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::False))
+        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(false)))
     );
 
     engine.remove_document("project_timeline");
@@ -276,7 +276,7 @@ rule end_date = start + timespan
 
     match &end_date.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Date(date) => {
+            lemma::ValueKind::Date(date) => {
                 assert_eq!(date.year, 2024);
                 assert_eq!(date.month, 2);
                 assert_eq!(date.day, 14);
@@ -309,7 +309,7 @@ rule start_date = end - timespan
 
     match &start_date.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Date(date) => {
+            lemma::ValueKind::Date(date) => {
                 assert_eq!(date.year, 2024);
                 assert_eq!(date.month, 1);
                 assert_eq!(date.day, 15);
@@ -342,7 +342,7 @@ rule timespan = end - start
 
     match &duration.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Duration(seconds, unit) => {
+            lemma::ValueKind::Duration(seconds, unit) => {
                 // Date - Date returns seconds (30 days = 2,592,000 seconds)
                 assert_eq!(*seconds, Decimal::from_str("2592000").unwrap());
                 assert_eq!(unit.to_string(), "seconds");
@@ -375,7 +375,7 @@ rule date1_after_date2 = date1 > date2
         .unwrap();
     assert_eq!(
         before.result,
-        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
     );
 
     let after = response
@@ -385,7 +385,7 @@ rule date1_after_date2 = date1 > date2
         .unwrap();
     assert_eq!(
         after.result,
-        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::False))
+        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(false)))
     );
 }
 
@@ -535,7 +535,7 @@ rule is_valid = value >= config.min_value and value <= config.max_value
         .unwrap();
     assert_eq!(
         is_valid.result,
-        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
     );
 }
 
@@ -569,7 +569,7 @@ rule is_valid = salary >= base_contract.min_salary and salary <= base_contract.m
         .unwrap();
     assert_eq!(
         is_valid.result,
-        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
     );
 }
 
@@ -603,7 +603,7 @@ rule probation_end = base_contract.project_start + base_contract.probation_perio
 
     match &probation_end.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Date(date) => {
+            lemma::ValueKind::Date(date) => {
                 assert_eq!(date.year, 2024);
                 assert_eq!(date.month, 4);
                 assert_eq!(date.day, 14);

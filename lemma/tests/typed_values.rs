@@ -1,4 +1,4 @@
-use lemma::{Value, *};
+use lemma::{ValueKind, *};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -25,7 +25,7 @@ rule net_multiplier = 1 - discount
 
     match result {
         LiteralValue {
-            value: Value::Number(n),
+            value: ValueKind::Number(n),
             ..
         } => assert_eq!(n, &Decimal::from_str("0.75").unwrap()),
         _ => panic!("Expected Number, got {:?}", result),
@@ -56,7 +56,7 @@ rule double_meeting = meeting_length * 2
 
     match result {
         LiteralValue {
-            value: Value::Duration(value, _unit),
+            value: ValueKind::Duration(value, _unit),
             ..
         } => {
             // 30 minutes * 2 = 60 (stored as the numeric value in minutes unit)
@@ -82,7 +82,7 @@ rule end = start + 7 days
 
     match result {
         LiteralValue {
-            value: Value::Date(dt),
+            value: ValueKind::Date(dt),
             ..
         } => {
             assert_eq!(dt.year, 2024);
@@ -116,10 +116,10 @@ rule can_access = is_active and not is_premium
 
     match result {
         LiteralValue {
-            value: Value::Boolean(b),
+            value: ValueKind::Boolean(b),
             ..
         } => {
-            assert!(bool::from(b.clone()));
+            assert!(*b);
         }
         _ => panic!("Expected Boolean, got {:?}", result),
     }
@@ -147,7 +147,7 @@ rule message = greeting
 
     match result {
         LiteralValue {
-            value: Value::Text(s),
+            value: ValueKind::Text(s),
             ..
         } => assert_eq!(s, "hello"),
         _ => panic!("Expected Text, got {:?}", result),

@@ -21,8 +21,8 @@ doc specific_employee
 """
 Specific Employee Document
 
-References the base employee document and overrides specific facts.
-Demonstrates document composition, fact overriding, and rule references.
+References the base employee document and binds specific facts.
+Demonstrates document composition, fact binding, and rule references.
 """
 
 fact employee = doc base_employee

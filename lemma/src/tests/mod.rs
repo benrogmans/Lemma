@@ -4,10 +4,10 @@
 mod engine;
 
 // Parser tests (moved to src/parsing modules)
-mod fact_overrides;
+mod fact_bindings;
 
-// Semantic tests
-mod semantic;
+// AST tests (types from parsing::ast, formerly semantic)
+mod ast;
 
 // Error tests
 mod error;

@@ -153,14 +153,14 @@ pub mod http {
             )
         })?;
 
-        let fact_overrides: HashMap<String, String> = payload
+        let fact_values: HashMap<String, String> = payload
             .facts
             .iter()
             .map(|(k, v)| (k.clone(), json_value_to_string(v)))
             .collect();
 
         let response: Response = temp_engine
-            .evaluate(doc_name, vec![], fact_overrides)
+            .evaluate(doc_name, vec![], fact_values)
             .map_err(|e| {
                 error!("Evaluation failed: {}", e);
                 (

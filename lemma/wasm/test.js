@@ -20,21 +20,21 @@ function opIsValue(op) {
   return op && Object.prototype.hasOwnProperty.call(op, 'value');
 }
 
-function literalStandardType(lit) {
+function literalPrimitiveType(lit) {
   if (!lit || !lit.value || typeof lit.value !== 'object') return null;
   const keys = Object.keys(lit.value);
   return keys.length === 1 ? keys[0] : null;
 }
 
 function literalNumberValue(lit) {
-  const t = literalStandardType(lit);
+  const t = literalPrimitiveType(lit);
   if (t !== 'number') return null;
   const v = lit.value.number;
   return typeof v === 'string' ? Number(v) : v;
 }
 
 function literalScaleValue(lit) {
-  const t = literalStandardType(lit);
+  const t = literalPrimitiveType(lit);
   if (t !== 'scale') return null;
   const v = lit.value.scale;
   if (!Array.isArray(v) || v.length !== 2) return null;
@@ -173,7 +173,7 @@ export async function test() {
       throw new Error(`Expected double_number to be a value result, got ${JSON.stringify(doubleRule.result)}`);
     }
     const lit = doubleRule.result.value;
-    const type = literalStandardType(lit);
+    const type = literalPrimitiveType(lit);
     if (type !== 'number') {
       throw new Error(`Expected type to be number, got ${type}`);
     }

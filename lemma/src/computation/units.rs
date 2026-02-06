@@ -1,86 +1,72 @@
 //! Unit conversion system
 //!
 //! Handles conversions between duration units and scale units.
+//! Uses only planning/semantic types; no dependency on parsing types.
 
 use crate::evaluation::OperationResult;
-use crate::semantic::{DurationUnit, LiteralValue, TypeSpecification, Unit, Value};
-use crate::ConversionTarget;
+use crate::planning::semantics::{
+    LiteralValue, SemanticConversionTarget, SemanticDurationUnit, ValueKind,
+};
 use rust_decimal::Decimal;
 
 /// Convert a value to a target unit (for `in` operator).
-///
-pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> OperationResult {
+pub fn convert_unit(value: &LiteralValue, target: &SemanticConversionTarget) -> OperationResult {
     match &value.value {
-        Value::Duration(v, from) => match target {
-            ConversionTarget::Duration(to) => {
+        ValueKind::Duration(v, from) => match target {
+            SemanticConversionTarget::Duration(to) => {
                 let val = convert_duration(*v, from, to);
-                OperationResult::Value(LiteralValue::duration_with_type(
+                OperationResult::Value(Box::new(LiteralValue::duration_with_type(
                     val,
                     to.clone(),
                     value.lemma_type.clone(),
-                ))
+                )))
             }
-            ConversionTarget::Percentage | ConversionTarget::ScaleUnit(_) => unreachable!(
+            _ => unreachable!(
                 "BUG: invalid conversion target {:?} for duration; this should be rejected during planning",
                 target
             ),
         },
 
-        Value::Number(n) => match target {
-            ConversionTarget::Duration(u) => {
-                OperationResult::Value(LiteralValue::duration(*n, u.clone()))
+        ValueKind::Number(n) => match target {
+            SemanticConversionTarget::Duration(u) => {
+                OperationResult::Value(Box::new(LiteralValue::duration(*n, u.clone())))
             }
-            ConversionTarget::Percentage => {
-                // Convert number to ratio with percent unit (e.g., 0.5 -> 50%)
-                use crate::semantic::standard_ratio;
-                OperationResult::Value(LiteralValue::ratio_with_type(
-                    *n,
-                    Some("percent".to_string()),
-                    standard_ratio().clone(),
-                ))
+            SemanticConversionTarget::ScaleUnit(unit) => {
+                OperationResult::Value(Box::new(LiteralValue::number_interpreted_as_scale(*n, unit.clone())))
             }
-            ConversionTarget::ScaleUnit(_) => unreachable!(
-                "BUG: converting number to scale unit should be rejected during planning"
-            ),
+            SemanticConversionTarget::RatioUnit(unit) => {
+                OperationResult::Value(Box::new(LiteralValue::ratio(*n, Some(unit.clone()))))
+            }
         },
 
-        Value::Ratio(r, unit_opt) => match target {
-            ConversionTarget::Percentage => OperationResult::Value(LiteralValue::ratio_with_type(
-                *r,
-                unit_opt.clone().or(Some("percent".to_string())),
-                value.lemma_type.clone(),
+        ValueKind::Ratio(ratio_value, _from_unit_opt) => match target {
+            SemanticConversionTarget::RatioUnit(to_unit) => OperationResult::Value(Box::new(
+                LiteralValue::ratio(*ratio_value, Some(to_unit.clone())),
             )),
-            ConversionTarget::Duration(_) | ConversionTarget::ScaleUnit(_) => unreachable!(
+            _ => unreachable!(
                 "BUG: invalid conversion target {:?} for ratio; this should be rejected during planning",
                 target
             ),
         },
 
-        Value::Scale(v, from_unit) => match target {
-            ConversionTarget::ScaleUnit(to_unit) => {
-                let from_unit = match from_unit {
-                    Some(u) => u,
-                    None => {
-                        unreachable!(
-                            "BUG: cannot convert scale value without a unit; unit must be provided by parsing/input validation"
-                        );
-                    }
-                };
-
-                let from_factor = scale_unit_factor(&value.lemma_type, from_unit);
-                let to_factor = scale_unit_factor(&value.lemma_type, to_unit);
+        ValueKind::Scale(v, from_unit) => match target {
+            SemanticConversionTarget::ScaleUnit(to_unit) => {
+                let from_factor = value.lemma_type.scale_unit_factor(from_unit);
+                let to_factor = value.lemma_type.scale_unit_factor(to_unit);
 
                 let converted = (*v) * (to_factor / from_factor);
 
-                OperationResult::Value(LiteralValue::scale_with_type(
+                OperationResult::Value(Box::new(LiteralValue::scale_with_type(
                     converted,
-                    Some(to_unit.clone()),
+                    to_unit.clone(),
                     value.lemma_type.clone(),
-                ))
+                )))
             }
-            ConversionTarget::Duration(_) | ConversionTarget::Percentage => unreachable!(
-                "BUG: invalid conversion target {:?} for scale; this should be rejected during planning",
-                target
+            SemanticConversionTarget::Duration(duration_unit) => {
+                OperationResult::Value(Box::new(LiteralValue::duration(*v, duration_unit.clone())))
+            }
+            SemanticConversionTarget::RatioUnit(_) => unreachable!(
+                "BUG: cannot convert scale to ratio unit; this should be rejected during planning"
             ),
         },
 
@@ -92,34 +78,12 @@ pub fn convert_unit(value: &LiteralValue, target: &ConversionTarget) -> Operatio
     }
 }
 
-fn scale_unit_factor(lemma_type: &crate::semantic::LemmaType, unit_name: &str) -> Decimal {
-    let units = match &lemma_type.specifications {
-        TypeSpecification::Scale { units, .. } => units,
-        _ => unreachable!(
-            "BUG: scale_unit_factor called with non-scale type {}",
-            lemma_type.name()
-        ),
-    };
-
-    match units
-        .iter()
-        .find(|u| u.name.eq_ignore_ascii_case(unit_name))
-    {
-        Some(Unit { value, .. }) => *value,
-        None => {
-            let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
-            unreachable!(
-                "BUG: unknown unit '{}' for scale type {}. Valid units: {}",
-                unit_name,
-                lemma_type.name(),
-                valid.join(", ")
-            );
-        }
-    }
-}
-
 /// Convert a duration value between units
-fn convert_duration(value: Decimal, from: &DurationUnit, to: &DurationUnit) -> Decimal {
+fn convert_duration(
+    value: Decimal,
+    from: &SemanticDurationUnit,
+    to: &SemanticDurationUnit,
+) -> Decimal {
     if from == to {
         return value;
     }
@@ -129,50 +93,109 @@ fn convert_duration(value: Decimal, from: &DurationUnit, to: &DurationUnit) -> D
 }
 
 /// Convert a duration value to seconds (base unit)
-pub fn duration_to_seconds(value: Decimal, unit: &DurationUnit) -> Decimal {
+/// TODO: Do not allow conversions from months or years as they are not deterministic
+pub fn duration_to_seconds(value: Decimal, unit: &SemanticDurationUnit) -> Decimal {
     match unit {
-        DurationUnit::Microsecond => value / Decimal::from(1_000_000),
-        DurationUnit::Millisecond => value / Decimal::from(1_000),
-        DurationUnit::Second => value,
-        DurationUnit::Minute => value * Decimal::from(60),
-        DurationUnit::Hour => value * Decimal::from(3_600),
-        DurationUnit::Day => value * Decimal::from(86_400),
-        DurationUnit::Week => value * Decimal::from(604_800),
-        DurationUnit::Month => value * Decimal::from(2_592_000), // 30 days
-        DurationUnit::Year => value * Decimal::from(31_536_000), // 365 days
+        SemanticDurationUnit::Microsecond => value / Decimal::from(1_000_000),
+        SemanticDurationUnit::Millisecond => value / Decimal::from(1_000),
+        SemanticDurationUnit::Second => value,
+        SemanticDurationUnit::Minute => value * Decimal::from(60),
+        SemanticDurationUnit::Hour => value * Decimal::from(3_600),
+        SemanticDurationUnit::Day => value * Decimal::from(86_400),
+        SemanticDurationUnit::Week => value * Decimal::from(604_800),
+        SemanticDurationUnit::Month => value * Decimal::from(2_592_000), // 30 days
+        SemanticDurationUnit::Year => value * Decimal::from(31_536_000), // 365 days
     }
 }
 
 /// Convert seconds to a duration value in the target unit
-pub fn seconds_to_duration(seconds: Decimal, unit: &DurationUnit) -> Decimal {
+/// TODO: Do not allow conversions to months or years as they are not deterministic
+pub fn seconds_to_duration(seconds: Decimal, unit: &SemanticDurationUnit) -> Decimal {
     match unit {
-        DurationUnit::Microsecond => seconds * Decimal::from(1_000_000),
-        DurationUnit::Millisecond => seconds * Decimal::from(1_000),
-        DurationUnit::Second => seconds,
-        DurationUnit::Minute => seconds / Decimal::from(60),
-        DurationUnit::Hour => seconds / Decimal::from(3_600),
-        DurationUnit::Day => seconds / Decimal::from(86_400),
-        DurationUnit::Week => seconds / Decimal::from(604_800),
-        DurationUnit::Month => seconds / Decimal::from(2_592_000), // 30 days
-        DurationUnit::Year => seconds / Decimal::from(31_536_000), // 365 days
+        SemanticDurationUnit::Microsecond => seconds * Decimal::from(1_000_000),
+        SemanticDurationUnit::Millisecond => seconds * Decimal::from(1_000),
+        SemanticDurationUnit::Second => seconds,
+        SemanticDurationUnit::Minute => seconds / Decimal::from(60),
+        SemanticDurationUnit::Hour => seconds / Decimal::from(3_600),
+        SemanticDurationUnit::Day => seconds / Decimal::from(86_400),
+        SemanticDurationUnit::Week => seconds / Decimal::from(604_800),
+        SemanticDurationUnit::Month => seconds / Decimal::from(2_592_000), // 30 days
+        SemanticDurationUnit::Year => seconds / Decimal::from(31_536_000), // 365 days
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evaluation::OperationResult;
+    use crate::planning::semantics::{LiteralValue, ValueKind};
 
     #[test]
     fn duration_conversion() {
-        let result = convert_duration(Decimal::from(2), &DurationUnit::Hour, &DurationUnit::Minute);
+        let result = convert_duration(
+            Decimal::from(2),
+            &SemanticDurationUnit::Hour,
+            &SemanticDurationUnit::Minute,
+        );
         assert_eq!(result, Decimal::from(120));
     }
 
     #[test]
     fn duration_seconds_roundtrip() {
         let original = Decimal::from(5);
-        let seconds = duration_to_seconds(original, &DurationUnit::Day);
-        let back = seconds_to_duration(seconds, &DurationUnit::Day);
+        let seconds = duration_to_seconds(original, &SemanticDurationUnit::Day);
+        let back = seconds_to_duration(seconds, &SemanticDurationUnit::Day);
         assert_eq!(original, back);
+    }
+
+    #[test]
+    fn number_to_ratio_unit_produces_ratio_value() {
+        let value = LiteralValue::number(Decimal::new(25, 2));
+        let target = SemanticConversionTarget::RatioUnit("percent".to_string());
+        let result = convert_unit(&value, &target);
+        let OperationResult::Value(lit) = result else {
+            panic!("expected Value, got {:?}", result);
+        };
+        match &lit.value {
+            ValueKind::Ratio(r, u) => {
+                assert_eq!(*r, Decimal::new(25, 2));
+                assert_eq!(u.as_deref(), Some("percent"));
+            }
+            _ => panic!("expected Ratio value, got {:?}", lit.value),
+        }
+    }
+
+    #[test]
+    fn ratio_to_ratio_unit_preserves_value_attaches_unit() {
+        let value = LiteralValue::ratio(Decimal::new(25, 2), Some("percent".to_string()));
+        let target = SemanticConversionTarget::RatioUnit("permille".to_string());
+        let result = convert_unit(&value, &target);
+        let OperationResult::Value(lit) = result else {
+            panic!("expected Value, got {:?}", result);
+        };
+        match &lit.value {
+            ValueKind::Ratio(r, u) => {
+                assert_eq!(*r, Decimal::new(25, 2));
+                assert_eq!(u.as_deref(), Some("permille"));
+            }
+            _ => panic!("expected Ratio value, got {:?}", lit.value),
+        }
+    }
+
+    #[test]
+    fn ratio_with_none_unit_to_ratio_unit_attaches_unit() {
+        let value = LiteralValue::ratio(Decimal::new(1, 2), None);
+        let target = SemanticConversionTarget::RatioUnit("percent".to_string());
+        let result = convert_unit(&value, &target);
+        let OperationResult::Value(lit) = result else {
+            panic!("expected Value, got {:?}", result);
+        };
+        match &lit.value {
+            ValueKind::Ratio(r, u) => {
+                assert_eq!(*r, Decimal::new(1, 2));
+                assert_eq!(u.as_deref(), Some("percent"));
+            }
+            _ => panic!("expected Ratio value, got {:?}", lit.value),
+        }
     }
 }

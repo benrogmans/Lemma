@@ -1,15 +1,28 @@
 use crate::evaluation::operations::{OperationRecord, OperationResult};
+use crate::planning::semantics::{Expression, Fact, LemmaType, RulePath, Source};
 use indexmap::IndexMap;
 use serde::Serialize;
 
-/// Facts from a specific document
+/// Rule info with resolved expressions for use in evaluation response.
+/// Evaluation uses only semantics types; no parsing types.
+#[derive(Debug, Clone, Serialize)]
+pub struct EvaluatedRule {
+    pub name: String,
+    pub path: RulePath,
+    pub default_expression: Expression,
+    pub unless_branches: Vec<(Option<Expression>, Expression)>,
+    pub source_location: Source,
+    pub rule_type: LemmaType,
+}
+
+/// Facts from a specific document (semantics types only).
 #[derive(Debug, Clone, Serialize)]
 pub struct Facts {
     pub fact_path: String,
     pub referencing_fact_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document_reference: Option<String>,
-    pub facts: Vec<crate::LemmaFact>,
+    pub facts: Vec<Fact>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub referenced_docs: Vec<Facts>,
 }
@@ -22,20 +35,19 @@ pub struct Response {
     pub results: IndexMap<String, RuleResult>,
 }
 
-/// Result of evaluating a single rule
+/// Result of evaluating a single rule (semantics types only).
 #[derive(Debug, Clone, Serialize)]
 pub struct RuleResult {
     #[serde(skip_serializing)]
-    pub rule: crate::LemmaRule,
+    pub rule: EvaluatedRule,
     pub result: OperationResult,
-    pub facts: Vec<crate::LemmaFact>,
+    pub facts: Vec<Fact>,
     #[serde(skip_serializing)]
     pub operations: Vec<OperationRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proof: Option<crate::evaluation::proof::Proof>,
-    /// Computed type of this rule's result
-    /// Every rule MUST have a type (Lemma is strictly typed)
-    pub rule_type: crate::LemmaType,
+    /// Computed type of this rule's result (semantics).
+    pub rule_type: LemmaType,
 }
 
 impl Response {
@@ -51,19 +63,37 @@ impl Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Expression, ExpressionKind, LemmaRule, LiteralValue, OperationResult};
+    use crate::planning::semantics::{
+        primitive_boolean, primitive_number, Expression, ExpressionKind, LemmaType, LiteralValue,
+        RulePath, Span,
+    };
     use rust_decimal::Decimal;
     use std::str::FromStr;
 
-    fn dummy_rule(name: &str) -> LemmaRule {
-        LemmaRule {
-            name: name.to_string(),
-            expression: Expression {
-                kind: ExpressionKind::Literal(LiteralValue::boolean(crate::BooleanValue::True)),
-                source_location: None,
+    fn dummy_source() -> Source {
+        Source::new(
+            "<test>",
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 1,
             },
-            unless_clauses: vec![],
-            source_location: None,
+            "test_doc",
+        )
+    }
+
+    fn dummy_evaluated_rule(name: &str) -> EvaluatedRule {
+        EvaluatedRule {
+            name: name.to_string(),
+            path: RulePath::new(vec![], name.to_string()),
+            default_expression: Expression::new(
+                ExpressionKind::Literal(Box::new(LiteralValue::from_bool(true))),
+                dummy_source(),
+            ),
+            unless_branches: vec![],
+            source_location: dummy_source(),
+            rule_type: primitive_number().clone(),
         }
     }
 
@@ -73,14 +103,14 @@ mod tests {
         results.insert(
             "test_rule".to_string(),
             RuleResult {
-                rule: dummy_rule("test_rule"),
-                result: OperationResult::Value(LiteralValue::number(
+                rule: dummy_evaluated_rule("test_rule"),
+                result: OperationResult::Value(Box::new(LiteralValue::number(
                     Decimal::from_str("42").unwrap(),
-                )),
+                ))),
                 facts: vec![],
                 operations: vec![],
                 proof: None,
-                rule_type: crate::semantic::standard_number().clone(),
+                rule_type: primitive_number().clone(),
             },
         );
         let response = Response {
@@ -101,23 +131,23 @@ mod tests {
         results.insert(
             "rule1".to_string(),
             RuleResult {
-                rule: dummy_rule("rule1"),
-                result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::True)),
+                rule: dummy_evaluated_rule("rule1"),
+                result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
                 facts: vec![],
                 operations: vec![],
                 proof: None,
-                rule_type: crate::semantic::standard_boolean().clone(),
+                rule_type: primitive_boolean().clone(),
             },
         );
         results.insert(
             "rule2".to_string(),
             RuleResult {
-                rule: dummy_rule("rule2"),
-                result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::False)),
+                rule: dummy_evaluated_rule("rule2"),
+                result: OperationResult::Value(Box::new(LiteralValue::from_bool(false))),
                 facts: vec![],
                 operations: vec![],
                 proof: None,
-                rule_type: crate::semantic::standard_boolean().clone(),
+                rule_type: primitive_boolean().clone(),
             },
         );
         let mut response = Response {
@@ -135,46 +165,49 @@ mod tests {
     #[test]
     fn test_rule_result_types() {
         let success = RuleResult {
-            rule: dummy_rule("rule1"),
-            result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::True)),
+            rule: dummy_evaluated_rule("rule1"),
+            result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
             facts: vec![],
             operations: vec![],
             proof: None,
-            rule_type: crate::semantic::standard_boolean().clone(),
+            rule_type: primitive_boolean().clone(),
         };
         assert!(matches!(success.result, OperationResult::Value(_)));
 
         let missing = RuleResult {
-            rule: dummy_rule("rule3"),
+            rule: dummy_evaluated_rule("rule3"),
             result: OperationResult::Veto(Some("Missing fact: fact1".to_string())),
-            facts: vec![crate::LemmaFact {
-                reference: crate::FactReference::from_path(vec!["fact1".to_string()]),
-                value: crate::FactValue::TypeDeclaration {
-                    base: "number".to_string(),
-                    overrides: None,
-                    from: None,
-                },
-                source_location: None,
+            facts: vec![crate::planning::semantics::Fact {
+                path: crate::planning::semantics::FactPath::new(vec![], "fact1".to_string()),
+                value: crate::planning::semantics::FactValue::Literal(
+                    crate::planning::semantics::LiteralValue::from_bool(false),
+                ),
+                source: crate::Source::new(
+                    "",
+                    crate::Span {
+                        start: 0,
+                        end: 0,
+                        line: 0,
+                        col: 0,
+                    },
+                    "",
+                ),
             }],
             operations: vec![],
             proof: None,
-            rule_type: crate::LemmaType::veto_type(),
+            rule_type: LemmaType::veto_type(),
         };
         assert_eq!(missing.facts.len(), 1);
-        assert_eq!(missing.facts[0].reference.to_string(), "fact1");
-        assert!(matches!(
-            missing.facts[0].value,
-            crate::FactValue::TypeDeclaration { .. }
-        ));
+        assert_eq!(missing.facts[0].path.fact, "fact1");
         assert!(matches!(missing.result, OperationResult::Veto(_)));
 
         let veto = RuleResult {
-            rule: dummy_rule("rule4"),
+            rule: dummy_evaluated_rule("rule4"),
             result: OperationResult::Veto(Some("Vetoed".to_string())),
             facts: vec![],
             operations: vec![],
             proof: None,
-            rule_type: crate::LemmaType::veto_type(),
+            rule_type: LemmaType::veto_type(),
         };
         assert_eq!(
             veto.result,

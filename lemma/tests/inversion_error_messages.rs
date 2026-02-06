@@ -21,7 +21,7 @@ fn test_better_error_for_invalid_value() {
     let result = engine.invert(
         "shipping",
         "shipping_cost",
-        Target::value(LiteralValue::number(15)),
+        Target::value(LiteralValue::number(15.into())),
         HashMap::new(),
     );
 
@@ -90,7 +90,7 @@ fn test_error_with_no_satisfiable_branches() {
     let result = engine.invert(
         "test",
         "result",
-        Target::value(LiteralValue::number(200)),
+        Target::value(LiteralValue::number(200.into())),
         given,
     );
 

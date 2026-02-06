@@ -68,7 +68,7 @@ fn test_02_rules_and_unless() {
     let final_total = response.results.get("final_total").unwrap();
     match &final_total.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("800").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("800").unwrap()),
             other => panic!("Expected Number for final_total, got {:?}", other),
         },
         other => panic!("Expected Value for final_total, got {:?}", other),
@@ -109,7 +109,7 @@ fn test_03_document_references() {
     let salary_with_bonus = response.results.get("salary_with_bonus").unwrap();
     match &salary_with_bonus.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => assert_eq!(*n, Decimal::from_str("99000").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("99000").unwrap()),
             other => panic!("Expected Number for salary_with_bonus, got {:?}", other),
         },
         other => panic!("Expected Value for salary_with_bonus, got {:?}", other),
@@ -118,7 +118,7 @@ fn test_03_document_references() {
     let employee_summary = response.results.get("employee_summary").unwrap();
     match &employee_summary.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Text(s) => assert_eq!(s, "Alice Smith"),
+            lemma::ValueKind::Text(s) => assert_eq!(s, "Alice Smith"),
             other => panic!("Expected Text for employee_summary, got {:?}", other),
         },
         other => panic!("Expected Value for employee_summary, got {:?}", other),
@@ -154,9 +154,9 @@ fn test_04_unit_conversions() {
     let duration_hours = response.results.get("duration_hours").unwrap();
     match &duration_hours.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Duration(v, unit) => {
+            lemma::ValueKind::Duration(v, unit) => {
                 assert_eq!(*v, Decimal::from_str("1.5").unwrap());
-                assert_eq!(*unit, lemma::DurationUnit::Hour);
+                assert_eq!(*unit, lemma::SemanticDurationUnit::Hour);
             }
             other => panic!("Expected Duration for duration_hours, got {:?}", other),
         },
@@ -166,9 +166,9 @@ fn test_04_unit_conversions() {
     let duration_seconds = response.results.get("duration_seconds").unwrap();
     match &duration_seconds.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Duration(v, unit) => {
+            lemma::ValueKind::Duration(v, unit) => {
                 assert_eq!(*v, Decimal::from_str("5400").unwrap());
-                assert_eq!(*unit, lemma::DurationUnit::Second);
+                assert_eq!(*unit, lemma::SemanticDurationUnit::Second);
             }
             other => panic!("Expected Duration for duration_seconds, got {:?}", other),
         },
@@ -178,7 +178,7 @@ fn test_04_unit_conversions() {
     let is_quick_processing = response.results.get("is_quick_processing").unwrap();
     assert_eq!(
         is_quick_processing.result,
-        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
     );
 }
 
@@ -199,7 +199,7 @@ fn test_05_date_handling() {
     let probation_end = response.results.get("probation_end_date").unwrap();
     match &probation_end.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Date(date) => {
+            lemma::ValueKind::Date(date) => {
                 assert_eq!(date.year, 2024);
                 assert_eq!(date.month, 5);
                 assert_eq!(date.day, 30);
@@ -212,7 +212,7 @@ fn test_05_date_handling() {
     let is_probation_complete = response.results.get("is_probation_complete").unwrap();
     assert_eq!(
         is_probation_complete.result,
-        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
     );
 }
 #[test]
@@ -236,7 +236,7 @@ fn test_06_tax_calculation() {
     let total_tax = response.results.get("total_tax").unwrap();
     match &total_tax.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => {
+            lemma::ValueKind::Number(n) => {
                 // Dutch tax calculation: taxable_income = 70000
                 // Bracket 1 (up to 73031): 70000 * 9% = 6300
                 // VAT: 70000 * 21% = 14700
@@ -255,7 +255,7 @@ fn test_06_tax_calculation() {
     let after_tax_income = response.results.get("after_tax_income").unwrap();
     match &after_tax_income.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => {
+            lemma::ValueKind::Number(n) => {
                 // Should be less than income
                 assert!(
                     *n < Decimal::from_str("80000").unwrap(),
@@ -294,7 +294,7 @@ fn test_07_shipping_policy() {
     let final_shipping = response.results.get("final_shipping").unwrap();
     match &final_shipping.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Number(n) => {
+            lemma::ValueKind::Number(n) => {
                 // NL base shipping: 22.00, weight > 5: +7.50, customer_tier default "gold" = 20% discount
                 // shipping_before_discount = 22.00 + 7.50 = 29.50
                 // discount = 29.50 * 20% = 5.90
@@ -313,10 +313,10 @@ fn test_07_shipping_policy() {
     let estimated_delivery_days = response.results.get("estimated_delivery_days").unwrap();
     match &estimated_delivery_days.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Duration(v, unit) => {
+            lemma::ValueKind::Duration(v, unit) => {
                 // destination_country is NL and is_expedited is false, so delivery is 2 days
                 assert_eq!(*v, Decimal::from_str("2").unwrap());
-                assert_eq!(*unit, lemma::DurationUnit::Day);
+                assert_eq!(*unit, lemma::SemanticDurationUnit::Day);
             }
             other => panic!(
                 "Expected Duration for estimated_delivery_days, got {:?}",
@@ -342,13 +342,13 @@ fn test_08_rule_references() {
     assert_eq!(response.doc_name, "rule_references");
     assert_eq!(
         response.results.get("can_drive_legally").unwrap().result,
-        lemma::OperationResult::Value(lemma::LiteralValue::boolean(lemma::BooleanValue::True))
+        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
     );
 
     let driving_status = response.results.get("driving_status").unwrap();
     match &driving_status.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::Value::Text(s) => assert_eq!(s, "Can drive legally"),
+            lemma::ValueKind::Text(s) => assert_eq!(s, "Can drive legally"),
             other => panic!("Expected Text for driving_status, got {:?}", other),
         },
         other => panic!("Expected Value for driving_status, got {:?}", other),
@@ -490,7 +490,7 @@ fn test_11_document_composition() {
         .values()
         .any(|r| r.rule.name == "final_price"));
 
-    // Test wholesale pricing with overrides
+    // Test wholesale pricing with bindings
     let response = engine
         .evaluate("pricing/wholesale", vec![], HashMap::new())
         .expect("Failed to evaluate wholesale");
@@ -533,7 +533,7 @@ fn test_11_document_composition() {
         .values()
         .any(|r| r.rule.name == "price_difference"));
 
-    // Test deep nested overrides
+    // Test deep nested bindings
     let response = engine
         .evaluate("order/custom_wholesale", vec![], HashMap::new())
         .expect("Failed to evaluate custom_wholesale");

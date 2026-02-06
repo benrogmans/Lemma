@@ -38,7 +38,7 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
         lemma::OperationResult::Value(lit) => {
             assert_eq!(
                 lit.value,
-                lemma::Value::Ratio(
+                lemma::ValueKind::Ratio(
                     Decimal::from_str("0.1").unwrap(),
                     Some("percent".to_string())
                 )
@@ -56,7 +56,7 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
 
     match &price_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Number(n) = &lit.value {
+            if let lemma::ValueKind::Number(n) = &lit.value {
                 assert_eq!(*n, Decimal::from_str("180").unwrap());
             } else {
                 panic!("Expected number for price, got {:?}", price_result.result);
@@ -94,10 +94,10 @@ fn test_unit_add_percentage() -> LemmaResult<()> {
 
     match &result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Number(_n) = &lit.value {
+            if let lemma::ValueKind::Number(_n) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::Value::Number(Decimal::from_str("108.5").unwrap())
+                    lemma::ValueKind::Number(Decimal::from_str("108.5").unwrap())
                 );
             } else {
                 panic!(
@@ -145,10 +145,10 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
 
     match &increased_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Number(_n) = &lit.value {
+            if let lemma::ValueKind::Number(_n) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::Value::Number(Decimal::from_str("60").unwrap())
+                    lemma::ValueKind::Number(Decimal::from_str("60").unwrap())
                 );
             } else {
                 panic!("Expected number for increased");
@@ -169,10 +169,10 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
 
     match &decreased_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Number(_n) = &lit.value {
+            if let lemma::ValueKind::Number(_n) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::Value::Number(Decimal::from_str("42.5").unwrap())
+                    lemma::ValueKind::Number(Decimal::from_str("42.5").unwrap())
                 );
             } else {
                 panic!(
@@ -196,10 +196,10 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
 
     match &scaled_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Number(_n) = &lit.value {
+            if let lemma::ValueKind::Number(_n) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::Value::Number(Decimal::from_str("10").unwrap())
+                    lemma::ValueKind::Number(Decimal::from_str("10").unwrap())
                 );
             } else {
                 panic!("Expected number for scaled, got {:?}", scaled_result.result);
@@ -240,10 +240,10 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
 
     match &after_bulk_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Number(_n) = &lit.value {
+            if let lemma::ValueKind::Number(_n) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::Value::Number(Decimal::from_str("850").unwrap())
+                    lemma::ValueKind::Number(Decimal::from_str("850").unwrap())
                 );
             } else {
                 panic!(
@@ -267,10 +267,10 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
 
     match &final_price_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Number(_n) = &lit.value {
+            if let lemma::ValueKind::Number(_n) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::Value::Number(Decimal::from_str("807.5").unwrap())
+                    lemma::ValueKind::Number(Decimal::from_str("807.5").unwrap())
                 );
             } else {
                 panic!(
@@ -320,10 +320,10 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
 
     match &combined_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Ratio(_r, _) = &lit.value {
+            if let lemma::ValueKind::Ratio(_r, _) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::Value::Ratio(
+                    lemma::ValueKind::Ratio(
                         Decimal::from_str("0.15").unwrap(),
                         Some("percent".to_string())
                     )
@@ -350,10 +350,10 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
 
     match &net_rate_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Ratio(_r, _) = &lit.value {
+            if let lemma::ValueKind::Ratio(_r, _) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::Value::Ratio(
+                    lemma::ValueKind::Ratio(
                         Decimal::from_str("0.10").unwrap(),
                         Some("percent".to_string())
                     )
@@ -380,10 +380,10 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
 
     match &compound_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Ratio(_r, _) = &lit.value {
+            if let lemma::ValueKind::Ratio(_r, _) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::Value::Ratio(
+                    lemma::ValueKind::Ratio(
                         Decimal::from_str("0.04").unwrap(),
                         Some("percent".to_string())
                     )
@@ -412,7 +412,7 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
         lemma::OperationResult::Value(lit) => {
             // 20% / 5% = 4 (ratio / ratio = ratio)
             match &lit.value {
-                lemma::Value::Ratio(r, unit) => {
+                lemma::ValueKind::Ratio(r, unit) => {
                     assert_eq!(*r, Decimal::from_str("4").unwrap());
                     assert_eq!(unit.as_deref(), Some("percent"));
                 }
@@ -457,10 +457,10 @@ fn test_averaging_percentages() -> LemmaResult<()> {
 
     match &sum_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Ratio(_r, _) = &lit.value {
+            if let lemma::ValueKind::Ratio(_r, _) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::Value::Ratio(
+                    lemma::ValueKind::Ratio(
                         Decimal::from_str("0.45").unwrap(),
                         Some("percent".to_string())
                     )
@@ -483,19 +483,19 @@ fn test_averaging_percentages() -> LemmaResult<()> {
         lemma::OperationResult::Value(lit) => {
             // 45% / 3 = 15% (ratio / number = ratio or number depending on implementation)
             match &lit.value {
-                lemma::Value::Ratio(_r, _) => {
+                lemma::ValueKind::Ratio(_r, _) => {
                     assert_eq!(
                         lit.value,
-                        lemma::Value::Ratio(
+                        lemma::ValueKind::Ratio(
                             Decimal::from_str("0.15").unwrap(),
                             Some("percent".to_string())
                         )
                     );
                 }
-                lemma::Value::Number(_n) => {
+                lemma::ValueKind::Number(_n) => {
                     assert_eq!(
                         lit.value,
-                        lemma::Value::Number(Decimal::from_str("0.15").unwrap())
+                        lemma::ValueKind::Number(Decimal::from_str("0.15").unwrap())
                     );
                 }
                 _ => panic!("Expected ratio or number for average, got {:?}", lit.value),

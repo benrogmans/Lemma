@@ -1,7 +1,7 @@
 use super::ast::{DepthTracker, Span};
 use super::Rule;
 use crate::error::LemmaError;
-use crate::semantic::*;
+use crate::parsing::ast::*;
 use crate::Source;
 use pest::iterators::Pair;
 use std::sync::Arc;
@@ -59,11 +59,7 @@ pub(crate) fn parse_rule_definition(
         name,
         expression,
         unless_clauses,
-        source_location: Some(Source::new(
-            attribute.to_string(),
-            span.clone(),
-            doc_name.to_string(),
-        )),
+        source_location: Source::new(attribute.to_string(), span.clone(), doc_name.to_string()),
     })
 }
 
@@ -121,23 +117,37 @@ fn parse_veto_expression(
 ) -> Result<Expression, LemmaError> {
     let veto_span = Span::from_pest_span(pair.as_span());
     // Pest grammar: ^"veto" ~ (SPACE+ ~ text_literal)?
-    // If text_literal child exists, extract the string content (without quotes)
-    let message = pair
+    // If text_literal child exists, parse it via the existing literal parser (same path as other types).
+    let message = match pair
         .clone()
         .into_inner()
         .find(|p| p.as_rule() == Rule::text_literal)
-        .map(|string_pair| {
-            let content = string_pair.as_str();
-            content[1..content.len() - 1].to_string()
-        });
+    {
+        Some(string_pair) => {
+            let value =
+                crate::parsing::literals::parse_literal(string_pair.clone(), attribute, doc_name)?;
+            match value {
+                Value::Text(s) => Some(s),
+                _ => {
+                    let span = Span::from_pest_span(string_pair.as_span());
+                    return Err(LemmaError::engine(
+                        "veto message must be a text literal",
+                        span,
+                        attribute,
+                        Arc::from(string_pair.as_str()),
+                        doc_name,
+                        1,
+                        None::<String>,
+                    ));
+                }
+            }
+        }
+        None => None,
+    };
     let kind = ExpressionKind::Veto(VetoExpression { message });
     Ok(Expression::new(
         kind,
-        Some(Source::new(
-            attribute.to_string(),
-            veto_span,
-            doc_name.to_string(),
-        )),
+        Source::new(attribute.to_string(), veto_span, doc_name.to_string()),
     ))
 }
 
@@ -203,11 +213,7 @@ fn parse_unless_statement(
     Ok(UnlessClause {
         condition: cond,
         result: res,
-        source_location: Some(Source::new(
-            attribute.to_string(),
-            span.clone(),
-            doc_name.to_string(),
-        )),
+        source_location: Source::new(attribute.to_string(), span.clone(), doc_name.to_string()),
     })
 }
 
@@ -337,7 +343,7 @@ rule adjusted_age = age + 1
         }
 
         match &rule.unless_clauses[1].result.kind {
-            ExpressionKind::Literal(lit) => match &lit.value {
+            ExpressionKind::Literal(lit) => match lit {
                 Value::Number(n) => assert_eq!(*n, rust_decimal::Decimal::new(100, 0)),
                 other => panic!("Expected literal number, got {:?}", other),
             },

@@ -92,7 +92,7 @@ doc = {
 }
 
 doc_body = {
-    (type_import | type_definition | fact_definition | fact_override | rule_definition | SPACE)*
+    (type_import | type_definition | fact_definition | fact_binding | rule_definition | SPACE)*
 }
 
 doc_declaration = { ^"doc" ~ SPACE+ ~ doc_name }
@@ -112,7 +112,7 @@ fact_reference_segment = { type_custom | type_standard }
 fact_reference = { fact_reference_segment ~ ("." ~ fact_reference_segment)* }
 
 fact_definition = { ^"fact" ~ SPACE+ ~ fact_reference_segment ~ SPACE* ~ "=" ~ SPACE* ~ fact_value }
-fact_override   = { ^"fact" ~ SPACE+ ~ fact_reference ~ SPACE* ~ "=" ~ SPACE* ~ fact_value }
+fact_binding    = { ^"fact" ~ SPACE+ ~ fact_reference ~ SPACE* ~ "=" ~ SPACE* ~ fact_value }
 
 fact_value = {
     inline_type_definition

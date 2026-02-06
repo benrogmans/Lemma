@@ -24,7 +24,7 @@ fn bdd_unification_simplifies_to_single_atom() {
         .invert(
             "shop_bdd",
             "target",
-            Target::value(LiteralValue::number(1)),
+            Target::value(LiteralValue::number(1.into())),
             HashMap::new(),
         )
         .expect("invert should succeed");

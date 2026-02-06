@@ -36,7 +36,7 @@ rule product = x * y
 }
 
 #[test]
-fn test_cli_run_with_fact_override() {
+fn test_cli_run_with_fact_values() {
     let temp_dir = TempDir::new().unwrap();
     let lemma_file = temp_dir.path().join("test.lemma");
 

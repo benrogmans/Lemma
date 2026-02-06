@@ -1,6 +1,6 @@
-/// Comprehensive tests for fact override type validation
+/// Comprehensive tests for fact binding type validation
 ///
-/// These tests ensure that the engine correctly validates that fact overrides
+/// These tests ensure that the engine correctly validates that fact bindings
 /// match the expected types declared in the document, preventing type confusion bugs.
 use lemma::Engine;
 use std::collections::HashMap;
@@ -117,7 +117,7 @@ rule total = base_price * 1.2
 }
 
 #[test]
-fn test_unknown_fact_override_rejected() {
+fn test_unknown_fact_binding_rejected() {
     let code = r#"
 doc test
 fact price = [number]
@@ -132,12 +132,12 @@ rule total = price * 1.1
     facts.insert("unknown_fact".to_string(), "42".to_string());
 
     let result = engine.evaluate("test", vec![], facts);
-    assert!(result.is_err(), "Expected error for unknown fact override");
+    assert!(result.is_err(), "Expected error for unknown fact binding");
     assert!(result.unwrap_err().to_string().contains("unknown_fact"));
 }
 
 #[test]
-fn test_fact_override_with_type_definition_should_fail() {
+fn test_fact_binding_with_type_definition_should_fail() {
     let code = r#"
 doc base
 fact quantity = [number -> minimum 0 -> default 10]
@@ -161,8 +161,8 @@ rule result = line.total?
     assert!(
         error_msg.contains("quantity")
             || error_msg.contains("type")
-            || error_msg.contains("override"),
-        "Error message should mention the problematic fact or type override. Got: {}",
+            || error_msg.contains("binding"),
+        "Error message should mention the problematic fact or type binding. Got: {}",
         error_msg
     );
 }

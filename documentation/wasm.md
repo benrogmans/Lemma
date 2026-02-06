@@ -66,7 +66,7 @@ Evaluates a loaded document.
 
 **Parameters:**
 - `docName` - Name of the document to evaluate
-- `factValuesJson` - JSON array of fact overrides (e.g., `'["x=10", "y=20"]'`)
+- `factValuesJson` - JSON array of fact values (e.g., `'["x=10", "y=20"]'`)
 
 **Returns:** JSON string with `{success, data, error, warnings}` structure. The `data` field contains the serialized `Response`.
 

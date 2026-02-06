@@ -26,7 +26,9 @@ impl Source {
             doc_name: doc_name.into(),
         }
     }
+}
 
+impl Source {
     /// Extract the source text for this location from the given source string
     ///
     /// Returns `None` if the span is out of bounds for the source.

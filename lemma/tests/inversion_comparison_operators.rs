@@ -24,7 +24,7 @@ fn premium_greater_than_or_equal() {
             "premium",
             Target::with_op(
                 TargetOp::Gte,
-                OperationResult::Value(LiteralValue::number(80)),
+                OperationResult::Value(Box::new(LiteralValue::number(80.into()))),
             ),
             HashMap::new(),
         )
@@ -72,10 +72,10 @@ fn discount_greater_than_threshold() {
             "discount",
             Target::with_op(
                 TargetOp::Gt,
-                OperationResult::Value(LiteralValue::ratio(
+                OperationResult::Value(Box::new(LiteralValue::ratio(
                     Decimal::from_str_exact("0.05").unwrap(), // 5% = 0.05 as ratio
                     Some("percent".to_string()),
-                )),
+                ))),
             ),
             HashMap::new(),
         )
@@ -120,7 +120,7 @@ fn price_less_than_budget() {
             "total",
             Target::with_op(
                 TargetOp::Lt,
-                OperationResult::Value(LiteralValue::number(100)),
+                OperationResult::Value(Box::new(LiteralValue::number(100.into()))),
             ),
             HashMap::new(),
         )
@@ -161,7 +161,7 @@ fn temperature_in_comfortable_range() {
             "comfort_level",
             Target::with_op(
                 TargetOp::Gte,
-                OperationResult::Value(LiteralValue::number(2)),
+                OperationResult::Value(Box::new(LiteralValue::number(2.into()))),
             ),
             HashMap::new(),
         )
@@ -204,7 +204,7 @@ fn get_valid_domain_with_threshold() {
             "shipping_cost",
             Target::with_op(
                 TargetOp::Lte,
-                OperationResult::Value(LiteralValue::number(0)),
+                OperationResult::Value(Box::new(LiteralValue::number(0.into()))),
             ),
             HashMap::new(),
         )
@@ -253,7 +253,10 @@ fn all_comparison_operators() {
             .invert(
                 "test",
                 "result",
-                Target::with_op(op, OperationResult::Value(LiteralValue::number(10))),
+                Target::with_op(
+                    op,
+                    OperationResult::Value(Box::new(LiteralValue::number(10.into()))),
+                ),
                 HashMap::new(),
             )
             .expect("should invert");

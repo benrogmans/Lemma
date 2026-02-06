@@ -21,7 +21,7 @@ fn test_recursive_rule_reference_expansion_enables_solving() {
     let result = engine.invert(
         "pricing",
         "total",
-        Target::value(LiteralValue::number(122)),
+        Target::value(LiteralValue::number(122.into())),
         HashMap::new(),
     );
     assert!(result.is_ok(), "Inversion should succeed: {:?}", result);

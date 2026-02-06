@@ -13,7 +13,7 @@ fact x = [number]
 rule doubled = x * 2
 "#;
         
-        if engine.add_lemma_code(code, "fuzz_override").is_ok() {
+        if engine.add_lemma_code(code, "fuzz_binding").is_ok() {
             if let Ok(facts) = lemma::parse_facts(&[s]) {
                 let _ = engine.evaluate("fuzz_test", None, Some(facts));
             }

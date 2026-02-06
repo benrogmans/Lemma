@@ -5,12 +5,13 @@
 //!
 //! Also includes expression substitution and hydration utilities.
 
-use crate::planning::{ExecutableRule, ExecutionPlan};
-use crate::{
-    ArithmeticComputation, BooleanValue, ComparisonComputation, ConversionTarget, Expression,
-    ExpressionKind, FactPath, LemmaResult, LiteralValue, MathematicalComputation, NegationType,
-    OperationResult, RulePath, Value,
+use crate::planning::semantics::{
+    ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, FactPath,
+    LiteralValue, MathematicalComputation, NegationType, RulePath, SemanticConversionTarget,
+    Source,
 };
+use crate::planning::{ExecutableRule, ExecutionPlan};
+use crate::{LemmaResult, OperationResult};
 use serde::ser::{Serialize, SerializeMap, Serializer};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -361,13 +362,7 @@ fn extract_rule_paths_from_expression(expr: &Expression, paths: &mut HashSet<Rul
         | ExpressionKind::MathematicalComputation(_, inner) => {
             extract_rule_paths_from_expression(inner, paths);
         }
-        ExpressionKind::Literal(_)
-        | ExpressionKind::FactPath(_)
-        | ExpressionKind::Veto(_)
-        | ExpressionKind::Reference(_)
-        | ExpressionKind::UnresolvedUnitLiteral(_, _)
-        | ExpressionKind::FactReference(_)
-        | ExpressionKind::RuleReference(_) => {}
+        ExpressionKind::Literal(_) | ExpressionKind::FactPath(_) | ExpressionKind::Veto(_) => {}
     }
 }
 
@@ -386,13 +381,13 @@ fn substitute_rules_in_expression(
 ) -> LemmaResult<Expression> {
     enum WorkItem {
         Process(usize),
-        BuildArithmetic(ArithmeticComputation, Option<crate::Source>),
-        BuildComparison(ComparisonComputation, Option<crate::Source>),
-        BuildLogicalAnd(Option<crate::Source>),
-        BuildLogicalOr(Option<crate::Source>),
-        BuildLogicalNegation(NegationType, Option<crate::Source>),
-        BuildUnitConversion(ConversionTarget, Option<crate::Source>),
-        BuildMathematicalComputation(MathematicalComputation, Option<crate::Source>),
+        BuildArithmetic(ArithmeticComputation, Source),
+        BuildComparison(ComparisonComputation, Source),
+        BuildLogicalAnd(Source),
+        BuildLogicalOr(Source),
+        BuildLogicalNegation(NegationType, Source),
+        BuildUnitConversion(SemanticConversionTarget, Source),
+        BuildMathematicalComputation(MathematicalComputation, Source),
         PopVisitedRules,
     }
 
@@ -441,26 +436,6 @@ fn substitute_rules_in_expression(
                             ExpressionKind::RulePath(rule_path.clone()),
                             source_loc,
                         ));
-                    }
-                    ExpressionKind::RuleReference(_) => {
-                        unreachable!(
-                            "BUG: RuleReference found during substitution (should be RulePath)"
-                        );
-                    }
-                    ExpressionKind::FactReference(_) => {
-                        unreachable!(
-                            "BUG: FactReference found during substitution (should be FactPath)"
-                        );
-                    }
-                    ExpressionKind::Reference(_) => {
-                        unreachable!(
-                            "BUG: unresolved Reference found during substitution (should be resolved during planning)"
-                        );
-                    }
-                    ExpressionKind::UnresolvedUnitLiteral(_, _) => {
-                        unreachable!(
-                            "UnresolvedUnitLiteral found during substitution - this is a bug: unresolved units should be resolved during planning"
-                        );
                     }
                     ExpressionKind::Arithmetic(left, op, right) => {
                         let op_clone = op.clone();
@@ -679,13 +654,13 @@ fn hydrate_facts_in_expression(
 ) -> LemmaResult<Expression> {
     enum WorkItem {
         Process(usize),
-        BuildArithmetic(ArithmeticComputation, Option<crate::Source>),
-        BuildComparison(ComparisonComputation, Option<crate::Source>),
-        BuildLogicalAnd(Option<crate::Source>),
-        BuildLogicalOr(Option<crate::Source>),
-        BuildLogicalNegation(NegationType, Option<crate::Source>),
-        BuildUnitConversion(ConversionTarget, Option<crate::Source>),
-        BuildMathematicalComputation(MathematicalComputation, Option<crate::Source>),
+        BuildArithmetic(ArithmeticComputation, Source),
+        BuildComparison(ComparisonComputation, Source),
+        BuildLogicalAnd(Source),
+        BuildLogicalOr(Source),
+        BuildLogicalNegation(NegationType, Source),
+        BuildUnitConversion(SemanticConversionTarget, Source),
+        BuildMathematicalComputation(MathematicalComputation, Source),
     }
 
     let mut expr_pool: Vec<Arc<Expression>> = Vec::new();
@@ -707,9 +682,9 @@ fn hydrate_facts_in_expression(
                 match expr_kind_ref {
                     ExpressionKind::FactPath(fact_path) => {
                         if provided_facts.contains(fact_path) {
-                            if let Some(lit) = plan.fact_values.get(fact_path) {
+                            if let Some(lit) = plan.facts.get(fact_path).and_then(|d| d.value()) {
                                 result_pool.push(Expression::new(
-                                    ExpressionKind::Literal(lit.clone()),
+                                    ExpressionKind::Literal(Box::new(lit.clone())),
                                     source_loc,
                                 ));
                                 continue;
@@ -719,26 +694,6 @@ fn hydrate_facts_in_expression(
                             ExpressionKind::FactPath(fact_path.clone()),
                             source_loc,
                         ));
-                    }
-                    ExpressionKind::FactReference(_) => {
-                        unreachable!(
-                            "BUG: FactReference found during hydration (should be FactPath)"
-                        );
-                    }
-                    ExpressionKind::RuleReference(_) => {
-                        unreachable!(
-                            "BUG: RuleReference found during hydration (should be RulePath)"
-                        );
-                    }
-                    ExpressionKind::Reference(_) => {
-                        unreachable!(
-                            "BUG: unresolved Reference found during hydration (should be resolved during planning)"
-                        );
-                    }
-                    ExpressionKind::UnresolvedUnitLiteral(_, _) => {
-                        unreachable!(
-                            "UnresolvedUnitLiteral found during hydration - this is a bug: unresolved units should be resolved during planning"
-                        );
                     }
                     ExpressionKind::Arithmetic(left, op, right) => {
                         let op_clone = op.clone();
@@ -930,7 +885,9 @@ fn hydrate_facts_in_expression(
 /// Extract an outcome (value or veto) from an expression
 fn extract_outcome(expr: &Expression) -> Option<OperationResult> {
     match &expr.kind {
-        ExpressionKind::Literal(lit) => Some(OperationResult::Value(lit.clone())),
+        ExpressionKind::Literal(lit) => {
+            Some(OperationResult::Value(Box::new(lit.as_ref().clone())))
+        }
         ExpressionKind::Veto(ve) => Some(OperationResult::Veto(ve.message.clone())),
         _ => None,
     }
@@ -980,7 +937,7 @@ fn create_boolean_expression_solutions(
         vec![WorldSolution {
             world: world.clone(),
             constraint: simplified_true,
-            outcome: OperationResult::Value(LiteralValue::boolean(BooleanValue::True)),
+            outcome: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
         }]
     } else {
         vec![]
@@ -994,7 +951,7 @@ fn create_boolean_expression_solutions(
         vec![WorldSolution {
             world,
             constraint: simplified_false,
-            outcome: OperationResult::Value(LiteralValue::boolean(BooleanValue::False)),
+            outcome: OperationResult::Value(Box::new(LiteralValue::from_bool(false))),
         }]
     } else {
         vec![]
@@ -1013,9 +970,10 @@ pub(crate) fn try_constant_fold_expression(expr: &Expression) -> Option<Expressi
             if let (ExpressionKind::Literal(ref left_val), ExpressionKind::Literal(ref right_val)) =
                 (&left_folded.kind, &right_folded.kind)
             {
-                if let Some(result) = evaluate_arithmetic(left_val, op, right_val) {
+                if let Some(result) = evaluate_arithmetic(left_val.as_ref(), op, right_val.as_ref())
+                {
                     return Some(Expression::new(
-                        ExpressionKind::Literal(result),
+                        ExpressionKind::Literal(Box::new(result)),
                         expr.source_location.clone(),
                     ));
                 }
@@ -1035,9 +993,10 @@ pub(crate) fn try_constant_fold_expression(expr: &Expression) -> Option<Expressi
             if let (ExpressionKind::Literal(ref left_val), ExpressionKind::Literal(ref right_val)) =
                 (&left_folded.kind, &right_folded.kind)
             {
-                if let Some(result) = evaluate_comparison(left_val, op, right_val) {
+                if let Some(result) = evaluate_comparison(left_val.as_ref(), op, right_val.as_ref())
+                {
                     return Some(Expression::new(
-                        ExpressionKind::Literal(LiteralValue::boolean(result)),
+                        ExpressionKind::Literal(Box::new(LiteralValue::from_bool(result))),
                         expr.source_location.clone(),
                     ));
                 }
@@ -1066,7 +1025,7 @@ fn evaluate_arithmetic(
     use crate::computation::arithmetic_operation;
 
     match arithmetic_operation(left, op, right) {
-        OperationResult::Value(lit) => Some(lit),
+        OperationResult::Value(lit) => Some(lit.as_ref().clone()),
         OperationResult::Veto(_) => None,
     }
 }
@@ -1078,12 +1037,13 @@ fn evaluate_comparison(
     left: &LiteralValue,
     op: &ComparisonComputation,
     right: &LiteralValue,
-) -> Option<BooleanValue> {
+) -> Option<bool> {
     use crate::computation::comparison_operation;
+    use crate::planning::semantics::ValueKind;
 
     match comparison_operation(left, op, right) {
         OperationResult::Value(lit) => match &lit.value {
-            Value::Boolean(b) => Some(b.clone()),
+            ValueKind::Boolean(b) => Some(*b),
             _ => None,
         },
         _ => None,
@@ -1097,16 +1057,20 @@ fn evaluate_comparison(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planning::semantics::ValueKind;
     use rust_decimal::Decimal;
 
     fn literal_expr(val: LiteralValue) -> Expression {
-        Expression::new(ExpressionKind::Literal(val), None)
+        Expression::new(
+            ExpressionKind::Literal(Box::new(val)),
+            crate::inversion::synthetic_source(),
+        )
     }
 
     fn fact_expr(name: &str) -> Expression {
         Expression::new(
-            ExpressionKind::FactPath(FactPath::local(name.to_string())),
-            None,
+            ExpressionKind::FactPath(FactPath::new(vec![], name.to_string())),
+            crate::inversion::synthetic_source(),
         )
     }
 
@@ -1134,10 +1098,7 @@ mod tests {
     fn empty_plan() -> ExecutionPlan {
         ExecutionPlan {
             doc_name: "test".to_string(),
-            fact_schema: HashMap::new(),
-            fact_values: HashMap::new(),
-            doc_refs: HashMap::new(),
-            fact_sources: HashMap::new(),
+            facts: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
         }
@@ -1152,7 +1113,7 @@ mod tests {
         let result = hydrate_facts_in_expression(&Arc::new(expr), &plan, &provided).unwrap();
 
         if let ExpressionKind::Literal(lit) = &result.kind {
-            assert!(matches!(&lit.value, Value::Number(_)));
+            assert!(matches!(&lit.value, ValueKind::Number(_)));
         } else {
             panic!("Expected literal number");
         }
@@ -1175,13 +1136,13 @@ mod tests {
         let right = literal_expr(num(5));
         let expr = Expression::new(
             ExpressionKind::Arithmetic(Arc::new(left), ArithmeticComputation::Add, Arc::new(right)),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
         let folded = try_constant_fold_expression(&expr).unwrap();
 
         if let ExpressionKind::Literal(lit) = &folded.kind {
-            if let Value::Number(n) = &lit.value {
+            if let ValueKind::Number(n) = &lit.value {
                 assert_eq!(*n, Decimal::from(15));
             } else {
                 panic!("Expected literal number");
@@ -1201,14 +1162,14 @@ mod tests {
                 ComparisonComputation::GreaterThan,
                 Arc::new(right),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
         let folded = try_constant_fold_expression(&expr).unwrap();
 
         if let ExpressionKind::Literal(lit) = &folded.kind {
-            if let Value::Boolean(b) = &lit.value {
-                assert_eq!(*b, BooleanValue::True);
+            if let ValueKind::Boolean(b) = &lit.value {
+                assert!(*b);
             } else {
                 panic!("Expected literal boolean");
             }

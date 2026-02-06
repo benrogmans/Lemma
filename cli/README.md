@@ -25,7 +25,7 @@ lemma run shipping
 # Evaluate specific rules
 lemma run tax_calculation:tax_owed
 
-# Override facts at runtime
+# Provide fact values
 lemma run tax_calculation income=75000 filing_status="married"
 
 # Explore documents interactively

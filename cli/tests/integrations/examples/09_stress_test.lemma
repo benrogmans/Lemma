@@ -158,7 +158,7 @@ fact weight_limit_express = 100
 doc stress_test_extended
 """
 Extended stress test with document composition
-Demonstrates: cross-document references, field access, complex dependencies, fact overrides
+Demonstrates: cross-document references, field access, complex dependencies, fact bindings
 """
 
 fact config = doc stress_test_config

@@ -203,7 +203,7 @@ for (var, domain) in &response.solutions {
 
 - **Rich type system** – percentages, mass, length, duration, temperature, pressure, power, energy, frequency, and data sizes
 - **Automatic unit conversions** – convert between units inside expressions without extra code
-- **Document composition** – extend documents, override facts, and reuse rules across modules
+- **Document composition** – extend documents, bind facts, and reuse rules across modules
 - **Audit trail** – every evaluation returns the operations that led to each result
 - **Inverse reasoning** – find what inputs produce desired outputs
 - **WebAssembly build** – `npm install @benrogmans/lemma-engine` to run Lemma in browsers and at the edge

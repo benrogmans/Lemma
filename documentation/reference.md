@@ -74,9 +74,9 @@ fact workweek = 40 hours
 rule workweek_days = workweek in days  // Converts to ~1.67 days
 ```
 
-## Standard Types
+## Primitive types
 
-Lemma provides these standard primitive types:
+Lemma provides these primitive types:
 
 - **`boolean`** - true/false values
 - **`number`** - dimensionless numeric values (no units)

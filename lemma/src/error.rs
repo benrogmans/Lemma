@@ -1,5 +1,6 @@
 use crate::parsing::ast::Span;
-use crate::Source;
+use crate::parsing::source::Source;
+use crate::planning::semantics::{FactPath, RulePath};
 use std::fmt;
 use std::sync::Arc;
 
@@ -136,18 +137,14 @@ impl LemmaError {
     /// Create an inversion error with source information
     pub fn inversion(
         message: impl Into<String>,
-        span: Span,
-        attribute: impl Into<String>,
-        source_text: Arc<str>,
-        doc_name: impl Into<String>,
-        doc_start_line: usize,
+        source: &Source,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
         Self::Inversion(Box::new(ErrorDetails {
             message: message.into(),
-            source_location: Source::new(attribute, span, doc_name),
-            source_text,
-            doc_start_line,
+            source_location: source.clone(),
+            source_text: Arc::from(""),
+            doc_start_line: 1,
             suggestion: suggestion.map(Into::into),
         }))
     }
@@ -155,22 +152,10 @@ impl LemmaError {
     /// Create an inversion error with suggestion
     pub fn inversion_with_suggestion(
         message: impl Into<String>,
-        span: Span,
-        attribute: impl Into<String>,
-        source_text: Arc<str>,
-        doc_name: impl Into<String>,
-        doc_start_line: usize,
+        source: &Source,
         suggestion: impl Into<String>,
     ) -> Self {
-        Self::inversion(
-            message,
-            span,
-            attribute,
-            source_text,
-            doc_name,
-            doc_start_line,
-            Some(suggestion),
-        )
+        Self::inversion(message, source, Some(suggestion))
     }
 
     /// Create an engine error with source information
@@ -194,7 +179,7 @@ impl LemmaError {
 
     /// Create a missing fact error with source information
     pub fn missing_fact(
-        fact_path: crate::FactPath,
+        fact_path: FactPath,
         span: Span,
         attribute: impl Into<String>,
         source_text: Arc<str>,
@@ -213,7 +198,7 @@ impl LemmaError {
 
     /// Create a missing rule error with source information
     pub fn missing_rule(
-        rule_path: crate::RulePath,
+        rule_path: RulePath,
         span: Span,
         attribute: impl Into<String>,
         source_text: Arc<str>,
@@ -230,52 +215,11 @@ impl LemmaError {
         }))
     }
 
-    /// Create a missing type error with source information
-    pub fn missing_type(
-        type_name: impl Into<String>,
-        span: Span,
-        attribute: impl Into<String>,
-        source_text: Arc<str>,
-        doc_name: impl Into<String>,
-        doc_start_line: usize,
-        suggestion: Option<impl Into<String>>,
-    ) -> Self {
-        Self::Engine(Box::new(ErrorDetails {
-            message: format!("Missing type: {}", type_name.into()),
-            source_location: Source::new(attribute, span, doc_name),
-            source_text,
-            doc_start_line,
-            suggestion: suggestion.map(Into::into),
-        }))
-    }
-
-    /// Create a missing document error with source information
-    pub fn missing_doc(
-        doc_name: impl Into<String>,
-        span: Span,
-        attribute: impl Into<String>,
-        source_text: Arc<str>,
-        current_doc_name: impl Into<String>,
-        doc_start_line: usize,
-        suggestion: Option<impl Into<String>>,
-    ) -> Self {
-        Self::Engine(Box::new(ErrorDetails {
-            message: format!("Missing document: {}", doc_name.into()),
-            source_location: Source::new(attribute, span, current_doc_name),
-            source_text,
-            doc_start_line,
-            suggestion: suggestion.map(Into::into),
-        }))
-    }
-
     /// Create a circular dependency error with source information
-    #[allow(clippy::too_many_arguments)]
     pub fn circular_dependency(
         message: impl Into<String>,
-        span: Span,
-        attribute: impl Into<String>,
+        source_location: Source,
         source_text: Arc<str>,
-        doc_name: impl Into<String>,
         doc_start_line: usize,
         cycle: Vec<Source>,
         suggestion: Option<impl Into<String>>,
@@ -283,7 +227,7 @@ impl LemmaError {
         Self::CircularDependency {
             details: Box::new(ErrorDetails {
                 message: message.into(),
-                source_location: Source::new(attribute, span, doc_name),
+                source_location,
                 source_text,
                 doc_start_line,
                 suggestion: suggestion.map(Into::into),
@@ -586,15 +530,17 @@ mod tests {
 
         let circular_dependency_error = LemmaError::circular_dependency(
             "a -> b -> a",
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<test>",
+            Source::new(
+                "<test>",
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<test>",
+            ),
             Arc::from(""),
-            "<test>",
             1,
             vec![],
             None::<String>,

@@ -18,7 +18,7 @@ fn piecewise_value_guard_pruning_equality() {
         .invert(
             "shipping",
             "shipping_cost",
-            Target::value(LiteralValue::number(10)),
+            Target::value(LiteralValue::number(10.into())),
             std::collections::HashMap::new(),
         )
         .expect("invert should succeed");
@@ -50,7 +50,7 @@ fn piecewise_value_guard_pruning_inequality() {
             "shipping_cost",
             Target::with_op(
                 TargetOp::Gt,
-                lemma::OperationResult::Value(LiteralValue::number(5)),
+                lemma::OperationResult::Value(Box::new(LiteralValue::number(5.into()))),
             ),
             std::collections::HashMap::new(),
         )

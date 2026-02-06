@@ -1,6 +1,7 @@
 //! Target specification for inversion queries
 
-use crate::{LiteralValue, OperationResult};
+use crate::planning::semantics::LiteralValue;
+use crate::OperationResult;
 use serde::Serialize;
 
 /// Desired outcome for an inversion query
@@ -36,7 +37,7 @@ impl Target {
     pub fn value(value: LiteralValue) -> Self {
         Self {
             op: TargetOp::Eq,
-            outcome: Some(OperationResult::Value(value)),
+            outcome: Some(OperationResult::Value(Box::new(value))),
         }
     }
 

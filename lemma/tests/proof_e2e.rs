@@ -28,7 +28,7 @@ rule doubled = base_value * 2
     // Verify result
     assert_eq!(
         doubled_result.result,
-        OperationResult::Value(LiteralValue::number(200))
+        OperationResult::Value(Box::new(LiteralValue::number(200.into())))
     );
 
     // Verify proof was built
@@ -40,7 +40,7 @@ rule doubled = base_value * 2
     assert_eq!(proof.rule_path.rule, "doubled");
     assert_eq!(
         proof.result,
-        OperationResult::Value(LiteralValue::number(200))
+        OperationResult::Value(Box::new(LiteralValue::number(200.into())))
     );
 
     // Verify proof tree structure exists
@@ -79,7 +79,7 @@ rule quadruple = doubled? * 2
     // Verify result
     assert_eq!(
         quadruple_result.result,
-        OperationResult::Value(LiteralValue::number(200))
+        OperationResult::Value(Box::new(LiteralValue::number(200.into())))
     );
 
     // Verify proof exists
@@ -93,7 +93,7 @@ rule quadruple = doubled? * 2
         lemma::proof::ProofNode::Computation {
             operands, result, ..
         } => {
-            assert_eq!(*result, LiteralValue::number(200));
+            assert_eq!(*result, LiteralValue::number(200.into()));
 
             // First operand should be a rule reference to doubled
             match &operands[0] {
@@ -107,7 +107,7 @@ rule quadruple = doubled? * 2
                     // Expansion should contain the proof for doubled
                     match &**expansion {
                         lemma::proof::ProofNode::Computation { result, .. } => {
-                            assert_eq!(*result, LiteralValue::number(100));
+                            assert_eq!(*result, LiteralValue::number(100.into()));
                         }
                         other => panic!("Expected Computation in expansion, got {:?}", other),
                     }
@@ -150,10 +150,10 @@ rule discount_percentage = 0%
     // 0% is stored as Ratio(0, Some("percent")) to indicate it's a percentage
     assert_eq!(
         discount_result.result,
-        OperationResult::Value(LiteralValue::ratio(
+        OperationResult::Value(Box::new(LiteralValue::ratio(
             Decimal::from(0),
             Some("percent".to_string())
-        ))
+        )))
     );
 
     // Verify proof exists
@@ -262,7 +262,7 @@ rule result = base_ref.doubled? + 50
     // Verify result
     assert_eq!(
         result.result,
-        OperationResult::Value(LiteralValue::number(250))
+        OperationResult::Value(Box::new(LiteralValue::number(250.into())))
     );
 
     // Verify proof exists

@@ -8,11 +8,11 @@
 //! Includes BDD-based simplification for contradiction detection.
 //! For semantic analysis (e.g., `x == A and x != B`), use domain extraction.
 
-use crate::parsing::ast::Span;
-use crate::{
-    ArithmeticComputation, ComparisonComputation, ConversionTarget, FactPath, LemmaError,
-    LemmaResult, LiteralValue, OperationResult, Value,
+use crate::planning::semantics::{
+    ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, FactPath,
+    LiteralValue, SemanticConversionTarget, ValueKind,
 };
+use crate::{LemmaError, LemmaResult, OperationResult};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::fmt;
 use std::sync::Arc;
@@ -127,8 +127,8 @@ impl Constraint {
     /// - Boolean fact references
     /// - Logical operators (and, or, not)
     /// - Boolean literals
-    pub fn from_expression(expr: &crate::Expression) -> LemmaResult<Constraint> {
-        use crate::ExpressionKind;
+    pub fn from_expression(expr: &Expression) -> LemmaResult<Constraint> {
+        use ExpressionKind;
 
         enum WorkItem {
             Process(usize),
@@ -137,7 +137,7 @@ impl Constraint {
             ApplyNot,
         }
 
-        let mut expr_pool: Vec<crate::Expression> = Vec::new();
+        let mut expr_pool: Vec<Expression> = Vec::new();
         let mut work_stack: Vec<WorkItem> = Vec::new();
         let mut constraint_stack: Vec<Constraint> = Vec::new();
 
@@ -150,27 +150,13 @@ impl Constraint {
                 WorkItem::Process(expr_idx) => {
                     let current_expr = &expr_pool[expr_idx];
                     let expr_kind = current_expr.kind.clone();
-                    let expr_source = current_expr
-                        .source_location
-                        .as_ref()
-                        .map(|s| (s.span.clone(), s.attribute.clone(), s.doc_name.clone()))
-                        .unwrap_or_else(|| {
-                            (
-                                Span {
-                                    start: 0,
-                                    end: 0,
-                                    line: 1,
-                                    col: 0,
-                                },
-                                "<inversion>".to_string(),
-                                "<inversion>".to_string(),
-                            )
-                        });
+                    let s = &current_expr.source_location;
+                    let expr_source = (s.span.clone(), s.attribute.clone(), s.doc_name.clone());
 
                     match expr_kind {
                         ExpressionKind::Literal(lit) => match &lit.value {
-                            Value::Boolean(bool_val) => {
-                                if bool_val.into() {
+                            ValueKind::Boolean(bool_val) => {
+                                if *bool_val {
                                     constraint_stack.push(Constraint::True);
                                 } else {
                                     constraint_stack.push(Constraint::False);
@@ -227,22 +213,9 @@ impl Constraint {
                             work_stack.push(WorkItem::Process(inner_idx));
                         }
                         other => {
-                            let expr_source = current_expr
-                                .source_location
-                                .as_ref()
-                                .map(|s| (s.span.clone(), s.attribute.clone(), s.doc_name.clone()))
-                                .unwrap_or_else(|| {
-                                    (
-                                        Span {
-                                            start: 0,
-                                            end: 0,
-                                            line: 1,
-                                            col: 0,
-                                        },
-                                        "<inversion>".to_string(),
-                                        "<inversion>".to_string(),
-                                    )
-                                });
+                            let s = &current_expr.source_location;
+                            let expr_source =
+                                (s.span.clone(), s.attribute.clone(), s.doc_name.clone());
                             return Err(LemmaError::engine(
                                 format!(
                                     "Cannot convert expression kind to constraint: {:?}",
@@ -292,45 +265,18 @@ impl Constraint {
 
     /// Convert a comparison expression to a constraint
     fn from_comparison(
-        left: &crate::Expression,
+        left: &Expression,
         op: &ComparisonComputation,
-        right: &crate::Expression,
+        right: &Expression,
     ) -> LemmaResult<Constraint> {
-        use crate::BooleanValue;
-        use crate::ExpressionKind;
-
-        fn expr_source(expr: &crate::Expression) -> Option<(Span, String, String)> {
-            expr.source_location
-                .as_ref()
-                .map(|s| (s.span.clone(), s.attribute.clone(), s.doc_name.clone()))
-        }
+        use ExpressionKind;
 
         fn inversion_err_for(
-            left: &crate::Expression,
-            right: &crate::Expression,
+            left: &Expression,
             message: impl Into<String>,
             suggestion: Option<String>,
         ) -> LemmaError {
-            let (span, attribute, doc_name) =
-                expr_source(left).or_else(|| expr_source(right)).unwrap_or((
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<inversion>".to_string(),
-                    "<inversion>".to_string(),
-                ));
-            LemmaError::inversion(
-                message,
-                span,
-                attribute,
-                Arc::from(""),
-                doc_name,
-                1,
-                suggestion,
-            )
+            LemmaError::inversion(message, &left.source_location, suggestion)
         }
 
         // Case 1: fact op literal (e.g., age > 18)
@@ -339,7 +285,7 @@ impl Constraint {
                 return Ok(Constraint::Comparison {
                     fact: fact_path.clone(),
                     op: op.clone(),
-                    value: Arc::new(value.clone()),
+                    value: Arc::new(value.as_ref().clone()),
                 });
             }
         }
@@ -351,7 +297,7 @@ impl Constraint {
                 return Ok(Constraint::Comparison {
                     fact: fact_path.clone(),
                     op: flipped_op,
-                    value: Arc::new(value.clone()),
+                    value: Arc::new(value.as_ref().clone()),
                 });
             }
         }
@@ -377,16 +323,12 @@ impl Constraint {
         if op.is_equal() || op.is_not_equal() {
             if let ExpressionKind::Comparison(inner_left, inner_op, inner_right) = &left.kind {
                 if let ExpressionKind::Literal(lit) = &right.kind {
-                    if let Value::Boolean(bool_val) = &lit.value {
+                    if let ValueKind::Boolean(bool_val) = &lit.value {
                         let inner_constraint =
                             Self::from_comparison(inner_left, inner_op, inner_right)?;
                         // For ==: true means keep, false means negate
                         // For !=: true means negate, false means keep
-                        let should_negate = if op.is_equal() {
-                            bool_val == &BooleanValue::False
-                        } else {
-                            bool_val == &BooleanValue::True
-                        };
+                        let should_negate = if op.is_equal() { !*bool_val } else { *bool_val };
                         if should_negate {
                             return Ok(inner_constraint.not());
                         } else {
@@ -396,17 +338,13 @@ impl Constraint {
                 }
             }
             if let ExpressionKind::Literal(lit) = &left.kind {
-                if let Value::Boolean(bool_val) = &lit.value {
+                if let ValueKind::Boolean(bool_val) = &lit.value {
                     if let ExpressionKind::Comparison(inner_left, inner_op, inner_right) =
                         &right.kind
                     {
                         let inner_constraint =
                             Self::from_comparison(inner_left, inner_op, inner_right)?;
-                        let should_negate = if op.is_equal() {
-                            bool_val == &BooleanValue::False
-                        } else {
-                            bool_val == &BooleanValue::True
-                        };
+                        let should_negate = if op.is_equal() { !*bool_val } else { *bool_val };
                         if should_negate {
                             return Ok(inner_constraint.not());
                         } else {
@@ -437,9 +375,8 @@ impl Constraint {
 
         Err(inversion_err_for(
             left,
-            right,
             format!(
-                "Cannot invert condition yet: unsupported comparison shape: {} {} {}",
+                "Cannot invert condition yet: unsupported comparison shape: {:?} {:?} {:?}",
                 left, op, right
             ),
             Some(
@@ -484,11 +421,11 @@ impl Constraint {
 // =============================================================================
 
 fn try_rewrite_comparison_to_atomic(
-    left: &crate::Expression,
+    left: &Expression,
     op: &ComparisonComputation,
-    right: &crate::Expression,
+    right: &Expression,
 ) -> Option<Constraint> {
-    use crate::ExpressionKind;
+    use ExpressionKind;
 
     // Prefer constant-folding to reduce expression complexity.
     let left = constant_fold_expression(left).unwrap_or_else(|| left.clone());
@@ -519,9 +456,9 @@ fn try_rewrite_comparison_to_atomic(
         (ExpressionKind::Literal(l), _) => {
             // literal op expr  =>  expr flip(op) literal
             let flipped = flip_comparison_operator(op);
-            (right.clone(), flipped, l.clone())
+            (right.clone(), flipped, l.as_ref().clone())
         }
-        (_, ExpressionKind::Literal(r)) => (left.clone(), op.clone(), r.clone()),
+        (_, ExpressionKind::Literal(r)) => (left.clone(), op.clone(), r.as_ref().clone()),
         _ => return None,
     };
 
@@ -546,16 +483,18 @@ fn try_rewrite_comparison_to_atomic(
     })
 }
 
-fn is_monotone_unit_conversion_target(target: &ConversionTarget) -> bool {
+fn is_monotone_unit_conversion_target(target: &SemanticConversionTarget) -> bool {
     matches!(
         target,
-        ConversionTarget::Duration(_) | ConversionTarget::ScaleUnit(_)
+        SemanticConversionTarget::Duration(_)
+            | SemanticConversionTarget::ScaleUnit(_)
+            | SemanticConversionTarget::RatioUnit(_)
     )
 }
 
-fn collect_fact_paths(expr: &crate::Expression, out: &mut Vec<FactPath>) {
-    use crate::ExpressionKind;
-    let mut stack: Vec<&crate::Expression> = vec![expr];
+fn collect_fact_paths(expr: &Expression, out: &mut Vec<FactPath>) {
+    use ExpressionKind;
+    let mut stack: Vec<&Expression> = vec![expr];
     while let Some(e) = stack.pop() {
         match &e.kind {
             ExpressionKind::FactPath(fp) => out.push(fp.clone()),
@@ -571,18 +510,12 @@ fn collect_fact_paths(expr: &crate::Expression, out: &mut Vec<FactPath>) {
             | ExpressionKind::MathematicalComputation(_, inner) => {
                 stack.push(inner.as_ref());
             }
-            ExpressionKind::Literal(_)
-            | ExpressionKind::Veto(_)
-            | ExpressionKind::Reference(_)
-            | ExpressionKind::UnresolvedUnitLiteral(_, _)
-            | ExpressionKind::FactReference(_)
-            | ExpressionKind::RuleReference(_)
-            | ExpressionKind::RulePath(_) => {}
+            ExpressionKind::Literal(_) | ExpressionKind::Veto(_) | ExpressionKind::RulePath(_) => {}
         }
     }
 }
 
-fn contains_fact(expr: &crate::Expression, fact: &FactPath) -> bool {
+fn contains_fact(expr: &Expression, fact: &FactPath) -> bool {
     let mut found = false;
     let mut facts = Vec::new();
     collect_fact_paths(expr, &mut facts);
@@ -595,8 +528,8 @@ fn contains_fact(expr: &crate::Expression, fact: &FactPath) -> bool {
     found
 }
 
-fn constant_fold_expression(expr: &crate::Expression) -> Option<crate::Expression> {
-    use crate::ExpressionKind;
+fn constant_fold_expression(expr: &Expression) -> Option<Expression> {
+    use ExpressionKind;
 
     match &expr.kind {
         ExpressionKind::Literal(_) => Some(expr.clone()),
@@ -605,9 +538,9 @@ fn constant_fold_expression(expr: &crate::Expression) -> Option<crate::Expressio
         ExpressionKind::UnitConversion(inner, target) => {
             let folded_inner = constant_fold_expression(inner)?;
             if let ExpressionKind::Literal(lit) = &folded_inner.kind {
-                match crate::computation::convert_unit(lit, target) {
-                    OperationResult::Value(v) => Some(crate::Expression::new(
-                        ExpressionKind::Literal(v),
+                match crate::computation::convert_unit(lit.as_ref(), target) {
+                    OperationResult::Value(v) => Some(Expression::new(
+                        ExpressionKind::Literal(Box::new(v.as_ref().clone())),
                         expr.source_location.clone(),
                     )),
                     _ => None,
@@ -622,9 +555,9 @@ fn constant_fold_expression(expr: &crate::Expression) -> Option<crate::Expressio
             let right_folded = constant_fold_expression(right)?;
             match (&left_folded.kind, &right_folded.kind) {
                 (ExpressionKind::Literal(l), ExpressionKind::Literal(r)) => {
-                    match crate::computation::arithmetic_operation(l, op, r) {
-                        OperationResult::Value(v) => Some(crate::Expression::new(
-                            ExpressionKind::Literal(v),
+                    match crate::computation::arithmetic_operation(l.as_ref(), op, r.as_ref()) {
+                        OperationResult::Value(v) => Some(Expression::new(
+                            ExpressionKind::Literal(Box::new(v.as_ref().clone())),
                             expr.source_location.clone(),
                         )),
                         _ => None,
@@ -651,12 +584,12 @@ fn flip_inequality(op: &ComparisonComputation) -> ComparisonComputation {
 }
 
 fn isolate_linear_comparison(
-    expr: &crate::Expression,
+    expr: &Expression,
     unknown: &FactPath,
     op: &ComparisonComputation,
     bound: &LiteralValue,
 ) -> Option<(ComparisonComputation, LiteralValue)> {
-    use crate::ExpressionKind;
+    use ExpressionKind;
 
     match &expr.kind {
         ExpressionKind::FactPath(fp) if fp == unknown => Some((op.clone(), bound.clone())),
@@ -681,13 +614,20 @@ fn isolate_linear_comparison(
                 let ExpressionKind::Literal(c) = right_lit.kind else {
                     return None;
                 };
-                isolate_through_arithmetic_left(left, arithmetic_op, &c, op, bound, unknown)
+                isolate_through_arithmetic_left(left, arithmetic_op, c.as_ref(), op, bound, unknown)
             } else if right_contains {
                 let left_lit = constant_fold_expression(left)?;
                 let ExpressionKind::Literal(c) = left_lit.kind else {
                     return None;
                 };
-                isolate_through_arithmetic_right(right, arithmetic_op, &c, op, bound, unknown)
+                isolate_through_arithmetic_right(
+                    right,
+                    arithmetic_op,
+                    c.as_ref(),
+                    op,
+                    bound,
+                    unknown,
+                )
             } else {
                 None
             }
@@ -698,7 +638,7 @@ fn isolate_linear_comparison(
 }
 
 fn isolate_through_arithmetic_left(
-    inner_with_unknown: &crate::Expression,
+    inner_with_unknown: &Expression,
     operation: &ArithmeticComputation,
     constant: &LiteralValue,
     op: &ComparisonComputation,
@@ -747,7 +687,7 @@ fn isolate_through_arithmetic_left(
 }
 
 fn isolate_through_arithmetic_right(
-    inner_with_unknown: &crate::Expression,
+    inner_with_unknown: &Expression,
     operation: &ArithmeticComputation,
     constant: &LiteralValue,
     op: &ComparisonComputation,
@@ -791,18 +731,18 @@ fn isolate_through_arithmetic_right(
 
 fn constant_as_number(lit: &LiteralValue) -> Option<rust_decimal::Decimal> {
     match &lit.value {
-        Value::Number(n) => Some(*n),
+        ValueKind::Number(n) => Some(*n),
         _ => None,
     }
 }
 
 fn lit_add(a: &LiteralValue, b: &LiteralValue) -> Option<LiteralValue> {
     match (&a.value, &b.value) {
-        (Value::Number(la), Value::Number(lb)) => Some(LiteralValue::number_with_type(
+        (ValueKind::Number(la), ValueKind::Number(lb)) => Some(LiteralValue::number_with_type(
             *la + *lb,
             a.lemma_type.clone(),
         )),
-        (Value::Scale(la, lua), Value::Scale(lb, lub))
+        (ValueKind::Scale(la, lua), ValueKind::Scale(lb, lub))
             if a.lemma_type == b.lemma_type && lua == lub =>
         {
             Some(LiteralValue::scale_with_type(
@@ -811,7 +751,7 @@ fn lit_add(a: &LiteralValue, b: &LiteralValue) -> Option<LiteralValue> {
                 a.lemma_type.clone(),
             ))
         }
-        (Value::Duration(la, lua), Value::Duration(lb, lub))
+        (ValueKind::Duration(la, lua), ValueKind::Duration(lb, lub))
             if a.lemma_type == b.lemma_type && lua == lub =>
         {
             Some(LiteralValue::duration_with_type(
@@ -826,11 +766,11 @@ fn lit_add(a: &LiteralValue, b: &LiteralValue) -> Option<LiteralValue> {
 
 fn lit_sub(a: &LiteralValue, b: &LiteralValue) -> Option<LiteralValue> {
     match (&a.value, &b.value) {
-        (Value::Number(la), Value::Number(lb)) => Some(LiteralValue::number_with_type(
+        (ValueKind::Number(la), ValueKind::Number(lb)) => Some(LiteralValue::number_with_type(
             *la - *lb,
             a.lemma_type.clone(),
         )),
-        (Value::Scale(la, lua), Value::Scale(lb, lub))
+        (ValueKind::Scale(la, lua), ValueKind::Scale(lb, lub))
             if a.lemma_type == b.lemma_type && lua == lub =>
         {
             Some(LiteralValue::scale_with_type(
@@ -839,7 +779,7 @@ fn lit_sub(a: &LiteralValue, b: &LiteralValue) -> Option<LiteralValue> {
                 a.lemma_type.clone(),
             ))
         }
-        (Value::Duration(la, lua), Value::Duration(lb, lub))
+        (ValueKind::Duration(la, lua), ValueKind::Duration(lb, lub))
             if a.lemma_type == b.lemma_type && lua == lub =>
         {
             Some(LiteralValue::duration_with_type(
@@ -854,13 +794,13 @@ fn lit_sub(a: &LiteralValue, b: &LiteralValue) -> Option<LiteralValue> {
 
 fn lit_mul_number(a: &LiteralValue, c: rust_decimal::Decimal) -> Option<LiteralValue> {
     match &a.value {
-        Value::Number(n) => Some(LiteralValue::number_with_type(*n * c, a.lemma_type.clone())),
-        Value::Scale(n, u) => Some(LiteralValue::scale_with_type(
+        ValueKind::Number(n) => Some(LiteralValue::number_with_type(*n * c, a.lemma_type.clone())),
+        ValueKind::Scale(n, u) => Some(LiteralValue::scale_with_type(
             *n * c,
             u.clone(),
             a.lemma_type.clone(),
         )),
-        Value::Duration(n, u) => Some(LiteralValue::duration_with_type(
+        ValueKind::Duration(n, u) => Some(LiteralValue::duration_with_type(
             *n * c,
             u.clone(),
             a.lemma_type.clone(),
@@ -874,13 +814,13 @@ fn lit_div_number(a: &LiteralValue, c: rust_decimal::Decimal) -> Option<LiteralV
         return None;
     }
     match &a.value {
-        Value::Number(n) => Some(LiteralValue::number_with_type(*n / c, a.lemma_type.clone())),
-        Value::Scale(n, u) => Some(LiteralValue::scale_with_type(
+        ValueKind::Number(n) => Some(LiteralValue::number_with_type(*n / c, a.lemma_type.clone())),
+        ValueKind::Scale(n, u) => Some(LiteralValue::scale_with_type(
             *n / c,
             u.clone(),
             a.lemma_type.clone(),
         )),
-        Value::Duration(n, u) => Some(LiteralValue::duration_with_type(
+        ValueKind::Duration(n, u) => Some(LiteralValue::duration_with_type(
             *n / c,
             u.clone(),
             a.lemma_type.clone(),
@@ -971,7 +911,7 @@ fn evaluate_literal_comparison(
 ) -> Option<bool> {
     match (&left.value, &right.value) {
         // Text equality
-        (Value::Text(l), Value::Text(r)) => {
+        (ValueKind::Text(l), ValueKind::Text(r)) => {
             if op.is_equal() {
                 Some(l == r)
             } else if op.is_not_equal() {
@@ -981,7 +921,7 @@ fn evaluate_literal_comparison(
             }
         }
         // Boolean equality
-        (Value::Boolean(l), Value::Boolean(r)) => {
+        (ValueKind::Boolean(l), ValueKind::Boolean(r)) => {
             if op.is_equal() {
                 Some(l == r)
             } else if op.is_not_equal() {
@@ -991,7 +931,7 @@ fn evaluate_literal_comparison(
             }
         }
         // Number comparisons
-        (Value::Number(l), Value::Number(r)) => match op {
+        (ValueKind::Number(l), ValueKind::Number(r)) => match op {
             ComparisonComputation::Equal | ComparisonComputation::Is => Some(l == r),
             ComparisonComputation::NotEqual | ComparisonComputation::IsNot => Some(l != r),
             ComparisonComputation::LessThan => Some(l < r),
@@ -1000,7 +940,7 @@ fn evaluate_literal_comparison(
             ComparisonComputation::GreaterThanOrEqual => Some(l >= r),
         },
         // Ratio comparisons
-        (Value::Ratio(l, _), Value::Ratio(r, _)) => match op {
+        (ValueKind::Ratio(l, _), ValueKind::Ratio(r, _)) => match op {
             ComparisonComputation::Equal | ComparisonComputation::Is => Some(l == r),
             ComparisonComputation::NotEqual | ComparisonComputation::IsNot => Some(l != r),
             ComparisonComputation::LessThan => Some(l < r),
@@ -1297,7 +1237,7 @@ mod tests {
     }
 
     fn fact(name: &str) -> FactPath {
-        FactPath::local(name.to_string())
+        FactPath::new(vec![], name.to_string())
     }
 
     fn comparison(fact_name: &str, op: ComparisonComputation, val: i64) -> Constraint {

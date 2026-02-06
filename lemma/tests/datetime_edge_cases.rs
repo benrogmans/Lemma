@@ -29,7 +29,7 @@ rule check = leap_date
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "check");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2024);
         assert_eq!(date.month, 2);
         assert_eq!(date.day, 29);
@@ -52,7 +52,7 @@ rule check = leap_date
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "check");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2000);
         assert_eq!(date.month, 2);
         assert_eq!(date.day, 29);
@@ -75,7 +75,7 @@ rule next_day = start_date + 1 day
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 1900);
         assert_eq!(date.month, 3);
         assert_eq!(date.day, 1);
@@ -98,7 +98,7 @@ rule next_day = start_date + 1 day
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2100);
         assert_eq!(date.month, 3);
         assert_eq!(date.day, 1);
@@ -121,7 +121,7 @@ rule next_month = start_date + 1 month
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_month");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2024);
         assert_eq!(date.month, 2);
         assert_eq!(date.day, 29);
@@ -144,7 +144,7 @@ rule next_month = start_date + 1 month
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_month");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2023);
         assert_eq!(date.month, 2);
         assert_eq!(date.day, 28);
@@ -167,7 +167,7 @@ rule next_year = leap_date + 1 year
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_year");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2025);
         assert_eq!(date.month, 2);
         assert_eq!(date.day, 28);
@@ -190,7 +190,7 @@ rule four_years_later = leap_date + 4 years
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "four_years_later");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2028);
         assert_eq!(date.month, 2);
         assert_eq!(date.day, 29);
@@ -213,7 +213,7 @@ rule three_months_ago = start_date - 3 months
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "three_months_ago");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2023);
         assert_eq!(date.month, 11);
         assert_eq!(date.day, 15);
@@ -236,7 +236,7 @@ rule twenty_months_later = start_date + 20 months
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "twenty_months_later");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2024);
         assert_eq!(date.month, 9);
         assert_eq!(date.day, 15);
@@ -259,7 +259,7 @@ rule last_year = start_date - 1 year
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "last_year");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2023);
         assert_eq!(date.month, 1);
         assert_eq!(date.day, 1);
@@ -283,7 +283,7 @@ rule days_diff = end_date - start_date
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "days_diff");
-    if let lemma::Value::Duration(seconds, _) = &lit.value {
+    if let lemma::ValueKind::Duration(seconds, _) = &lit.value {
         // 366 days = 31,622,400 seconds
         assert_eq!(*seconds, Decimal::from(31622400));
     } else {
@@ -306,7 +306,7 @@ rule days_diff = end_date - start_date
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "days_diff");
-    if let lemma::Value::Duration(seconds, _) = &lit.value {
+    if let lemma::ValueKind::Duration(seconds, _) = &lit.value {
         // 365 days = 31,536,000 seconds
         assert_eq!(*seconds, Decimal::from(31536000));
     } else {
@@ -328,7 +328,7 @@ rule next_day = start_datetime + 5 hours
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2024);
         assert_eq!(date.month, 3);
         assert_eq!(date.day, 16);
@@ -353,7 +353,7 @@ rule prev_day = start_datetime - 5 hours
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "prev_day");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2024);
         assert_eq!(date.month, 3);
         assert_eq!(date.day, 15);
@@ -378,7 +378,7 @@ rule later = start_time + 90 minutes
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.hour, 12);
         assert_eq!(date.minute, 0);
         assert_eq!(date.second, 45);
@@ -401,7 +401,7 @@ rule later = start_time + 90 seconds
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.hour, 10);
         assert_eq!(date.minute, 32);
         assert_eq!(date.second, 0);
@@ -424,7 +424,7 @@ rule after_midnight = evening_time + 90 minutes
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "after_midnight");
-    if let lemma::Value::Time(time) = &lit.value {
+    if let lemma::ValueKind::Time(time) = &lit.value {
         assert_eq!(time.hour, 1);
         assert_eq!(time.minute, 0);
         assert_eq!(time.second, 0);
@@ -448,7 +448,7 @@ rule timespan = end_time - start_time
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "timespan");
-    if let lemma::Value::Duration(seconds, _) = &lit.value {
+    if let lemma::ValueKind::Duration(seconds, _) = &lit.value {
         // 5.5 hours = 19800 seconds
         assert_eq!(*seconds, Decimal::new(19800, 0));
     } else {
@@ -471,7 +471,7 @@ rule timespan = end_time - start_time
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "timespan");
-    if let lemma::Value::Duration(seconds, _) = &lit.value {
+    if let lemma::ValueKind::Duration(seconds, _) = &lit.value {
         // -5.5 hours = -19800 seconds
         assert_eq!(*seconds, Decimal::new(-19800, 0));
     } else {
@@ -493,7 +493,7 @@ rule future = start_date + 1000 days
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "future");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2026);
         assert_eq!(date.month, 9);
         assert_eq!(date.day, 27);
@@ -516,7 +516,7 @@ rule later = start_time + 2.5 hours
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.hour, 12);
         assert_eq!(date.minute, 30);
         assert_eq!(date.second, 0);
@@ -540,8 +540,8 @@ rule is_before = date1 < date2
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "is_before");
-    if let lemma::Value::Boolean(value) = &lit.value {
-        assert!(bool::from(value));
+    if let lemma::ValueKind::Boolean(value) = &lit.value {
+        assert!(*value);
     } else {
         panic!("Expected Boolean value");
     }
@@ -561,7 +561,7 @@ rule april = start_date + 1 month
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "april");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2024);
         assert_eq!(date.month, 4);
         assert_eq!(date.day, 30);
@@ -584,7 +584,7 @@ rule january = start_date + 1 month
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "january");
-    if let lemma::Value::Date(date) = &lit.value {
+    if let lemma::ValueKind::Date(date) = &lit.value {
         assert_eq!(date.year, 2024);
         assert_eq!(date.month, 1);
         assert_eq!(date.day, 31);

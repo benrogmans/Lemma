@@ -29,7 +29,7 @@ cargo +nightly fuzz run fuzz_parser -- -max_total_time=3600
 2. **fuzz_expressions** - Expression parsing within valid document context
 3. **fuzz_literals** - Literal value parsing (numbers, strings, units)
 4. **fuzz_deeply_nested** - Nested expressions to test stack limits
-5. **fuzz_fact_overrides** - Fact override parsing and evaluation
+5. **fuzz_fact_bindings** - Fact binding parsing and evaluation
 
 ### Running Specific Targets
 
@@ -37,7 +37,7 @@ cargo +nightly fuzz run fuzz_parser -- -max_total_time=3600
 cargo +nightly fuzz run fuzz_expressions -- -max_total_time=60
 cargo +nightly fuzz run fuzz_literals -- -max_total_time=60
 cargo +nightly fuzz run fuzz_deeply_nested -- -max_total_time=60
-cargo +nightly fuzz run fuzz_fact_overrides -- -max_total_time=60
+cargo +nightly fuzz run fuzz_fact_bindings -- -max_total_time=60
 ```
 
 ### Reproducing Crashes

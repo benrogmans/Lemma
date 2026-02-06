@@ -21,7 +21,7 @@
 //!         rule total = price * quantity
 //!     "#, "example.lemma")?;
 //!
-//!     // Evaluate the document (all rules, no fact overrides)
+//!     // Evaluate the document (all rules, no fact values)
 //!     let response = engine.evaluate("example", vec![], std::collections::HashMap::new())?;
 //!
 //!     Ok(())
@@ -54,7 +54,6 @@ pub mod inversion;
 pub mod limits;
 pub mod parsing;
 pub mod planning;
-pub mod semantic;
 pub mod serialization;
 
 #[cfg(target_arch = "wasm32")]
@@ -67,11 +66,19 @@ pub use evaluation::operations::{
 };
 pub use evaluation::proof;
 pub use evaluation::response::{Facts, Response, RuleResult};
-pub use inversion::{invert, Bound, Domain, InversionResponse, Solution, Target, TargetOp};
+pub use inversion::{
+    invert, Bound, DerivedExpression, Domain, InversionResponse, Solution, Target, TargetOp,
+};
 pub use limits::ResourceLimits;
+pub use parsing::ast::*;
+pub use parsing::ast::{DepthTracker, Span};
 pub use parsing::parse;
-pub use parsing::{DepthTracker, Source, Span};
-pub use semantic::*;
+pub use parsing::Source;
+pub use planning::semantics::{
+    FactPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit, ScaleUnits,
+    SemanticDurationUnit, TypeSpecification, ValueKind,
+};
+pub use planning::ExecutionPlan;
 
 /// Result type for Lemma operations
 pub type LemmaResult<T> = Result<T, LemmaError>;

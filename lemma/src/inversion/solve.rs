@@ -11,7 +11,7 @@
 //! - Exponential and logarithmic functions
 //! - Unit conversions
 
-use crate::{
+use crate::planning::semantics::{
     ArithmeticComputation, Expression, ExpressionKind, FactPath, LiteralValue,
     MathematicalComputation,
 };
@@ -101,13 +101,7 @@ fn collect_unknown_facts(
         | ExpressionKind::MathematicalComputation(_, inner) => {
             collect_unknown_facts(inner, provided_facts, result);
         }
-        ExpressionKind::Literal(_)
-        | ExpressionKind::Veto(_)
-        | ExpressionKind::Reference(_)
-        | ExpressionKind::UnresolvedUnitLiteral(_, _)
-        | ExpressionKind::FactReference(_)
-        | ExpressionKind::RuleReference(_)
-        | ExpressionKind::RulePath(_) => {}
+        ExpressionKind::Literal(_) | ExpressionKind::Veto(_) | ExpressionKind::RulePath(_) => {}
     }
 }
 
@@ -187,11 +181,7 @@ fn solve_recursive(
             }
         }
 
-        ExpressionKind::FactReference(_) => Err(SolveError::CannotIsolateUnknown),
-
-        ExpressionKind::RuleReference(_) | ExpressionKind::RulePath(_) => {
-            Err(SolveError::RuleReferenceFound)
-        }
+        ExpressionKind::RulePath(_) => Err(SolveError::RuleReferenceFound),
 
         ExpressionKind::UnitConversion(inner, target_unit) => {
             if !contains_fact(inner, unknown_fact) {
@@ -303,7 +293,7 @@ fn solve_left_operand(
         ),
         ArithmeticComputation::Power => {
             let one = Expression::new(
-                ExpressionKind::Literal(LiteralValue::number(rust_decimal::Decimal::ONE)),
+                ExpressionKind::Literal(Box::new(LiteralValue::number(rust_decimal::Decimal::ONE))),
                 expression.source_location.clone(),
             );
             let inverse_exponent = Expression::new(
@@ -453,7 +443,7 @@ fn count_fact_occurrences(expression: &Expression, fact_path: &FactPath) -> usiz
 /// Check if expression contains any rule references
 fn contains_rule_reference(expression: &Expression) -> bool {
     match &expression.kind {
-        ExpressionKind::RuleReference(_) | ExpressionKind::RulePath(_) => true,
+        ExpressionKind::RulePath(_) => true,
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
         | ExpressionKind::LogicalAnd(left, right)
@@ -470,10 +460,7 @@ fn contains_rule_reference(expression: &Expression) -> bool {
 /// Check if expression only contains operations supported by the solver
 fn has_supported_operations(expression: &Expression) -> bool {
     match &expression.kind {
-        ExpressionKind::FactPath(_)
-        | ExpressionKind::FactReference(_)
-        | ExpressionKind::Literal(_)
-        | ExpressionKind::Veto(_) => true,
+        ExpressionKind::FactPath(_) | ExpressionKind::Literal(_) | ExpressionKind::Veto(_) => true,
 
         ExpressionKind::Arithmetic(left, operation, right) => {
             let supported_operation = matches!(
@@ -513,7 +500,7 @@ fn has_supported_operations(expression: &Expression) -> bool {
 fn evaluate_to_literal(expression: &Expression) -> Option<LiteralValue> {
     let folded = super::world::try_constant_fold_expression(expression)?;
     match folded.kind {
-        ExpressionKind::Literal(literal) => Some(literal),
+        ExpressionKind::Literal(literal) => Some(literal.as_ref().clone()),
         _ => None,
     }
 }
@@ -533,7 +520,10 @@ pub fn solve_arithmetic_batch(
 )> {
     let mut results = Vec::new();
 
-    let target_expression = Expression::new(ExpressionKind::Literal(target_value.clone()), None);
+    let target_expression = Expression::new(
+        ExpressionKind::Literal(Box::new(target_value.clone())),
+        crate::inversion::synthetic_source(),
+    );
 
     for arithmetic_solution in arithmetic_solutions {
         if let Some(solve_result) = try_solve_for_any_unknown(
@@ -562,13 +552,16 @@ mod tests {
     use rust_decimal::Decimal;
 
     fn literal_expression(value: LiteralValue) -> Expression {
-        Expression::new(ExpressionKind::Literal(value), None)
+        Expression::new(
+            ExpressionKind::Literal(Box::new(value)),
+            crate::inversion::synthetic_source(),
+        )
     }
 
     fn fact_expression(name: &str) -> Expression {
         Expression::new(
-            ExpressionKind::FactPath(FactPath::local(name.to_string())),
-            None,
+            ExpressionKind::FactPath(FactPath::new(vec![], name.to_string())),
+            crate::inversion::synthetic_source(),
         )
     }
 
@@ -584,11 +577,11 @@ mod tests {
                 ArithmeticComputation::Multiply,
                 Arc::new(fact_expression("quantity")),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
         let mut provided = HashSet::new();
-        provided.insert(FactPath::local("quantity".to_string()));
+        provided.insert(FactPath::new(vec![], "quantity".to_string()));
 
         let unknowns = find_unknown_facts(&expression, &provided);
         assert_eq!(unknowns.len(), 1);
@@ -603,10 +596,10 @@ mod tests {
                 ArithmeticComputation::Multiply,
                 Arc::new(literal_expression(number(5))),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
-        let unknown = FactPath::local("price".to_string());
+        let unknown = FactPath::new(vec![], "price".to_string());
         assert!(can_solve_for_fact(&expression, &unknown));
     }
 
@@ -618,10 +611,10 @@ mod tests {
                 ArithmeticComputation::Add,
                 Arc::new(fact_expression("price")),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
-        let unknown = FactPath::local("price".to_string());
+        let unknown = FactPath::new(vec![], "price".to_string());
         assert!(!can_solve_for_fact(&expression, &unknown));
     }
 
@@ -633,10 +626,10 @@ mod tests {
                 ArithmeticComputation::Multiply,
                 Arc::new(literal_expression(number(5))),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
-        let unknown = FactPath::local("price".to_string());
+        let unknown = FactPath::new(vec![], "price".to_string());
         let target = literal_expression(number(50));
 
         let result = solve_for_fact(&expression, &unknown, &target).expect("should solve");
@@ -653,10 +646,10 @@ mod tests {
                 ArithmeticComputation::Add,
                 Arc::new(literal_expression(number(10))),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
-        let unknown = FactPath::local("x".to_string());
+        let unknown = FactPath::new(vec![], "x".to_string());
         let target = literal_expression(number(25));
 
         let result = solve_for_fact(&expression, &unknown, &target).expect("should solve");
@@ -673,10 +666,10 @@ mod tests {
                 ArithmeticComputation::Subtract,
                 Arc::new(literal_expression(number(5))),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
-        let unknown = FactPath::local("x".to_string());
+        let unknown = FactPath::new(vec![], "x".to_string());
         let target = literal_expression(number(20));
 
         let result = solve_for_fact(&expression, &unknown, &target).expect("should solve");
@@ -693,10 +686,10 @@ mod tests {
                 ArithmeticComputation::Divide,
                 Arc::new(literal_expression(number(2))),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
-        let unknown = FactPath::local("x".to_string());
+        let unknown = FactPath::new(vec![], "x".to_string());
         let target = literal_expression(number(10));
 
         let result = solve_for_fact(&expression, &unknown, &target).expect("should solve");
@@ -713,7 +706,7 @@ mod tests {
                 ArithmeticComputation::Multiply,
                 Arc::new(literal_expression(number(25))),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
         let expression = Expression::new(
@@ -722,10 +715,10 @@ mod tests {
                 ArithmeticComputation::Multiply,
                 Arc::new(literal_expression(LiteralValue::number(Decimal::new(8, 1)))),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
-        let unknown = FactPath::local("hours".to_string());
+        let unknown = FactPath::new(vec![], "hours".to_string());
         let target = literal_expression(number(800));
 
         let result = solve_for_fact(&expression, &unknown, &target).expect("should solve");
@@ -742,10 +735,10 @@ mod tests {
                 ArithmeticComputation::Subtract,
                 Arc::new(fact_expression("discount")),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
-        let unknown = FactPath::local("discount".to_string());
+        let unknown = FactPath::new(vec![], "discount".to_string());
         let target = literal_expression(number(70));
 
         let result = solve_for_fact(&expression, &unknown, &target).expect("should solve");
@@ -762,7 +755,7 @@ mod tests {
                 ArithmeticComputation::Multiply,
                 Arc::new(literal_expression(number(5))),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
         let target = literal_expression(number(50));
@@ -787,10 +780,10 @@ mod tests {
                 ArithmeticComputation::Add,
                 Arc::new(fact_expression("x")),
             ),
-            None,
+            crate::inversion::synthetic_source(),
         );
 
-        let unknown = FactPath::local("x".to_string());
+        let unknown = FactPath::new(vec![], "x".to_string());
         let target = literal_expression(number(20));
 
         let result = solve_for_fact(&expression, &unknown, &target);

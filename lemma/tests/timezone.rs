@@ -30,14 +30,11 @@ rule are_equal = time_nyc == time_london
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::Value::Boolean(value),
+        value: lemma::ValueKind::Boolean(value),
         ..
     } = get_rule_value(&engine, "test", "are_equal")
     {
-        assert!(
-            bool::from(value),
-            "Same instant in different timezones should be equal"
-        );
+        assert!(value, "Same instant in different timezones should be equal");
     } else {
         panic!("Expected Boolean value");
     }
@@ -58,14 +55,11 @@ rule nyc_is_later = time_nyc > time_tokyo
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::Value::Boolean(value),
+        value: lemma::ValueKind::Boolean(value),
         ..
     } = get_rule_value(&engine, "test", "nyc_is_later")
     {
-        assert!(
-            bool::from(value),
-            "NYC 10am is later than Tokyo 10am (same local time)"
-        );
+        assert!(value, "NYC 10am is later than Tokyo 10am (same local time)");
     } else {
         panic!("Expected Boolean value");
     }
@@ -85,14 +79,14 @@ rule later = start_time + 2 hours
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::Value::Date(date),
+        value: lemma::ValueKind::Date(date),
         ..
     } = get_rule_value(&engine, "test", "later")
     {
         assert_eq!(date.hour, 12);
         assert_eq!(date.minute, 0);
         assert_eq!(date.second, 0);
-        if let Some(tz) = date.timezone {
+        if let Some(tz) = &date.timezone {
             assert_eq!(tz.offset_hours, 1);
             assert_eq!(tz.offset_minutes, 0);
         } else {
@@ -120,7 +114,7 @@ rule later = west_coast + 3 hours
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::Value::Date(date),
+        value: lemma::ValueKind::Date(date),
         ..
     } = get_rule_value(&engine, "test", "later")
     {
@@ -150,7 +144,7 @@ rule next_day = evening + 2 hours
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::Value::Date(date),
+        value: lemma::ValueKind::Date(date),
         ..
     } = get_rule_value(&engine, "test", "next_day")
     {
@@ -185,7 +179,7 @@ rule hours_diff = time2 - time1
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::Value::Duration(seconds, _),
+        value: lemma::ValueKind::Duration(seconds, _),
         ..
     } = get_rule_value(&engine, "test", "hours_diff")
     {
@@ -212,7 +206,7 @@ rule utc_equivalent = india_time
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::Value::Date(date),
+        value: lemma::ValueKind::Date(date),
         ..
     } = get_rule_value(&engine, "test", "utc_equivalent")
     {
@@ -241,7 +235,7 @@ rule preserved = nepal_time
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::Value::Date(date),
+        value: lemma::ValueKind::Date(date),
         ..
     } = get_rule_value(&engine, "test", "preserved")
     {
@@ -277,7 +271,7 @@ rule later = hawaii + 1 hour
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::Value::Date(date),
+        value: lemma::ValueKind::Date(date),
         ..
     } = get_rule_value(&engine, "test", "later")
     {
@@ -306,7 +300,7 @@ rule earlier = kiribati - 1 hour
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::Value::Date(date),
+        value: lemma::ValueKind::Date(date),
         ..
     } = get_rule_value(&engine, "test", "earlier")
     {

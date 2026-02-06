@@ -78,7 +78,7 @@ Evaluates a document with optional runtime facts.
 // Evaluate with default facts
 const result1 = engine.evaluate('employee_contract', '{}');
 
-// Evaluate with runtime fact overrides (as JSON object)
+// Evaluate with runtime fact values (as JSON object)
 const result2 = engine.evaluate('employee_contract', JSON.stringify({
   salary: 6000,
   vacation_days: 30

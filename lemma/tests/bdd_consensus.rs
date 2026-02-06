@@ -26,7 +26,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
         .invert(
             "shop_consensus",
             "target",
-            Target::value(LiteralValue::number(1)),
+            Target::value(LiteralValue::number(1.into())),
             HashMap::new(),
         )
         .expect("invert should succeed");

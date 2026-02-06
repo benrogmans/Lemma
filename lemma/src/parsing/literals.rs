@@ -1,7 +1,7 @@
 use super::Rule;
 use crate::error::LemmaError;
 use crate::parsing::ast::Span;
-use crate::semantic::*;
+use crate::parsing::ast::*;
 
 use chrono::{Datelike, Timelike};
 use pest::iterators::Pair;
@@ -13,9 +13,13 @@ pub(crate) fn parse_literal(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
-) -> Result<LiteralValue, LemmaError> {
+) -> Result<Value, LemmaError> {
     match pair.as_rule() {
         Rule::number_literal => parse_number_literal(pair, attribute, doc_name),
+        Rule::number_unit_literal => {
+            let (n, u) = parse_number_unit_literal(pair, attribute, doc_name)?;
+            Ok(Value::Scale(n, u))
+        }
         Rule::text_literal => parse_string_literal(pair),
         Rule::boolean_literal => parse_boolean_literal(pair, attribute, doc_name),
         Rule::percent_literal => parse_percent_literal(pair, attribute, doc_name),
@@ -38,7 +42,7 @@ fn parse_number_literal(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
-) -> Result<LiteralValue, LemmaError> {
+) -> Result<Value, LemmaError> {
     let pair_str = pair.as_str();
     let span = Span::from_pest_span(pair.as_span());
     let mut inner = pair.into_inner();
@@ -77,20 +81,20 @@ fn parse_number_literal(
         )?,
     };
 
-    Ok(LiteralValue::number(number))
+    Ok(Value::Number(number))
 }
 
-fn parse_string_literal(pair: Pair<Rule>) -> Result<LiteralValue, LemmaError> {
+fn parse_string_literal(pair: Pair<Rule>) -> Result<Value, LemmaError> {
     let content = pair.as_str();
     let unquoted = &content[1..content.len() - 1];
-    Ok(LiteralValue::text(unquoted.to_string()))
+    Ok(Value::Text(unquoted.to_string()))
 }
 
 fn parse_boolean_literal(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
-) -> Result<LiteralValue, LemmaError> {
+) -> Result<Value, LemmaError> {
     use crate::BooleanValue;
 
     let boolean_value = match pair.as_str() {
@@ -114,30 +118,26 @@ fn parse_boolean_literal(
         }
     };
 
-    Ok(LiteralValue::boolean(boolean_value))
+    Ok(Value::Boolean(boolean_value))
 }
 
 fn parse_percent_literal(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
-) -> Result<LiteralValue, LemmaError> {
+) -> Result<Value, LemmaError> {
     let pair_str = pair.as_str();
     let pair_span = Span::from_pest_span(pair.as_span());
     for inner_pair in pair.into_inner() {
         if inner_pair.as_rule() == Rule::number_literal {
             let inner_span = Span::from_pest_span(inner_pair.as_span());
-            let percentage = parse_number_literal(inner_pair, attribute, doc_name)?;
-            match &percentage.value {
+            let percentage_value = parse_number_literal(inner_pair, attribute, doc_name)?;
+            match &percentage_value {
                 Value::Number(n) => {
                     // Convert percent (50) to ratio (0.50) for storage
-                    // The percent unit in standard_ratio() type will indicate this is a percent
                     use rust_decimal::Decimal;
                     let ratio_value = *n / Decimal::from(100);
-                    return Ok(LiteralValue {
-                        value: Value::Ratio(ratio_value, Some("percent".to_string())),
-                        lemma_type: crate::semantic::standard_ratio().clone(),
-                    });
+                    return Ok(Value::Ratio(ratio_value, Some("percent".to_string())));
                 }
                 _ => {
                     return Err(LemmaError::engine(
@@ -168,7 +168,7 @@ fn parse_duration_literal(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
-) -> Result<LiteralValue, LemmaError> {
+) -> Result<Value, LemmaError> {
     let pair_str = pair.as_str();
     let pair_span = Span::from_pest_span(pair.as_span());
     let mut number = None;
@@ -178,8 +178,8 @@ fn parse_duration_literal(
         match inner_pair.as_rule() {
             Rule::number_literal => {
                 let inner_span = Span::from_pest_span(inner_pair.as_span());
-                let lit = parse_number_literal(inner_pair, attribute, doc_name)?;
-                match &lit.value {
+                let lit_value = parse_number_literal(inner_pair, attribute, doc_name)?;
+                match &lit_value {
                     Value::Number(n) => number = Some(*n),
                     _ => {
                         return Err(LemmaError::engine(
@@ -213,7 +213,7 @@ fn parse_duration_literal(
             None::<String>,
         )
     })?;
-    let unit = unit_str.ok_or_else(|| {
+    let unit_string = unit_str.ok_or_else(|| {
         LemmaError::engine(
             "Missing unit in duration literal",
             span,
@@ -225,92 +225,109 @@ fn parse_duration_literal(
         )
     })?;
 
-    super::units::resolve_unit(
-        value,
-        unit,
+    // Parse the duration unit string to DurationUnit enum
+    let unit = parse_duration_unit_string(
+        unit_string,
         pair_span,
         attribute,
         doc_name,
         Arc::from(pair_str),
-    )
+    )?;
+
+    Ok(Value::Duration(value, unit))
 }
 
-/// Parse a number+unit literal (e.g., "5 celsius")
-/// Returns (number, unit_name) tuple for later resolution during semantic analysis
+pub(crate) fn parse_duration_unit_string(
+    unit_str: &str,
+    span: Span,
+    attribute: &str,
+    doc_name: &str,
+    source_text: Arc<str>,
+) -> Result<DurationUnit, LemmaError> {
+    let unit_lower = unit_str.to_lowercase();
+
+    match unit_lower.as_str() {
+        "year" | "years" => Ok(DurationUnit::Year),
+        "month" | "months" => Ok(DurationUnit::Month),
+        "week" | "weeks" => Ok(DurationUnit::Week),
+        "day" | "days" => Ok(DurationUnit::Day),
+        "hour" | "hours" => Ok(DurationUnit::Hour),
+        "minute" | "minutes" => Ok(DurationUnit::Minute),
+        "second" | "seconds" => Ok(DurationUnit::Second),
+        "millisecond" | "milliseconds" => Ok(DurationUnit::Millisecond),
+        "microsecond" | "microseconds" => Ok(DurationUnit::Microsecond),
+        _ => Err(LemmaError::engine(
+            format!("Unknown duration unit: '{}'. Expected one of: years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds", unit_str),
+            span,
+            attribute,
+            source_text,
+            doc_name,
+            1,
+            None::<String>,
+        )),
+    }
+}
+
+/// Parse a "number unit" string (e.g. "1 eur", "50 percent", "500 permille") into `(number, unit_name)`.
+/// Does not validate the unit against any type; use `ScaleUnits::get()` or `RatioUnits::get()` for that.
+/// Single canonical implementation used by both AST (Pest) and runtime string parsing for scale and ratio.
+pub(crate) fn parse_number_unit_string(s: &str) -> Result<(Decimal, String), String> {
+    let trimmed = s.trim();
+    let mut parts = trimmed.split_whitespace();
+    let number_part = parts.next().ok_or_else(|| {
+        if trimmed.is_empty() {
+            "Scale value cannot be empty. Use a number followed by a unit (e.g. '10 eur')."
+                .to_string()
+        } else {
+            format!(
+                "Invalid scale value: '{}'. Scale value must be a number followed by a unit (e.g. '10 eur').",
+                s
+            )
+        }
+    })?;
+    let unit_part = parts.next().ok_or_else(|| {
+        format!(
+            "Scale value must include a unit (e.g. '{} eur').",
+            number_part
+        )
+    })?;
+    let clean = number_part.replace(['_', ','], "");
+    let n = Decimal::from_str(&clean).map_err(|_| format!("Invalid scale: '{}'", s))?;
+    Ok((n, unit_part.to_string()))
+}
+
+/// Parse a number+unit literal from AST (e.g. fact value "1 eur" in source).
+/// Uses the same logic as `parse_scale_number_unit_string`; only the source (pair.as_str()) comes from Pest.
 pub(crate) fn parse_number_unit_literal(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
-) -> Result<(rust_decimal::Decimal, String), LemmaError> {
-    let pair_str = pair.as_str();
-    let pair_span = Span::from_pest_span(pair.as_span());
-    let mut number = None;
-    let mut unit_name = None;
-
-    for inner_pair in pair.into_inner() {
-        match inner_pair.as_rule() {
-            Rule::number_literal => {
-                let inner_span = Span::from_pest_span(inner_pair.as_span());
-                let lit = parse_number_literal(inner_pair, attribute, doc_name)?;
-                match &lit.value {
-                    Value::Number(n) => number = Some(*n),
-                    _ => {
-                        return Err(LemmaError::engine(
-                            "Expected number in number+unit literal",
-                            inner_span,
-                            attribute,
-                            Arc::from(pair_str),
-                            doc_name,
-                            1,
-                            None::<String>,
-                        ));
-                    }
-                }
-            }
-            Rule::unit_name => {
-                unit_name = Some(inner_pair.as_str().to_string());
-            }
-            _ => {}
-        }
-    }
-
-    let span = pair_span.clone();
-    let value = number.ok_or_else(|| {
+) -> Result<(Decimal, String), LemmaError> {
+    let s = pair.as_str();
+    let span = Span::from_pest_span(pair.as_span());
+    parse_number_unit_string(s).map_err(|msg| {
         LemmaError::engine(
-            "Missing number in number+unit literal",
-            span.clone(),
+            msg,
+            span,
             attribute,
-            Arc::from(pair_str),
+            Arc::from(s),
             doc_name,
             1,
             None::<String>,
         )
-    })?;
-    let unit = unit_name.ok_or_else(|| {
-        LemmaError::engine(
-            "Missing unit name in number+unit literal",
-            pair_span,
-            attribute,
-            Arc::from(pair_str),
-            doc_name,
-            1,
-            None::<String>,
-        )
-    })?;
-
-    Ok((value, unit))
+    })
 }
 
 fn parse_datetime_literal(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
-) -> Result<LiteralValue, LemmaError> {
+) -> Result<Value, LemmaError> {
     let datetime_str = pair.as_str();
 
     if let Ok(dt) = datetime_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
         let offset = dt.offset().local_minus_utc();
-        return Ok(LiteralValue::date(DateTimeValue {
+        return Ok(Value::Date(DateTimeValue {
             year: dt.year(),
             month: dt.month(),
             day: dt.day(),
@@ -325,7 +342,7 @@ fn parse_datetime_literal(
     }
 
     if let Ok(dt) = datetime_str.parse::<chrono::NaiveDateTime>() {
-        return Ok(LiteralValue::date(DateTimeValue {
+        return Ok(Value::Date(DateTimeValue {
             year: dt.year(),
             month: dt.month(),
             day: dt.day(),
@@ -337,7 +354,7 @@ fn parse_datetime_literal(
     }
 
     if let Ok(d) = datetime_str.parse::<chrono::NaiveDate>() {
-        return Ok(LiteralValue::date(DateTimeValue {
+        return Ok(Value::Date(DateTimeValue {
             year: d.year(),
             month: d.month(),
             day: d.day(),
@@ -363,12 +380,12 @@ fn parse_time_literal(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
-) -> Result<LiteralValue, LemmaError> {
+) -> Result<Value, LemmaError> {
     let time_str = pair.as_str();
 
     if let Ok(t) = time_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
         let offset = t.offset().local_minus_utc();
-        return Ok(LiteralValue::time(TimeValue {
+        return Ok(Value::Time(TimeValue {
             hour: t.hour() as u8,
             minute: t.minute() as u8,
             second: t.second() as u8,
@@ -380,7 +397,7 @@ fn parse_time_literal(
     }
 
     if let Ok(t) = time_str.parse::<chrono::NaiveTime>() {
-        return Ok(LiteralValue::time(TimeValue {
+        return Ok(Value::Time(TimeValue {
             hour: t.hour() as u8,
             minute: t.minute() as u8,
             second: t.second() as u8,
@@ -538,6 +555,86 @@ fn parse_decimal_number(
             None::<String>,
         )
     })
+}
+
+// ============================================================================
+// String parsing helpers (for type constraint parsing)
+// ============================================================================
+
+/// Parse a date string into a DateTimeValue (for type constraint parsing)
+pub fn parse_date_string(s: &str) -> Result<DateTimeValue, String> {
+    use chrono::{Datelike, Timelike};
+
+    if let Ok(dt) = s.parse::<chrono::DateTime<chrono::FixedOffset>>() {
+        let offset = dt.offset().local_minus_utc();
+        return Ok(DateTimeValue {
+            year: dt.year(),
+            month: dt.month(),
+            day: dt.day(),
+            hour: dt.hour(),
+            minute: dt.minute(),
+            second: dt.second(),
+            timezone: Some(TimezoneValue {
+                offset_hours: (offset / 3600) as i8,
+                offset_minutes: ((offset % 3600) / 60) as u8,
+            }),
+        });
+    }
+
+    if let Ok(dt) = s.parse::<chrono::NaiveDateTime>() {
+        return Ok(DateTimeValue {
+            year: dt.year(),
+            month: dt.month(),
+            day: dt.day(),
+            hour: dt.hour(),
+            minute: dt.minute(),
+            second: dt.second(),
+            timezone: None,
+        });
+    }
+
+    if let Ok(d) = s.parse::<chrono::NaiveDate>() {
+        return Ok(DateTimeValue {
+            year: d.year(),
+            month: d.month(),
+            day: d.day(),
+            hour: 0,
+            minute: 0,
+            second: 0,
+            timezone: None,
+        });
+    }
+
+    Err(format!("Invalid date format: '{}'", s))
+}
+
+/// Parse a time string into a TimeValue (for type constraint parsing)
+pub fn parse_time_string(s: &str) -> Result<TimeValue, String> {
+    use chrono::Timelike;
+
+    if let Ok(t) = s.parse::<chrono::DateTime<chrono::FixedOffset>>() {
+        let offset = t.offset().local_minus_utc();
+        return Ok(TimeValue {
+            hour: t.hour() as u8,
+            minute: t.minute() as u8,
+            second: t.second() as u8,
+            timezone: Some(TimezoneValue {
+                offset_hours: (offset / 3600) as i8,
+                offset_minutes: ((offset % 3600) / 60) as u8,
+            }),
+        });
+    }
+
+    if let Ok(t) = s.parse::<chrono::NaiveTime>() {
+        return Ok(TimeValue {
+            hour: t.hour() as u8,
+            minute: t.minute() as u8,
+            second: t.second() as u8,
+            timezone: None,
+        });
+    }
+
+    Err(format!("Invalid time format: '{}'", s))
 }
 
 // ============================================================================

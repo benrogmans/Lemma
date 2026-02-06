@@ -9,10 +9,9 @@ pub mod operations;
 pub mod proof;
 pub mod response;
 
+use crate::evaluation::response::EvaluatedRule;
+use crate::planning::semantics::{Expression, Fact, FactPath, FactValue, LiteralValue, RulePath};
 use crate::planning::ExecutionPlan;
-use crate::{
-    Expression, FactPath, FactReference, FactValue, LemmaFact, LemmaResult, LiteralValue, RulePath,
-};
 use indexmap::IndexMap;
 pub use operations::{ComputationKind, OperationKind, OperationRecord, OperationResult};
 pub use response::{Facts, Response, RuleResult};
@@ -30,8 +29,13 @@ pub struct EvaluationContext {
 
 impl EvaluationContext {
     fn new(plan: &ExecutionPlan) -> Self {
+        let fact_values: HashMap<FactPath, LiteralValue> = plan
+            .facts
+            .iter()
+            .filter_map(|(path, d)| d.value().map(|v| (path.clone(), v.clone())))
+            .collect();
         Self {
-            fact_values: plan.fact_values.clone(),
+            fact_values,
             rule_results: HashMap::new(),
             rule_proofs: HashMap::new(),
             operations: Vec::new(),
@@ -81,12 +85,15 @@ impl Evaluator {
         Self
     }
 
-    /// Evaluate an execution plan
+    /// Evaluate an execution plan.
     ///
     /// Executes rules in pre-computed dependency order with all facts pre-loaded.
     /// Rules are already flattened into executable branches with fact prefixes resolved.
-    /// This evaluation never errors - runtime issues create Vetoes instead.
-    pub fn evaluate(&self, plan: &ExecutionPlan) -> LemmaResult<Response> {
+    ///
+    /// After planning, evaluation is guaranteed to complete. This function never returns
+    /// a LemmaError — runtime issues (division by zero, missing facts, user-defined veto)
+    /// produce Vetoes, which are valid evaluation outcomes.
+    pub fn evaluate(&self, plan: &ExecutionPlan) -> Response {
         let mut context = EvaluationContext::new(plan);
 
         let mut response = Response {
@@ -103,7 +110,7 @@ impl Evaluator {
             context.operations.clear();
             context.proof_nodes.clear();
 
-            let (result, proof) = expression::evaluate_rule(exec_rule, &mut context)?;
+            let (result, proof) = expression::evaluate_rule(exec_rule, &mut context);
 
             context
                 .rule_results
@@ -112,39 +119,41 @@ impl Evaluator {
 
             let rule_operations = context.operations.clone();
 
-            // Collect facts from operations as we go
+            // Collect facts from operations (semantics types only; no parsing)
             for op in &rule_operations {
                 if let OperationKind::FactUsed { fact_ref, value } = &op.kind {
                     if seen_facts.insert(fact_ref.clone()) {
-                        let segments: Vec<String> =
-                            fact_ref.segments.iter().map(|s| s.fact.clone()).collect();
-                        fact_list.push(LemmaFact {
-                            reference: FactReference {
-                                segments,
-                                fact: fact_ref.fact.clone(),
-                            },
+                        fact_list.push(Fact {
+                            path: fact_ref.clone(),
                             value: FactValue::Literal(value.clone()),
-                            source_location: None,
+                            source: crate::Source::new(
+                                "",
+                                crate::Span {
+                                    start: 0,
+                                    end: 0,
+                                    line: 0,
+                                    col: 0,
+                                },
+                                "",
+                            ),
                         });
                     }
                 }
             }
 
+            let unless_branches: Vec<(Option<Expression>, Expression)> = exec_rule.branches[1..]
+                .iter()
+                .map(|b| (b.condition.clone(), b.result.clone()))
+                .collect();
+
             response.add_result(RuleResult {
-                rule: crate::LemmaRule {
+                rule: EvaluatedRule {
                     name: exec_rule.name.clone(),
-                    expression: exec_rule.branches[0].result.clone(),
-                    unless_clauses: exec_rule.branches[1..]
-                        .iter()
-                        .filter_map(|b| {
-                            b.condition.as_ref().map(|cond| crate::UnlessClause {
-                                condition: cond.clone(),
-                                result: b.result.clone(),
-                                source_location: b.source.clone(),
-                            })
-                        })
-                        .collect(),
+                    path: exec_rule.path.clone(),
+                    default_expression: exec_rule.branches[0].result.clone(),
+                    unless_branches,
                     source_location: exec_rule.source.clone(),
+                    rule_type: exec_rule.rule_type.clone(),
                 },
                 result,
                 facts: vec![],
@@ -164,6 +173,6 @@ impl Evaluator {
             }];
         }
 
-        Ok(response)
+        response
     }
 }

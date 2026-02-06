@@ -12,12 +12,11 @@ pub mod literals;
 pub mod rules;
 pub mod source;
 pub mod types;
-pub mod units;
 
 pub use ast::{DepthTracker, Span};
 pub use source::Source;
 
-pub use crate::semantic::*;
+pub use ast::*;
 
 #[derive(Parser)]
 #[grammar = "src/parsing/lemma.pest"]
@@ -179,8 +178,8 @@ fn parse_doc(
                         )?;
                         facts.push(fact);
                     }
-                    Rule::fact_override => {
-                        let fact = crate::parsing::facts::parse_fact_override(
+                    Rule::fact_binding => {
+                        let fact = crate::parsing::facts::parse_fact_binding(
                             body_item, attribute, &name, &types,
                         )?;
                         facts.push(fact);

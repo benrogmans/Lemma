@@ -28,7 +28,7 @@ struct Cli {
 enum Commands {
     /// Evaluate rules and display results (try: doc:rule1,rule2)
     ///
-    /// Loads all .lemma files from the workspace, evaluates the specified doc with optional fact overrides,
+    /// Loads all .lemma files from the workspace, evaluates the specified doc with optional fact values,
     /// and displays the computed results. Use this for command-line evaluation and testing.
     ///
     /// Syntax: doc or doc:rule1,rule2,rule3
@@ -41,7 +41,7 @@ enum Commands {
         ///   pricing:total,tax    - evaluate total and tax rules
         #[arg(value_name = "[DOC[:RULES]]")]
         doc_name: Option<String>,
-        /// Facts to override (format: name=value or ref_doc.fact=value)
+        /// Fact values to provide (format: name=value or ref_doc.fact=value)
         ///
         /// Examples: price=100, quantity=5, config.tax_rate=0.21
         facts: Vec<String>,
@@ -172,7 +172,7 @@ fn run_command(
             );
             eprintln!("  lemma run pricing:total              - Evaluate only 'total' rule");
             eprintln!("  lemma run pricing:total,tax          - Evaluate 'total' and 'tax' rules");
-            eprintln!("  lemma run pricing price=100 qty=5    - Evaluate with fact overrides");
+            eprintln!("  lemma run pricing price=100 qty=5    - Evaluate with fact values");
             eprintln!("  lemma run --interactive              - Interactive mode for selection\n");
             eprintln!("To see available documents:");
             eprintln!("  lemma list\n");
@@ -201,8 +201,8 @@ fn run_command(
         (d, r.unwrap_or_default(), all_facts, interactive_target)
     } else if let Some(name) = doc_name {
         let (doc, rules) = parse_doc_and_rules(name);
-        let fact_overrides = parse_fact_strings(facts);
-        (doc, rules.unwrap_or_default(), fact_overrides, None)
+        let fact_values = parse_fact_strings(facts);
+        (doc, rules.unwrap_or_default(), fact_values, None)
     } else {
         unreachable!()
     };
@@ -220,7 +220,7 @@ fn run_command(
     Ok(())
 }
 
-/// Parse fact override strings in "key=value" format into a HashMap
+/// Parse fact value strings in "key=value" format into a HashMap
 fn parse_fact_strings(facts: &[String]) -> std::collections::HashMap<String, String> {
     facts
         .iter()
@@ -235,15 +235,9 @@ fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
-    if let Some(doc) = engine.get_document(doc_name) {
-        let facts: Vec<&lemma::LemmaFact> = doc.facts.iter().collect();
-        let rules: Vec<&lemma::LemmaRule> = doc.rules.iter().collect();
-
+    if let Some(plan) = engine.get_execution_plan(doc_name) {
         let formatter = Formatter;
-        print!(
-            "{}",
-            formatter.format_document_inspection(doc, &facts, &rules)
-        );
+        print!("{}", formatter.format_document_inspection(plan));
     } else {
         eprintln!("Error: Document '{}' not found", doc_name);
         std::process::exit(1);
@@ -271,9 +265,10 @@ fn list_command(root: &PathBuf) -> Result<()> {
     let mut doc_stats: Vec<(String, usize, usize)> = documents
         .iter()
         .map(|doc_name| {
-            let doc = engine.get_document(doc_name);
-            let facts_count = doc.map(|d| d.facts.len()).unwrap_or(0);
-            let rules_count = doc.map(|d| d.rules.len()).unwrap_or(0);
+            let (facts_count, rules_count) = engine
+                .get_execution_plan(doc_name)
+                .map(|p| (p.facts.len(), p.rules.len()))
+                .unwrap_or((0, 0));
             (doc_name.clone(), facts_count, rules_count)
         })
         .collect();

@@ -5,10 +5,10 @@
 //! - Domain operations: intersection, union, normalization
 //! - `extract_domains_from_constraint()`: extracts domains from constraints
 
-use crate::{
-    BooleanValue, ComparisonComputation, FactPath, LemmaResult, LiteralValue, OperationResult,
-    Value,
+use crate::planning::semantics::{
+    ComparisonComputation, FactPath, LiteralValue, SemanticConversionTarget, ValueKind,
 };
+use crate::{LemmaResult, OperationResult};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -258,9 +258,9 @@ fn extract_domain_for_fact(
 
         Constraint::Fact(fp) => {
             if fp == fact_path {
-                Some(Domain::Enumeration(Arc::new(vec![LiteralValue::boolean(
-                    BooleanValue::True,
-                )])))
+                Some(Domain::Enumeration(Arc::new(vec![
+                    LiteralValue::from_bool(true),
+                ])))
             } else {
                 None
             }
@@ -299,7 +299,7 @@ fn extract_domain_for_fact(
             if let Constraint::Fact(fp) = inner.as_ref() {
                 if fp == fact_path {
                     return Ok(Some(Domain::Enumeration(Arc::new(vec![
-                        LiteralValue::boolean(BooleanValue::False),
+                        LiteralValue::from_bool(false),
                     ]))));
                 }
             }
@@ -465,37 +465,37 @@ fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
     use std::cmp::Ordering;
 
     match (&a.value, &b.value) {
-        (Value::Number(la), Value::Number(lb)) => match la.cmp(lb) {
+        (ValueKind::Number(la), ValueKind::Number(lb)) => match la.cmp(lb) {
             Ordering::Less => -1,
             Ordering::Equal => 0,
             Ordering::Greater => 1,
         },
 
-        (Value::Boolean(la), Value::Boolean(lb)) => match bool::from(la).cmp(&bool::from(lb)) {
+        (ValueKind::Boolean(la), ValueKind::Boolean(lb)) => match la.cmp(lb) {
             Ordering::Less => -1,
             Ordering::Equal => 0,
             Ordering::Greater => 1,
         },
 
-        (Value::Text(la), Value::Text(lb)) => match la.cmp(lb) {
+        (ValueKind::Text(la), ValueKind::Text(lb)) => match la.cmp(lb) {
             Ordering::Less => -1,
             Ordering::Equal => 0,
             Ordering::Greater => 1,
         },
 
-        (Value::Date(la), Value::Date(lb)) => match la.cmp(lb) {
+        (ValueKind::Date(la), ValueKind::Date(lb)) => match la.cmp(lb) {
             Ordering::Less => -1,
             Ordering::Equal => 0,
             Ordering::Greater => 1,
         },
 
-        (Value::Time(la), Value::Time(lb)) => match la.cmp(lb) {
+        (ValueKind::Time(la), ValueKind::Time(lb)) => match la.cmp(lb) {
             Ordering::Less => -1,
             Ordering::Equal => 0,
             Ordering::Greater => 1,
         },
 
-        (Value::Duration(la, lua), Value::Duration(lb, lub)) => {
+        (ValueKind::Duration(la, lua), ValueKind::Duration(lb, lub)) => {
             let a_sec = crate::computation::units::duration_to_seconds(*la, lua);
             let b_sec = crate::computation::units::duration_to_seconds(*lb, lub);
             match a_sec.cmp(&b_sec) {
@@ -505,13 +505,13 @@ fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
             }
         }
 
-        (Value::Ratio(la, _), Value::Ratio(lb, _)) => match la.cmp(lb) {
+        (ValueKind::Ratio(la, _), ValueKind::Ratio(lb, _)) => match la.cmp(lb) {
             Ordering::Less => -1,
             Ordering::Equal => 0,
             Ordering::Greater => 1,
         },
 
-        (Value::Scale(la, lua), Value::Scale(lb, lub)) => {
+        (ValueKind::Scale(la, lua), ValueKind::Scale(lb, lub)) => {
             if a.lemma_type != b.lemma_type {
                 unreachable!(
                     "BUG: lit_cmp compared different scale types ({} vs {})",
@@ -520,43 +520,31 @@ fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
                 );
             }
 
-            match (lua, lub) {
-                (None, None) => match la.cmp(lb) {
+            if lua.eq_ignore_ascii_case(lub) {
+                return match la.cmp(lb) {
                     Ordering::Less => -1,
                     Ordering::Equal => 0,
                     Ordering::Greater => 1,
+                };
+            }
+
+            // Convert b to a's unit for comparison
+            let target = SemanticConversionTarget::ScaleUnit(lua.clone());
+            let converted = crate::computation::convert_unit(b, &target);
+            let converted_value = match converted {
+                OperationResult::Value(lit) => match lit.value {
+                    ValueKind::Scale(v, _) => v,
+                    _ => unreachable!("BUG: scale unit conversion returned non-scale value"),
                 },
-                (Some(lua), Some(lub)) => {
-                    if lua.eq_ignore_ascii_case(lub) {
-                        return match la.cmp(lb) {
-                            Ordering::Less => -1,
-                            Ordering::Equal => 0,
-                            Ordering::Greater => 1,
-                        };
-                    }
-
-                    let target = crate::semantic::ConversionTarget::ScaleUnit(lua.clone());
-                    let converted = crate::computation::convert_unit(b, &target);
-                    let converted_value = match converted {
-                        OperationResult::Value(lit) => match lit.value {
-                            Value::Scale(v, _) => v,
-                            _ => {
-                                unreachable!("BUG: scale unit conversion returned non-scale value")
-                            }
-                        },
-                        OperationResult::Veto(msg) => unreachable!(
-                            "BUG: scale unit conversion vetoed unexpectedly: {:?}",
-                            msg
-                        ),
-                    };
-
-                    match la.cmp(&converted_value) {
-                        Ordering::Less => -1,
-                        Ordering::Equal => 0,
-                        Ordering::Greater => 1,
-                    }
+                OperationResult::Veto(msg) => {
+                    unreachable!("BUG: scale unit conversion vetoed unexpectedly: {:?}", msg)
                 }
-                _ => unreachable!("BUG: lit_cmp saw scale value missing unit on one side"),
+            };
+
+            match la.cmp(&converted_value) {
+                Ordering::Less => -1,
+                Ordering::Equal => 0,
+                Ordering::Greater => 1,
             }
         }
 
@@ -898,15 +886,15 @@ fn normalize_domain(d: Domain) -> Domain {
                 Domain::Enumeration(vals) => {
                     if vals.len() == 1 {
                         if let Some(lit) = vals.first() {
-                            if let Value::Boolean(BooleanValue::True) = &lit.value {
-                                return Domain::Enumeration(Arc::new(vec![LiteralValue::boolean(
-                                    BooleanValue::False,
-                                )]));
+                            if let ValueKind::Boolean(true) = &lit.value {
+                                return Domain::Enumeration(Arc::new(vec![
+                                    LiteralValue::from_bool(false),
+                                ]));
                             }
-                            if let Value::Boolean(BooleanValue::False) = &lit.value {
-                                return Domain::Enumeration(Arc::new(vec![LiteralValue::boolean(
-                                    BooleanValue::True,
-                                )]));
+                            if let ValueKind::Boolean(false) = &lit.value {
+                                return Domain::Enumeration(Arc::new(vec![
+                                    LiteralValue::from_bool(true),
+                                ]));
                             }
                         }
                     }
@@ -1114,7 +1102,7 @@ mod tests {
     }
 
     fn fact(name: &str) -> FactPath {
-        FactPath::local(name.to_string())
+        FactPath::new(vec![], name.to_string())
     }
 
     #[test]
@@ -1223,7 +1211,7 @@ mod tests {
 
         assert_eq!(
             *is_active_domain,
-            Domain::Enumeration(Arc::new(vec![LiteralValue::boolean(BooleanValue::True)]))
+            Domain::Enumeration(Arc::new(vec![LiteralValue::from_bool(true)]))
         );
     }
 
@@ -1236,7 +1224,7 @@ mod tests {
 
         assert_eq!(
             *is_active_domain,
-            Domain::Enumeration(Arc::new(vec![LiteralValue::boolean(BooleanValue::False)]))
+            Domain::Enumeration(Arc::new(vec![LiteralValue::from_bool(false)]))
         );
     }
 }

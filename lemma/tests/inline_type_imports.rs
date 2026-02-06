@@ -37,8 +37,8 @@ rule is_adult = user_age >= 18
 
     match &is_adult_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Boolean(b) = &lit.value {
-                assert!(bool::from(b), "25 >= 18 should be true");
+            if let lemma::ValueKind::Boolean(b) = &lit.value {
+                assert!(*b, "25 >= 18 should be true");
             } else {
                 panic!("Expected boolean result");
             }
@@ -50,7 +50,7 @@ rule is_adult = user_age >= 18
 }
 
 #[test]
-fn test_inline_type_import_with_overrides() -> LemmaResult<()> {
+fn test_inline_type_import_with_constraints() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
     // Define a type in one document
@@ -59,7 +59,7 @@ doc age
 type age = number -> minimum 0 -> maximum 150
 "#;
 
-    // Use that type inline with additional overrides
+    // Use that type inline with additional constraints
     let test_doc = r#"
 doc test
 fact user_age = [age from age -> maximum 120]
@@ -83,8 +83,8 @@ rule is_senior = user_age >= 65
 
     match &is_senior_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Boolean(b) = &lit.value {
-                assert!(bool::from(b), "70 >= 65 should be true");
+            if let lemma::ValueKind::Boolean(b) = &lit.value {
+                assert!(*b, "70 >= 65 should be true");
             } else {
                 panic!("Expected boolean result");
             }

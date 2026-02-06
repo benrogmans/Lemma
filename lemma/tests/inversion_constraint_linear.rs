@@ -1,6 +1,4 @@
-use lemma::{
-    Bound, Domain, DurationUnit, Engine, FactPath, LemmaError, LiteralValue, Target, Value,
-};
+use lemma::{Bound, Domain, Engine, FactPath, LemmaError, LiteralValue, Target, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -161,7 +159,7 @@ rule r = 0
             max: Bound::Unbounded,
         } = d
         {
-            if let Value::Scale(n, Some(unit)) = &v.value {
+            if let ValueKind::Scale(n, unit) = &v.value {
                 if *n == Decimal::from(100) && unit == "eur" {
                     saw_expected = true;
                 }
@@ -207,8 +205,8 @@ rule r = 0
             max: Bound::Unbounded,
         } = dom
         {
-            if let Value::Duration(n, unit) = &v.value {
-                if *n == Decimal::from(2) && unit == &DurationUnit::Hour {
+            if let ValueKind::Duration(n, unit) = &v.value {
+                if *n == Decimal::from(2) && *unit == lemma::SemanticDurationUnit::Hour {
                     saw_expected = true;
                 }
             }

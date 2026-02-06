@@ -154,7 +154,7 @@ fact tax_rate = 22%
 fact deadline = 2024-12-31
 ```
 
-**Standard Types:**
+**Primitive types:**
 - `boolean` - true/false values
 - `number` - dimensionless numeric values
 - `scale` - numeric values that can have units
@@ -263,7 +263,7 @@ lemma run simple_facts
 # Run specific rules only
 lemma run tax_calculation:tax_owed
 
-# Override facts at runtime
+# Provide fact values
 lemma run tax_calculation income=75000 filing_status="married"
 
 # Interactive mode for exploring documents and facts

@@ -7,25 +7,38 @@
 //! containing all valid solutions with their domains.
 
 mod constraint;
+mod derived;
 mod domain;
 mod solve;
 mod target;
 mod world;
 
+pub use derived::{DerivedExpression, DerivedExpressionKind};
 pub use domain::{extract_domains_from_constraint, Bound, Domain};
 pub use target::{Target, TargetOp};
 pub use world::World;
 
-use crate::parsing::ast::Span;
+use crate::planning::semantics::{Expression, FactPath, LiteralValue, Source, Span, ValueKind};
 use crate::planning::ExecutionPlan;
-use crate::{
-    Expression, ExpressionKind, FactPath, LemmaError, LemmaResult, LiteralValue, OperationResult,
-    Value,
-};
+use crate::{LemmaError, LemmaResult, OperationResult};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::collections::{HashMap, HashSet};
 
 use world::{WorldEnumerator, WorldSolution};
+
+/// Creates a synthetic source for generated expressions during inversion
+pub fn synthetic_source() -> Source {
+    Source {
+        attribute: "<inversion>".to_string(),
+        span: Span {
+            start: 0,
+            end: 0,
+            line: 1,
+            col: 0,
+        },
+        doc_name: "<synthetic>".to_string(),
+    }
+}
 
 // ============================================================================
 // Solution and Response types
@@ -86,16 +99,6 @@ impl InversionResponse {
     /// Iterate over solutions with their domains
     pub fn iter(&self) -> impl Iterator<Item = (&Solution, &HashMap<FactPath, Domain>)> {
         self.solutions.iter().zip(self.domains.iter())
-    }
-
-    /// Alias for undetermined_facts (backwards compatibility)
-    pub fn free_variables(&self) -> &[FactPath] {
-        &self.undetermined_facts
-    }
-
-    /// Alias for is_determined (backwards compatibility)
-    pub fn is_fully_constrained(&self) -> bool {
-        self.is_determined
     }
 }
 
@@ -243,7 +246,7 @@ pub fn invert(
                     continue; // Skip this solution as solved value violates constraint
                 }
 
-                let solved_outcome_result = OperationResult::Value(solved_outcome);
+                let solved_outcome_result = OperationResult::Value(Box::new(solved_outcome));
 
                 let mut combined_domains = constraint_domains;
                 for (fact_path, domain) in solved_domains {
@@ -288,7 +291,7 @@ pub fn invert(
             }
 
             let solution = Solution {
-                outcome: OperationResult::Value(target_value.clone()),
+                outcome: OperationResult::Value(Box::new(target_value.as_ref().clone())),
                 world: arith_solution.world.clone(),
                 shape: Some(arith_solution.outcome_expression.clone()),
             };
@@ -319,10 +322,13 @@ fn filter_literal_solutions_by_target(
                 true
             }
             (Some(OperationResult::Value(target_value)), OperationResult::Value(outcome_value)) => {
-                // Specific value target, outcome is a value
+                // Specific value target, outcome is a value.
+                // Compare by semantic value only (ValueKind), not full LiteralValue,
+                // because type metadata (e.g. LemmaType.name) may differ between the
+                // target (constructed externally) and the outcome (from constant folding).
                 match target.op {
-                    TargetOp::Eq => outcome_value == target_value,
-                    TargetOp::Neq => outcome_value != target_value,
+                    TargetOp::Eq => outcome_value.value == target_value.value,
+                    TargetOp::Neq => outcome_value.value != target_value.value,
                     TargetOp::Lt => {
                         compare_values(outcome_value, target_value)
                             == Some(std::cmp::Ordering::Less)
@@ -364,10 +370,10 @@ fn filter_literal_solutions_by_target(
 /// Compare two literal values for ordering
 fn compare_values(a: &LiteralValue, b: &LiteralValue) -> Option<std::cmp::Ordering> {
     match (&a.value, &b.value) {
-        (Value::Number(a_val), Value::Number(b_val)) => Some(a_val.cmp(b_val)),
-        (Value::Ratio(a_val, _), Value::Ratio(b_val, _)) => Some(a_val.cmp(b_val)),
-        (Value::Scale(a_val, _), Value::Scale(b_val, _)) => Some(a_val.cmp(b_val)),
-        (Value::Duration(a_val, unit_a), Value::Duration(b_val, unit_b)) => {
+        (ValueKind::Number(a_val), ValueKind::Number(b_val)) => Some(a_val.cmp(b_val)),
+        (ValueKind::Ratio(a_val, _), ValueKind::Ratio(b_val, _)) => Some(a_val.cmp(b_val)),
+        (ValueKind::Scale(a_val, _), ValueKind::Scale(b_val, _)) => Some(a_val.cmp(b_val)),
+        (ValueKind::Duration(a_val, unit_a), ValueKind::Duration(b_val, unit_b)) => {
             if unit_a == unit_b {
                 Some(a_val.cmp(b_val))
             } else {
@@ -378,40 +384,11 @@ fn compare_values(a: &LiteralValue, b: &LiteralValue) -> Option<std::cmp::Orderi
     }
 }
 
-/// Extract all FactPath references from an expression
+/// Extract all FactPath references from a derived expression
 fn extract_fact_paths_from_expression(expr: &Expression) -> Vec<FactPath> {
-    let mut paths = Vec::new();
-    collect_fact_paths(expr, &mut paths);
-    paths
-}
-
-fn collect_fact_paths(expr: &Expression, paths: &mut Vec<FactPath>) {
-    match &expr.kind {
-        ExpressionKind::FactPath(fp) => {
-            if !paths.contains(fp) {
-                paths.push(fp.clone());
-            }
-        }
-        ExpressionKind::Arithmetic(left, _, right)
-        | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right)
-        | ExpressionKind::LogicalOr(left, right) => {
-            collect_fact_paths(left, paths);
-            collect_fact_paths(right, paths);
-        }
-        ExpressionKind::LogicalNegation(inner, _)
-        | ExpressionKind::UnitConversion(inner, _)
-        | ExpressionKind::MathematicalComputation(_, inner) => {
-            collect_fact_paths(inner, paths);
-        }
-        ExpressionKind::Literal(_)
-        | ExpressionKind::Veto(_)
-        | ExpressionKind::Reference(_)
-        | ExpressionKind::UnresolvedUnitLiteral(_, _)
-        | ExpressionKind::FactReference(_)
-        | ExpressionKind::RuleReference(_)
-        | ExpressionKind::RulePath(_) => {}
-    }
+    let mut set = std::collections::HashSet::new();
+    expr.collect_fact_paths(&mut set);
+    set.into_iter().collect()
 }
 
 /// Compute the list of undetermined facts from all solution domains
@@ -493,7 +470,7 @@ mod tests {
     fn test_compute_undetermined_facts_single_value() {
         let mut domain_map = HashMap::new();
         domain_map.insert(
-            FactPath::local("age".to_string()),
+            FactPath::new(vec![], "age".to_string()),
             Domain::Enumeration(Arc::new(vec![LiteralValue::number(Decimal::from(25))])),
         );
         let domains = vec![domain_map];
@@ -505,7 +482,7 @@ mod tests {
     fn test_compute_undetermined_facts_range() {
         let mut domain_map = HashMap::new();
         domain_map.insert(
-            FactPath::local("age".to_string()),
+            FactPath::new(vec![], "age".to_string()),
             Domain::Range {
                 min: Bound::Exclusive(Arc::new(LiteralValue::number(Decimal::from(18)))),
                 max: Bound::Unbounded,
@@ -526,7 +503,7 @@ mod tests {
     fn test_compute_is_determined_true() {
         let mut domain_map = HashMap::new();
         domain_map.insert(
-            FactPath::local("age".to_string()),
+            FactPath::new(vec![], "age".to_string()),
             Domain::Enumeration(Arc::new(vec![LiteralValue::number(Decimal::from(25))])),
         );
         let domains = vec![domain_map];
@@ -537,7 +514,7 @@ mod tests {
     fn test_compute_is_determined_false() {
         let mut domain_map = HashMap::new();
         domain_map.insert(
-            FactPath::local("age".to_string()),
+            FactPath::new(vec![], "age".to_string()),
             Domain::Range {
                 min: Bound::Exclusive(Arc::new(LiteralValue::number(Decimal::from(18)))),
                 max: Bound::Unbounded,
@@ -569,15 +546,15 @@ rule another = base?
             .invert(
                 "example",
                 "another",
-                Target::value(LiteralValue::number(3)),
+                Target::value(LiteralValue::number(3.into())),
                 HashMap::new(),
             )
             .expect("inversion should succeed");
 
         assert!(!inv.is_empty(), "expected at least one solution");
 
-        let x = FactPath::local("x".to_string());
-        let three = LiteralValue::number(3);
+        let x = FactPath::new(vec![], "x".to_string());
+        let three = LiteralValue::number(3.into());
 
         // For target value 3, x must be exactly 3 (not just within a broad range).
         for (_solution, domains) in inv.iter() {
@@ -610,7 +587,7 @@ rule another = base?
             .invert(
                 "example",
                 "another",
-                Target::value(LiteralValue::number(7)),
+                Target::value(LiteralValue::number(7.into())),
                 HashMap::new(),
             )
             .expect("inversion should succeed");
@@ -648,9 +625,9 @@ rule another = base?
 
         assert!(!inv.is_empty(), "expected solutions for veto query");
 
-        let x = FactPath::local("x".to_string());
-        let five = LiteralValue::number(5);
-        let six = LiteralValue::number(6);
+        let x = FactPath::new(vec![], "x".to_string());
+        let five = LiteralValue::number(5.into());
+        let six = LiteralValue::number(6.into());
 
         for (solution, domains) in inv.iter() {
             assert_eq!(
@@ -711,14 +688,14 @@ rule another = base?
 
         assert!(!inv.is_empty(), "expected solutions for any-veto query");
 
-        let x = FactPath::local("x".to_string());
-        let minus_one = LiteralValue::number(-1);
-        let zero = LiteralValue::number(0);
-        let two = LiteralValue::number(2);
-        let three = LiteralValue::number(3);
-        let four = LiteralValue::number(4);
-        let five = LiteralValue::number(5);
-        let six = LiteralValue::number(6);
+        let x = FactPath::new(vec![], "x".to_string());
+        let minus_one = LiteralValue::number((-1).into());
+        let zero = LiteralValue::number(0.into());
+        let two = LiteralValue::number(2.into());
+        let three = LiteralValue::number(3.into());
+        let four = LiteralValue::number(4.into());
+        let five = LiteralValue::number(5.into());
+        let six = LiteralValue::number(6.into());
 
         let mut saw_too_little = false;
         let mut saw_too_much = false;

@@ -1,4 +1,4 @@
-use crate::semantic::*;
+use crate::parsing::ast::*;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
@@ -31,7 +31,7 @@ fn test_comparison_operator_name() {
 }
 
 #[test]
-fn test_literal_value_to_standard_type() {
+fn test_literal_value_to_primitive_type() {
     let one = Decimal::from_str("1").unwrap();
 
     assert_eq!(LiteralValue::text("".to_string()).lemma_type.name(), "text");
@@ -54,7 +54,7 @@ fn test_literal_value_to_standard_type() {
     };
     assert_eq!(LiteralValue::date(dt).lemma_type.name(), "date");
     assert_eq!(
-        LiteralValue::ratio(one / rust_decimal::Decimal::from(100)).lemma_type.name(),
+        LiteralValue::ratio(one / rust_decimal::Decimal::from(100), None).lemma_type.name(),
         "ratio"
     );
     assert_eq!(
@@ -103,8 +103,7 @@ fn test_duration_unit_display() {
 
 #[test]
 fn test_conversion_target_display() {
-        assert_eq!(format!("{}", ConversionTarget::Percentage), "percent");
-    assert_eq!(
+        assert_eq!(
         format!("{}", ConversionTarget::Duration(DurationUnit::Hour)),
         "hour"
     );
@@ -112,19 +111,19 @@ fn test_conversion_target_display() {
 
 #[test]
 fn test_doc_type_display() {
-    assert_eq!(format!("{}", crate::semantic::standard_text()), "text");
-    assert_eq!(format!("{}", crate::semantic::standard_number()), "number");
-    assert_eq!(format!("{}", crate::semantic::standard_date()), "date");
+    assert_eq!(format!("{}", crate::planning::semantics::primitive_text()), "text");
+    assert_eq!(format!("{}", crate::planning::semantics::primitive_number()), "number");
+    assert_eq!(format!("{}", crate::planning::semantics::primitive_date()), "date");
     assert_eq!(
-        format!("{}", crate::semantic::standard_boolean()),
+        format!("{}", crate::planning::semantics::primitive_boolean()),
         "boolean"
     );
     assert_eq!(
-        format!("{}", crate::semantic::standard_ratio()),
+        format!("{}", crate::planning::semantics::primitive_ratio()),
         "ratio"
     );
     assert_eq!(
-        format!("{}", crate::semantic::standard_duration()),
+        format!("{}", crate::planning::semantics::primitive_duration()),
         "duration"
     );
 }
@@ -179,7 +178,7 @@ fn test_literal_value_display_value() {
         "false"
     );
     // 10% stored as 0.10 ratio
-    let ten_percent_ratio = LiteralValue::ratio(rust_decimal::Decimal::from_str("0.10").unwrap());
+    let ten_percent_ratio = LiteralValue::ratio(rust_decimal::Decimal::from_str("0.10").unwrap(), None);
     assert_eq!(ten_percent_ratio.display_value(), "0.1");
 
     let time = TimeValue {
@@ -293,7 +292,7 @@ fn test_expression_get_source_text_with_location() {
         line: 1,
         col: 13,
     };
-    let source_location = Some(Source::new("test.lemma", span, "test"));
+    let source_location = Source::new("test.lemma", span, "test");
     let expr = Expression::new(
         ExpressionKind::Literal(LiteralValue::number(rust_decimal::Decimal::new(42, 0))),
         source_location,
@@ -330,7 +329,7 @@ fn test_expression_get_source_text_source_not_found() {
         line: 1,
         col: 0,
     };
-    let source_location = Some(Source::new("missing.lemma", span, "test"));
+    let source_location = Source::new("missing.lemma", span, "test");
     let expr = Expression::new(
         ExpressionKind::Literal(LiteralValue::number(rust_decimal::Decimal::new(42, 0))),
         source_location,

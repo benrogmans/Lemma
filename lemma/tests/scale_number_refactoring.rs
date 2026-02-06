@@ -656,10 +656,15 @@ rule total = with_tax? * quantity"#;
 }
 
 #[test]
-fn test_standard_scale_and_number_types() {
-    // Test that standard scale and number types work correctly
+fn test_primitive_scale_and_number_types() {
+    // Scale types must declare at least one unit; scale values are unitful.
+    // This test uses a proper scale type (money) and unitful fact value.
     let code = r#"doc test
-fact scale_value = [scale]
+type money = scale
+  -> unit eur 1.00
+  -> minimum 0 eur
+
+fact scale_value = [money]
 fact number_value = [number]
 
 rule result = scale_value * number_value"#;
@@ -670,7 +675,7 @@ rule result = scale_value * number_value"#;
         .expect("Should parse");
 
     let mut facts = HashMap::new();
-    facts.insert("scale_value".to_string(), "10".to_string());
+    facts.insert("scale_value".to_string(), "10 eur".to_string());
     facts.insert("number_value".to_string(), "2".to_string());
 
     let response = engine

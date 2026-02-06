@@ -7,11 +7,11 @@ fn display_piecewise_and_domain() {
     // Domain display basic sanity
     let d1 = Domain::Range {
         min: Bound::Unbounded,
-        max: Bound::Inclusive(Arc::new(lemma::LiteralValue::number(10))),
+        max: Bound::Inclusive(Arc::new(lemma::LiteralValue::number(10.into()))),
     };
     assert_eq!(d1.to_string(), "(-inf, 10]");
 
-    let d2 = Domain::Enumeration(Arc::new(vec![lemma::LiteralValue::number(5)]));
+    let d2 = Domain::Enumeration(Arc::new(vec![lemma::LiteralValue::number(5.into())]));
     // Union prints parts with a pipe separator
     let du = Domain::Union(Arc::new(vec![d2, d1]));
     let su = du.to_string();
@@ -21,8 +21,8 @@ fn display_piecewise_and_domain() {
 #[test]
 fn serialize_domain_range() {
     let d = Domain::Range {
-        min: Bound::Inclusive(Arc::new(lemma::LiteralValue::number(0))),
-        max: Bound::Exclusive(Arc::new(lemma::LiteralValue::number(10))),
+        min: Bound::Inclusive(Arc::new(lemma::LiteralValue::number(0.into()))),
+        max: Bound::Exclusive(Arc::new(lemma::LiteralValue::number(10.into()))),
     };
     let v = serde_json::to_value(&d).expect("serialize domain");
 

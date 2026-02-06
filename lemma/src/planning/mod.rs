@@ -7,13 +7,19 @@
 
 pub mod execution_plan;
 pub mod graph;
+pub mod semantics;
 pub mod types;
 pub mod validation;
 
 pub use execution_plan::{Branch, ExecutableRule, ExecutionPlan};
+pub use semantics::{
+    ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, Fact, FactData,
+    FactPath, FactValue, LemmaType, LiteralValue, LogicalComputation, MathematicalComputation,
+    NegationType, PathSegment, RulePath, Source, Span, TypeExtends, ValueKind, VetoExpression,
+};
 pub use types::TypeRegistry;
 
-use crate::semantic::LemmaDoc;
+use crate::parsing::ast::LemmaDoc;
 use crate::LemmaError;
 use std::collections::HashMap;
 
@@ -62,7 +68,7 @@ fn validate_all_documents(all_docs: &[LemmaDoc]) -> Result<(), Vec<LemmaError>> 
 #[cfg(test)]
 mod internal_tests {
     use super::plan;
-    use crate::semantic::{FactPath, PathSegment};
+    use crate::planning::semantics::{FactPath, PathSegment};
     use crate::{parse, ResourceLimits};
     use std::collections::HashMap;
 
@@ -265,9 +271,9 @@ fact contract = doc nonexistent"#;
     }
 
     #[test]
-    fn test_fact_override_with_custom_type_resolves_in_correct_document_context() {
-        // This is a planning-level test: ensure fact overrides resolve custom types correctly
-        // when the type is defined in a different document than the override.
+    fn test_fact_binding_with_custom_type_resolves_in_correct_document_context() {
+        // This is a planning-level test: ensure fact bindings resolve custom types correctly
+        // when the type is defined in a different document than the binding.
         //
         // doc one:
         //   type money = number
@@ -302,8 +308,9 @@ rule getx = one.x
         };
 
         let one_x_type = execution_plan
-            .fact_schema
+            .facts
             .get(&one_x_path)
+            .and_then(|d| d.schema_type())
             .expect("one.x should have a resolved type");
 
         assert_eq!(

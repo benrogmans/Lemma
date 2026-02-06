@@ -20,7 +20,7 @@ fn test_rule_reference_expansion_simple_constant() {
     let result = engine.invert(
         "pricing",
         "total_price",
-        Target::value(LiteralValue::number(121)),
+        Target::value(LiteralValue::number(121.into())),
         HashMap::new(),
     );
 
@@ -54,7 +54,7 @@ fn test_enhanced_error_message_lists_values() {
     let result = engine.invert(
         "test",
         "result",
-        Target::value(LiteralValue::number(15)),
+        Target::value(LiteralValue::number(15.into())),
         HashMap::new(),
     );
 

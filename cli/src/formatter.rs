@@ -1,8 +1,6 @@
 use lemma::evaluation::proof::{NonMatchedBranch, ProofNode, ValueSource};
-use lemma::{
-    LemmaDoc, LemmaFact, LemmaRule, LiteralValue, OperationResult, Response, RuleResult,
-    TypeSpecification, Value,
-};
+use lemma::planning::semantics::{FactPath, FactValue, ValueKind};
+use lemma::{ExecutionPlan, LiteralValue, OperationResult, Response, RuleResult};
 use std::collections::HashSet;
 use super_table::{presets, Cell, CellAlignment, Table};
 
@@ -53,39 +51,40 @@ impl Formatter {
         output
     }
 
-    pub fn format_document_inspection(
-        &self,
-        doc: &LemmaDoc,
-        facts: &[&LemmaFact],
-        rules: &[&LemmaRule],
-    ) -> String {
-        let local_facts: Vec<_> = facts.iter().filter(|f| f.is_local()).collect();
+    pub fn format_document_inspection(&self, plan: &ExecutionPlan) -> String {
+        let local_fact_paths: Vec<&FactPath> = plan
+            .facts
+            .keys()
+            .filter(|p| p.segments.is_empty())
+            .collect();
 
         let mut table = Table::new();
         table.load_preset(presets::UTF8_FULL);
         table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
         table.set_style(super_table::TableComponent::HorizontalLines, '─');
 
-        table.add_row(vec![Cell::new(&doc.name).set_alignment(CellAlignment::Left)]);
+        table.add_row(vec![
+            Cell::new(&plan.doc_name).set_alignment(CellAlignment::Left)
+        ]);
 
         let mut content_lines = Vec::new();
 
-        if !local_facts.is_empty() {
+        if !local_fact_paths.is_empty() {
             content_lines.push("facts".to_string());
-            for (i, fact) in local_facts.iter().enumerate() {
-                let prefix = if i == local_facts.len() - 1 {
+            for (i, path) in local_fact_paths.iter().enumerate() {
+                let prefix = if i == local_fact_paths.len() - 1 {
                     "└─"
                 } else {
                     "├─"
                 };
-                content_lines.push(format!("{} {}", prefix, fact.reference.fact));
+                content_lines.push(format!("{} {}", prefix, path.fact));
             }
         }
 
-        if !rules.is_empty() {
+        if !plan.rules.is_empty() {
             content_lines.push("rules".to_string());
-            for (i, rule) in rules.iter().enumerate() {
-                let prefix = if i == rules.len() - 1 {
+            for (i, rule) in plan.rules.iter().enumerate() {
+                let prefix = if i == plan.rules.len() - 1 {
                     "└─"
                 } else {
                     "├─"
@@ -186,12 +185,12 @@ impl Formatter {
         for (idx, fact) in group.facts.iter().enumerate() {
             let connector = if idx == len - 1 { "└─" } else { "├─" };
             let value_str = match &fact.value {
-                lemma::FactValue::Literal(lit) => self.format_literal(lit),
-                lemma::FactValue::DocumentReference(_) => fact.value.to_string(),
-                lemma::FactValue::TypeDeclaration { .. } => String::new(),
+                FactValue::Literal(lit) => self.format_literal(lit),
+                FactValue::DocumentReference(doc_name) => format!("doc {}", doc_name),
+                FactValue::TypeDeclaration { .. } => String::new(),
             };
 
-            left_lines.push(format!("{} {}", connector, fact.reference.fact));
+            left_lines.push(format!("{} {}", connector, fact.path));
             right_lines.push(value_str);
         }
 
@@ -241,15 +240,12 @@ impl Formatter {
             let connector = if is_last { "└─ " } else { "├─ " };
 
             let value_str = match &fact.value {
-                lemma::FactValue::Literal(lit) => self.format_literal(lit),
-                lemma::FactValue::DocumentReference(_) => fact.value.to_string(),
-                lemma::FactValue::TypeDeclaration { .. } => String::new(),
+                FactValue::Literal(lit) => self.format_literal(lit),
+                FactValue::DocumentReference(doc_name) => format!("doc {}", doc_name),
+                FactValue::TypeDeclaration { .. } => String::new(),
             };
 
-            left_lines.push(format!(
-                "{}{}{}",
-                next_prefix, connector, fact.reference.fact
-            ));
+            left_lines.push(format!("{}{}{}", next_prefix, connector, fact.path));
             right_lines.push(value_str);
         }
 
@@ -258,7 +254,7 @@ impl Formatter {
 
     fn format_literal(&self, lit: &LiteralValue) -> String {
         match &lit.value {
-            Value::Text(s) => s.clone(),
+            ValueKind::Text(s) => s.clone(),
             _ => lit.to_string(),
         }
     }
@@ -309,15 +305,14 @@ impl Formatter {
             ]);
         }
 
-        if let Some(source) = &result.rule.source_location {
-            let location = format!(
-                "Source: {}:{}:{}",
-                source.attribute, source.span.line, source.span.col
-            );
-            table.add_row(vec![Cell::new(self.gray(&location))
-                .set_alignment(CellAlignment::Left)
-                .set_colspan(3)]);
-        }
+        let source = &result.rule.source_location;
+        let location = format!(
+            "Source: {}:{}:{}",
+            source.attribute, source.span.line, source.span.col
+        );
+        table.add_row(vec![Cell::new(self.gray(&location))
+            .set_alignment(CellAlignment::Left)
+            .set_colspan(3)]);
 
         if let Some(last_column) = table.column_mut(2) {
             use super_table::ColumnConstraint;
@@ -663,43 +658,30 @@ impl Formatter {
 
     fn split_literal(&self, lit: &LiteralValue) -> (String, String) {
         match &lit.value {
-            Value::Number(n) => {
-                let decimals_opt = match &lit.lemma_type.specifications {
-                    TypeSpecification::Number { decimals, .. } => *decimals,
-                    _ => None,
-                };
+            ValueKind::Number(n) => {
+                let decimals_opt = lit.lemma_type.decimal_places();
                 (String::new(), format_decimal(n, decimals_opt))
             }
-            Value::Scale(n, unit_opt) => {
-                let decimals_opt = match &lit.lemma_type.specifications {
-                    TypeSpecification::Scale { decimals, .. } => *decimals,
-                    _ => None,
-                };
-                if let Some(unit) = unit_opt {
-                    (unit.clone(), format_decimal(n, decimals_opt))
-                } else {
-                    (String::new(), format_decimal(n, decimals_opt))
+            ValueKind::Scale(n, unit) => {
+                let decimals_opt = lit.lemma_type.decimal_places();
+                (unit.clone(), format_decimal(n, decimals_opt))
+            }
+            ValueKind::Ratio(r, unit_opt) => {
+                let decimals_opt = lit.lemma_type.decimal_places();
+                match unit_opt.as_deref() {
+                    Some("percent") => (
+                        "%".to_string(),
+                        format_decimal(&(*r * rust_decimal::Decimal::from(100)), decimals_opt),
+                    ),
+                    Some(u) => (u.to_string(), format_decimal(r, decimals_opt)),
+                    None => (String::new(), format_decimal(r, decimals_opt)),
                 }
             }
-            Value::Ratio(r, unit_opt) => {
-                if let Some(unit) = unit_opt {
-                    if unit == "percent" {
-                        (
-                            "%".to_string(),
-                            format_decimal(&(*r * rust_decimal::Decimal::from(100)), None),
-                        )
-                    } else {
-                        (unit.clone(), format_decimal(r, None))
-                    }
-                } else {
-                    (String::new(), format_decimal(r, None))
-                }
-            }
-            Value::Text(s) => (String::new(), s.clone()),
-            Value::Boolean(b) => (String::new(), b.to_string()),
-            Value::Date(d) => (String::new(), d.to_string()),
-            Value::Time(t) => (String::new(), t.to_string()),
-            Value::Duration(value, unit) => (unit.to_string(), format_decimal(value, None)),
+            ValueKind::Text(s) => (String::new(), s.clone()),
+            ValueKind::Boolean(b) => (String::new(), b.to_string()),
+            ValueKind::Date(d) => (String::new(), d.to_string()),
+            ValueKind::Time(t) => (String::new(), t.to_string()),
+            ValueKind::Duration(value, unit) => (unit.to_string(), format_decimal(value, None)),
         }
     }
 

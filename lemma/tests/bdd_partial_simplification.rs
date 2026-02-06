@@ -32,7 +32,7 @@ fn bdd_partial_simplification_on_large_expression() {
         .invert(
             "shop_partial",
             "target",
-            Target::value(LiteralValue::number(1)),
+            Target::value(LiteralValue::number(1.into())),
             HashMap::new(),
         )
         .expect("invert should succeed");

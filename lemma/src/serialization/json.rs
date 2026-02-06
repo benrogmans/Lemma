@@ -1,9 +1,7 @@
-use crate::parsing::ast::Span;
+use crate::planning::semantics::{FactData, FactPath, Span};
 use crate::planning::ExecutionPlan;
-use crate::semantic::{FactPath, LemmaFact, LemmaType, LiteralValue};
 use crate::LemmaError;
-use crate::Source;
-use serde::{Deserialize, Deserializer, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -47,216 +45,45 @@ fn json_value_to_string(value: &Value) -> String {
     }
 }
 
-/// Custom serializer for HashMap<FactPath, LemmaFact>
-///
-/// JSON object keys must be strings, so FactPath keys are serialized as strings
-/// using their Display implementation (e.g., "age" or "employee.salary").
-pub fn serialize_fact_path_map<S>(
-    map: &HashMap<FactPath, LemmaFact>,
+/// Serializes HashMap<FactPath, FactData> as array of [FactPath, FactData] tuples.
+pub fn serialize_resolved_fact_value_map<S>(
+    map: &HashMap<FactPath, FactData>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    use serde::ser::SerializeMap;
-    let mut map_serializer = serializer.serialize_map(Some(map.len()))?;
-    for (key, value) in map {
-        map_serializer.serialize_entry(&key.to_string(), value)?;
-    }
-    map_serializer.end()
+    let entries: Vec<(&FactPath, &FactData)> = map.iter().collect();
+    entries.serialize(serializer)
 }
 
-/// Custom deserializer for HashMap<FactPath, LemmaFact>
-///
-/// Deserializes string keys back to FactPath using FactPath::from_path().
-pub fn deserialize_fact_path_map<'de, D>(
+/// Deserializes from array of [FactPath, FactData] tuples.
+pub fn deserialize_resolved_fact_value_map<'de, D>(
     deserializer: D,
-) -> Result<HashMap<FactPath, LemmaFact>, D::Error>
+) -> Result<HashMap<FactPath, FactData>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let map: HashMap<String, LemmaFact> = HashMap::deserialize(deserializer)?;
-    let mut result = HashMap::new();
-    for (key_str, value) in map {
-        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
-        let fact_path = FactPath::from_path(path_parts);
-        result.insert(fact_path, value);
-    }
-    Ok(result)
+    let entries: Vec<(FactPath, FactData)> = Vec::deserialize(deserializer)?;
+    Ok(entries.into_iter().collect())
 }
 
-/// Custom serializer for HashMap<FactPath, LemmaType>
-///
-/// JSON object keys must be strings, so FactPath keys are serialized as strings
-/// using their Display implementation (e.g., "age" or "employee.salary").
-pub fn serialize_fact_type_map<S>(
-    map: &HashMap<FactPath, LemmaType>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    use serde::ser::SerializeMap;
-    let mut map_serializer = serializer.serialize_map(Some(map.len()))?;
-    for (key, value) in map {
-        map_serializer.serialize_entry(&key.to_string(), value)?;
-    }
-    map_serializer.end()
-}
-
-/// Custom deserializer for HashMap<FactPath, LemmaType>
-///
-/// Deserializes string keys back to FactPath using FactPath::from_path().
-pub fn deserialize_fact_type_map<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<FactPath, LemmaType>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let map: HashMap<String, LemmaType> = HashMap::deserialize(deserializer)?;
-    let mut result = HashMap::new();
-    for (key_str, value) in map {
-        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
-        let fact_path = FactPath::from_path(path_parts);
-        result.insert(fact_path, value);
-    }
-    Ok(result)
-}
-
-/// Custom serializer for HashMap<FactPath, LiteralValue>
-///
-/// JSON object keys must be strings, so FactPath keys are serialized as strings
-/// using their Display implementation (e.g., "age" or "employee.salary").
-pub fn serialize_fact_value_map<S>(
-    map: &HashMap<FactPath, LiteralValue>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    use serde::ser::SerializeMap;
-    let mut map_serializer = serializer.serialize_map(Some(map.len()))?;
-    for (key, value) in map {
-        map_serializer.serialize_entry(&key.to_string(), value)?;
-    }
-    map_serializer.end()
-}
-
-/// Custom deserializer for HashMap<FactPath, LiteralValue>
-///
-/// Deserializes string keys back to FactPath using FactPath::from_path().
-pub fn deserialize_fact_value_map<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<FactPath, LiteralValue>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let map: HashMap<String, LiteralValue> = HashMap::deserialize(deserializer)?;
-    let mut result = HashMap::new();
-    for (key_str, value) in map {
-        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
-        let fact_path = FactPath::from_path(path_parts);
-        result.insert(fact_path, value);
-    }
-    Ok(result)
-}
-
-/// Custom serializer for HashMap<FactPath, String> (document references)
-pub fn serialize_fact_doc_ref_map<S>(
-    map: &HashMap<FactPath, String>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    use serde::ser::SerializeMap;
-    let mut map_serializer = serializer.serialize_map(Some(map.len()))?;
-    for (key, value) in map {
-        map_serializer.serialize_entry(&key.to_string(), value)?;
-    }
-    map_serializer.end()
-}
-
-/// Custom deserializer for HashMap<FactPath, String> (document references)
-pub fn deserialize_fact_doc_ref_map<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<FactPath, String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let map: HashMap<String, String> = HashMap::deserialize(deserializer)?;
-    let mut result = HashMap::new();
-    for (key_str, value) in map {
-        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
-        let fact_path = FactPath::from_path(path_parts);
-        result.insert(fact_path, value);
-    }
-    Ok(result)
-}
-
-/// Custom serializer for HashMap<FactPath, Source> (fact sources)
-pub fn serialize_fact_source_map<S>(
-    map: &HashMap<FactPath, Source>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    use serde::ser::SerializeMap;
-    let mut map_serializer = serializer.serialize_map(Some(map.len()))?;
-    for (key, value) in map {
-        map_serializer.serialize_entry(&key.to_string(), value)?;
-    }
-    map_serializer.end()
-}
-
-/// Custom deserializer for HashMap<FactPath, Source> (fact sources)
-pub fn deserialize_fact_source_map<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<FactPath, Source>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let map: HashMap<String, Source> = HashMap::deserialize(deserializer)?;
-    let mut result = HashMap::new();
-    for (key_str, value) in map {
-        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
-        let fact_path = FactPath::from_path(path_parts);
-        result.insert(fact_path, value);
-    }
-    Ok(result)
-}
-
-/// Custom serializer for HashSet<FactPath>
-///
-/// Serializes as a JSON array of strings using FactPath's Display implementation.
+/// Serializes HashSet<FactPath> as array of FactPath structures.
 pub fn serialize_fact_path_set<S>(set: &HashSet<FactPath>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    use serde::ser::SerializeSeq;
-    let mut seq = serializer.serialize_seq(Some(set.len()))?;
-    for item in set {
-        seq.serialize_element(&item.to_string())?;
-    }
-    seq.end()
+    let items: Vec<&FactPath> = set.iter().collect();
+    items.serialize(serializer)
 }
 
-/// Custom deserializer for HashSet<FactPath>
-///
-/// Deserializes array of strings back to FactPath using FactPath::from_path().
+/// Deserializes array of FactPath structures to HashSet<FactPath>.
 pub fn deserialize_fact_path_set<'de, D>(deserializer: D) -> Result<HashSet<FactPath>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let vec: Vec<String> = Vec::deserialize(deserializer)?;
-    let mut result = HashSet::new();
-    for key_str in vec {
-        let path_parts: Vec<String> = key_str.split('.').map(|s| s.to_string()).collect();
-        let fact_path = FactPath::from_path(path_parts);
-        result.insert(fact_path);
-    }
-    Ok(result)
+    let items: Vec<FactPath> = Vec::deserialize(deserializer)?;
+    Ok(items.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -265,10 +92,7 @@ mod tests {
     fn create_test_plan() -> ExecutionPlan {
         ExecutionPlan {
             doc_name: "test".to_string(),
-            fact_schema: HashMap::new(),
-            fact_values: HashMap::new(),
-            doc_refs: HashMap::new(),
-            fact_sources: HashMap::new(),
+            facts: HashMap::new(),
             rules: vec![],
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
         }

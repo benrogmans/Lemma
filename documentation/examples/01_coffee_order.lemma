@@ -7,10 +7,10 @@ Perfect for understanding the basics of Lemma.
 """
 
 type money = scale
-  -> minimum 0
   -> decimals 2
   -> unit eur 1.00
   -> unit gbp 1.17
+  -> minimum 0 eur
 
 type coffee = text
   -> option "espresso"

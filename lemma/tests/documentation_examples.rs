@@ -2,7 +2,7 @@
 //!
 //! Ensures all example files in documentation/examples/ are valid and can be evaluated
 
-use lemma::Engine;
+use lemma::{Engine, SemanticDurationUnit};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -67,7 +67,7 @@ fn test_01_coffee_order() {
     // total = 8.40 - 0.756 = 7.644 eur
     assert_eq!(
         total.value,
-        lemma::Value::Scale(Decimal::from_str("7.644").unwrap(), Some("eur".to_string()))
+        lemma::ValueKind::Scale(Decimal::from_str("7.644").unwrap(), "eur".to_string())
     );
 }
 
@@ -83,14 +83,11 @@ fn test_02_library_fees() {
     let final_fee = get_rule_value(&engine, "library_fees", "final_fee", facts.clone());
     assert_eq!(
         final_fee.value,
-        lemma::Value::Scale(Decimal::from_str("1.25").unwrap(), Some("eur".to_string()))
+        lemma::ValueKind::Scale(Decimal::from_str("1.25").unwrap(), "eur".to_string())
     );
 
     let can_checkout = get_rule_value(&engine, "library_fees", "can_checkout", facts);
-    assert_eq!(
-        can_checkout.value,
-        lemma::Value::Boolean(lemma::BooleanValue::True)
-    );
+    assert_eq!(can_checkout.value, lemma::ValueKind::Boolean(true));
 }
 
 #[test]
@@ -105,27 +102,22 @@ fn test_03_recipe_scaling() {
     let scaling_factor = get_rule_value(&engine, "recipe_scaling", "scaling_factor", facts.clone());
     assert_eq!(
         scaling_factor.value,
-        lemma::Value::Number(Decimal::from_str("2").unwrap())
+        lemma::ValueKind::Number(Decimal::from_str("2").unwrap())
     );
 
-    let baking_time = get_rule_value(
-        &engine,
-        "recipe_scaling",
-        "baking_time_minutes",
-        facts.clone(),
-    );
+    let baking_time = get_rule_value(&engine, "recipe_scaling", "baking_time", facts.clone());
     assert_eq!(
         baking_time.value,
-        lemma::Value::Number(Decimal::from_str("40").unwrap())
+        lemma::ValueKind::Duration(
+            Decimal::from_str("40").unwrap(),
+            SemanticDurationUnit::Minute.clone()
+        )
     );
 
     let oven_temp = get_rule_value(&engine, "recipe_scaling", "oven_temperature", facts);
     assert_eq!(
         oven_temp.value,
-        lemma::Value::Scale(
-            Decimal::from_str("175").unwrap(),
-            Some("celsius".to_string())
-        )
+        lemma::ValueKind::Scale(Decimal::from_str("175").unwrap(), "celsius".to_string())
     );
 }
 
@@ -142,7 +134,7 @@ fn test_04_membership_benefits() {
     );
     assert_eq!(
         discount_rate.value,
-        lemma::Value::Ratio(
+        lemma::ValueKind::Ratio(
             Decimal::from_str("0.10").unwrap(),
             Some("percent".to_string())
         )
@@ -152,7 +144,7 @@ fn test_04_membership_benefits() {
     let discount = get_rule_value(&engine, "membership_benefits", "discount", HashMap::new());
     assert_eq!(
         discount.value,
-        lemma::Value::Number(Decimal::from_str("15").unwrap())
+        lemma::ValueKind::Number(Decimal::from_str("15").unwrap())
     );
 
     let shipping_cost = get_rule_value(
@@ -163,7 +155,7 @@ fn test_04_membership_benefits() {
     );
     assert_eq!(
         shipping_cost.value,
-        lemma::Value::Number(Decimal::from_str("0").unwrap())
+        lemma::ValueKind::Number(Decimal::from_str("0").unwrap())
     );
 
     let total_points = get_rule_value(
@@ -174,7 +166,7 @@ fn test_04_membership_benefits() {
     );
     assert_eq!(
         total_points.value,
-        lemma::Value::Number(Decimal::from_str("325").unwrap())
+        lemma::ValueKind::Number(Decimal::from_str("325").unwrap())
     );
 }
 
@@ -191,14 +183,11 @@ fn test_05_weather_clothing() {
         get_rule_value(&engine, "weather_clothing", "clothing_layer", facts.clone());
     assert_eq!(
         clothing_layer.value,
-        lemma::Value::Text("light".to_string())
+        lemma::ValueKind::Text("light".to_string())
     );
 
     let needs_jacket = get_rule_value(&engine, "weather_clothing", "needs_jacket", facts);
-    assert_eq!(
-        needs_jacket.value,
-        lemma::Value::Boolean(lemma::BooleanValue::False)
-    );
+    assert_eq!(needs_jacket.value, lemma::ValueKind::Boolean(false));
 }
 
 #[test]

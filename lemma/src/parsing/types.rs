@@ -1,7 +1,7 @@
 use super::ast::Span;
 use super::Rule;
 use crate::error::LemmaError;
-use crate::semantic::TypeDef;
+use crate::parsing::ast::TypeDef;
 use pest::iterators::Pair;
 use std::sync::Arc;
 
@@ -52,7 +52,7 @@ pub(crate) fn parse_type_definition(
         )
     })?;
 
-    let (parent, overrides, _from) =
+    let (parent, constraints, _from) =
         parse_type_arrow_chain_with_commands(arrow_chain_pair, attribute, doc_name)?;
     // Regular types don't support 'from' - it's only for imports and inline types
 
@@ -60,7 +60,7 @@ pub(crate) fn parse_type_definition(
         source_location,
         name: type_name_str,
         parent,
-        overrides,
+        constraints,
     })
 }
 
@@ -137,7 +137,7 @@ pub(crate) fn parse_type_import(
         name: final_type_name,
         source_type: source_type_name,
         from: imported_doc_name,
-        overrides: None,
+        constraints: None,
     })
 }
 
@@ -166,47 +166,40 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
     // Store the remaining items for command parsing (after the first element)
     let remaining_items: Vec<_> = inner.collect();
 
-    let (parent_name, from_doc) = match first.as_rule() {
-        Rule::type_name_def => {
-            // type_name_def can match either type_custom or type_standard
-            let mut inner = first.clone().into_inner();
-            match inner.next() {
-                Some(child) => match child.as_rule() {
-                    Rule::type_standard => {
-                        // Standard type - should be lowercase
-                        (first.as_str().to_lowercase(), None)
-                    }
-                    Rule::type_custom => {
-                        // Custom type (label)
-                        (first.as_str().to_string(), None)
-                    }
-                    _ => {
-                        let child_span = Span::from_pest_span(child.as_span());
-                        return Err(LemmaError::engine(
-                            format!("Unexpected rule in type_name_def: {:?}", child.as_rule()),
-                            child_span,
-                            attribute,
-                            Arc::from(first.as_str()),
-                            doc_name,
-                            1,
-                            None::<String>,
-                        ));
-                    }
-                },
-                None => {
-                    let first_span = Span::from_pest_span(first.as_span());
-                    return Err(LemmaError::engine(
-                        "Grammar error: type_name_def must contain type_custom or type_standard",
-                        first_span,
-                        attribute,
-                        Arc::from(first.as_str()),
-                        doc_name,
-                        1,
-                        None::<String>,
-                    ));
-                }
-            }
+    fn parse_type_name_def_pair(
+        pair: &Pair<Rule>,
+        attribute: &str,
+        doc_name: &str,
+    ) -> Result<String, LemmaError> {
+        let mut inner = pair.clone().into_inner();
+        match inner.next() {
+            Some(child) => match child.as_rule() {
+                Rule::type_standard => Ok(pair.as_str().to_lowercase()),
+                Rule::type_custom => Ok(pair.as_str().to_string()),
+                _ => Err(LemmaError::engine(
+                    format!("Unexpected rule in type_name_def: {:?}", child.as_rule()),
+                    Span::from_pest_span(child.as_span()),
+                    attribute,
+                    Arc::from(pair.as_str()),
+                    doc_name,
+                    1,
+                    None::<String>,
+                )),
+            },
+            None => Err(LemmaError::engine(
+                "Grammar error: type_name_def must contain type_custom or type_standard",
+                Span::from_pest_span(pair.as_span()),
+                attribute,
+                Arc::from(pair.as_str()),
+                doc_name,
+                1,
+                None::<String>,
+            )),
         }
+    }
+
+    let (parent_name, from_doc) = match first.as_rule() {
+        Rule::type_name_def => (parse_type_name_def_pair(&first, attribute, doc_name)?, None),
         Rule::type_import_def => {
             // Parse: type_name_def ~ "from" ~ doc_name
             let inner = first.clone().into_inner();
@@ -216,44 +209,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
             for item in inner {
                 match item.as_rule() {
                     Rule::type_name_def => {
-                        let mut type_inner = item.clone().into_inner();
-                        match type_inner.next() {
-                            Some(child) => match child.as_rule() {
-                                Rule::type_standard => {
-                                    type_name_def = Some(item.as_str().to_lowercase());
-                                }
-                                Rule::type_custom => {
-                                    type_name_def = Some(item.as_str().to_string());
-                                }
-                                _ => {
-                                    let child_span = Span::from_pest_span(child.as_span());
-                                    return Err(LemmaError::engine(
-                                        format!(
-                                            "Unexpected rule in type_name_def: {:?}",
-                                            child.as_rule()
-                                        ),
-                                        child_span,
-                                        attribute,
-                                        Arc::from(item.as_str()),
-                                        doc_name,
-                                        1,
-                                        None::<String>,
-                                    ));
-                                }
-                            },
-                            None => {
-                                let item_span = Span::from_pest_span(item.as_span());
-                                return Err(LemmaError::engine(
-                                    "Grammar error: type_name_def must contain type_custom or type_standard",
-                                    item_span,
-                                    attribute,
-                                    Arc::from(item.as_str()),
-                                    doc_name,
-                                    1,
-                                    None::<String>,
-                                ));
-                            }
-                        }
+                        type_name_def = Some(parse_type_name_def_pair(&item, attribute, doc_name)?);
                     }
                     Rule::doc_name => {
                         imported_doc_name = Some(item.as_str().to_string());
@@ -354,13 +310,13 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
         ));
     }
 
-    let overrides = if commands.is_empty() {
+    let constraints = if commands.is_empty() {
         None
     } else {
         Some(commands)
     };
 
-    Ok((parent_name, overrides, from_doc))
+    Ok((parent_name, constraints, from_doc))
 }
 
 fn parse_command(
@@ -409,7 +365,7 @@ mod tests {
     use crate::{parse, ResourceLimits};
 
     #[test]
-    fn type_definition_parsing_produces_regular_typedef_with_overrides() {
+    fn type_definition_parsing_produces_regular_typedef_with_constraints() {
         let code = r#"doc test
 type dice = number -> minimum 0 -> maximum 6"#;
 
@@ -425,19 +381,19 @@ type dice = number -> minimum 0 -> maximum 6"#;
             crate::TypeDef::Regular {
                 name,
                 parent,
-                overrides,
+                constraints,
                 ..
             } => {
                 assert_eq!(name, "dice");
                 assert_eq!(parent, "number");
-                assert!(overrides.is_some());
+                assert!(constraints.is_some());
 
-                let overrides = overrides.as_ref().unwrap();
-                assert_eq!(overrides.len(), 2);
-                assert_eq!(overrides[0].0, "minimum");
-                assert_eq!(overrides[0].1, vec!["0"]);
-                assert_eq!(overrides[1].0, "maximum");
-                assert_eq!(overrides[1].1, vec!["6"]);
+                let constraints = constraints.as_ref().unwrap();
+                assert_eq!(constraints.len(), 2);
+                assert_eq!(constraints[0].0, "minimum");
+                assert_eq!(constraints[0].1, vec!["0"]);
+                assert_eq!(constraints[1].0, "maximum");
+                assert_eq!(constraints[1].1, vec!["6"]);
             }
             other => panic!("Expected Regular type definition, got {:?}", other),
         }

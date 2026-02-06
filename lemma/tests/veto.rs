@@ -85,7 +85,7 @@ rule is_adult = age >= 18
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::True))
+        OperationResult::Value(Box::new(LiteralValue::from_bool(true)))
     );
 }
 
@@ -202,7 +202,7 @@ rule can_drive = age >= 16
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::False))
+        OperationResult::Value(Box::new(LiteralValue::from_bool(false)))
     );
 }
 
@@ -434,7 +434,7 @@ rule double_value = value * 2
         .unwrap();
     assert_eq!(
         check_negative.result,
-        OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::True))
+        OperationResult::Value(Box::new(LiteralValue::from_bool(true)))
     );
 
     let double_value = response
@@ -444,7 +444,9 @@ rule double_value = value * 2
         .unwrap();
     assert_eq!(
         double_value.result,
-        OperationResult::Value(LiteralValue::number(Decimal::from_str("-20.0").unwrap()))
+        OperationResult::Value(Box::new(LiteralValue::number(
+            Decimal::from_str("-20.0").unwrap()
+        )))
     );
 }
 

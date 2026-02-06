@@ -30,7 +30,7 @@ rule discount = 0
     // Since quantity=25 is >= 10, we should get 10
     match &discount_result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Number(n) = &lit.value {
+            if let lemma::ValueKind::Number(n) = &lit.value {
                 assert_eq!(*n, Decimal::from_str("10").unwrap());
             } else {
                 panic!("Expected number result");
@@ -65,8 +65,8 @@ rule can_drive = age >= 18 and has_license
 
     match &result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Boolean(b) = &lit.value {
-                assert!(bool::from(b));
+            if let lemma::ValueKind::Boolean(b) = &lit.value {
+                assert!(*b);
             } else {
                 panic!("Expected boolean result, got {:?}", result.result);
             }
@@ -100,7 +100,7 @@ rule result = base * multiplier
 
     match &result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Number(n) = &lit.value {
+            if let lemma::ValueKind::Number(n) = &lit.value {
                 assert_eq!(*n, Decimal::from_str("200").unwrap());
             } else {
                 panic!("Expected number result, got {:?}", result.result);
@@ -137,7 +137,7 @@ rule final_price = 100 - discount?
 
     match &result.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Number(n) = &lit.value {
+            if let lemma::ValueKind::Number(n) = &lit.value {
                 assert_eq!(*n, Decimal::from_str("90").unwrap());
             } else {
                 panic!("Expected number result, got {:?}", result.result);

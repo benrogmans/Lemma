@@ -3,12 +3,17 @@
 //! Validates document structure and type declarations
 //! to catch errors early with clear messages.
 
-use crate::parsing::ast::Span;
-use crate::semantic::{DateTimeValue, FactValue, LemmaDoc, TimeValue, TypeSpecification};
+use crate::parsing::ast::{DateTimeValue, FactValue, LemmaDoc, TimeValue};
+use crate::planning::semantics::{
+    Expression, ExpressionKind, FactPath, LemmaType, RulePath, SemanticConversionTarget,
+    TypeSpecification,
+};
 use crate::LemmaError;
 use crate::Source;
+use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Validate basic type declaration structure in a document
@@ -26,23 +31,13 @@ pub fn validate_types(
     for fact in &document.facts {
         if let FactValue::TypeDeclaration {
             base,
-            overrides: _,
+            constraints: _,
             from: _,
         } = &fact.value
         {
             // Basic validation - check that base is not empty
             if base.is_empty() {
-                let fallback = Source::new(
-                    "<validation>",
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    &document.name,
-                );
-                let src = fact.source_location.as_ref().unwrap_or(&fallback);
+                let src = &fact.source_location;
                 errors.push(LemmaError::engine(
                     "TypeDeclaration base cannot be empty",
                     src.span.clone(),
@@ -200,11 +195,26 @@ pub fn validate_type_specifications(
                 }
             }
 
+            // Scale types must have at least one unit (required for parsing and conversion)
+            if units.is_empty() {
+                errors.push(LemmaError::engine(
+                    format!(
+                        "Type '{}' is a scale type but has no units. Scale types must define at least one unit (e.g. -> unit eur 1).",
+                        type_name
+                    ),
+                    source.span.clone(),
+                    &source.attribute,
+                    Arc::from(""),
+                    &source.doc_name,
+                    1,
+                    None::<String>,
+                ));
+            }
+
             // Validate units (if present)
-            // Scale types can have units - validate them
             if !units.is_empty() {
                 let mut seen_names: Vec<String> = Vec::new();
-                for unit in units {
+                for unit in units.iter() {
                     // Validate unit name is not empty
                     if unit.name.trim().is_empty() {
                         errors.push(LemmaError::engine(
@@ -352,16 +362,35 @@ pub fn validate_type_specifications(
                     }
                 }
             }
-            // Note: Number types are dimensionless and cannot have units (validated in apply_override)
+            // Note: Number types are dimensionless and cannot have units (validated in apply_constraint)
         }
 
         TypeSpecification::Ratio {
             minimum,
             maximum,
+            decimals,
             default,
             units,
             ..
         } => {
+            // Validate decimals range (0-28 is rust_decimal limit)
+            if let Some(d) = decimals {
+                if *d > 28 {
+                    errors.push(LemmaError::engine(
+                        format!(
+                            "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
+                            type_name, d
+                        ),
+                        source.span.clone(),
+                        &source.attribute,
+                        Arc::from(""),
+                        &source.doc_name,
+                        1,
+                        None::<String>,
+                    ));
+                }
+            }
+
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
@@ -421,7 +450,7 @@ pub fn validate_type_specifications(
             // Only validate if units are defined
             if !units.is_empty() {
                 let mut seen_names: Vec<String> = Vec::new();
-                for unit in units {
+                for unit in units.iter() {
                     // Validate unit name is not empty
                     if unit.name.trim().is_empty() {
                         errors.push(LemmaError::engine(
@@ -747,16 +776,307 @@ fn compare_time_values(left: &TimeValue, right: &TimeValue) -> Ordering {
         .then_with(|| left.second.cmp(&right.second))
 }
 
+// -----------------------------------------------------------------------------
+// Document interface validation (required rule names + rule result types)
+// -----------------------------------------------------------------------------
+
+/// Rule data needed to validate document interfaces (avoids validation depending on graph).
+pub struct RuleEntryForBindingCheck {
+    pub rule_type: LemmaType,
+    pub depends_on_rules: HashSet<RulePath>,
+    pub branches: Vec<(Option<Expression>, Expression)>,
+}
+
+/// Expected type constraint at a rule reference use site (from parent expression).
+#[derive(Clone, Copy, Debug)]
+enum ExpectedRuleTypeConstraint {
+    Numeric,
+    Boolean,
+    Comparable,
+    Number,
+    Duration,
+    Ratio,
+    Scale,
+    Any,
+}
+
+/// Map a rule's result type to the strictest ExpectedRuleTypeConstraint it satisfies,
+/// for document interface type checking.
+fn lemma_type_to_expected_constraint(lemma_type: &LemmaType) -> ExpectedRuleTypeConstraint {
+    if lemma_type.is_boolean() {
+        return ExpectedRuleTypeConstraint::Boolean;
+    }
+    if lemma_type.is_number() {
+        return ExpectedRuleTypeConstraint::Number;
+    }
+    if lemma_type.is_scale() {
+        return ExpectedRuleTypeConstraint::Scale;
+    }
+    if lemma_type.is_duration() {
+        return ExpectedRuleTypeConstraint::Duration;
+    }
+    if lemma_type.is_ratio() {
+        return ExpectedRuleTypeConstraint::Ratio;
+    }
+    if lemma_type.is_text() || lemma_type.is_date() || lemma_type.is_time() {
+        return ExpectedRuleTypeConstraint::Comparable;
+    }
+    ExpectedRuleTypeConstraint::Any
+}
+
+fn rule_type_satisfies_constraint(
+    lemma_type: &LemmaType,
+    constraint: ExpectedRuleTypeConstraint,
+) -> bool {
+    match constraint {
+        ExpectedRuleTypeConstraint::Any => true,
+        ExpectedRuleTypeConstraint::Boolean => lemma_type.is_boolean(),
+        ExpectedRuleTypeConstraint::Number => lemma_type.is_number(),
+        ExpectedRuleTypeConstraint::Duration => lemma_type.is_duration(),
+        ExpectedRuleTypeConstraint::Ratio => lemma_type.is_ratio(),
+        ExpectedRuleTypeConstraint::Scale => lemma_type.is_scale(),
+        ExpectedRuleTypeConstraint::Numeric => {
+            lemma_type.is_number() || lemma_type.is_scale() || lemma_type.is_ratio()
+        }
+        ExpectedRuleTypeConstraint::Comparable => {
+            lemma_type.is_boolean()
+                || lemma_type.is_text()
+                || lemma_type.is_number()
+                || lemma_type.is_ratio()
+                || lemma_type.is_date()
+                || lemma_type.is_time()
+                || lemma_type.is_scale()
+                || lemma_type.is_duration()
+        }
+    }
+}
+
+fn collect_expected_constraints_for_rule_ref(
+    expr: &Expression,
+    rule_path: &RulePath,
+    expected: ExpectedRuleTypeConstraint,
+) -> Vec<(Source, ExpectedRuleTypeConstraint)> {
+    let mut out = Vec::new();
+    match &expr.kind {
+        ExpressionKind::RulePath(rp) => {
+            if rp == rule_path {
+                out.push((expr.source_location.clone(), expected));
+            }
+        }
+        ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
+            out.extend(collect_expected_constraints_for_rule_ref(
+                left,
+                rule_path,
+                ExpectedRuleTypeConstraint::Boolean,
+            ));
+            out.extend(collect_expected_constraints_for_rule_ref(
+                right,
+                rule_path,
+                ExpectedRuleTypeConstraint::Boolean,
+            ));
+        }
+        ExpressionKind::LogicalNegation(operand, _) => {
+            out.extend(collect_expected_constraints_for_rule_ref(
+                operand,
+                rule_path,
+                ExpectedRuleTypeConstraint::Boolean,
+            ));
+        }
+        ExpressionKind::Comparison(left, _, right) => {
+            out.extend(collect_expected_constraints_for_rule_ref(
+                left,
+                rule_path,
+                ExpectedRuleTypeConstraint::Comparable,
+            ));
+            out.extend(collect_expected_constraints_for_rule_ref(
+                right,
+                rule_path,
+                ExpectedRuleTypeConstraint::Comparable,
+            ));
+        }
+        ExpressionKind::Arithmetic(left, _, right) => {
+            out.extend(collect_expected_constraints_for_rule_ref(
+                left,
+                rule_path,
+                ExpectedRuleTypeConstraint::Numeric,
+            ));
+            out.extend(collect_expected_constraints_for_rule_ref(
+                right,
+                rule_path,
+                ExpectedRuleTypeConstraint::Numeric,
+            ));
+        }
+        ExpressionKind::UnitConversion(source, target) => {
+            let constraint = match target {
+                SemanticConversionTarget::Duration(_) => ExpectedRuleTypeConstraint::Duration,
+                SemanticConversionTarget::ScaleUnit(_) => ExpectedRuleTypeConstraint::Scale,
+                SemanticConversionTarget::RatioUnit(_) => ExpectedRuleTypeConstraint::Ratio,
+            };
+            out.extend(collect_expected_constraints_for_rule_ref(
+                source, rule_path, constraint,
+            ));
+        }
+        ExpressionKind::MathematicalComputation(_, operand) => {
+            out.extend(collect_expected_constraints_for_rule_ref(
+                operand,
+                rule_path,
+                ExpectedRuleTypeConstraint::Number,
+            ));
+        }
+        ExpressionKind::Literal(_) | ExpressionKind::FactPath(_) | ExpressionKind::Veto(_) => {}
+    }
+    out
+}
+
+fn expected_constraint_name(c: ExpectedRuleTypeConstraint) -> &'static str {
+    match c {
+        ExpectedRuleTypeConstraint::Numeric => "numeric (number, scale, or ratio)",
+        ExpectedRuleTypeConstraint::Boolean => "boolean",
+        ExpectedRuleTypeConstraint::Comparable => "comparable",
+        ExpectedRuleTypeConstraint::Number => "number",
+        ExpectedRuleTypeConstraint::Duration => "duration",
+        ExpectedRuleTypeConstraint::Ratio => "ratio",
+        ExpectedRuleTypeConstraint::Scale => "scale",
+        ExpectedRuleTypeConstraint::Any => "any",
+    }
+}
+
+fn doc_start_line_for(doc_name: &str, all_docs: &[LemmaDoc]) -> usize {
+    all_docs
+        .iter()
+        .find(|d| d.name == doc_name)
+        .map(|d| d.start_line)
+        .unwrap_or(1)
+}
+
+fn push_document_interface_error(
+    errors: &mut Vec<LemmaError>,
+    source: &Source,
+    message: impl Into<String>,
+    sources: &HashMap<String, String>,
+    all_docs: &[LemmaDoc],
+) {
+    let source_text = sources.get(&source.attribute).cloned().unwrap_or_default();
+    errors.push(LemmaError::engine(
+        message.into(),
+        source.span.clone(),
+        source.attribute.clone(),
+        Arc::from(source_text),
+        source.doc_name.clone(),
+        doc_start_line_for(&source.doc_name, all_docs),
+        None::<String>,
+    ));
+}
+
+/// Validate that every doc-ref fact path's referenced document has the required rules
+/// and that each such rule's result type satisfies what the referencing rules expect.
+/// Type errors are reported at the binding fact's source when a binding changed the doc ref.
+pub fn validate_document_interfaces(
+    referenced_rules: &HashMap<Vec<String>, HashSet<String>>,
+    doc_ref_facts: &[(FactPath, String, Source)],
+    rule_entries: &IndexMap<RulePath, RuleEntryForBindingCheck>,
+    all_docs: &[LemmaDoc],
+    sources: &HashMap<String, String>,
+    errors: &mut Vec<LemmaError>,
+) {
+    for (fact_path, doc_name, fact_source) in doc_ref_facts {
+        let mut full_path: Vec<String> =
+            fact_path.segments.iter().map(|s| s.fact.clone()).collect();
+        full_path.push(fact_path.fact.clone());
+
+        let Some(required_rules) = referenced_rules.get(&full_path) else {
+            continue;
+        };
+
+        let doc = match all_docs.iter().find(|d| d.name == *doc_name) {
+            Some(d) => d,
+            None => continue,
+        };
+        let doc_rule_names: HashSet<&str> = doc.rules.iter().map(|r| r.name.as_str()).collect();
+
+        for required_rule in required_rules {
+            if !doc_rule_names.contains(required_rule.as_str()) {
+                push_document_interface_error(
+                    errors,
+                    fact_source,
+                    format!(
+                        "Document '{}' referenced by '{}' is missing required rule '{}'",
+                        doc_name, fact_path, required_rule
+                    ),
+                    sources,
+                    all_docs,
+                );
+                continue;
+            }
+
+            let ref_rule_path = RulePath::new(fact_path.segments.clone(), required_rule.clone());
+            let Some(ref_entry) = rule_entries.get(&ref_rule_path) else {
+                continue;
+            };
+            let ref_rule_type = &ref_entry.rule_type;
+
+            for (_referencing_path, entry) in rule_entries {
+                if !entry.depends_on_rules.contains(&ref_rule_path) {
+                    continue;
+                }
+                let expected = lemma_type_to_expected_constraint(&entry.rule_type);
+                for (_condition, result_expr) in &entry.branches {
+                    let constraints = collect_expected_constraints_for_rule_ref(
+                        result_expr,
+                        &ref_rule_path,
+                        expected,
+                    );
+                    for (_source, constraint) in constraints {
+                        if !rule_type_satisfies_constraint(ref_rule_type, constraint) {
+                            // fact_source already points to the binding site when a
+                            // binding changed the doc ref (set during graph building).
+                            let report_source = fact_source;
+
+                            let binding_path_str = fact_path
+                                .segments
+                                .iter()
+                                .map(|s| s.fact.as_str())
+                                .collect::<Vec<_>>()
+                                .join(".");
+                            let binding_path_str = if binding_path_str.is_empty() {
+                                fact_path.fact.clone()
+                            } else {
+                                format!("{}.{}", binding_path_str, fact_path.fact)
+                            };
+
+                            push_document_interface_error(
+                                errors,
+                                report_source,
+                                format!(
+                                    "Fact binding '{}' sets document reference to '{}', but that document's rule '{}' has result type {}; the referencing expression expects a {} value",
+                                    binding_path_str,
+                                    doc_name,
+                                    required_rule,
+                                    ref_rule_type.name(),
+                                    expected_constraint_name(constraint),
+                                ),
+                                sources,
+                                all_docs,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::semantic::{FactReference, FactValue, LemmaFact, LiteralValue, TypeSpecification};
+    use crate::parsing::ast::{FactReference, FactValue, LemmaFact, Value};
+    use crate::planning::semantics::TypeSpecification;
     use rust_decimal::Decimal;
 
     fn test_source(doc_name: &str) -> Source {
         Source::new(
             "<test>",
-            Span {
+            crate::parsing::ast::Span {
                 start: 0,
                 end: 0,
                 line: 1,
@@ -771,11 +1091,20 @@ mod tests {
     }
 
     fn make_fact(name: &str) -> LemmaFact {
-        LemmaFact {
-            reference: FactReference::local(name.to_string()),
-            value: FactValue::Literal(LiteralValue::number(Decimal::from(1))),
-            source_location: None,
-        }
+        LemmaFact::new(
+            FactReference::local(name.to_string()),
+            FactValue::Literal(Value::Number(Decimal::from(1))),
+            Source::new(
+                "<test>",
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "test",
+            ),
+        )
     }
 
     #[test]
@@ -791,10 +1120,10 @@ mod tests {
     fn validate_number_minimum_greater_than_maximum() {
         let mut specs = TypeSpecification::number();
         specs = specs
-            .apply_override("minimum", &["100".to_string()])
+            .apply_constraint("minimum", &["100".to_string()])
             .unwrap();
         specs = specs
-            .apply_override("maximum", &["50".to_string()])
+            .apply_constraint("maximum", &["50".to_string()])
             .unwrap();
 
         let src = test_source("test");
@@ -808,9 +1137,11 @@ mod tests {
     #[test]
     fn validate_number_valid_range() {
         let mut specs = TypeSpecification::number();
-        specs = specs.apply_override("minimum", &["0".to_string()]).unwrap();
         specs = specs
-            .apply_override("maximum", &["100".to_string()])
+            .apply_constraint("minimum", &["0".to_string()])
+            .unwrap();
+        specs = specs
+            .apply_constraint("maximum", &["100".to_string()])
             .unwrap();
 
         let src = test_source("test");
@@ -876,10 +1207,10 @@ mod tests {
     fn validate_text_minimum_greater_than_maximum() {
         let mut specs = TypeSpecification::text();
         specs = specs
-            .apply_override("minimum", &["100".to_string()])
+            .apply_constraint("minimum", &["100".to_string()])
             .unwrap();
         specs = specs
-            .apply_override("maximum", &["50".to_string()])
+            .apply_constraint("maximum", &["50".to_string()])
             .unwrap();
 
         let src = test_source("test");
@@ -894,9 +1225,11 @@ mod tests {
     fn validate_text_length_inconsistent_with_minimum() {
         let mut specs = TypeSpecification::text();
         specs = specs
-            .apply_override("minimum", &["10".to_string()])
+            .apply_constraint("minimum", &["10".to_string()])
             .unwrap();
-        specs = specs.apply_override("length", &["5".to_string()]).unwrap();
+        specs = specs
+            .apply_constraint("length", &["5".to_string()])
+            .unwrap();
 
         let src = test_source("test");
         let errors = validate_type_specifications(&specs, "test", &src);
@@ -946,7 +1279,8 @@ mod tests {
         let specs = TypeSpecification::Ratio {
             minimum: Some(Decimal::from(2)),
             maximum: Some(Decimal::from(1)),
-            units: vec![],
+            decimals: None,
+            units: crate::planning::semantics::RatioUnits::new(),
             help: None,
             default: None,
         };
@@ -963,10 +1297,10 @@ mod tests {
     fn validate_date_minimum_after_maximum() {
         let mut specs = TypeSpecification::date();
         specs = specs
-            .apply_override("minimum", &["2024-12-31".to_string()])
+            .apply_constraint("minimum", &["2024-12-31".to_string()])
             .unwrap();
         specs = specs
-            .apply_override("maximum", &["2024-01-01".to_string()])
+            .apply_constraint("maximum", &["2024-01-01".to_string()])
             .unwrap();
 
         let src = test_source("test");
@@ -982,10 +1316,10 @@ mod tests {
     fn validate_date_valid_range() {
         let mut specs = TypeSpecification::date();
         specs = specs
-            .apply_override("minimum", &["2024-01-01".to_string()])
+            .apply_constraint("minimum", &["2024-01-01".to_string()])
             .unwrap();
         specs = specs
-            .apply_override("maximum", &["2024-12-31".to_string()])
+            .apply_constraint("maximum", &["2024-12-31".to_string()])
             .unwrap();
 
         let src = test_source("test");
@@ -997,10 +1331,10 @@ mod tests {
     fn validate_time_minimum_after_maximum() {
         let mut specs = TypeSpecification::time();
         specs = specs
-            .apply_override("minimum", &["23:00:00".to_string()])
+            .apply_constraint("minimum", &["23:00:00".to_string()])
             .unwrap();
         specs = specs
-            .apply_override("maximum", &["10:00:00".to_string()])
+            .apply_constraint("maximum", &["10:00:00".to_string()])
             .unwrap();
 
         let src = test_source("test");
@@ -1017,8 +1351,8 @@ mod tests {
         // This test now validates that type specification validation works correctly.
         // The actual validation happens during graph building, but we test the validation
         // function directly here.
+        use crate::parsing::ast::TypeDef;
         use crate::planning::types::TypeRegistry;
-        use crate::semantic::TypeDef;
 
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
@@ -1033,7 +1367,7 @@ mod tests {
             ),
             name: "invalid_money".to_string(),
             parent: "number".to_string(),
-            overrides: Some(vec![
+            constraints: Some(vec![
                 ("minimum".to_string(), vec!["100".to_string()]),
                 ("maximum".to_string(), vec!["50".to_string()]),
             ]),

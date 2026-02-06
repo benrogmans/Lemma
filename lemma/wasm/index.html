@@ -710,14 +710,14 @@ rule total = price - discount?
             return op && Object.prototype.hasOwnProperty.call(op, 'value');
         }
 
-        function literalStandardType(lit) {
+        function literalPrimitiveType(lit) {
             if (!lit || !lit.value || typeof lit.value !== 'object') return 'unknown';
             const keys = Object.keys(lit.value);
             return keys.length === 1 ? keys[0] : 'unknown';
         }
 
         function literalDisplayValue(lit) {
-            const t = literalStandardType(lit);
+            const t = literalPrimitiveType(lit);
             const v = lit?.value?.[t];
             if (t === 'scale' || t === 'ratio') {
                 if (Array.isArray(v) && v.length === 2) return `${v[0]} ${v[1]}`;
@@ -759,7 +759,7 @@ rule total = price - discount?
                     summaryHTML += `<td class="veto">${ruleData.result.veto || 'Vetoed'}</td>`;
                 } else if (opIsValue(ruleData.result)) {
                     const lit = ruleData.result.value;
-                    const t = literalStandardType(lit);
+                    const t = literalPrimitiveType(lit);
                     summaryHTML += `<td class="value">${literalDisplayValue(lit)}</td>`;
                     summaryHTML += `<td style="color: #28a745">✓ Computed (${t})</td>`;
                 } else {

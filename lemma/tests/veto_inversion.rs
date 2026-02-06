@@ -184,7 +184,7 @@ fn veto_non_veto_value_queries_exclude_vetoes() {
         .invert(
             "pricing",
             "final_price",
-            Target::value(LiteralValue::number(90)),
+            Target::value(LiteralValue::number(90.into())),
             std::collections::HashMap::new(),
         )
         .expect("should invert successfully");

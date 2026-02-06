@@ -1,8 +1,8 @@
 use super::ast::Span;
 use super::Rule;
 use crate::error::LemmaError;
+use crate::parsing::ast::*;
 use crate::parsing::types;
-use crate::semantic::*;
 use crate::Source;
 use pest::iterators::Pair;
 use std::sync::Arc;
@@ -52,15 +52,15 @@ pub(crate) fn parse_fact_definition(
         )
     })?;
 
-    let fact = LemmaFact::new(FactReference::local(name), value).with_source_location(Source::new(
-        attribute.to_string(),
-        span,
-        doc_name.to_string(),
-    ));
+    let fact = LemmaFact::new(
+        FactReference::local(name),
+        value,
+        Source::new(attribute.to_string(), span, doc_name.to_string()),
+    );
     Ok(fact)
 }
 
-pub(crate) fn parse_fact_override(
+pub(crate) fn parse_fact_binding(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
@@ -88,9 +88,9 @@ pub(crate) fn parse_fact_override(
         }
     }
 
-    let override_ref_path = fact_reference_path.ok_or_else(|| {
+    let binding_ref_path = fact_reference_path.ok_or_else(|| {
         LemmaError::engine(
-            "Grammar error: fact_override missing fact_reference",
+            "Grammar error: fact_binding missing fact_reference",
             span.clone(),
             attribute,
             Arc::from(""),
@@ -101,7 +101,7 @@ pub(crate) fn parse_fact_override(
     })?;
     let value = fact_value.ok_or_else(|| {
         LemmaError::engine(
-            "Grammar error: fact_override missing fact_value",
+            "Grammar error: fact_binding missing fact_value",
             span.clone(),
             attribute,
             Arc::from(""),
@@ -111,12 +111,12 @@ pub(crate) fn parse_fact_override(
         )
     })?;
 
-    let override_ref = FactReference::from_path(override_ref_path);
-    let fact = LemmaFact::new(override_ref, value).with_source_location(Source::new(
-        attribute.to_string(),
-        span,
-        doc_name.to_string(),
-    ));
+    let binding_ref = FactReference::from_path(binding_ref_path);
+    let fact = LemmaFact::new(
+        binding_ref,
+        value,
+        Source::new(attribute.to_string(), span, doc_name.to_string()),
+    );
     Ok(fact)
 }
 
@@ -203,7 +203,7 @@ fn parse_type_declaration(
     // Just store the name - no resolution during parsing
     Ok(FactValue::TypeDeclaration {
         base: type_name,
-        overrides: None,
+        constraints: None,
         from: None,
     })
 }
@@ -231,13 +231,13 @@ fn parse_inline_type_definition(
         )
     })?;
 
-    let (parent_name, inline_overrides, from_doc) =
+    let (parent_name, inline_constraints, from_doc) =
         types::parse_type_arrow_chain_with_commands(type_arrow_chain, attribute, doc_name)?;
 
-    // Just store the base name, overrides, and from - no resolution during parsing
+    // Just store the base name, constraints, and from - no resolution during parsing
     Ok(FactValue::TypeDeclaration {
         base: parent_name,
-        overrides: inline_overrides,
+        constraints: inline_constraints,
         from: from_doc,
     })
 }
@@ -315,7 +315,7 @@ fact contract = doc employment_contract"#;
     }
 
     #[test]
-    fn test_parse_fact_overrides() {
+    fn test_parse_fact_bindings() {
         let input = r#"doc person
 fact contract = doc employment_contract
 fact contract.start_date = 2024-02-01
@@ -344,7 +344,7 @@ fact contract.base.rate = 100"#;
         match &result[0].facts[1].value {
             FactValue::Literal(lit) => {
                 assert!(
-                    matches!(&lit.value, crate::Value::Date(_)),
+                    matches!(lit, crate::Value::Date(_)),
                     "Expected Date literal"
                 );
             }
@@ -368,7 +368,7 @@ fact contract.base.rate = 100"#;
             ])
         );
         if let FactValue::Literal(lit) = &result[0].facts[3].value {
-            if let crate::Value::Text(s) = &lit.value {
+            if let crate::Value::Text(s) = lit {
                 assert_eq!(s, "contractor");
             } else {
                 panic!("Expected Text literal");
@@ -396,7 +396,7 @@ fact contract.base.rate = 100"#;
             ])
         );
         if let FactValue::Literal(lit) = &result[0].facts[5].value {
-            if let crate::Value::Number(n) = &lit.value {
+            if let crate::Value::Number(n) = lit {
                 assert_eq!(*n, rust_decimal::Decimal::new(100, 0));
             } else {
                 panic!("Expected Number literal");
@@ -422,7 +422,7 @@ fact duration = [duration]"#;
     }
 
     #[test]
-    fn parse_standard_type_annotations_in_facts_collects_all_facts() {
+    fn parse_primitive_type_annotations_in_facts_collects_all_facts() {
         let input = r#"doc test
 fact duration = [duration]
 fact number = [number]
@@ -434,5 +434,21 @@ fact percentage = [percent]"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].facts.len(), 6);
+    }
+
+    /// Fact value "1 eur" (number_unit_literal) should parse and resolve via document's scale type.
+    #[test]
+    fn parse_fact_with_number_unit_literal_resolves_unit() {
+        let input = r#"doc pricing
+type money = scale
+  -> unit eur 1
+  -> unit usd 1.19
+
+fact zz = 1 eur"#;
+
+        let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].facts.len(), 1);
+        assert_eq!(result[0].facts[0].reference.fact, "zz".to_string())
     }
 }

@@ -7,8 +7,9 @@ Easy to understand: books returned late incur fees.
 """
 
 type money = scale
-  -> unit eur 1.00
   -> decimals 2
+  -> unit eur 1.00
+  -> minimum 0 eur
 
 type book_kind = text
   -> option "regular"

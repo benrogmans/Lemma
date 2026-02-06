@@ -89,12 +89,12 @@ rule manager_bonus = employee.annual_salary? * 0.15
         .find(|r| r.rule.name == "manager_bonus")
         .unwrap();
 
-    assert_eq!(bonus.result.value().unwrap().to_string(), "9,000");
+    assert_eq!(bonus.result.value().unwrap().to_string(), "9000");
 }
 
-/// Test fact override with cross-doc rule reference
+/// Test fact binding with cross-doc rule reference
 #[test]
-fn test_cross_doc_fact_override_with_rule_reference() {
+fn test_cross_doc_fact_binding_with_rule_reference() {
     let mut engine = Engine::new();
 
     let base_doc = r#"
@@ -226,9 +226,9 @@ rule combined = base_data.input + base_data.calculated?
     assert_eq!(combined.result.value().unwrap().to_string(), "150");
 }
 
-/// Test cross-document fact override with multiple levels (should work)
+/// Test cross-document fact binding with multiple levels (should work)
 #[test]
-fn test_multi_level_fact_override() {
+fn test_multi_level_fact_binding() {
     let mut engine = Engine::new();
 
     let base_doc = r#"
@@ -261,9 +261,9 @@ rule sum = data.x + data.y + data.z
     assert_eq!(sum.result.value().unwrap().to_string(), "330");
 }
 
-/// Test simple fact override without rule references (should work)
+/// Test simple fact binding without rule references (should work)
 #[test]
-fn test_simple_fact_override() {
+fn test_simple_fact_binding() {
     let mut engine = Engine::new();
 
     let base_doc = r#"

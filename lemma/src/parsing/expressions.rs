@@ -1,7 +1,7 @@
 use super::ast::{DepthTracker, Span};
 use super::Rule;
 use crate::error::LemmaError;
-use crate::semantic::*;
+use crate::parsing::ast::*;
 use crate::Source;
 use pest::iterators::Pair;
 use std::sync::Arc;
@@ -15,11 +15,7 @@ fn create_expression_with_location(
     let span = Span::from_pest_span(pair.as_span());
     Expression::new(
         kind,
-        Some(Source::new(
-            attribute.to_string(),
-            span,
-            doc_name.to_string(),
-        )),
+        Source::new(attribute.to_string(), span, doc_name.to_string()),
     )
 }
 
@@ -600,7 +596,7 @@ fn parse_conversion_expression(
         )
     })?;
 
-    let target = crate::parsing::units::resolve_conversion_target(&unit_name)?;
+    let target = parse_conversion_target(&unit_name);
 
     let kind = ExpressionKind::UnitConversion(Arc::new(base_expr), target);
 
@@ -610,6 +606,23 @@ fn parse_conversion_expression(
         attribute,
         doc_name,
     ))
+}
+
+fn parse_conversion_target(unit_str: &str) -> ConversionTarget {
+    let unit_lower = unit_str.to_lowercase();
+
+    match unit_lower.as_str() {
+        "year" | "years" => ConversionTarget::Duration(DurationUnit::Year),
+        "month" | "months" => ConversionTarget::Duration(DurationUnit::Month),
+        "week" | "weeks" => ConversionTarget::Duration(DurationUnit::Week),
+        "day" | "days" => ConversionTarget::Duration(DurationUnit::Day),
+        "hour" | "hours" => ConversionTarget::Duration(DurationUnit::Hour),
+        "minute" | "minutes" => ConversionTarget::Duration(DurationUnit::Minute),
+        "second" | "seconds" => ConversionTarget::Duration(DurationUnit::Second),
+        "millisecond" | "milliseconds" => ConversionTarget::Duration(DurationUnit::Millisecond),
+        "microsecond" | "microseconds" => ConversionTarget::Duration(DurationUnit::Microsecond),
+        _ => ConversionTarget::Unit(unit_lower),
+    }
 }
 
 fn parse_term(
@@ -777,7 +790,7 @@ fn parse_factor(
 
     if is_negative {
         let zero = create_expression_with_location(
-            ExpressionKind::Literal(LiteralValue::number(rust_decimal::Decimal::ZERO)),
+            ExpressionKind::Literal(Value::Number(rust_decimal::Decimal::ZERO)),
             &pair,
             attribute,
             doc_name,

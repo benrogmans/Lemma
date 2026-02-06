@@ -4,11 +4,11 @@
 //! - Registering user-defined types for each document
 //! - Resolving type hierarchies and inheritance chains
 //! - Detecting and preventing circular dependencies
-//! - Applying overrides to create final type specifications
+//! - Applying constraints to create final type specifications
 
 use crate::error::LemmaError;
-use crate::parsing::ast::Span;
-use crate::semantic::{FactReference, LemmaType, TypeDef, TypeSpecification};
+use crate::parsing::ast::{FactReference, Span, TypeDef};
+use crate::planning::semantics::{self, LemmaType, TypeExtends, TypeSpecification};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -19,7 +19,7 @@ pub struct ResolvedDocumentTypes {
     /// Named types: type_name -> fully resolved type
     pub named_types: HashMap<String, LemmaType>,
 
-    /// Inline type definitions: fact_reference -> fully resolved type
+    /// Inline type definitions: fact reference -> fully resolved type
     pub inline_type_definitions: HashMap<FactReference, LemmaType>,
 
     /// Unit index: unit_name -> type that defines it
@@ -30,7 +30,7 @@ pub struct ResolvedDocumentTypes {
 /// Registry for managing and resolving custom types
 ///
 /// Types are organized per document and support inheritance through parent references.
-/// The registry handles cycle detection and accumulates overrides through the inheritance chain.
+/// The registry handles cycle detection and accumulates constraints through the inheritance chain.
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
     /// Named types per document: doc_name -> (type_name -> TypeDef)
@@ -108,7 +108,7 @@ impl TypeRegistry {
     ///
     /// Returns fully resolved types for the document, including named types, inline type definitions,
     /// and a unit index. After resolution, all imports are inlined - documents are independent.
-    /// Follows `parent` chains, accumulates overrides into `specifications`.
+    /// Follows `parent` chains, accumulates constraints into `specifications`.
     /// Handles cycle detection and cross-document references.
     ///
     /// # Errors
@@ -174,28 +174,56 @@ impl TypeRegistry {
             }
         }
 
-        // Build unit index from both named and inline type definitions
+        // Build unit index from types that have units (primitive types first, then document types)
         let mut unit_index: HashMap<String, LemmaType> = HashMap::new();
         let mut errors = Vec::new();
 
+        // Add all standard ratio units to the index
+        if let Err(error) = self.add_ratio_units_to_index(
+            &mut unit_index,
+            semantics::primitive_ratio(),
+            doc,
+            "ratio",
+        ) {
+            errors.push(error);
+        }
+
         // Add units from named types (collect all errors)
         for resolved_type in named_types.values() {
-            if let Err(e) = self.add_units_to_index(&mut unit_index, resolved_type, doc, || {
-                resolved_type
-                    .name
-                    .as_deref()
-                    .unwrap_or("inline")
-                    .to_string()
-            }) {
+            let type_name = resolved_type.name.as_deref().unwrap_or("inline");
+            let e = if resolved_type.is_scale() {
+                self.add_scale_units_to_index(&mut unit_index, resolved_type, doc, type_name)
+            } else if resolved_type.is_ratio() {
+                self.add_ratio_units_to_index(&mut unit_index, resolved_type, doc, type_name)
+            } else {
+                Ok(())
+            };
+            if let Err(e) = e {
                 errors.push(e);
             }
         }
 
         // Add units from inline type definitions (collect all errors)
         for (fact_ref, resolved_type) in &inline_type_definitions {
-            if let Err(e) = self.add_units_to_index(&mut unit_index, resolved_type, doc, || {
-                format!("{}::{}", doc, fact_ref)
-            }) {
+            let inline_type_name = format!("{}::{}", doc, fact_ref);
+            let e = if resolved_type.is_scale() {
+                self.add_scale_units_to_index(
+                    &mut unit_index,
+                    resolved_type,
+                    doc,
+                    &inline_type_name,
+                )
+            } else if resolved_type.is_ratio() {
+                self.add_ratio_units_to_index(
+                    &mut unit_index,
+                    resolved_type,
+                    doc,
+                    &inline_type_name,
+                )
+            } else {
+                Ok(())
+            };
+            if let Err(e) = e {
                 errors.push(e);
             }
         }
@@ -290,15 +318,17 @@ impl TypeRegistry {
         if visited.contains(&key) {
             return Err(LemmaError::circular_dependency(
                 format!("Circular dependency detected in type resolution: {}", key),
-                crate::parsing::ast::Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<internal>",
+                crate::parsing::source::Source::new(
+                    "<internal>",
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    doc,
+                ),
                 std::sync::Arc::from(""),
-                doc,
                 1,
                 vec![],
                 None::<String>,
@@ -316,23 +346,23 @@ impl TypeRegistry {
         };
 
         // Resolve the parent type (standard or custom)
-        let (parent, from, overrides, type_name) = match &type_def {
+        let (parent, from, constraints, type_name) = match &type_def {
             TypeDef::Regular {
                 name,
                 parent,
-                overrides,
+                constraints,
                 ..
-            } => (parent.clone(), None, overrides.clone(), name.clone()),
+            } => (parent.clone(), None, constraints.clone(), name.clone()),
             TypeDef::Import {
                 name,
                 source_type,
                 from,
-                overrides,
+                constraints,
                 ..
             } => (
                 source_type.clone(),
                 Some(from.clone()),
-                overrides.clone(),
+                constraints.clone(),
                 name.clone(),
             ),
             TypeDef::Inline { .. } => {
@@ -355,7 +385,7 @@ impl TypeRegistry {
                 // (inline type definitions might have forward references, but named types should be resolvable)
                 visited.remove(&key);
                 return Err(LemmaError::engine(
-                    format!("Unknown type: '{}'. Type must be defined before use. Valid standard types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
+                    format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                     Span { start: 0, end: 0, line: 1, col: 0 },
                     "<internal>",
                     Arc::from(""),
@@ -370,9 +400,9 @@ impl TypeRegistry {
             }
         };
 
-        // Apply overrides from the TypeDef
-        let final_specs = if let Some(overrides) = &overrides {
-            match self.apply_overrides(parent_specs, overrides, type_def.source_location()) {
+        // Apply constraints from the TypeDef
+        let final_specs = if let Some(constraints) = &constraints {
+            match self.apply_constraints(parent_specs, constraints, type_def.source_location()) {
                 Ok(specs) => specs,
                 Err(errors) => {
                     visited.remove(&key);
@@ -431,9 +461,27 @@ impl TypeRegistry {
 
         visited.remove(&key);
 
+        // Determine extends based on whether parent is standard or custom
+        let extends = if self.resolve_primitive_type(&parent).is_some() {
+            TypeExtends::Primitive
+        } else {
+            let parent_doc = from.as_deref().unwrap_or(doc);
+            let family = self
+                .resolve_type_internal(parent_doc, &parent, visited)
+                .ok()
+                .flatten()
+                .and_then(|parent_type| parent_type.scale_family_name().map(String::from))
+                .unwrap_or_else(|| parent.clone());
+            TypeExtends::Custom {
+                parent: parent.clone(),
+                family,
+            }
+        };
+
         Ok(Some(LemmaType {
             name: Some(type_name),
             specifications: final_specs,
+            extends,
         }))
     }
 
@@ -446,8 +494,8 @@ impl TypeRegistry {
         visited: &mut HashSet<String>,
         source: &crate::Source,
     ) -> Result<Option<TypeSpecification>, LemmaError> {
-        // Try standard types first
-        if let Some(specs) = self.resolve_standard_type(parent) {
+        // Try primitive types first
+        if let Some(specs) = self.resolve_primitive_type(parent) {
             return Ok(Some(specs));
         }
 
@@ -466,7 +514,7 @@ impl TypeRegistry {
                 if !type_exists {
                     // Type was never registered - invalid parent type
                     Err(LemmaError::engine(
-                        format!("Unknown type: '{}'. Type must be defined before use. Valid standard types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
+                        format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                         source.span.clone(),
                         &source.attribute,
                         Arc::from(""),
@@ -484,8 +532,8 @@ impl TypeRegistry {
         }
     }
 
-    /// Resolve a standard type by name
-    pub fn resolve_standard_type(&self, name: &str) -> Option<TypeSpecification> {
+    /// Resolve a primitive type by name
+    pub fn resolve_primitive_type(&self, name: &str) -> Option<TypeSpecification> {
         match name {
             "boolean" => Some(TypeSpecification::boolean()),
             "scale" => Some(TypeSpecification::scale()),
@@ -500,75 +548,22 @@ impl TypeRegistry {
         }
     }
 
-    /// Find which document a FactReference belongs to (for inline type definitions)
-    pub fn find_document_for_fact(&self, fact_ref: &FactReference) -> Option<String> {
-        for (doc_name, inline_types) in &self.inline_type_definitions {
-            if inline_types.contains_key(fact_ref) {
-                return Some(doc_name.clone());
-            }
-        }
-        None
-    }
-
-    /// Apply command-argument overrides to a TypeSpecification
-    fn apply_overrides(
+    /// Apply command-argument constraints to a TypeSpecification.
+    /// Each TypeSpecification variant handles its own commands; we just apply them in order.
+    fn apply_constraints(
         &self,
         mut specs: TypeSpecification,
-        overrides: &[(String, Vec<String>)],
+        constraints: &[(String, Vec<String>)],
         source: &crate::Source,
     ) -> Result<TypeSpecification, Vec<LemmaError>> {
-        // Extract existing units from parent type before applying overrides
-        let mut existing_units: Vec<String> = match &specs {
-            TypeSpecification::Scale { units, .. } => {
-                units.iter().map(|u| u.name.clone()).collect()
-            }
-            TypeSpecification::Ratio { units, .. } => {
-                units.iter().map(|u| u.name.clone()).collect()
-            }
-            _ => Vec::new(),
-        };
-
         let mut errors = Vec::new();
-        let mut valid_overrides = Vec::new();
-
-        // First pass: validate all unit overrides and collect errors
-        for (command, args) in overrides {
-            if command == "unit" && !args.is_empty() {
-                let unit_name = &args[0];
-                if existing_units.iter().any(|u| u == unit_name) {
-                    errors.push(LemmaError::engine(
-                        format!("Unit '{}' already exists in parent type. Use a different unit name (e.g., 'my_{}') if you need another unit factor.", unit_name, unit_name),
-                        source.span.clone(),
-                        &source.attribute,
-                        Arc::from(""),
-                        &source.doc_name,
-                        1,
-                        None::<String>,
-                    ));
-                    // Skip this override
-                } else {
-                    existing_units.push(unit_name.clone());
-                    valid_overrides.push((command.clone(), args.clone()));
-                }
-            } else {
-                // Non-unit override - always valid to apply
-                valid_overrides.push((command.clone(), args.clone()));
-            }
-        }
-
-        // Second pass: apply all valid overrides and collect any application errors
-        // We apply overrides sequentially, accumulating the result
-        // If one fails, we can't continue with a valid state, but we still collect all errors
-        for (command, args) in valid_overrides {
-            // Clone specs before applying override so we can continue even if this one fails
+        for (command, args) in constraints {
             let specs_clone = specs.clone();
-            match specs.apply_override(&command, &args) {
-                Ok(updated_specs) => {
-                    specs = updated_specs;
-                }
+            match specs.apply_constraint(command, args) {
+                Ok(updated_specs) => specs = updated_specs,
                 Err(e) => {
                     errors.push(LemmaError::engine(
-                        format!("Failed to apply override '{}': {}", command, e),
+                        format!("Failed to apply constraint '{}': {}", command, e),
                         source.span.clone(),
                         &source.attribute,
                         Arc::from(""),
@@ -576,16 +571,13 @@ impl TypeRegistry {
                         1,
                         None::<String>,
                     ));
-                    // Restore from clone so we can continue trying other overrides
                     specs = specs_clone;
                 }
             }
         }
-
         if !errors.is_empty() {
             return Err(errors);
         }
-
         Ok(specs)
     }
 
@@ -600,7 +592,7 @@ impl TypeRegistry {
         let def_loc = type_def.source_location().clone();
         let TypeDef::Inline {
             parent,
-            overrides,
+            constraints,
             fact_ref: _,
             from,
             ..
@@ -615,7 +607,7 @@ impl TypeRegistry {
                 // Parent type not found - this is an error for inline type definitions too
                 // Inline type definitions should have valid parent types
                 return Err(LemmaError::engine(
-                    format!("Unknown type: '{}'. Type must be defined before use. Valid standard types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
+                    format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                     def_loc.span.clone(),
                     &def_loc.attribute,
                     Arc::from(""),
@@ -627,8 +619,8 @@ impl TypeRegistry {
             Err(e) => return Err(e),
         };
 
-        let final_specs = if let Some(overrides) = overrides {
-            match self.apply_overrides(parent_specs, overrides, &def_loc) {
+        let final_specs = if let Some(constraints) = constraints {
+            match self.apply_constraints(parent_specs, constraints, &def_loc) {
                 Ok(specs) => specs,
                 Err(errors) => {
                     // Combine all errors into a single error message for now
@@ -684,168 +676,148 @@ impl TypeRegistry {
             parent_specs
         };
 
-        Ok(Some(LemmaType::without_name(final_specs)))
+        // Determine extends based on whether parent is standard or custom
+        let extends = if self.resolve_primitive_type(parent).is_some() {
+            TypeExtends::Primitive
+        } else {
+            let parent_doc = from.as_deref().unwrap_or(doc);
+            let family = self
+                .resolve_type_internal(parent_doc, parent, visited)
+                .ok()
+                .flatten()
+                .and_then(|parent_type| parent_type.scale_family_name().map(String::from))
+                .unwrap_or_else(|| parent.to_string());
+            TypeExtends::Custom {
+                parent: parent.to_string(),
+                family,
+            }
+        };
+
+        Ok(Some(LemmaType::without_name(final_specs, extends)))
     }
 
-    /// Get all units defined across all types, organized by unit name
-    ///
-    /// Returns a map from unit name to a list of (document_name, type_name) pairs
-    /// where that unit is defined. Useful for error messages and debugging.
-    ///
-    /// # Returns
-    /// A HashMap where:
-    /// - Key: unit name (e.g., "celsius", "kilogram")
-    /// - Value: list of (document_name, type_name) pairs where the unit is defined
-    pub fn get_all_units(&self) -> HashMap<String, Vec<(String, String)>> {
-        let mut unit_map: HashMap<String, Vec<(String, String)>> = HashMap::new();
-        let mut visited = HashSet::new();
-
-        // Process named types
-        for (doc_name, doc_types) in &self.named_types {
-            for type_name in doc_types.keys() {
-                if let Ok(Some(resolved_type)) =
-                    self.resolve_type_internal(doc_name, type_name, &mut visited)
-                {
-                    let units = self.extract_units_from_specs(&resolved_type.specifications);
-                    for unit in units {
-                        unit_map
-                            .entry(unit)
-                            .or_default()
-                            .push((doc_name.clone(), type_name.clone()));
-                    }
-                }
-                visited.clear();
-            }
-        }
-
-        // Process inline type definitions
-        for (doc_name, inline_types) in &self.inline_type_definitions {
-            for (fact_ref, type_def) in inline_types {
-                if let Ok(Some(resolved_type)) = self.resolve_inline_type_definition(
-                    doc_name,
-                    fact_ref,
-                    type_def,
-                    &mut HashSet::new(),
-                ) {
-                    let units = self.extract_units_from_specs(&resolved_type.specifications);
-                    let type_name = format!("{}::{}", doc_name, fact_ref);
-                    for unit in units {
-                        unit_map
-                            .entry(unit)
-                            .or_default()
-                            .push((doc_name.clone(), type_name.clone()));
-                    }
-                }
-            }
-        }
-
-        unit_map
-    }
-
-    /// Add units from a resolved type to the unit index
-    /// Returns an error if a unit is already defined in another type (ambiguous unit)
-    fn add_units_to_index<F>(
+    /// Add units from a scale type to the unit index.
+    /// Same unit in same type = error. Same unit in scale extension chain (same family) = allow. Otherwise ambiguous.
+    fn add_scale_units_to_index(
         &self,
         unit_index: &mut HashMap<String, LemmaType>,
         resolved_type: &LemmaType,
         doc: &str,
-        get_type_name: F,
-    ) -> Result<(), LemmaError>
-    where
-        F: FnOnce() -> String,
-    {
+        type_name: &str,
+    ) -> Result<(), LemmaError> {
         let units = self.extract_units_from_specs(&resolved_type.specifications);
-        let current_name = get_type_name(); // Call FnOnce before the loop
         for unit in units {
             if let Some(existing_type) = unit_index.get(&unit) {
                 let existing_name = existing_type.name.as_deref().unwrap_or("inline");
-
-                // Check if one type extends the other
-                // If the existing type's name matches the current type's name, they're the same type
                 let same_type = existing_type.name.as_deref() == resolved_type.name.as_deref();
+
                 if same_type {
-                    // Same type - not ambiguous, just continue
-                    continue;
+                    let source = self
+                        .named_types
+                        .get(doc)
+                        .and_then(|defs| defs.get(type_name))
+                        .map(|def| def.source_location());
+
+                    return Err(LemmaError::engine(
+                        format!(
+                            "Unit '{}' is defined more than once in type '{}'",
+                            unit, type_name
+                        ),
+                        source.map(|s| s.span.clone()).unwrap_or(Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        }),
+                        source.map(|s| s.attribute.as_str()).unwrap_or("<input>"),
+                        Arc::from(""),
+                        source.map(|s| s.doc_name.as_str()).unwrap_or(doc),
+                        1,
+                        None::<String>,
+                    ));
                 }
 
-                // Check if types share the same base and if one might extend the other
-                // by comparing their specifications - if one has all units from the other plus MORE,
-                // it's likely an extension (strict superset required)
-                // Check both directions: current extends existing OR existing extends current
-                let might_be_inheritance =
-                    match (&existing_type.specifications, &resolved_type.specifications) {
-                        (
-                            TypeSpecification::Scale {
-                                units: existing_units,
-                                ..
-                            },
-                            TypeSpecification::Scale {
-                                units: current_units,
-                                ..
-                            },
-                        ) => {
-                            // Check if current extends existing (current has all of existing + more)
-                            let current_extends_existing = existing_units.len()
-                                < current_units.len()
-                                && existing_units
-                                    .iter()
-                                    .all(|eu| current_units.iter().any(|cu| cu.name == eu.name));
-                            // Check if existing extends current (existing has all of current + more)
-                            let existing_extends_current = current_units.len()
-                                < existing_units.len()
-                                && current_units
-                                    .iter()
-                                    .all(|cu| existing_units.iter().any(|eu| eu.name == cu.name));
-                            current_extends_existing || existing_extends_current
-                        }
-                        (
-                            TypeSpecification::Ratio {
-                                units: existing_units,
-                                ..
-                            },
-                            TypeSpecification::Ratio {
-                                units: current_units,
-                                ..
-                            },
-                        ) => {
-                            // Check if current extends existing (current has all of existing + more)
-                            let current_extends_existing = existing_units.len()
-                                < current_units.len()
-                                && existing_units
-                                    .iter()
-                                    .all(|eu| current_units.iter().any(|cu| cu.name == eu.name));
-                            // Check if existing extends current (existing has all of current + more)
-                            let existing_extends_current = current_units.len()
-                                < existing_units.len()
-                                && current_units
-                                    .iter()
-                                    .all(|cu| existing_units.iter().any(|eu| eu.name == cu.name));
-                            current_extends_existing || existing_extends_current
-                        }
-                        _ => false,
-                    };
+                let current_extends_existing = resolved_type
+                    .extends
+                    .parent_name()
+                    .map(|p| existing_name == p)
+                    .unwrap_or(false);
+                let existing_extends_current = existing_type
+                    .extends
+                    .parent_name()
+                    .map(|p| p == resolved_type.name.as_deref().unwrap_or(""))
+                    .unwrap_or(false);
 
-                if might_be_inheritance {
-                    // One type likely extends the other - allow unit sharing via inheritance
+                if existing_type.is_scale()
+                    && (current_extends_existing || existing_extends_current)
+                {
+                    if current_extends_existing {
+                        unit_index.insert(unit, resolved_type.clone());
+                    }
                     continue;
                 }
 
                 let source = self
                     .named_types
                     .get(doc)
-                    .and_then(|defs| defs.get(&current_name))
+                    .and_then(|defs| defs.get(type_name))
                     .map(|def| def.source_location());
 
                 return Err(LemmaError::engine(
-                    format!("Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}", unit, doc, existing_name, current_name),
-                    source
-                        .map(|s| s.span.clone())
-                        .unwrap_or(Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        }),
+                    format!(
+                        "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
+                        unit, doc, existing_name, type_name
+                    ),
+                    source.map(|s| s.span.clone()).unwrap_or(Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    }),
+                    source.map(|s| s.attribute.as_str()).unwrap_or("<input>"),
+                    Arc::from(""),
+                    source.map(|s| s.doc_name.as_str()).unwrap_or(doc),
+                    1,
+                    None::<String>,
+                ));
+            }
+            unit_index.insert(unit, resolved_type.clone());
+        }
+        Ok(())
+    }
+
+    /// Add ratio units to the unit index. Ratio units are document-scoped singleton: merged across all ratio types.
+    fn add_ratio_units_to_index(
+        &self,
+        unit_index: &mut HashMap<String, LemmaType>,
+        resolved_type: &LemmaType,
+        doc: &str,
+        type_name: &str,
+    ) -> Result<(), LemmaError> {
+        let units = self.extract_units_from_specs(&resolved_type.specifications);
+        for unit in units {
+            if let Some(existing_type) = unit_index.get(&unit) {
+                if existing_type.is_ratio() {
+                    continue;
+                }
+                let existing_name = existing_type.name.as_deref().unwrap_or("inline");
+                let source = self
+                    .named_types
+                    .get(doc)
+                    .and_then(|defs| defs.get(type_name))
+                    .map(|def| def.source_location());
+
+                return Err(LemmaError::engine(
+                    format!(
+                        "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
+                        unit, doc, existing_name, type_name
+                    ),
+                    source.map(|s| s.span.clone()).unwrap_or(Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    }),
                     source.map(|s| s.attribute.as_str()).unwrap_or("<input>"),
                     Arc::from(""),
                     source.map(|s| s.doc_name.as_str()).unwrap_or(doc),
@@ -885,7 +857,6 @@ mod tests {
     use crate::parse;
     use crate::ResourceLimits;
     use rust_decimal::Decimal;
-    use std::str::FromStr;
 
     #[test]
     fn test_registry_creation() {
@@ -895,18 +866,18 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_standard_types() {
+    fn test_resolve_primitive_types() {
         let registry = TypeRegistry::new();
 
-        assert!(registry.resolve_standard_type("boolean").is_some());
-        assert!(registry.resolve_standard_type("scale").is_some());
-        assert!(registry.resolve_standard_type("number").is_some());
-        assert!(registry.resolve_standard_type("ratio").is_some());
-        assert!(registry.resolve_standard_type("text").is_some());
-        assert!(registry.resolve_standard_type("date").is_some());
-        assert!(registry.resolve_standard_type("time").is_some());
-        assert!(registry.resolve_standard_type("duration").is_some());
-        assert!(registry.resolve_standard_type("unknown").is_none());
+        assert!(registry.resolve_primitive_type("boolean").is_some());
+        assert!(registry.resolve_primitive_type("scale").is_some());
+        assert!(registry.resolve_primitive_type("number").is_some());
+        assert!(registry.resolve_primitive_type("ratio").is_some());
+        assert!(registry.resolve_primitive_type("text").is_some());
+        assert!(registry.resolve_primitive_type("date").is_some());
+        assert!(registry.resolve_primitive_type("time").is_some());
+        assert!(registry.resolve_primitive_type("duration").is_some());
+        assert!(registry.resolve_primitive_type("unknown").is_none());
     }
 
     #[test]
@@ -925,7 +896,7 @@ mod tests {
             ),
             name: "money".to_string(),
             parent: "number".to_string(),
-            overrides: None,
+            constraints: None,
         };
 
         let result = registry.register_type("test_doc", type_def);
@@ -934,7 +905,7 @@ mod tests {
 
     #[test]
     fn test_register_inline_type_definition() {
-        use crate::semantic::FactReference;
+        use crate::parsing::ast::FactReference;
         let mut registry = TypeRegistry::new();
         let fact_ref = FactReference::local("age".to_string());
         let type_def = TypeDef::Inline {
@@ -949,7 +920,7 @@ mod tests {
                 "test_doc",
             ),
             parent: "number".to_string(),
-            overrides: Some(vec![
+            constraints: Some(vec![
                 ("minimum".to_string(), vec!["0".to_string()]),
                 ("maximum".to_string(), vec!["150".to_string()]),
             ]),
@@ -984,7 +955,7 @@ mod tests {
             ),
             name: "money".to_string(),
             parent: "number".to_string(),
-            overrides: None,
+            constraints: None,
         };
 
         registry
@@ -995,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_custom_type_from_standard() {
+    fn test_resolve_custom_type_from_primitive() {
         let mut registry = TypeRegistry::new();
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
@@ -1010,7 +981,7 @@ mod tests {
             ),
             name: "money".to_string(),
             parent: "number".to_string(),
-            overrides: None,
+            constraints: None,
         };
 
         registry.register_type("test_doc", type_def).unwrap();
@@ -1135,7 +1106,7 @@ type precise_number = number -> decimals 4"#;
     #[test]
     fn test_scale_type_decimals_only() {
         let code = r#"doc test
-type weight = scale -> decimals 3"#;
+type weight = scale -> unit kg 1 -> decimals 3"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
@@ -1157,7 +1128,7 @@ type weight = scale -> decimals 3"#;
     }
 
     #[test]
-    fn test_ratio_type_rejects_decimals_command() {
+    fn test_ratio_type_accepts_optional_decimals_command() {
         let code = r#"doc test
 type ratio_type = ratio -> decimals 2"#;
 
@@ -1165,25 +1136,23 @@ type ratio_type = ratio -> decimals 2"#;
         let doc = &docs[0];
 
         let mut registry = TypeRegistry::new();
-        // register_type only stores the definition, it doesn't apply overrides
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();
 
-        // resolve_types applies overrides, so the error should occur here
-        let result = registry.resolve_types(&doc.name);
+        let resolved_types = registry.resolve_types(&doc.name).unwrap();
+        let ratio_type = resolved_types.named_types.get("ratio_type").unwrap();
 
-        // Ratio type should reject decimals command since it doesn't have a decimals field
-        assert!(
-            result.is_err(),
-            "Ratio type should reject decimals command during resolution"
-        );
-        let error_msg = result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("decimals") || error_msg.contains("Invalid command"),
-            "Error message should mention decimals or invalid command, got: {}",
-            error_msg
-        );
+        match &ratio_type.specifications {
+            TypeSpecification::Ratio { decimals, .. } => {
+                assert_eq!(
+                    *decimals,
+                    Some(2),
+                    "ratio type should accept decimals command"
+                );
+            }
+            _ => panic!("Expected Ratio type with decimals 2"),
+        }
     }
 
     #[test]
@@ -1209,12 +1178,64 @@ type percentage = ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
                 default,
                 ..
             } => {
-                assert_eq!(*minimum, Some(Decimal::from(0)));
-                assert_eq!(*maximum, Some(Decimal::from(1)));
-                assert_eq!(*default, Some(Decimal::from_str("0.5").unwrap()));
+                assert_eq!(
+                    *minimum,
+                    Some(Decimal::from(0)),
+                    "ratio type should have minimum 0"
+                );
+                assert_eq!(
+                    *maximum,
+                    Some(Decimal::from(1)),
+                    "ratio type should have maximum 1"
+                );
+                assert_eq!(
+                    *default,
+                    Some(Decimal::from_i128_with_scale(5, 1)),
+                    "ratio type with default command must work"
+                );
             }
-            _ => panic!("Expected Ratio type specifications"),
+            _ => panic!("Expected Ratio type with minimum, maximum, and default"),
         }
+    }
+
+    #[test]
+    fn test_scale_extension_chain_same_family_units_allowed() {
+        let code = r#"doc test
+type money = scale -> unit eur 1
+type money2 = money -> unit usd 1.24"#;
+
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let doc = &docs[0];
+
+        let mut registry = TypeRegistry::new();
+        for type_def in &doc.types {
+            registry.register_type(&doc.name, type_def.clone()).unwrap();
+        }
+
+        let result = registry.resolve_types(&doc.name);
+        assert!(
+            result.is_ok(),
+            "Scale extension chain should resolve: {:?}",
+            result.err()
+        );
+
+        let resolved = result.unwrap();
+        assert!(
+            resolved.unit_index.contains_key("eur"),
+            "eur should be in unit_index"
+        );
+        assert!(
+            resolved.unit_index.contains_key("usd"),
+            "usd should be in unit_index"
+        );
+        let eur_type = resolved.unit_index.get("eur").unwrap();
+        let usd_type = resolved.unit_index.get("usd").unwrap();
+        assert_eq!(
+            eur_type.name.as_deref(),
+            Some("money2"),
+            "more derived type (money2) should own eur for conversion"
+        );
+        assert_eq!(usd_type.name.as_deref(), Some("money2"));
     }
 
     #[test]
@@ -1242,8 +1263,8 @@ type invalid = nonexistent_type -> minimum 0"#;
     }
 
     #[test]
-    fn test_invalid_standard_type_name_should_error() {
-        // "choice" is not a standard type; this should fail resolution.
+    fn test_invalid_primitive_type_name_should_error() {
+        // "choice" is not a primitive type; this should fail resolution.
         let code = r#"doc test
 type invalid = choice -> option "a""#;
 
@@ -1267,7 +1288,7 @@ type invalid = choice -> option "a""#;
     }
 
     #[test]
-    fn test_unit_override_validation_errors_are_reported() {
+    fn test_unit_constraint_validation_errors_are_reported() {
         // Regression guard: overriding existing units should not silently succeed.
         let code = r#"doc test
 type money = scale
@@ -1288,7 +1309,10 @@ type money2 = money
         }
 
         let result = registry.resolve_types(&doc.name);
-        assert!(result.is_err(), "Expected unit override conflicts to error");
+        assert!(
+            result.is_err(),
+            "Expected unit constraint conflicts to error"
+        );
 
         let error_msg = result.unwrap_err().to_string();
         assert!(

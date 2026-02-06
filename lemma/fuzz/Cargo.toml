@@ -45,8 +45,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "fuzz_fact_overrides"
-path = "fuzz_targets/fuzz_fact_overrides.rs"
+name = "fuzz_fact_bindings"
+path = "fuzz_targets/fuzz_fact_bindings.rs"
 test = false
 doc = false
 bench = false

@@ -1,6 +1,6 @@
 use lemma::Engine;
 use lemma::LiteralValue;
-use lemma::Value;
+use lemma::ValueKind;
 use std::collections::HashMap;
 
 #[test]
@@ -28,9 +28,9 @@ rule with_spaces = not  (  x  )
     let not_x_rule = response.results.get("not_x").unwrap();
     match not_x_rule.result.value().unwrap() {
         LiteralValue {
-            value: Value::Boolean(b),
+            value: ValueKind::Boolean(b),
             ..
-        } => assert!(!bool::from(b), "not(x) with x=true should be false"),
+        } => assert!(!*b, "not(x) with x=true should be false"),
         v => panic!("Expected boolean false, got {:?}", v),
     }
 
@@ -38,7 +38,7 @@ rule with_spaces = not  (  x  )
     let sqrt_rule = response.results.get("sqrt_num").unwrap();
     match sqrt_rule.result.value().unwrap() {
         LiteralValue {
-            value: Value::Number(n),
+            value: ValueKind::Number(n),
             ..
         } => assert_eq!(n.to_string(), "4"),
         v => panic!("Expected number 4, got {:?}", v),
@@ -48,7 +48,7 @@ rule with_spaces = not  (  x  )
     let sin_rule = response.results.get("sin_zero").unwrap();
     match sin_rule.result.value().unwrap() {
         LiteralValue {
-            value: Value::Number(n),
+            value: ValueKind::Number(n),
             ..
         } => assert_eq!(n.to_string(), "0"),
         v => panic!("Expected number 0, got {:?}", v),
@@ -58,12 +58,9 @@ rule with_spaces = not  (  x  )
     let combined_rule = response.results.get("combined").unwrap();
     match combined_rule.result.value().unwrap() {
         LiteralValue {
-            value: Value::Boolean(b),
+            value: ValueKind::Boolean(b),
             ..
-        } => assert!(
-            !bool::from(b),
-            "not(x) and sqrt(16) == 4 with x=true should be false"
-        ),
+        } => assert!(!*b, "not(x) and sqrt(16) == 4 with x=true should be false"),
         v => panic!("Expected boolean false, got {:?}", v),
     }
 }

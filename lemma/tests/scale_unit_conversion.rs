@@ -1,6 +1,6 @@
 use lemma::evaluation::OperationResult;
 use lemma::Engine;
-use lemma::{LiteralValue, Value};
+use lemma::ValueKind;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -80,7 +80,7 @@ rule check = accept
 }
 
 #[test]
-fn scale_fact_override_requires_unit() {
+fn scale_fact_value_requires_unit() {
     let code = r#"
 doc pricing
 type money = scale
@@ -111,7 +111,7 @@ rule check = accept
 }
 
 #[test]
-fn scale_fact_override_rejects_unknown_unit() {
+fn scale_fact_value_rejects_unknown_unit() {
     let code = r#"
 doc pricing
 type money = scale
@@ -160,7 +160,7 @@ rule price_usd = 100 eur in usd
         .unwrap();
 
     let (value, lemma_type) = match &rule_result.result {
-        OperationResult::Value(LiteralValue { value, lemma_type }) => (value, lemma_type),
+        OperationResult::Value(lit) => (&lit.value, &lit.lemma_type),
         other => panic!("Expected a Value result, got: {:?}", other),
     };
 
@@ -170,12 +170,12 @@ rule price_usd = 100 eur in usd
     );
 
     let (amount, unit) = match value {
-        Value::Scale(amount, unit) => (amount, unit),
+        ValueKind::Scale(amount, unit) => (amount, unit),
         other => panic!("Expected a scale value, got: {other:?}"),
     };
 
     assert_eq!(*amount, Decimal::from(119));
-    assert_eq!(unit.as_deref(), Some("usd"));
+    assert_eq!(unit.as_str(), "usd");
 }
 
 #[test]

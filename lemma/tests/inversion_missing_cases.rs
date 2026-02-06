@@ -22,7 +22,7 @@ fn target_operator_greater_than() {
             "final_price",
             Target::with_op(
                 TargetOp::Gt,
-                lemma::OperationResult::Value(LiteralValue::number(100)),
+                lemma::OperationResult::Value(Box::new(LiteralValue::number(100.into()))),
             ),
             HashMap::new(),
         )
@@ -63,7 +63,7 @@ fn target_operator_less_than_or_equal() {
             "annual_cost",
             Target::with_op(
                 TargetOp::Lte,
-                lemma::OperationResult::Value(LiteralValue::number(50000)),
+                lemma::OperationResult::Value(Box::new(LiteralValue::number(50000.into()))),
             ),
             HashMap::new(),
         )
@@ -100,7 +100,7 @@ fn target_operator_greater_than_or_equal() {
             "total_comp",
             Target::with_op(
                 TargetOp::Gte,
-                lemma::OperationResult::Value(LiteralValue::number(120000)),
+                lemma::OperationResult::Value(Box::new(LiteralValue::number(120000.into()))),
             ),
             HashMap::new(),
         )
@@ -181,7 +181,7 @@ fn cross_document_simple() {
         .invert(
             "derived",
             "final_total",
-            Target::value(LiteralValue::number(85)),
+            Target::value(LiteralValue::number(85.into())),
             HashMap::new(),
         )
         .expect("should invert successfully");
@@ -228,7 +228,7 @@ fn cross_document_rule_references() {
         .invert(
             "order",
             "is_vip",
-            Target::value(LiteralValue::boolean(lemma::BooleanValue::True)),
+            Target::value(LiteralValue::from_bool(true)),
             given,
         )
         .expect("should invert successfully");
@@ -287,7 +287,7 @@ fn cross_document_multi_level() {
         .invert(
             "transaction",
             "fee",
-            Target::value(LiteralValue::number(15)),
+            Target::value(LiteralValue::number(15.into())),
             given,
         )
         .expect("should invert successfully");
@@ -338,7 +338,7 @@ fn cross_document_piecewise() {
         .invert(
             "pricing",
             "total",
-            Target::value(LiteralValue::number(80)),
+            Target::value(LiteralValue::number(80.into())),
             given,
         )
         .expect("should invert successfully");
@@ -414,7 +414,7 @@ fn target_operator_not_equal() {
         "is_complete",
         Target::with_op(
             TargetOp::Neq,
-            lemma::OperationResult::Value(LiteralValue::boolean(lemma::BooleanValue::True)),
+            lemma::OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
         ),
         HashMap::new(),
     );

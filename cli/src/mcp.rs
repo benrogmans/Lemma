@@ -164,7 +164,7 @@ pub mod server {
                     },
                     {
                         "name": "evaluate",
-                        "description": "Evaluate all rules in a document with optional fact overrides. Returns computed values for all rules.",
+                        "description": "Evaluate all rules in a document with optional fact values. Returns computed values for all rules.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -175,7 +175,7 @@ pub mod server {
                                 "facts": {
                                     "type": "array",
                                     "items": { "type": "string" },
-                                    "description": "Optional fact overrides in format 'name=value' (e.g., ['price=100', 'quantity=5'])",
+                                    "description": "Optional fact values in format 'name=value' (e.g., ['price=100', 'quantity=5'])",
                                     "default": []
                                 }
                             },
@@ -297,7 +297,7 @@ pub mod server {
                 .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
 
-            let fact_overrides: std::collections::HashMap<String, String> = facts
+            let fact_values: std::collections::HashMap<String, String> = facts
                 .iter()
                 .filter_map(|s| {
                     s.split_once('=')
@@ -307,7 +307,7 @@ pub mod server {
 
             let response = self
                 .engine
-                .evaluate(document, vec![], fact_overrides)
+                .evaluate(document, vec![], fact_values)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))

@@ -1,7 +1,8 @@
 use crate::evaluation::Evaluator;
-use crate::parsing::ast::Span;
+use crate::parsing::ast::{LemmaDoc, Span};
 use crate::planning::plan;
-use crate::{parse, LemmaDoc, LemmaError, LemmaResult, LemmaType, ResourceLimits, Response};
+use crate::planning::semantics::{FactPath, LemmaType};
+use crate::{parse, LemmaError, LemmaResult, ResourceLimits, Response};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -137,6 +138,14 @@ impl Engine {
         self.execution_plans.get(doc_name)
     }
 
+    /// Rule names for a document (from the execution plan).
+    pub fn get_document_rule_names(&self, doc_name: &str) -> Vec<String> {
+        self.execution_plans
+            .get(doc_name)
+            .map(|plan| plan.rules.iter().map(|r| r.name.clone()).collect())
+            .unwrap_or_default()
+    }
+
     pub fn get_document_rules(&self, doc_name: &str) -> Vec<&crate::LemmaRule> {
         if let Some(doc) = self.documents.get(doc_name) {
             doc.rules.iter().collect()
@@ -156,7 +165,7 @@ impl Engine {
         &self,
         doc_name: &str,
         rule_names: &[String],
-    ) -> LemmaResult<HashMap<crate::FactPath, LemmaType>> {
+    ) -> LemmaResult<HashMap<FactPath, LemmaType>> {
         let plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
                 format!("Document '{}' not found", doc_name),
@@ -203,10 +212,10 @@ impl Engine {
             }
         }
 
-        // Build result map with types from fact_schema
+        // Build result map with types from plan.facts (value facts only)
         let mut result = HashMap::new();
         for fact_path in fact_paths {
-            if let Some(lemma_type) = plan.fact_schema.get(&fact_path) {
+            if let Some(lemma_type) = plan.facts.get(&fact_path).and_then(|d| d.schema_type()) {
                 result.insert(fact_path, lemma_type.clone());
             }
         }
@@ -248,7 +257,7 @@ impl Engine {
         })?;
 
         let values = crate::serialization::from_json(json, base_plan)?;
-        let plan = base_plan.clone().with_values(values, &self.limits)?;
+        let plan = base_plan.clone().with_fact_values(values, &self.limits)?;
 
         self.evaluate_plan(plan, rule_names)
     }
@@ -262,13 +271,13 @@ impl Engine {
     /// If `rule_names` is empty, evaluates all rules.
     /// Otherwise, only returns results for the specified rules (dependencies still computed).
     ///
-    /// Values are provided as name -> value string pairs (e.g., "type" -> "latte").
+    /// Fact values are provided as name -> value string pairs (e.g., "type" -> "latte").
     /// They are automatically parsed to the expected type based on the document schema.
     pub fn evaluate(
         &self,
         doc_name: &str,
         rule_names: Vec<String>,
-        values: HashMap<String, String>,
+        fact_values: HashMap<String, String>,
     ) -> LemmaResult<Response> {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
@@ -287,7 +296,9 @@ impl Engine {
             )
         })?;
 
-        let plan = base_plan.clone().with_values(values, &self.limits)?;
+        let plan = base_plan
+            .clone()
+            .with_fact_values(fact_values, &self.limits)?;
 
         self.evaluate_plan(plan, rule_names)
     }
@@ -352,8 +363,13 @@ impl Engine {
             )
         })?;
 
-        let plan = base_plan.clone().with_values(values, &self.limits)?;
-        let provided_facts = plan.fact_values.keys().cloned().collect();
+        let plan = base_plan.clone().with_fact_values(values, &self.limits)?;
+        let provided_facts: std::collections::HashSet<_> = plan
+            .facts
+            .iter()
+            .filter(|(_, d)| d.value().is_some())
+            .map(|(p, _)| p.clone())
+            .collect();
 
         crate::inversion::invert(rule_name, target, &plan, &provided_facts)
     }
@@ -363,7 +379,7 @@ impl Engine {
         plan: crate::planning::ExecutionPlan,
         rule_names: Vec<String>,
     ) -> LemmaResult<Response> {
-        let mut response = self.evaluator.evaluate(&plan)?;
+        let mut response = self.evaluator.evaluate(&plan);
 
         if !rule_names.is_empty() {
             response.filter_rules(&rule_names);
@@ -405,9 +421,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             sum_result.result,
-            crate::OperationResult::Value(crate::LiteralValue::number(
+            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
                 Decimal::from_str("15").unwrap()
-            ))
+            )))
         );
 
         let product_result = response
@@ -417,9 +433,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             product_result.result,
-            crate::OperationResult::Value(crate::LiteralValue::number(
+            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
                 Decimal::from_str("50").unwrap()
-            ))
+            )))
         );
     }
 
@@ -441,9 +457,9 @@ mod tests {
         assert_eq!(response.results.len(), 1);
         assert_eq!(
             response.results.values().next().unwrap().result,
-            crate::OperationResult::Value(crate::LiteralValue::number(
+            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
                 Decimal::from_str("200").unwrap()
-            ))
+            )))
         );
     }
 
@@ -464,7 +480,7 @@ mod tests {
         let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
         assert_eq!(
             response.results.values().next().unwrap().result,
-            crate::OperationResult::Value(crate::LiteralValue::boolean(crate::BooleanValue::True))
+            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::from_bool(true)))
         );
     }
 
@@ -486,9 +502,9 @@ mod tests {
         let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
         assert_eq!(
             response.results.values().next().unwrap().result,
-            crate::OperationResult::Value(crate::LiteralValue::number(
+            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
                 Decimal::from_str("10").unwrap()
-            ))
+            )))
         );
     }
 
@@ -528,17 +544,17 @@ mod tests {
         let response1 = engine.evaluate("doc1", vec![], HashMap::new()).unwrap();
         assert_eq!(
             response1.results[0].result,
-            crate::OperationResult::Value(crate::LiteralValue::number(
+            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
                 Decimal::from_str("20").unwrap()
-            ))
+            )))
         );
 
         let response2 = engine.evaluate("doc2", vec![], HashMap::new()).unwrap();
         assert_eq!(
             response2.results[0].result,
-            crate::OperationResult::Value(crate::LiteralValue::number(
+            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
                 Decimal::from_str("15").unwrap()
-            ))
+            )))
         );
     }
 
@@ -604,15 +620,6 @@ mod tests {
         let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
         assert_eq!(response.results.len(), 3);
 
-        // Check they all have span information for ordering
-        for result in response.results.values() {
-            assert!(
-                result.rule.source_location.is_some(),
-                "Rule {} missing source_location",
-                result.rule.name
-            );
-        }
-
         // Verify source positions increase (z < y < x)
         let z_pos = response
             .results
@@ -621,8 +628,6 @@ mod tests {
             .unwrap()
             .rule
             .source_location
-            .as_ref()
-            .unwrap()
             .span
             .start;
         let y_pos = response
@@ -632,8 +637,6 @@ mod tests {
             .unwrap()
             .rule
             .source_location
-            .as_ref()
-            .unwrap()
             .span
             .start;
         let x_pos = response
@@ -643,8 +646,6 @@ mod tests {
             .unwrap()
             .rule
             .source_location
-            .as_ref()
-            .unwrap()
             .span
             .start;
 
@@ -681,9 +682,9 @@ mod tests {
         let total = response.results.values().next().unwrap();
         assert_eq!(
             total.result,
-            crate::OperationResult::Value(crate::LiteralValue::number(
+            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
                 Decimal::from_str("220").unwrap()
-            ))
+            )))
         );
     }
 }

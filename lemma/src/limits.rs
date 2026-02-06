@@ -27,10 +27,3 @@ impl Default for ResourceLimits {
         }
     }
 }
-
-impl ResourceLimits {
-    /// Create a new ResourceLimits with default values
-    pub fn new() -> Self {
-        Self::default()
-    }
-}

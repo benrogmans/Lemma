@@ -26,7 +26,7 @@ rule effective_cola = cost_of_living_adjustment
 doc compensation/engineering_dept
 """
 Engineering Department Compensation Rules
-Inherits base policy with engineering-specific overrides
+Inherits base policy with engineering-specific bindings
 """
 
 fact policy = doc compensation/base_policy

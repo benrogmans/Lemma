@@ -68,11 +68,10 @@ fn select_document(engine: &Engine) -> Result<String> {
     let display_options: Vec<String> = documents
         .iter()
         .map(|doc_name| {
-            let facts_count = engine
-                .get_facts(doc_name, &[])
-                .map(|f| f.len())
-                .unwrap_or(0);
-            let rules_count = engine.get_document_rules(doc_name).len();
+            let (facts_count, rules_count) = engine
+                .get_execution_plan(doc_name)
+                .map(|p| (p.facts.len(), p.rules.len()))
+                .unwrap_or((0, 0));
             format!(
                 "{} ({} facts, {} rules)",
                 doc_name, facts_count, rules_count
@@ -94,13 +93,11 @@ fn select_document(engine: &Engine) -> Result<String> {
 }
 
 fn select_rules(engine: &Engine, doc_name: &str) -> Result<Option<Vec<String>>> {
-    let all_rules = engine.get_document_rules(doc_name);
+    let rule_names = engine.get_document_rule_names(doc_name);
 
-    if all_rules.is_empty() {
+    if rule_names.is_empty() {
         return Ok(None);
     }
-
-    let rule_names: Vec<String> = all_rules.iter().map(|r| r.name.clone()).collect();
 
     if rule_names.len() == 1 {
         return Ok(None);
@@ -111,7 +108,7 @@ fn select_rules(engine: &Engine, doc_name: &str) -> Result<Option<Vec<String>>> 
         .prompt()
         .context("Failed to get rule selection")?;
 
-    if selected.is_empty() || selected.len() == all_rules.len() {
+    if selected.is_empty() || selected.len() == rule_names.len() {
         Ok(None)
     } else {
         Ok(Some(selected))
@@ -488,7 +485,7 @@ fn prompt_scale_fact(
     fact_name: &str,
     type_str: &str,
     default_value: Option<&str>,
-    units: &[lemma::Unit],
+    units: &lemma::ScaleUnits,
     constraints: &NumericConstraints,
 ) -> Result<String> {
     let prompt_message = format!("{} [{}]", fact_name, type_str);
@@ -516,7 +513,7 @@ fn prompt_ratio_fact(
     fact_name: &str,
     type_str: &str,
     default_value: Option<&str>,
-    units: &[lemma::Unit],
+    units: &lemma::RatioUnits,
     minimum: Option<Decimal>,
     maximum: Option<Decimal>,
     help: Option<&str>,

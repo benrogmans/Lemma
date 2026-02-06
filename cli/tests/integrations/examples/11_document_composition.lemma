@@ -136,8 +136,8 @@ doc order/custom_wholesale
 """
 Custom Wholesale Order
 
-Demonstrates fine-grained overrides through nested paths.
-Shows overriding facts deep in the reference chain.
+Demonstrates fine-grained bindings through nested paths.
+Shows binding facts deep in the reference chain.
 """
 
 fact order = doc order/wholesale_order

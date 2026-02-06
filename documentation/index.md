@@ -427,7 +427,7 @@ Lemma uses a pure Rust evaluator for fast and deterministic execution:
 # Run a document
 lemma run document
 
-# Override facts
+# Provide fact values
 lemma run document age=25 income=50000
 
 # Load multiple documents

@@ -81,10 +81,12 @@ fn test_error_creation_and_display() {
 
     let circular_dependency_error = LemmaError::circular_dependency(
         "a -> b -> a",
-        Span { start: 0, end: 0, line: 1, col: 0 },
-        "<test>",
+        crate::parsing::source::Source::new(
+            "<test>",
+            Span { start: 0, end: 0, line: 1, col: 0 },
+            "<test>",
+        ),
         Arc::from(""),
-        "<test>",
         1,
         vec![],
         None::<String>,

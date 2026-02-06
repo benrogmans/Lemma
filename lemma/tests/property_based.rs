@@ -2,7 +2,7 @@ use proptest::prelude::*;
 use rust_decimal::{prelude::FromPrimitive, Decimal};
 use std::{collections::HashMap, str::FromStr};
 
-use lemma::{Engine, Value};
+use lemma::{Engine, ValueKind};
 
 /// Get the result of a rule evaluation.
 /// Panics if the rule is not found (test failure).
@@ -38,7 +38,7 @@ rule result = x * 0
             .value()
             .expect("Expected value result, got veto")
             .clone();
-        if let Value::Number(num) = &val.value {
+        if let ValueKind::Number(num) = &val.value {
             prop_assert_eq!(*num, Decimal::from_str("0").unwrap());
         }
     }
@@ -58,7 +58,7 @@ rule result = x * 1
             .value()
             .expect("Expected value result, got veto")
             .clone();
-        if let Value::Number(num) = &val.value {
+        if let ValueKind::Number(num) = &val.value {
             let expected = Decimal::from_f64(n).unwrap();
             let diff = (num - expected).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
@@ -80,7 +80,7 @@ rule result = x + 0
             .value()
             .expect("Expected value result, got veto")
             .clone();
-        if let Value::Number(num) = &val.value {
+        if let ValueKind::Number(num) = &val.value {
             let expected = Decimal::from_f64(n).unwrap();
             let diff = (num - expected).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
@@ -100,19 +100,19 @@ rule lte_self = x <= x
 
         let result = get_rule_result(&mut engine, "test", "eq_self");
         let val = result.value().expect("Expected value result, got veto").clone();
-        if let Value::Boolean(b) = &val.value {
-            prop_assert!(bool::from(b));
+        if let ValueKind::Boolean(b) = &val.value {
+            prop_assert!(*b);
         }
 
         let result = get_rule_result(&mut engine, "test", "lte_self");
         let val = result.value().expect("Expected value result, got veto").clone();
-        if let Value::Boolean(b) = &val.value {
-            prop_assert!(bool::from(b));
+        if let ValueKind::Boolean(b) = &val.value {
+            prop_assert!(*b);
         }
     }
 
     #[test]
-    fn prop_fact_override_works(n in -100.0..100.0) {
+    fn prop_fact_binding_works(n in -100.0..100.0) {
         let mut engine = Engine::new();
         let code = r#"
 doc test
@@ -134,7 +134,7 @@ rule doubled = x * 2
             .value()
             .expect("Expected value result, got veto")
             .clone();
-        if let Value::Number(num) = &val.value {
+        if let ValueKind::Number(num) = &val.value {
             let expected = Decimal::from_f64(n * 2.0).unwrap();
             let diff = (num - expected).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
@@ -158,7 +158,7 @@ rule sum2 = b + a
         let v2_result = get_rule_result(&mut engine, "test", "sum2");
         let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Value::Number(val1), Value::Number(val2)) = (&v1.value, &v2.value) {
+        if let (ValueKind::Number(val1), ValueKind::Number(val2)) = (&v1.value, &v2.value) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
         }
@@ -181,7 +181,7 @@ rule prod2 = b * a
         let v2_result = get_rule_result(&mut engine, "test", "prod2");
         let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Value::Number(val1), Value::Number(val2)) = (&v1.value, &v2.value) {
+        if let (ValueKind::Number(val1), ValueKind::Number(val2)) = (&v1.value, &v2.value) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
         }
@@ -205,7 +205,7 @@ rule sum2 = a + (b + c)
         let v2_result = get_rule_result(&mut engine, "test", "sum2");
         let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Value::Number(val1), Value::Number(val2)) = (&v1.value, &v2.value) {
+        if let (ValueKind::Number(val1), ValueKind::Number(val2)) = (&v1.value, &v2.value) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
         }
@@ -229,7 +229,7 @@ rule prod2 = a * (b * c)
         let v2_result = get_rule_result(&mut engine, "test", "prod2");
         let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Value::Number(val1), Value::Number(val2)) = (&v1.value, &v2.value) {
+        if let (ValueKind::Number(val1), ValueKind::Number(val2)) = (&v1.value, &v2.value) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.01").unwrap());
         }
@@ -253,7 +253,7 @@ rule dist2 = (a * b) + (a * c)
         let v2_result = get_rule_result(&mut engine, "test", "dist2");
         let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Value::Number(val1), Value::Number(val2)) = (&v1.value, &v2.value) {
+        if let (ValueKind::Number(val1), ValueKind::Number(val2)) = (&v1.value, &v2.value) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.01").unwrap());
         }
@@ -275,7 +275,7 @@ rule double_neg = -(-x)
         let val = result.value().expect("Expected value result, got veto").clone();
 
 
-        if let Value::Number(val) = &val.value {
+        if let ValueKind::Number(val) = &val.value {
             let expected = Decimal::from_f64(n).unwrap();
             let diff = (val - expected).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
@@ -299,7 +299,7 @@ rule add_neg = a + (-b)
         let v2_result = get_rule_result(&mut engine, "test", "add_neg");
         let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Value::Number(val1), Value::Number(val2)) = (&v1.value, &v2.value) {
+        if let (ValueKind::Number(val1), ValueKind::Number(val2)) = (&v1.value, &v2.value) {
             let diff = (val1 - val2).abs();
             prop_assert!(diff < Decimal::from_str("0.001").unwrap());
         }
@@ -323,7 +323,7 @@ rule back = product? / b
         let val = result.value().expect("Expected value result, got veto").clone();
 
 
-        if let Value::Number(val) = &val.value {
+        if let ValueKind::Number(val) = &val.value {
             let expected = Decimal::from_f64(a).unwrap();
             let diff = (val - expected).abs();
             prop_assert!(diff < Decimal::from_str("0.01").unwrap());
@@ -346,8 +346,8 @@ rule double_not = not (not b)
         let val = result.value().expect("Expected value result, got veto").clone();
 
 
-        if let Value::Boolean(val) = &val.value {
-            prop_assert_eq!(bool::from(val), b);
+        if let ValueKind::Boolean(val) = &val.value {
+            prop_assert_eq!(*val, b);
         }
     }
 
@@ -368,7 +368,7 @@ rule and2 = b and a
         let v2_result = get_rule_result(&mut engine, "test", "and2");
         let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Value::Boolean(val1), Value::Boolean(val2)) = (&v1.value, &v2.value) {
+        if let (ValueKind::Boolean(val1), ValueKind::Boolean(val2)) = (&v1.value, &v2.value) {
             prop_assert_eq!(val1, val2);
         }
     }
@@ -390,7 +390,7 @@ rule or2 = b or a
         let v2_result = get_rule_result(&mut engine, "test", "or2");
         let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
-        if let (Value::Boolean(val1), Value::Boolean(val2)) = (&v1.value, &v2.value) {
+        if let (ValueKind::Boolean(val1), ValueKind::Boolean(val2)) = (&v1.value, &v2.value) {
             prop_assert_eq!(val1, val2);
         }
     }
@@ -419,9 +419,9 @@ rule ac = a < c
         let ac_result = get_rule_result(&mut engine, "test", "ac");
         let ac = ac_result.value().expect("Expected value, got veto").clone();
 
-        if let (Value::Boolean(ab_val), Value::Boolean(bc_val), Value::Boolean(ac_val)) = (&ab.value, &bc.value, &ac.value) {
-            if bool::from(ab_val) && bool::from(bc_val) {
-                prop_assert!(bool::from(ac_val));
+        if let (ValueKind::Boolean(ab_val), ValueKind::Boolean(bc_val), ValueKind::Boolean(ac_val)) = (&ab.value, &bc.value, &ac.value) {
+            if *ab_val && *bc_val {
+                prop_assert!(*ac_val);
             }
         }
     }
@@ -445,7 +445,7 @@ rule discount = 0
         let val = result.value().expect("Expected value result, got veto").clone();
 
 
-        if let Value::Number(val) = &val.value {
+        if let ValueKind::Number(val) = &val.value {
             let expected = if n > 50.0 {
                 Decimal::from(50)
             } else if n > 20.0 {
@@ -487,7 +487,7 @@ rule commutative2 = 5 + x
             .expect("Expected value result, got veto")
             .clone();
 
-        if let Value::Number(val) = &val.value {
+        if let ValueKind::Number(val) = &val.value {
             assert_eq!(
                 *val,
                 Decimal::from_str("0").unwrap(),
@@ -503,7 +503,7 @@ rule commutative2 = 5 + x
             .expect("Expected value result, got veto")
             .clone();
 
-        if let Value::Number(val) = &val.value {
+        if let ValueKind::Number(val) = &val.value {
             let expected = Decimal::from_f64(n).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.001").unwrap(),
@@ -519,7 +519,7 @@ rule commutative2 = 5 + x
             .expect("Expected value result, got veto")
             .clone();
 
-        if let Value::Number(val) = &val.value {
+        if let ValueKind::Number(val) = &val.value {
             let expected = Decimal::from_f64(n).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.001").unwrap(),
@@ -538,7 +538,7 @@ rule commutative2 = 5 + x
             .value()
             .expect("Expected value, got veto")
             .clone();
-        if let (Value::Number(v1), Value::Number(v2)) = (&comm1.value, &comm2.value) {
+        if let (ValueKind::Number(v1), ValueKind::Number(v2)) = (&comm1.value, &comm2.value) {
             assert!(
                 (v1 - v2).abs() < Decimal::from_str("0.001").unwrap(),
                 "Commutativity failed for {}",
@@ -572,8 +572,8 @@ rule a_gte_a = a >= a
         .expect("Expected value result, got veto")
         .clone();
 
-    if let Value::Boolean(val) = &val.value {
-        assert!(bool::from(val), "Reflexive equality failed");
+    if let ValueKind::Boolean(val) = &val.value {
+        assert!(*val, "Reflexive equality failed");
     }
 
     let result = get_rule_result(&mut engine, "test", "a_lte_a");
@@ -583,8 +583,8 @@ rule a_gte_a = a >= a
         .expect("Expected value result, got veto")
         .clone();
 
-    if let Value::Boolean(val) = &val.value {
-        assert!(bool::from(val), "Reflexive <= failed");
+    if let ValueKind::Boolean(val) = &val.value {
+        assert!(*val, "Reflexive <= failed");
     }
 
     let result = get_rule_result(&mut engine, "test", "a_gte_a");
@@ -594,8 +594,8 @@ rule a_gte_a = a >= a
         .expect("Expected value result, got veto")
         .clone();
 
-    if let Value::Boolean(val) = &val.value {
-        assert!(bool::from(val), "Reflexive >= failed");
+    if let ValueKind::Boolean(val) = &val.value {
+        assert!(*val, "Reflexive >= failed");
     }
 
     let ab_result = get_rule_result(&mut engine, "test", "a_lt_b");
@@ -605,13 +605,10 @@ rule a_gte_a = a >= a
     let ac_result = get_rule_result(&mut engine, "test", "a_lt_c");
     let ac = ac_result.value().expect("Expected value, got veto").clone();
 
-    if let (
-        Value::Boolean(lemma::BooleanValue::True),
-        Value::Boolean(lemma::BooleanValue::True),
-        Value::Boolean(val),
-    ) = (&ab.value, &bc.value, &ac.value)
+    if let (ValueKind::Boolean(true), ValueKind::Boolean(true), ValueKind::Boolean(val)) =
+        (&ab.value, &bc.value, &ac.value)
     {
-        assert!(bool::from(val), "Transitivity of < failed");
+        assert!(*val, "Transitivity of < failed");
     }
 }
 
@@ -632,7 +629,7 @@ rule to_hours = duration in hours
         .expect("Expected value result, got veto")
         .clone();
 
-    if let Value::Duration(value, _) = &val.value {
+    if let ValueKind::Duration(value, _) = &val.value {
         // 60 minutes = 1 hour (the conversion returns 1 hour, not 3600 seconds)
         assert_eq!(
             *value,
@@ -666,7 +663,7 @@ rule result = base * rate
         .expect("Expected value result, got veto")
         .clone();
 
-    if let Value::Number(val) = &val.value {
+    if let ValueKind::Number(val) = &val.value {
         assert!(
             (val - Decimal::from_str("20").unwrap()).abs() < Decimal::from_str("0.01").unwrap(),
             "Percentage calculation failed"
@@ -701,7 +698,7 @@ rule back_div = product? / b
             .expect("Expected value result, got veto")
             .clone();
 
-        if let Value::Number(val) = &val.value {
+        if let ValueKind::Number(val) = &val.value {
             let expected = Decimal::from_f64(a).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.001").unwrap(),
@@ -718,7 +715,7 @@ rule back_div = product? / b
             .expect("Expected value result, got veto")
             .clone();
 
-        if let Value::Number(val) = &val.value {
+        if let ValueKind::Number(val) = &val.value {
             let expected = Decimal::from_f64(a).unwrap();
             assert!(
                 (val - expected).abs() < Decimal::from_str("0.01").unwrap(),

@@ -49,7 +49,7 @@ fn invert_power_exponent_unknown() {
         .invert(
             "math",
             "y",
-            Target::value(LiteralValue::number(8)),
+            Target::value(LiteralValue::number(8.into())),
             HashMap::new(),
         )
         .expect("invert OK");
@@ -69,7 +69,7 @@ fn invert_power_base_unknown() {
         .invert(
             "math",
             "y",
-            Target::value(LiteralValue::number(9)),
+            Target::value(LiteralValue::number(9.into())),
             HashMap::new(),
         )
         .expect("invert OK");

@@ -1,6 +1,5 @@
 use crate::evaluation::operations::{ComputationKind, OperationResult};
-use crate::{FactPath, RulePath};
-use crate::{LiteralValue, Source};
+use crate::planning::semantics::{FactPath, LiteralValue, RulePath, Source};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]

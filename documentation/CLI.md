@@ -188,7 +188,7 @@ lemma mcp [-d <path>]
 The MCP server provides AI assistants with tools to:
 - Add and evaluate Lemma documents
 - Inspect document structure
-- Query rules with fact overrides
+- Query rules with fact values
 
 ## Workspace Structure
 
@@ -223,7 +223,7 @@ EOF
 # 3. Evaluate it
 lemma run pricing
 
-# 4. Override facts
+# 4. Provide fact values
 lemma run pricing base_price=200 quantity=5
 
 # 5. Show document structure

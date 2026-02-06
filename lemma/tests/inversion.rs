@@ -24,7 +24,7 @@ fn test_inversion_simple_arithmetic() {
     let result = engine.invert(
         "pricing",
         "total",
-        Target::value(LiteralValue::number(100)),
+        Target::value(LiteralValue::number(100.into())),
         HashMap::new(),
     );
     assert!(result.is_ok(), "Inversion should succeed: {:?}", result);

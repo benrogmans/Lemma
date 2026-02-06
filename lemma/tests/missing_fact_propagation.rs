@@ -212,7 +212,7 @@ rule message = "Order processed"
         .expect("message rule should be in results");
     match &message_rule.result {
         lemma::OperationResult::Value(lit) => {
-            if let lemma::Value::Text(text) = &lit.value {
+            if let lemma::ValueKind::Text(text) = &lit.value {
                 assert_eq!(text, "Order processed");
             } else {
                 panic!("Expected text result");

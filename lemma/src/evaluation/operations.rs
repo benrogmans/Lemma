@@ -1,6 +1,6 @@
 //! Operation types and result handling for evaluation
 
-use crate::{
+use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, FactPath, LiteralValue, LogicalComputation,
     MathematicalComputation, RulePath,
 };
@@ -10,8 +10,8 @@ use serde::Serialize;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationResult {
-    /// Operation produced a value
-    Value(LiteralValue),
+    /// Operation produced a value (boxed to keep enum small)
+    Value(Box<LiteralValue>),
     /// Operation was vetoed (valid result, no value)
     Veto(Option<String>),
 }
@@ -24,7 +24,7 @@ impl OperationResult {
     #[must_use]
     pub fn value(&self) -> Option<&LiteralValue> {
         match self {
-            OperationResult::Value(v) => Some(v),
+            OperationResult::Value(v) => Some(v.as_ref()),
             OperationResult::Veto(_) => None,
         }
     }
