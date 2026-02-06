@@ -1,5 +1,5 @@
 use lemma::evaluation::proof::{NonMatchedBranch, ProofNode, ValueSource};
-use lemma::planning::semantics::{FactPath, FactValue, ValueKind};
+use lemma::planning::semantics::{FactPath, FactValue, TypeSpecification, ValueKind};
 use lemma::{ExecutionPlan, LiteralValue, OperationResult, Response, RuleResult};
 use std::collections::HashSet;
 use super_table::{presets, Cell, CellAlignment, Table};
@@ -669,11 +669,25 @@ impl Formatter {
             ValueKind::Ratio(r, unit_opt) => {
                 let decimals_opt = lit.lemma_type.decimal_places();
                 match unit_opt.as_deref() {
-                    Some("percent") => (
-                        "%".to_string(),
-                        format_decimal(&(*r * rust_decimal::Decimal::from(100)), decimals_opt),
-                    ),
-                    Some(u) => (u.to_string(), format_decimal(r, decimals_opt)),
+                    Some(unit_name) => {
+                        let display_value = if let TypeSpecification::Ratio { units, .. } =
+                            &lit.lemma_type.specifications
+                        {
+                            if let Ok(unit) = units.get(unit_name) {
+                                *r * unit.value
+                            } else {
+                                *r
+                            }
+                        } else {
+                            *r
+                        };
+                        let display_unit = if unit_name == "percent" {
+                            "%".to_string()
+                        } else {
+                            unit_name.to_string()
+                        };
+                        (display_unit, format_decimal(&display_value, decimals_opt))
+                    }
                     None => (String::new(), format_decimal(r, decimals_opt)),
                 }
             }

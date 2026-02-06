@@ -1,0 +1,68 @@
+{
+  "name": "lemma-language",
+  "displayName": "Lemma Language",
+  "description": "Language support for Lemma: syntax highlighting, inline diagnostics, and clickable Registry references",
+  "version": "0.1.0",
+  "publisher": "lemma",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/benrogmans/lemma"
+  },
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:lemma"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "lemma",
+        "aliases": [
+          "Lemma",
+          "lemma"
+        ],
+        "extensions": [
+          ".lemma"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lemma",
+        "scopeName": "source.lemma",
+        "path": "./syntaxes/lemma.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Lemma",
+      "properties": {
+        "lemma.lspServerPath": {
+          "type": "string",
+          "default": "lemma-lsp",
+          "description": "Path to the lemma-lsp binary. If not absolute, the binary is looked up on $PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}

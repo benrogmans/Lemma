@@ -520,6 +520,61 @@ fact age = 25
     }
 
     #[test]
+    fn parse_registry_doc_name_with_at_prefix() {
+        let input = r#"doc @user/workspace/somedoc
+fact name = "Alice""#;
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "@user/workspace/somedoc");
+    }
+
+    #[test]
+    fn parse_fact_doc_reference_with_at_prefix() {
+        let input = r#"doc example
+fact external = doc @user/workspace/somedoc"#;
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].facts.len(), 1);
+        match &result[0].facts[0].value {
+            crate::FactValue::DocumentReference(doc_name) => {
+                assert_eq!(doc_name, "@user/workspace/somedoc");
+            }
+            other => panic!("Expected DocumentReference, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_type_import_with_at_prefix() {
+        let input = r#"doc example
+type money from @lemma/std/finance
+fact price = [money]"#;
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].types.len(), 1);
+        match &result[0].types[0] {
+            crate::TypeDef::Import { from, name, .. } => {
+                assert_eq!(from, "@lemma/std/finance");
+                assert_eq!(name, "money");
+            }
+            other => panic!("Expected Import type, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_multiple_registry_docs_in_same_file() {
+        let input = r#"doc @user/workspace/doc_a
+fact x = 10
+
+doc @user/workspace/doc_b
+fact y = 20
+fact a = doc @user/workspace/doc_a"#;
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "@user/workspace/doc_a");
+        assert_eq!(result[1].name, "@user/workspace/doc_b");
+    }
+
+    #[test]
     fn parse_error_is_returned_for_garbage_input() {
         let result = parse(
             r#"

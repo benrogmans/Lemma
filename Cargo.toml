@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "cli",
     "lemma",
+    "lemma-lsp",
 ]
 exclude = ["lemma/fuzz"]
 

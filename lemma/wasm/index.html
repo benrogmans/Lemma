@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lemma WASM Test</title>
+    <title>Lemma WASM Playground</title>
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
     <style>
         body {
@@ -13,9 +13,16 @@
             padding: 20px;
             line-height: 1.6;
         }
-        h1 {
-            color: #333;
+
+        h1 { color: #333; }
+
+        #editor {
+            width: 100%;
+            height: 300px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
         }
+
         .section {
             margin: 20px 0;
             padding: 15px;
@@ -23,136 +30,41 @@
             border-radius: 5px;
             background: #f9f9f9;
         }
+
         .hint {
             margin-top: 8px;
             color: #666;
             font-size: 13px;
         }
-        #lemmaCodeEditor {
-            width: 100%;
-            height: 300px;
-            border: 1px solid #ccc;
-            border-radius: 3px;
-        }
-        textarea {
-            width: 100%;
-            min-height: 100px;
-            font-family: 'Courier New', monospace;
-            padding: 8px;
-            border: 1px solid #ccc;
-            border-radius: 3px;
-        }
-        input[type="text"] {
-            width: 100%;
-            padding: 8px;
-            margin: 5px 0;
-            border: 1px solid #ccc;
-            border-radius: 3px;
-        }
-        button {
-            background: #007bff;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 3px;
-            cursor: pointer;
-            margin: 5px 5px 5px 0;
-        }
-        button:hover {
-            background: #0056b3;
-        }
-        button.secondary {
-            background: #6c757d;
-        }
-        button.secondary:hover {
-            background: #5a6268;
-        }
-        .result {
-            margin-top: 15px;
-            padding: 10px;
-            background: white;
-            border: 1px solid #28a745;
-            border-radius: 3px;
-            white-space: pre-wrap;
-            font-family: 'Courier New', monospace;
-        }
-        .summary-table {
-            margin-top: 15px;
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-        }
-        .summary-table th {
-            background: #f0f0f0;
-            padding: 10px;
-            text-align: left;
-            border-bottom: 2px solid #ddd;
-        }
-        .summary-table td {
-            padding: 8px 10px;
-            border-bottom: 1px solid #eee;
-        }
-        .summary-table .rule-name {
-            font-weight: 500;
-            color: #007bff;
-        }
-        .summary-table .value {
-            font-family: 'Courier New', monospace;
-        }
-        .summary-table .veto {
-            color: #dc3545;
-            font-style: italic;
-        }
-        .summary-table .missing {
-            color: #856404;
-            font-style: italic;
-        }
-        .error {
-            border-color: #dc3545;
-            background: #f8d7da;
-        }
-        .success {
-            background: #d4edda;
-        }
-        .floating-status {
+
+        /* --- Floating status panel --- */
+
+        #status {
             position: fixed;
             right: 18px;
             bottom: 18px;
             width: min(520px, calc(100vw - 36px));
             max-height: min(45vh, 420px);
             overflow: auto;
-            padding: 12px 12px;
+            padding: 12px;
             border-radius: 8px;
             border: 1px solid #ddd;
             background: rgba(255, 255, 255, 0.98);
             box-shadow: 0 10px 30px rgba(0,0,0,0.14);
             z-index: 9999;
         }
-        .floating-status.hidden {
-            display: none;
-        }
-        .floating-status .title {
-            font-weight: 600;
-            margin-bottom: 6px;
-        }
-        .floating-status .message {
+        #status.ok  { border-color: #28a745; background: rgba(212, 237, 218, 0.96); }
+        #status.err { border-color: #dc3545; background: rgba(248, 215, 218, 0.96); }
+        #status.warn { border-color: #ffc107; background: rgba(255, 243, 205, 0.96); }
+        #status .title { font-weight: 600; margin-bottom: 6px; }
+        #status .message {
             white-space: pre-wrap;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             font-size: 12px;
             line-height: 1.45;
         }
-        .floating-status.ok {
-            border-color: #28a745;
-            background: rgba(212, 237, 218, 0.96);
-        }
-        .floating-status.err {
-            border-color: #dc3545;
-            background: rgba(248, 215, 218, 0.96);
-        }
-        .floating-status.warn {
-            border-color: #ffc107;
-            background: rgba(255, 243, 205, 0.96);
-        }
+
+        /* --- Document cards --- */
 
         .doc-card {
             background: white;
@@ -165,6 +77,9 @@
             margin: 0 0 10px 0;
             font-size: 16px;
         }
+
+        /* --- Fact input rows --- */
+
         .facts-grid {
             display: grid;
             grid-template-columns: 1fr;
@@ -177,7 +92,7 @@
             align-items: center;
         }
         .fact-row .label {
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             font-size: 13px;
             color: #111;
         }
@@ -186,12 +101,13 @@
             font-weight: 700;
             margin-left: 6px;
         }
-        .fact-row .input {
+        .fact-row .input-group {
             display: flex;
             gap: 8px;
             align-items: center;
         }
-        .fact-row select, .fact-row input {
+        .fact-row select,
+        .fact-row input {
             width: 100%;
         }
         .fact-row input[type="checkbox"] {
@@ -204,612 +120,994 @@
             font-size: 12px;
             margin-top: -6px;
         }
+
+        /* --- Actions row --- */
+
         .doc-actions {
             display: flex;
             gap: 8px;
             align-items: center;
             margin-top: 10px;
         }
-        .doc-result {
-            margin-top: 10px;
+
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin: 0;
         }
+        button:hover { background: #0056b3; }
+        button.secondary { background: #6c757d; }
+        button.secondary:hover { background: #5a6268; }
+
+        /* --- Results table --- */
+
+        .results-table {
+            margin-top: 10px;
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+        }
+        .results-table th {
+            background: #f0f0f0;
+            padding: 10px;
+            text-align: left;
+            border-bottom: 2px solid #ddd;
+        }
+        .results-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #eee;
+        }
+        .results-table .rule-name { font-weight: 500; color: #007bff; }
+        .results-table .value { font-family: monospace; }
+        .results-table .veto { color: #dc3545; font-style: italic; }
+
+        .result-message {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 3px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        .result-message.error { background: #f8d7da; border: 1px solid #dc3545; }
+        .result-message.success { background: #d4edda; border: 1px solid #28a745; }
+
+        /* --- Responsive --- */
+
         @media (max-width: 740px) {
-            .fact-row {
-                grid-template-columns: 1fr;
-            }
-            .fact-help {
-                grid-column: 1 / 2;
-                margin-top: -2px;
-            }
+            .fact-row { grid-template-columns: 1fr; }
+            .fact-help { grid-column: 1 / 2; margin-top: -2px; }
         }
     </style>
 </head>
 <body>
     <h1>Lemma WASM Playground</h1>
-    <div id="floatingStatus" class="floating-status warn">
-        <div class="title">Loading…</div>
-        <div class="message">Initializing WASM module…</div>
+
+    <div id="status" class="warn">
+        <div class="title">Loading</div>
+        <div class="message">Initializing WASM module</div>
     </div>
 
     <div class="section">
         <h2>Lemma code</h2>
-        <div id="lemmaCodeEditor"></div>
+        <div id="editor"></div>
         <div class="hint">Edits auto-load. Errors are shown in the floating panel (bottom-right).</div>
     </div>
 
     <div class="section">
-        <h2>Evaluate</h2>
-        <div id="docsContainer"></div>
-    </div>
-
-    <div class="section">
-        <h2>Last evaluation</h2>
-        <div id="evalResultSummary"></div>
-        <div id="evalResult"></div>
+        <h2>Documents</h2>
+        <div id="docs"></div>
     </div>
 
     <script type="module">
         import init, { WasmEngine } from '../pkg/lemma.js';
         import { registerLemmaLanguage } from '../syntax/monaco.js';
 
+        // ---------------------------------------------------------------
+        // State
+        // ---------------------------------------------------------------
+
         let engine = null;
-        let lemmaEditor = null;
-        let isEditorReady = false;
-        let pendingLoadTimer = null;
+        let monacoEditor = null;
+        let editorReady = false;
+        let loadTimer = null;
 
-        require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+        const state = {
+            docs: [],
+            schemas: {},
+            factValues: {},
+            evalResults: {},
+        };
 
-        require(['vs/editor/editor.main'], function() {
-            // Use the canonical Lemma syntax rules from `lemma/syntax/monaco.js`
-            // so this page stays in sync with the language.
-            registerLemmaLanguage(monaco);
+        // ---------------------------------------------------------------
+        // Status panel
+        // ---------------------------------------------------------------
 
-            lemmaEditor = monaco.editor.create(document.getElementById('lemmaCodeEditor'), {
-                value: `doc pricing
-
-type money = scale
-  -> unit eur 1
-  -> unit usd 1.19
-
-type x = number
-  -> minimum 0
-  -> maximum 100
-
-fact quantity = 10
-fact is_member = false
-fact price = [money]
-
-rule discount = 0%
-  unless quantity >= 10 then 10%
-  unless quantity >= 50 then 20%
-  unless is_member then 15%
-
-rule total = price - discount?
-  unless price > 100 usd then veto "This price is too high."`,
-                language: 'lemma',
-                theme: 'vs',
-                automaticLayout: true,
-                minimap: { enabled: false },
-                scrollBeyondLastLine: false
-            });
-
-            // Debounced auto-load on edits (Monaco change events are better than DOM keyup).
-            lemmaEditor.onDidChangeModelContent(() => scheduleAutoLoad());
-            isEditorReady = true;
-            scheduleAutoLoad(true);
-        });
-
-        function setFloatingStatus(kind, title, message) {
-            const el = document.getElementById('floatingStatus');
-            el.classList.remove('ok', 'err', 'warn', 'hidden');
-            if (kind === 'ok') el.classList.add('ok');
-            else if (kind === 'err') el.classList.add('err');
-            else el.classList.add('warn');
-            el.querySelector('.title').textContent = title;
-            el.querySelector('.message').textContent = message || '';
+        function setStatus(kind, title, message) {
+            const element = document.getElementById('status');
+            element.classList.remove('ok', 'err', 'warn');
+            if (kind === 'ok') element.classList.add('ok');
+            else if (kind === 'err') element.classList.add('err');
+            else element.classList.add('warn');
+            element.querySelector('.title').textContent = title;
+            element.querySelector('.message').textContent = message || '';
         }
 
-        function scheduleAutoLoad(immediate = false) {
-            if (!engine || !isEditorReady) return;
-            if (pendingLoadTimer) {
-                clearTimeout(pendingLoadTimer);
-                pendingLoadTimer = null;
-            }
-            const delay = immediate ? 0 : 250;
-            pendingLoadTimer = setTimeout(() => {
-                pendingLoadTimer = null;
-                loadFromEditor();
-            }, delay);
+        // ---------------------------------------------------------------
+        // Schema introspection
+        // ---------------------------------------------------------------
+
+        function specKind(schemaType) {
+            const specifications = schemaType && schemaType.specifications;
+            if (!specifications || typeof specifications !== 'object') return null;
+            const keys = Object.keys(specifications);
+            if (keys.length !== 1) return null;
+            return keys[0];
         }
 
-        async function initializeWasm() {
-            try {
-                await init();
-                engine = new WasmEngine();
-
-                window.engine = engine;
-                window.evaluateDoc = evaluateDoc;
-
-                if (typeof engine.getDocumentSchema !== 'function') {
-                    setFloatingStatus(
-                        'warn',
-                        'WASM ready (UI needs rebuild)',
-                        'This page expects `getDocumentSchema()` to exist on WasmEngine.\nRebuild the WASM pkg (wasm-bindgen output) and reload.'
-                    );
-                } else {
-                    setFloatingStatus('ok', 'WASM ready', 'Auto-loading Lemma code…');
-                }
-                scheduleAutoLoad(true);
-            } catch (error) {
-                setFloatingStatus('err', 'Failed to load WASM', error?.message || String(error));
-            }
-        }
-
-        function loadFromEditor() {
-            const code = lemmaEditor ? lemmaEditor.getValue() : '';
-            try {
-                const result = JSON.parse(engine.addLemmaCode(code, 'wasm.lemma'));
-
-                if (result.success) {
-                    setFloatingStatus('ok', 'Loaded', 'Documents compiled successfully.');
-                    refreshDocsUI();
-                } else {
-                    setFloatingStatus('err', 'Error while loading', result.error || 'Unknown error');
-                }
-            } catch (error) {
-                setFloatingStatus('err', 'Exception while loading', error?.message || String(error));
-            }
-        }
-
-        function safeJsonParse(str) {
-            try {
-                return JSON.parse(str);
-            } catch (error) {
-                return null;
-            }
-        }
-
-        function schemaSpecKind(schemaType) {
-            const specs = schemaType?.specifications;
-            if (!specs || typeof specs !== 'object') return null;
-            const keys = Object.keys(specs);
-            return keys.length === 1 ? keys[0] : null;
-        }
-
-        function schemaSpecData(schemaType) {
-            const kind = schemaSpecKind(schemaType);
-            if (!kind) return null;
+        function specData(schemaType) {
+            const kind = specKind(schemaType);
+            if (kind === null) return null;
             return schemaType.specifications[kind] || null;
         }
 
-        function suggestedDefault(schemaType) {
-            const kind = schemaSpecKind(schemaType);
-            const data = schemaSpecData(schemaType);
-            if (!kind || !data) return null;
-            if (kind === 'Boolean') return data.default ?? null;
-            if (kind === 'Number') return data.default ?? null;
-            if (kind === 'Text') return data.default ?? null;
-            if (kind === 'Scale') {
-                if (Array.isArray(data.default) && data.default.length === 2) {
-                    return { amount: data.default[0], unit: data.default[1] };
-                }
-                return null;
-            }
-            if (kind === 'Ratio') return data.default ?? null;
-            if (kind === 'Date') return data.default ?? null;
-            if (kind === 'Time') return data.default ?? null;
-            if (kind === 'Duration') {
-                if (Array.isArray(data.default) && data.default.length === 2) {
-                    return { amount: data.default[0], unit: data.default[1] };
-                }
-                return null;
-            }
-            return null;
-        }
+        // ---------------------------------------------------------------
+        // Fact value serialization (state -> engine JSON)
+        // ---------------------------------------------------------------
 
-        function createEl(tag, attrs = {}, children = []) {
-            const el = document.createElement(tag);
-            for (const [k, v] of Object.entries(attrs)) {
-                if (k === 'className') el.className = v;
-                else if (k === 'text') el.textContent = v;
-                else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
-                else el.setAttribute(k, v);
-            }
-            for (const child of children) el.appendChild(child);
-            return el;
-        }
+        function serializeFactValues(docName) {
+            const values = state.factValues[docName];
+            if (!values) return {};
 
-        function clearEl(el) {
-            while (el.firstChild) el.removeChild(el.firstChild);
-        }
+            const schema = state.schemas[docName];
+            if (!schema || !Array.isArray(schema.facts)) return {};
 
-        function refreshDocsUI() {
-            const container = document.getElementById('docsContainer');
-            clearEl(container);
+            const result = {};
 
-            if (!engine || typeof engine.getDocumentSchema !== 'function') {
-                container.appendChild(createEl('div', {
-                    className: 'result error',
-                    text: 'Missing WasmEngine.getDocumentSchema(). Please rebuild the WASM package and reload this page.'
-                }));
-                return;
-            }
+            for (const fact of schema.facts) {
+                const name = fact.name;
+                const entry = values[name];
+                if (entry === undefined || entry === null) continue;
 
-            let listParsed = safeJsonParse(engine.listDocuments());
-            if (!listParsed || !listParsed.success) {
-                container.appendChild(createEl('div', { className: 'result error', text: 'Failed to list documents.' }));
-                return;
-            }
+                const kind = specKind(fact.schemaType);
 
-            const docs = (listParsed.documents || []).slice().sort();
-            if (docs.length === 0) {
-                container.appendChild(createEl('div', { className: 'hint', text: 'No documents loaded yet.' }));
-                return;
-            }
-
-            for (const docName of docs) {
-                const schemaParsed = (typeof engine.getRequiredFacts === 'function')
-                    ? safeJsonParse(engine.getRequiredFacts(docName, '[]'))
-                    : safeJsonParse(engine.getDocumentSchema(docName));
-                if (!schemaParsed || !schemaParsed.success) {
-                    container.appendChild(createEl('div', { className: 'result error', text: `Failed to load schema for doc '${docName}'.` }));
+                if (kind === 'Boolean') {
+                    result[name] = entry === true;
                     continue;
                 }
-                container.appendChild(renderDocCard(schemaParsed.doc));
-            }
-        }
 
-        function renderDocCard(doc) {
-            const card = createEl('div', { className: 'doc-card' });
-            card.appendChild(createEl('h3', { text: `doc ${doc.name}` }));
-
-            const facts = Array.isArray(doc.facts) ? doc.facts.slice() : [];
-            facts.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-            const grid = createEl('div', { className: 'facts-grid' });
-
-            for (const fact of facts) {
-                const row = renderFactRow(doc.name, fact);
-                if (row) grid.appendChild(row);
-            }
-
-            card.appendChild(grid);
-
-            const actions = createEl('div', { className: 'doc-actions' });
-            actions.appendChild(createEl('button', {
-                text: 'Evaluate',
-                onclick: () => evaluateDoc(doc.name)
-            }));
-            actions.appendChild(createEl('button', {
-                className: 'secondary',
-                text: 'Clear inputs',
-                onclick: () => {
-                    for (const input of card.querySelectorAll('input, select')) {
-                        if (input.dataset && input.dataset.factName) {
-                            if (input.type === 'checkbox') input.checked = false;
-                            else input.value = '';
+                if (kind === 'Scale') {
+                    if (typeof entry === 'object' && entry !== null) {
+                        const amount = (entry.amount || '').toString().trim();
+                        const unit = (entry.unit || '').toString().trim();
+                        if (amount === '') continue;
+                        if (unit !== '') {
+                            result[name] = amount + ' ' + unit;
+                        } else {
+                            result[name] = Number(amount);
                         }
                     }
+                    continue;
                 }
-            }));
-            card.appendChild(actions);
 
-            const result = createEl('div', { className: 'doc-result', id: `docResult:${doc.name}` });
-            card.appendChild(result);
-            return card;
+                if (kind === 'Ratio') {
+                    if (typeof entry === 'object' && entry !== null) {
+                        const amount = (entry.amount || '').toString().trim();
+                        const unit = (entry.unit || '').toString().trim();
+                        if (amount === '') continue;
+                        if (unit === 'percent') {
+                            result[name] = amount + '%';
+                        } else if (unit === 'permille') {
+                            result[name] = amount + '%%';
+                        } else {
+                            result[name] = Number(amount);
+                        }
+                    }
+                    continue;
+                }
+
+                if (kind === 'Number') {
+                    const stringValue = entry.toString().trim();
+                    if (stringValue === '') continue;
+                    result[name] = Number(stringValue);
+                    continue;
+                }
+
+                // Text, Date, Time, Duration: pass as string
+                const stringValue = entry.toString().trim();
+                if (stringValue !== '') {
+                    result[name] = stringValue;
+                }
+            }
+
+            return result;
         }
 
-        function renderFactRow(docName, fact) {
-            const name = fact?.name;
-            if (!name) return null;
+        // ---------------------------------------------------------------
+        // DOM: Build a fact input row
+        // ---------------------------------------------------------------
 
-            // Don't prompt for doc references by default (they aren't "values" in JSON evaluation).
-            // Still show them as read-only context.
-            if (fact.valueKind === 'document_reference') {
-                const row = createEl('div', { className: 'fact-row' });
-                const label = createEl('div', { className: 'label', text: name });
-                row.appendChild(label);
-                row.appendChild(createEl('div', { className: 'input' }, [
-                    createEl('input', { type: 'text', value: fact.defaultValue?.doc || '', disabled: 'true' })
-                ]));
-                row.appendChild(createEl('div', { className: 'fact-help', text: 'Document reference (read-only)' }));
-                return row;
-            }
+        function buildFactRow(docName, fact) {
+            const name = fact.name;
+            const schemaType = fact.schemaType;
+            const kind = specKind(schemaType);
+            const spec = specData(schemaType);
 
-            const schemaType = fact.schemaType || null;
-            const kind = schemaSpecKind(schemaType);
-            const spec = schemaSpecData(schemaType);
+            const row = document.createElement('div');
+            row.className = 'fact-row';
+            row.dataset.factName = name;
+            row.dataset.typeKind = kind || 'unknown';
 
-            const row = createEl('div', { className: 'fact-row' });
-            const labelEl = createEl('div', { className: 'label' });
-            labelEl.textContent = name;
+            // Label
+            const label = document.createElement('div');
+            label.className = 'label';
+            label.textContent = name;
             if (fact.required) {
-                labelEl.appendChild(createEl('span', { className: 'required', text: '*' }));
+                const asterisk = document.createElement('span');
+                asterisk.className = 'required';
+                asterisk.textContent = '*';
+                label.appendChild(asterisk);
             }
-            row.appendChild(labelEl);
+            row.appendChild(label);
 
-            const inputWrap = createEl('div', { className: 'input' });
+            // Input group
+            const inputGroup = document.createElement('div');
+            inputGroup.className = 'input-group';
 
-            const helpText = (spec && typeof spec.help === 'string' && spec.help.trim()) ? spec.help.trim() : null;
-
-            const typeDefault = suggestedDefault(schemaType);
-
-            // NOTE: evaluation accepts FactPath keys as strings (including dots).
-            // We store factName on each input so we can build the JSON object.
+            // Initialize state entry if missing
+            if (!state.factValues[docName]) {
+                state.factValues[docName] = {};
+            }
+            const currentValue = state.factValues[docName][name];
 
             if (kind === 'Boolean') {
-                const checkbox = createEl('input', { type: 'checkbox' });
-                checkbox.dataset.factName = name;
-                if (typeof typeDefault === 'boolean') checkbox.checked = typeDefault;
-                inputWrap.appendChild(checkbox);
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                if (currentValue === true) {
+                    checkbox.checked = true;
+                } else if (currentValue === undefined && spec && typeof spec.default === 'boolean') {
+                    checkbox.checked = spec.default;
+                    state.factValues[docName][name] = spec.default;
+                }
+                checkbox.addEventListener('change', function () {
+                    state.factValues[docName][name] = this.checked;
+                });
+                inputGroup.appendChild(checkbox);
+
             } else if (kind === 'Text') {
-                const options = Array.isArray(spec?.options) ? spec.options : [];
+                const options = (spec && Array.isArray(spec.options)) ? spec.options : [];
+
                 if (options.length > 0) {
-                    const select = createEl('select');
-                    select.dataset.factName = name;
-                    select.appendChild(createEl('option', { value: '', text: '' }));
-                    for (const opt of options) {
-                        select.appendChild(createEl('option', { value: opt, text: opt }));
+                    const select = document.createElement('select');
+                    const emptyOption = document.createElement('option');
+                    emptyOption.value = '';
+                    emptyOption.textContent = '';
+                    select.appendChild(emptyOption);
+                    for (const optionValue of options) {
+                        const option = document.createElement('option');
+                        option.value = optionValue;
+                        option.textContent = optionValue;
+                        select.appendChild(option);
                     }
-                    if (typeof typeDefault === 'string') select.value = typeDefault;
-                    inputWrap.appendChild(select);
+                    if (typeof currentValue === 'string') {
+                        select.value = currentValue;
+                    } else if (currentValue === undefined && spec && typeof spec.default === 'string') {
+                        select.value = spec.default;
+                        state.factValues[docName][name] = spec.default;
+                    }
+                    select.addEventListener('change', function () {
+                        state.factValues[docName][name] = this.value;
+                    });
+                    inputGroup.appendChild(select);
                 } else {
-                    const input = createEl('input', { type: 'text', placeholder: 'text' });
-                    input.dataset.factName = name;
-                    if (typeof typeDefault === 'string') input.value = typeDefault;
-                    inputWrap.appendChild(input);
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.placeholder = 'text';
+                    if (typeof currentValue === 'string') {
+                        input.value = currentValue;
+                    } else if (currentValue === undefined && spec && typeof spec.default === 'string') {
+                        input.value = spec.default;
+                        state.factValues[docName][name] = spec.default;
+                    }
+                    input.addEventListener('input', function () {
+                        state.factValues[docName][name] = this.value;
+                    });
+                    inputGroup.appendChild(input);
                 }
+
             } else if (kind === 'Number') {
-                const input = createEl('input', { type: 'number', step: 'any', placeholder: 'number' });
-                input.dataset.factName = name;
-                if (typeDefault !== null && typeDefault !== undefined) input.value = String(typeDefault);
-                inputWrap.appendChild(input);
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.step = 'any';
+                input.placeholder = 'number';
+                if (currentValue !== undefined && currentValue !== null) {
+                    input.value = currentValue.toString();
+                } else if (currentValue === undefined && spec && spec.default !== null && spec.default !== undefined) {
+                    input.value = spec.default.toString();
+                    state.factValues[docName][name] = spec.default.toString();
+                }
+                input.addEventListener('input', function () {
+                    state.factValues[docName][name] = this.value;
+                });
+                inputGroup.appendChild(input);
+
             } else if (kind === 'Scale') {
-                const units = Array.isArray(spec?.units) ? spec.units : [];
-                const amount = createEl('input', { type: 'number', step: 'any', placeholder: units.length ? 'amount' : 'number' });
-                amount.dataset.factName = name;
-                amount.dataset.factKind = 'scaleAmount';
-                inputWrap.appendChild(amount);
+                const units = (spec && Array.isArray(spec.units)) ? spec.units : [];
+                const storedEntry = (typeof currentValue === 'object' && currentValue !== null) ? currentValue : {};
 
-                if (units.length) {
-                    const unitSelect = createEl('select');
-                    unitSelect.dataset.factName = name;
-                    unitSelect.dataset.factKind = 'scaleUnit';
-                    unitSelect.appendChild(createEl('option', { value: '', text: '' }));
-                    for (const u of units) {
-                        unitSelect.appendChild(createEl('option', { value: u.name, text: u.name }));
-                    }
-                    inputWrap.appendChild(unitSelect);
-
-                    if (typeDefault && typeof typeDefault === 'object') {
-                        if (typeDefault.amount !== undefined) amount.value = String(typeDefault.amount);
-                        if (typeDefault.unit) unitSelect.value = String(typeDefault.unit);
-                    }
-                } else if (typeDefault !== null && typeDefault !== undefined) {
-                    amount.value = String(typeDefault);
+                const amountInput = document.createElement('input');
+                amountInput.type = 'number';
+                amountInput.step = 'any';
+                amountInput.placeholder = units.length > 0 ? 'amount' : 'number';
+                if (storedEntry.amount !== undefined) {
+                    amountInput.value = storedEntry.amount;
                 }
+
+                if (!state.factValues[docName][name] || typeof state.factValues[docName][name] !== 'object') {
+                    state.factValues[docName][name] = { amount: storedEntry.amount || '', unit: storedEntry.unit || '' };
+                }
+
+                amountInput.addEventListener('input', function () {
+                    if (!state.factValues[docName][name] || typeof state.factValues[docName][name] !== 'object') {
+                        state.factValues[docName][name] = { amount: '', unit: '' };
+                    }
+                    state.factValues[docName][name].amount = this.value;
+                });
+                inputGroup.appendChild(amountInput);
+
+                if (units.length > 0) {
+                    const unitSelect = document.createElement('select');
+                    const emptyOption = document.createElement('option');
+                    emptyOption.value = '';
+                    emptyOption.textContent = '';
+                    unitSelect.appendChild(emptyOption);
+                    for (const unitDefinition of units) {
+                        const option = document.createElement('option');
+                        option.value = unitDefinition.name;
+                        option.textContent = unitDefinition.name;
+                        unitSelect.appendChild(option);
+                    }
+                    if (storedEntry.unit) {
+                        unitSelect.value = storedEntry.unit;
+                    }
+                    unitSelect.addEventListener('change', function () {
+                        state.factValues[docName][name].unit = this.value;
+                    });
+                    inputGroup.appendChild(unitSelect);
+                }
+
             } else if (kind === 'Ratio') {
-                const input = createEl('input', { type: 'number', step: 'any', placeholder: 'e.g. 10' });
-                input.dataset.factName = name;
-                input.dataset.factKind = 'ratioAmount';
-                inputWrap.appendChild(input);
+                const units = (spec && Array.isArray(spec.units)) ? spec.units : [];
+                const storedEntry = (typeof currentValue === 'object' && currentValue !== null) ? currentValue : {};
 
-                const unitSelect = createEl('select');
-                unitSelect.dataset.factName = name;
-                unitSelect.dataset.factKind = 'ratioUnit';
-                unitSelect.appendChild(createEl('option', { value: 'ratio', text: 'ratio' })); // raw 0..1
-                unitSelect.appendChild(createEl('option', { value: 'percent', text: '%' }));
-                unitSelect.appendChild(createEl('option', { value: 'permille', text: '%%' }));
-                inputWrap.appendChild(unitSelect);
-
-                if (typeDefault !== null && typeDefault !== undefined) {
-                    input.value = String(typeDefault);
-                    unitSelect.value = 'ratio';
+                const amountInput = document.createElement('input');
+                amountInput.type = 'number';
+                amountInput.step = 'any';
+                amountInput.placeholder = 'amount';
+                if (storedEntry.amount !== undefined) {
+                    amountInput.value = storedEntry.amount;
                 }
+
+                if (!state.factValues[docName][name] || typeof state.factValues[docName][name] !== 'object') {
+                    state.factValues[docName][name] = { amount: storedEntry.amount || '', unit: storedEntry.unit || 'ratio' };
+                }
+
+                amountInput.addEventListener('input', function () {
+                    if (!state.factValues[docName][name] || typeof state.factValues[docName][name] !== 'object') {
+                        state.factValues[docName][name] = { amount: '', unit: 'ratio' };
+                    }
+                    state.factValues[docName][name].amount = this.value;
+                });
+                inputGroup.appendChild(amountInput);
+
+                const unitSelect = document.createElement('select');
+                const ratioOption = document.createElement('option');
+                ratioOption.value = 'ratio';
+                ratioOption.textContent = 'ratio';
+                unitSelect.appendChild(ratioOption);
+                for (const unitDefinition of units) {
+                    const option = document.createElement('option');
+                    option.value = unitDefinition.name;
+                    option.textContent = unitDefinition.name === 'percent' ? '%' : unitDefinition.name;
+                    unitSelect.appendChild(option);
+                }
+                if (storedEntry.unit) {
+                    unitSelect.value = storedEntry.unit;
+                }
+                unitSelect.addEventListener('change', function () {
+                    state.factValues[docName][name].unit = this.value;
+                });
+                inputGroup.appendChild(unitSelect);
+
             } else if (kind === 'Date') {
-                const input = createEl('input', { type: 'text', placeholder: 'YYYY-MM-DD' });
-                input.dataset.factName = name;
-                if (typeDefault) input.value = String(typeDefault);
-                inputWrap.appendChild(input);
-            } else if (kind === 'Time') {
-                const input = createEl('input', { type: 'text', placeholder: 'HH:MM[:SS]' });
-                input.dataset.factName = name;
-                if (typeDefault) input.value = String(typeDefault);
-                inputWrap.appendChild(input);
-            } else if (kind === 'Duration') {
-                const input = createEl('input', { type: 'text', placeholder: 'e.g. 5 days' });
-                input.dataset.factName = name;
-                if (typeDefault && typeof typeDefault === 'object') {
-                    input.value = `${typeDefault.amount} ${typeDefault.unit}`;
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.placeholder = 'YYYY-MM-DD';
+                if (typeof currentValue === 'string') {
+                    input.value = currentValue;
                 }
-                inputWrap.appendChild(input);
+                input.addEventListener('input', function () {
+                    state.factValues[docName][name] = this.value;
+                });
+                inputGroup.appendChild(input);
+
+            } else if (kind === 'Time') {
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.placeholder = 'HH:MM[:SS]';
+                if (typeof currentValue === 'string') {
+                    input.value = currentValue;
+                }
+                input.addEventListener('input', function () {
+                    state.factValues[docName][name] = this.value;
+                });
+                inputGroup.appendChild(input);
+
+            } else if (kind === 'Duration') {
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.placeholder = 'e.g. 5 days';
+                if (typeof currentValue === 'string') {
+                    input.value = currentValue;
+                }
+                input.addEventListener('input', function () {
+                    state.factValues[docName][name] = this.value;
+                });
+                inputGroup.appendChild(input);
+
             } else {
-                const input = createEl('input', { type: 'text', placeholder: 'value' });
-                input.dataset.factName = name;
-                inputWrap.appendChild(input);
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.placeholder = 'value';
+                if (typeof currentValue === 'string') {
+                    input.value = currentValue;
+                }
+                input.addEventListener('input', function () {
+                    state.factValues[docName][name] = this.value;
+                });
+                inputGroup.appendChild(input);
             }
 
-            row.appendChild(inputWrap);
+            row.appendChild(inputGroup);
 
-            if (helpText) {
-                row.appendChild(createEl('div', { className: 'fact-help', text: helpText }));
+            // Help text
+            const helpText = (spec && typeof spec.help === 'string' && spec.help.trim() !== '') ? spec.help.trim() : null;
+            if (helpText !== null) {
+                const helpElement = document.createElement('div');
+                helpElement.className = 'fact-help';
+                helpElement.textContent = helpText;
+                row.appendChild(helpElement);
             }
 
             return row;
         }
 
-        function collectFactsForDoc(docName) {
-            // Find the right card by result div id (stable).
-            const resultDiv = document.getElementById(`docResult:${docName}`);
-            const root = resultDiv ? resultDiv.closest('.doc-card') : null;
-            if (!root) return {};
+        // ---------------------------------------------------------------
+        // DOM: Build a results table from evaluation response
+        // ---------------------------------------------------------------
 
-            const values = {};
-            const cssEscape = (s) => (window.CSS && typeof CSS.escape === 'function')
-                ? CSS.escape(s)
-                : String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+        function buildResultsTable(response) {
+            const rules = (response && response.results) ? response.results : {};
+            const ruleNames = Object.keys(rules);
 
-            // Scale: needs two fields (amount + unit) when units exist.
-            const scaleAmountInputs = root.querySelectorAll('input[data-fact-kind="scaleAmount"]');
-            for (const amountInput of scaleAmountInputs) {
-                const factName = amountInput.dataset.factName;
-                const unitSelect = root.querySelector(`select[data-fact-name="${cssEscape(factName)}"][data-fact-kind="scaleUnit"]`);
-                const rawAmount = amountInput.value.trim();
-                const rawUnit = unitSelect ? unitSelect.value.trim() : '';
-                if (!rawAmount && !rawUnit) continue;
-                if (rawUnit) {
-                    values[factName] = `${rawAmount} ${rawUnit}`.trim();
-                } else if (rawAmount) {
-                    values[factName] = Number(rawAmount);
-                }
-            }
+            if (ruleNames.length === 0) return null;
 
-            // Ratio: amount + unit mode.
-            const ratioAmountInputs = root.querySelectorAll('input[data-fact-kind="ratioAmount"]');
-            for (const amountInput of ratioAmountInputs) {
-                const factName = amountInput.dataset.factName;
-                const unitSelect = root.querySelector(`select[data-fact-name="${cssEscape(factName)}"][data-fact-kind="ratioUnit"]`);
-                const rawAmount = amountInput.value.trim();
-                if (!rawAmount) continue;
-                const mode = unitSelect ? unitSelect.value : 'ratio';
-                if (mode === 'percent') values[factName] = `${rawAmount}%`;
-                else if (mode === 'permille') values[factName] = `${rawAmount}%%`;
-                else values[factName] = Number(rawAmount);
-            }
+            const table = document.createElement('table');
+            table.className = 'results-table';
 
-            // Everything else: single input/select.
-            const inputs = root.querySelectorAll('input[data-fact-name]:not([data-fact-kind]), select[data-fact-name]:not([data-fact-kind])');
-            for (const el of inputs) {
-                const factName = el.dataset.factName;
-                if (!factName) continue;
-                if (Object.prototype.hasOwnProperty.call(values, factName)) continue; // already set by scale/ratio logic
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            const headerRule = document.createElement('th');
+            headerRule.textContent = 'Rule';
+            const headerResult = document.createElement('th');
+            headerResult.textContent = 'Result';
+            const headerDetails = document.createElement('th');
+            headerDetails.textContent = 'Details';
+            headerRow.appendChild(headerRule);
+            headerRow.appendChild(headerResult);
+            headerRow.appendChild(headerDetails);
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
 
-                if (el.tagName === 'INPUT' && el.type === 'checkbox') {
-                    values[factName] = !!el.checked;
-                    continue;
-                }
+            const tbody = document.createElement('tbody');
 
-                const v = (el.value ?? '').toString().trim();
-                if (!v) continue;
+            for (const ruleName of ruleNames) {
+                const ruleData = rules[ruleName];
+                const resultData = ruleData.result;
 
-                if (el.tagName === 'INPUT' && el.type === 'number') {
-                    values[factName] = Number(v);
+                const tableRow = document.createElement('tr');
+
+                const nameCell = document.createElement('td');
+                nameCell.className = 'rule-name';
+                nameCell.textContent = ruleName;
+                tableRow.appendChild(nameCell);
+
+                const valueCell = document.createElement('td');
+                const detailsCell = document.createElement('td');
+
+                const isVeto = resultData && Object.prototype.hasOwnProperty.call(resultData, 'veto');
+                const isValue = resultData && Object.prototype.hasOwnProperty.call(resultData, 'value');
+
+                if (isVeto) {
+                    valueCell.className = 'veto';
+                    valueCell.textContent = 'Vetoed';
+                    detailsCell.className = 'veto';
+                    detailsCell.textContent = resultData.veto || 'Vetoed';
+                } else if (isValue) {
+                    const literal = resultData.value;
+                    valueCell.className = 'value';
+                    valueCell.textContent = (literal && literal.display_value !== null && literal.display_value !== undefined)
+                        ? literal.display_value
+                        : JSON.stringify(literal);
+                    detailsCell.style.color = '#28a745';
+                    const typeKey = (literal && literal.value && typeof literal.value === 'object')
+                        ? Object.keys(literal.value)[0] || 'unknown'
+                        : 'unknown';
+                    detailsCell.textContent = 'Computed (' + typeKey + ')';
                 } else {
-                    values[factName] = v;
+                    valueCell.textContent = '-';
+                    detailsCell.textContent = 'No result';
+                }
+
+                tableRow.appendChild(valueCell);
+                tableRow.appendChild(detailsCell);
+                tbody.appendChild(tableRow);
+            }
+
+            table.appendChild(tbody);
+            return table;
+        }
+
+        // ---------------------------------------------------------------
+        // DOM: Build a doc card
+        // ---------------------------------------------------------------
+
+        function buildDocCard(docName) {
+            const schema = state.schemas[docName];
+            const facts = (schema && Array.isArray(schema.facts)) ? schema.facts : [];
+
+            const card = document.createElement('div');
+            card.className = 'doc-card';
+            card.dataset.docName = docName;
+
+            const heading = document.createElement('h3');
+            heading.textContent = 'doc ' + docName;
+            card.appendChild(heading);
+
+            const factsGrid = document.createElement('div');
+            factsGrid.className = 'facts-grid';
+            for (const fact of facts) {
+                factsGrid.appendChild(buildFactRow(docName, fact));
+            }
+            card.appendChild(factsGrid);
+
+            const actions = document.createElement('div');
+            actions.className = 'doc-actions';
+
+            const evaluateButton = document.createElement('button');
+            evaluateButton.textContent = 'Evaluate';
+            evaluateButton.addEventListener('click', function () {
+                evaluateDoc(docName);
+            });
+            actions.appendChild(evaluateButton);
+
+            const clearButton = document.createElement('button');
+            clearButton.className = 'secondary';
+            clearButton.textContent = 'Clear inputs';
+            clearButton.addEventListener('click', function () {
+                clearInputs(docName);
+            });
+            actions.appendChild(clearButton);
+
+            card.appendChild(actions);
+
+            const resultsContainer = document.createElement('div');
+            resultsContainer.className = 'results-container';
+            card.appendChild(resultsContainer);
+
+            return card;
+        }
+
+        // ---------------------------------------------------------------
+        // Schema diffing and DOM patching
+        // ---------------------------------------------------------------
+
+        function patchFactInputs(docName, card, oldFacts, newFacts) {
+            const factsGrid = card.querySelector('.facts-grid');
+            if (!factsGrid) return;
+
+            const oldByName = {};
+            for (const fact of oldFacts) {
+                oldByName[fact.name] = fact;
+            }
+
+            const newByName = {};
+            for (const fact of newFacts) {
+                newByName[fact.name] = fact;
+            }
+
+            // Remove facts that no longer exist
+            for (const oldName of Object.keys(oldByName)) {
+                if (!newByName[oldName]) {
+                    const existingRow = factsGrid.querySelector('[data-fact-name="' + CSS.escape(oldName) + '"]');
+                    if (existingRow) {
+                        factsGrid.removeChild(existingRow);
+                    }
+                    if (state.factValues[docName]) {
+                        delete state.factValues[docName][oldName];
+                    }
                 }
             }
 
-            return values;
-        }
+            // Add or update facts
+            for (const newFact of newFacts) {
+                const name = newFact.name;
+                const oldFact = oldByName[name];
+                const existingRow = factsGrid.querySelector('[data-fact-name="' + CSS.escape(name) + '"]');
 
-        function opIsVeto(op) {
-            return op && Object.prototype.hasOwnProperty.call(op, 'veto');
-        }
+                if (oldFact && existingRow) {
+                    const oldKind = specKind(oldFact.schemaType);
+                    const newKind = specKind(newFact.schemaType);
 
-        function opIsValue(op) {
-            return op && Object.prototype.hasOwnProperty.call(op, 'value');
-        }
+                    if (oldKind === newKind) {
+                        // Same type kind: keep the existing input and its state value
+                        continue;
+                    }
 
-        function literalPrimitiveType(lit) {
-            if (!lit || !lit.value || typeof lit.value !== 'object') return 'unknown';
-            const keys = Object.keys(lit.value);
-            return keys.length === 1 ? keys[0] : 'unknown';
-        }
-
-        function literalDisplayValue(lit) {
-            const t = literalPrimitiveType(lit);
-            const v = lit?.value?.[t];
-            if (t === 'scale' || t === 'ratio') {
-                if (Array.isArray(v) && v.length === 2) return `${v[0]} ${v[1]}`;
+                    // Different type kind: replace input, delete old state value
+                    if (state.factValues[docName]) {
+                        delete state.factValues[docName][name];
+                    }
+                    const newRow = buildFactRow(docName, newFact);
+                    factsGrid.replaceChild(newRow, existingRow);
+                } else if (!existingRow) {
+                    // New fact: add input
+                    const newRow = buildFactRow(docName, newFact);
+                    factsGrid.appendChild(newRow);
+                }
             }
-            if (t === 'boolean') return String(v);
-            if (t === 'number') return String(v);
-            if (t === 'text') return String(v);
-            if (t === 'date' || t === 'time') return String(v);
-            if (t === 'duration') return Array.isArray(v) ? v.join(' ') : String(v);
-            return JSON.stringify(lit);
+
+            // Reorder rows to match new schema order
+            for (const newFact of newFacts) {
+                const row = factsGrid.querySelector('[data-fact-name="' + CSS.escape(newFact.name) + '"]');
+                if (row) {
+                    factsGrid.appendChild(row);
+                }
+            }
         }
 
-        function renderEvaluationResult(result) {
-            const summaryDiv = document.getElementById('evalResultSummary');
-            const resultDiv = document.getElementById('evalResult');
+        function patchDocCards() {
+            const container = document.getElementById('docs');
+            const newDocs = state.docs;
 
-            summaryDiv.innerHTML = '';
-            resultDiv.className = '';
-            resultDiv.textContent = '';
+            // Build set of current card doc names
+            const existingCards = container.querySelectorAll('.doc-card[data-doc-name]');
+            const existingDocNames = new Set();
+            for (const card of existingCards) {
+                existingDocNames.add(card.dataset.docName);
+            }
 
-            if (!result || !result.success) {
-                resultDiv.className = 'result error';
-                resultDiv.textContent = '✗ Error: ' + (result?.error || 'Unknown error');
+            const newDocNames = new Set(newDocs);
+
+            // Remove cards for docs that no longer exist
+            for (const card of existingCards) {
+                const docName = card.dataset.docName;
+                if (!newDocNames.has(docName)) {
+                    container.removeChild(card);
+                    delete state.factValues[docName];
+                    delete state.evalResults[docName];
+                }
+            }
+
+            // Add or update cards for current docs
+            for (const docName of newDocs) {
+                const existingCard = container.querySelector('.doc-card[data-doc-name="' + CSS.escape(docName) + '"]');
+
+                if (existingCard) {
+                    // Doc exists: diff its facts
+                    const oldSchema = state.schemas[docName];
+                    const newSchema = fetchSchema(docName);
+                    if (newSchema) {
+                        const oldFacts = (oldSchema && Array.isArray(oldSchema.facts)) ? oldSchema.facts : [];
+                        const newFacts = Array.isArray(newSchema.facts) ? newSchema.facts : [];
+                        patchFactInputs(docName, existingCard, oldFacts, newFacts);
+                        state.schemas[docName] = newSchema;
+                    }
+
+                    // Clear stale results
+                    const resultsContainer = existingCard.querySelector('.results-container');
+                    if (resultsContainer) {
+                        resultsContainer.textContent = '';
+                    }
+                    delete state.evalResults[docName];
+                } else {
+                    // New doc: fetch schema and build card
+                    const newSchema = fetchSchema(docName);
+                    if (newSchema) {
+                        state.schemas[docName] = newSchema;
+                        const card = buildDocCard(docName);
+                        container.appendChild(card);
+                    }
+                }
+            }
+
+            // Reorder cards to match doc order
+            for (const docName of newDocs) {
+                const card = container.querySelector('.doc-card[data-doc-name="' + CSS.escape(docName) + '"]');
+                if (card) {
+                    container.appendChild(card);
+                }
+            }
+
+            // Show hint if no docs
+            let hintElement = container.querySelector('.no-docs-hint');
+            if (newDocs.length === 0) {
+                if (!hintElement) {
+                    hintElement = document.createElement('div');
+                    hintElement.className = 'hint no-docs-hint';
+                    hintElement.textContent = 'No documents loaded yet.';
+                    container.appendChild(hintElement);
+                }
+            } else if (hintElement) {
+                container.removeChild(hintElement);
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Engine interaction
+        // ---------------------------------------------------------------
+
+        function fetchSchema(docName) {
+            if (!engine) return null;
+            let response;
+            try {
+                response = JSON.parse(engine.getRequiredFacts(docName, '[]'));
+            } catch (parseError) {
+                return null;
+            }
+            if (!response || !response.success || !response.doc) return null;
+            return response.doc;
+        }
+
+        function updateDiagnostics() {
+            if (!monacoEditor) return;
+            const model = monacoEditor.getModel();
+            if (!model) return;
+            const code = monacoEditor.getValue();
+            try {
+                const diagEngine = new WasmEngine();
+                const raw = diagEngine.getDiagnostics(code, 'wasm.lemma');
+                const list = JSON.parse(raw);
+                const markers = Array.isArray(list) ? list.map(function (d) {
+                    return {
+                        severity: monaco.MarkerSeverity.Error,
+                        message: d.message || 'Error',
+                        startLineNumber: d.startLine || 1,
+                        startColumn: d.startColumn || 1,
+                        endLineNumber: d.endLine || 1,
+                        endColumn: d.endColumn || 1,
+                    };
+                }) : [];
+                monaco.editor.setModelMarkers(model, 'lemma', markers);
+            } catch (e) {
+                monaco.editor.setModelMarkers(model, 'lemma', []);
+            }
+        }
+
+        function loadCode() {
+            if (!monacoEditor) return;
+
+            const code = monacoEditor.getValue();
+
+            updateDiagnostics();
+
+            // Create a fresh engine for each load
+            engine = new WasmEngine();
+
+            let addResult;
+            try {
+                addResult = JSON.parse(engine.addLemmaCode(code, 'wasm.lemma'));
+            } catch (parseError) {
+                setStatus('err', 'Exception while loading', parseError.message || String(parseError));
                 return;
             }
 
-            // Create summary table
-            let summaryHTML = '<table class="summary-table">';
-            summaryHTML += '<thead><tr><th>Rule</th><th>Result</th><th>Details</th></tr></thead>';
-            summaryHTML += '<tbody>';
-
-            const rules = result.response?.results || {};
-            for (const [ruleName, ruleData] of Object.entries(rules)) {
-                summaryHTML += '<tr>';
-                summaryHTML += `<td class="rule-name">${ruleName}</td>`;
-
-                if (opIsVeto(ruleData.result)) {
-                    summaryHTML += `<td class="veto">Vetoed</td>`;
-                    summaryHTML += `<td class="veto">${ruleData.result.veto || 'Vetoed'}</td>`;
-                } else if (opIsValue(ruleData.result)) {
-                    const lit = ruleData.result.value;
-                    const t = literalPrimitiveType(lit);
-                    summaryHTML += `<td class="value">${literalDisplayValue(lit)}</td>`;
-                    summaryHTML += `<td style="color: #28a745">✓ Computed (${t})</td>`;
-                } else {
-                    summaryHTML += `<td class="missing">-</td>`;
-                    summaryHTML += `<td class="missing">No result</td>`;
-                }
-
-                summaryHTML += '</tr>';
+            if (!addResult || !addResult.success) {
+                setStatus('err', 'Error while loading', addResult && addResult.error ? addResult.error : 'Unknown error');
+                // Clear docs on compile error
+                state.docs = [];
+                patchDocCards();
+                return;
             }
 
-            summaryHTML += '</tbody></table>';
-            summaryDiv.innerHTML = summaryHTML;
+            setStatus('ok', 'Loaded', 'Documents compiled successfully.');
 
-            resultDiv.className = 'result success';
-            resultDiv.textContent = '✓ Full Response (JSON):\n\n' + JSON.stringify(result, null, 2);
+            // Fetch new doc list
+            let listResult;
+            try {
+                listResult = JSON.parse(engine.listDocuments());
+            } catch (parseError) {
+                setStatus('err', 'Exception listing documents', parseError.message || String(parseError));
+                return;
+            }
+
+            if (!listResult || !listResult.success) {
+                state.docs = [];
+                patchDocCards();
+                return;
+            }
+
+            const newDocs = Array.isArray(listResult.documents) ? listResult.documents.slice().sort() : [];
+
+            // Clean up state for removed docs
+            for (const oldDocName of state.docs) {
+                if (newDocs.indexOf(oldDocName) === -1) {
+                    delete state.schemas[oldDocName];
+                    delete state.factValues[oldDocName];
+                    delete state.evalResults[oldDocName];
+                }
+            }
+
+            state.docs = newDocs;
+            patchDocCards();
         }
+
+        function scheduleLoad(immediate) {
+            if (!engine || !editorReady) return;
+            if (loadTimer !== null) {
+                clearTimeout(loadTimer);
+                loadTimer = null;
+            }
+            var delay = immediate ? 0 : 300;
+            loadTimer = setTimeout(function () {
+                loadTimer = null;
+                loadCode();
+            }, delay);
+        }
+
+        // ---------------------------------------------------------------
+        // Evaluate and clear
+        // ---------------------------------------------------------------
 
         function evaluateDoc(docName) {
-            const facts = collectFactsForDoc(docName);
-            const resultEl = document.getElementById(`docResult:${docName}`);
-            if (resultEl) {
-                resultEl.className = 'result';
-                resultEl.textContent = 'Evaluating…';
+            // Ensure the engine has the latest code (state survives reload)
+            if (loadTimer !== null) {
+                clearTimeout(loadTimer);
+                loadTimer = null;
+            }
+            loadCode();
+
+            if (!engine) return;
+
+            const factsJson = JSON.stringify(serializeFactValues(docName));
+
+            let evalResult;
+            try {
+                evalResult = JSON.parse(engine.evaluate(docName, factsJson));
+            } catch (parseError) {
+                state.evalResults[docName] = { success: false, error: parseError.message || String(parseError) };
+                renderResultsForDoc(docName);
+                return;
             }
 
-            try {
-                const result = safeJsonParse(engine.evaluate(docName, JSON.stringify(facts)));
-                if (!result) throw new Error('Failed to parse evaluation response');
+            state.evalResults[docName] = evalResult;
+            renderResultsForDoc(docName);
+        }
 
-                if (resultEl) {
-                    if (result.success) {
-                        resultEl.className = 'result success';
-                        resultEl.textContent = `✓ Evaluated '${docName}' with facts:\n${JSON.stringify(facts, null, 2)}`;
-                    } else {
-                        resultEl.className = 'result error';
-                        resultEl.textContent = `✗ ${result.error || 'Error'}`;
-                    }
-                }
+        function renderResultsForDoc(docName) {
+            const container = document.getElementById('docs');
+            const card = container.querySelector('.doc-card[data-doc-name="' + CSS.escape(docName) + '"]');
+            if (!card) return;
 
-                renderEvaluationResult(result);
-            } catch (error) {
-                if (resultEl) {
-                    resultEl.className = 'result error';
-                    resultEl.textContent = `✗ Exception: ${error?.message || String(error)}`;
-                }
-                renderEvaluationResult({ success: false, error: error?.message || String(error) });
+            const resultsContainer = card.querySelector('.results-container');
+            if (!resultsContainer) return;
+
+            resultsContainer.textContent = '';
+
+            const evalResult = state.evalResults[docName];
+            if (!evalResult) return;
+
+            if (!evalResult.success) {
+                const errorMessage = document.createElement('div');
+                errorMessage.className = 'result-message error';
+                errorMessage.textContent = evalResult.error || 'Unknown error';
+                resultsContainer.appendChild(errorMessage);
+                return;
+            }
+
+            const response = evalResult.response;
+            if (!response) return;
+
+            const table = buildResultsTable(response);
+            if (table) {
+                resultsContainer.appendChild(table);
             }
         }
 
-        // Initialize on page load
+        function clearInputs(docName) {
+            state.factValues[docName] = {};
+            delete state.evalResults[docName];
+
+            // Re-render the fact inputs from schema with empty state
+            const container = document.getElementById('docs');
+            const card = container.querySelector('.doc-card[data-doc-name="' + CSS.escape(docName) + '"]');
+            if (!card) return;
+
+            const factsGrid = card.querySelector('.facts-grid');
+            if (!factsGrid) return;
+
+            const schema = state.schemas[docName];
+            const facts = (schema && Array.isArray(schema.facts)) ? schema.facts : [];
+
+            factsGrid.textContent = '';
+            for (const fact of facts) {
+                factsGrid.appendChild(buildFactRow(docName, fact));
+            }
+
+            const resultsContainer = card.querySelector('.results-container');
+            if (resultsContainer) {
+                resultsContainer.textContent = '';
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Initialization
+        // ---------------------------------------------------------------
+
+        require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+
+        require(['vs/editor/editor.main'], function () {
+            registerLemmaLanguage(monaco);
+
+            monacoEditor = monaco.editor.create(document.getElementById('editor'), {
+                value: [
+                    'doc pricing',
+                    '',
+                    'type money = scale',
+                    '  -> unit eur 1',
+                    '  -> unit usd 1.19',
+                    '',
+                    'fact quantity = 10',
+                    'fact is_member = false',
+                    'fact price = [money]',
+                    '',
+                    'rule discount = 0%',
+                    '  unless quantity >= 10 then 10%',
+                    '  unless quantity >= 50 then 20%',
+                    '  unless is_member then 15%',
+                    '',
+                    'rule total = price - discount?',
+                    '  unless price > 100 usd then veto "This price is too high."',
+                ].join('\n'),
+                language: 'lemma',
+                theme: 'vs',
+                automaticLayout: true,
+                minimap: { enabled: false },
+                scrollBeyondLastLine: false,
+            });
+
+            monacoEditor.onDidChangeModelContent(function () {
+                scheduleLoad(false);
+            });
+
+            editorReady = true;
+            scheduleLoad(true);
+        });
+
+        async function initializeWasm() {
+            try {
+                await init();
+                engine = new WasmEngine();
+                setStatus('ok', 'WASM ready', 'Auto-loading Lemma code');
+                scheduleLoad(true);
+            } catch (error) {
+                setStatus('err', 'Failed to load WASM', error.message || String(error));
+            }
+        }
+
         initializeWasm();
     </script>
 </body>

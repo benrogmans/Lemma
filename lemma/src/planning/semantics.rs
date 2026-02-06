@@ -1406,10 +1406,24 @@ impl LemmaType {
 }
 
 /// Literal value with type. The single value type in semantics.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
 pub struct LiteralValue {
     pub value: ValueKind,
     pub lemma_type: LemmaType,
+}
+
+impl Serialize for LiteralValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("LiteralValue", 3)?;
+        state.serialize_field("value", &self.value)?;
+        state.serialize_field("lemma_type", &self.lemma_type)?;
+        state.serialize_field("display_value", &self.display_value())?;
+        state.end()
+    }
 }
 
 impl LiteralValue {
@@ -1807,7 +1821,23 @@ impl fmt::Display for LemmaType {
 
 impl fmt::Display for LiteralValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.value)
+        match &self.value {
+            ValueKind::Ratio(r, Some(unit_name)) => {
+                if let TypeSpecification::Ratio { units, .. } = &self.lemma_type.specifications {
+                    if let Ok(unit) = units.get(unit_name) {
+                        let display_value = (*r * unit.value).normalize();
+                        let s = if display_value.fract().is_zero() {
+                            display_value.trunc().to_string()
+                        } else {
+                            display_value.to_string()
+                        };
+                        return write!(f, "{} {}", s, unit_name);
+                    }
+                }
+                write!(f, "{}", self.value)
+            }
+            _ => write!(f, "{}", self.value),
+        }
     }
 }
 
@@ -1937,12 +1967,12 @@ mod tests {
         assert_eq!(LiteralValue::from_bool(true).display_value(), "true");
         assert_eq!(LiteralValue::from_bool(false).display_value(), "false");
 
-        // 0.10 ratio with "percent" unit displays as value + unit (no special %)
+        // 0.10 ratio with "percent" unit displays as 10 percent (unit conversion applied)
         let ten_percent_ratio = LiteralValue::ratio(
             Decimal::from_str("0.10").unwrap(),
             Some("percent".to_string()),
         );
-        assert_eq!(ten_percent_ratio.display_value(), "0.1 percent");
+        assert_eq!(ten_percent_ratio.display_value(), "10 percent");
 
         let time = TimeValue {
             hour: 14,
