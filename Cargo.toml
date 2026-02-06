@@ -2,10 +2,10 @@
 resolver = "3"
 members = [
     "cli",
-    "lemma",
-    "lemma-lsp",
+    "engine",
+    "engine/lemma-lsp",
 ]
-exclude = ["lemma/fuzz"]
+exclude = ["engine/fuzz"]
 
 [workspace.package]
 version = "0.7.3"

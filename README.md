@@ -1,6 +1,6 @@
 # Lemma
 
-[![CI](https://github.com/benrogmans/lemma/workflows/CI/badge.svg)](https://github.com/benrogmans/lemma/actions/workflows/ci.yml)
+[![CI](https://github.com/benrogmans/engine/workflows/CI/badge.svg)](https://github.com/benrogmans/engine/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/lemma-engine.svg)](https://crates.io/crates/lemma-engine)
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -331,7 +331,6 @@ Lemma is still in an early stage of development and is **not yet recommended for
 ## Project structure overview
 
 ```
-lemma/
 ├── cli/                    # CLI application (includes HTTP, MCP, interactive modes)
 │   ├── src/
 │   │   ├── main.rs         # CLI commands
@@ -341,14 +340,14 @@ lemma/
 │   │   └── formatter.rs
 │   └── tests/
 │       └── cli_integration_test.rs
-├── lemma/                  # Core engine library
+├── engine/                 # Core engine library
 │   ├── src/
 │   │   ├── parser/         # Grammar and parsing logic
 │   │   ├── evaluator/      # Evaluation pipeline
 │   │   ├── serializers/    # Output serializers (JSON, etc.)
 │   │   └── ...             # Engine modules (analysis, validator, wasm, tests)
 │   └── tests/              # Engine integration tests
-├── documentation/                   # Documentation & examples
+├── documentation/          # Documentation & examples
 │   ├── examples/           # Example .lemma files
 │   └── *.md                # Guides, reference, roadmap, etc.
 └── README.md               # This file

@@ -11,7 +11,7 @@ To test the syntax highlighting directly in Cursor (or VS Code):
 1. Open Cursor/VS Code
 2. Press `F1` (or `Cmd+Shift+P` on Mac, `Ctrl+Shift+P` on Windows/Linux)
 3. Type "Extensions: Install from VSIX..." or "Developer: Install Extension from Location..."
-4. Navigate to this folder: `lemma/syntax`
+4. Navigate to this folder: `engine/syntax`
 5. Select the folder
 6. Reload the window if prompted
 7. Open any `.lemma` file to see syntax highlighting
@@ -26,14 +26,14 @@ To test the syntax highlighting directly in Cursor (or VS Code):
 2. Create a symlink:
    ```bash
    # From the repo root
-   ln -s $(pwd)/lemma/syntax ~/.cursor/extensions/lemma-language
+   ln -s $(pwd)/engine/syntax ~/.cursor/extensions/lemma-language
    ```
 
 3. Reload Cursor/VS Code
 
 ### Method 3: Development Mode (Recommended for Testing)
 
-1. Open this folder in Cursor/VS Code: `lemma/syntax`
+1. Open this folder in Cursor/VS Code: `engine/syntax`
 2. Press `F5` to launch a new Extension Development Host window
 3. In the new window, open any `.lemma` file to test
 

@@ -404,7 +404,7 @@ The inversion response contains:
 - **Shape**: Symbolic representation of all valid solutions
 - **Free variables**: Facts that can vary while still satisfying the target
 
-See the [engine README](../lemma/README.md#inverse-reasoning) for detailed API documentation.
+See the [engine README](../engine/README.md#inverse-reasoning) for detailed API documentation.
 
 ## Complete Examples
 

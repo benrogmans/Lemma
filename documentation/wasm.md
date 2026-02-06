@@ -98,7 +98,7 @@ cd lemma
 node wasm/build.js
 ```
 
-This generates JavaScript bindings in `lemma/pkg/` with a package.json created from Cargo.toml metadata.
+This generates JavaScript bindings in `engine/pkg/` with a package.json created from Cargo.toml metadata.
 
-For comprehensive JavaScript API documentation and examples, see [lemma/wasm/README.md](../lemma/wasm/README.md).
+For comprehensive JavaScript API documentation and examples, see [engine/wasm/README.md](../engine/wasm/README.md).
 

@@ -62,39 +62,39 @@ Lemma aims to be reliable enough for critical domains (e.g. aerospace, global re
 
 High-level flow:
 
-1. **Parse** (`lemma/src/parsing/`)  
+1. **Parse** (`engine/src/parsing/`)  
    - Grammar: `lemma/src/parsing/lemma.pest` (Pest).  
    - Produces AST; conversion to **LemmaDoc** (document AST) happens in the same parse pipeline (see `parse::parse_doc` and `parsing/ast.rs`).
 
-2. **AST** (`lemma/src/parsing/ast.rs`)  
+2. **AST** (`engine/src/parsing/ast.rs`)  
    - **LemmaDoc**, **LemmaRule**, **LemmaFact**, **Expression**, **ExpressionKind**, **FactValue**, **TypeSpecification**, etc.  
    - No evaluation here; this is the resolved document structure used by planning.
 
-3. **Planning** (`lemma/src/planning/`)  
+3. **Planning** (`engine/src/planning/`)  
    - **Validation** (`validation.rs`): type/structure checks.  
    - **Graph** (`graph.rs`): builds dependency graph, resolves types and references, converts fact/rule references to **FactPath** / **RulePath**. Returns **Vec&lt;LemmaError&gt;** on failure.  
    - **Execution plan** (`execution_plan.rs`): builds **ExecutionPlan** from graph (topologically sorted rules, fact schema, fact values, sources).  
    - **Types** (`types.rs`): type registry and scale/unit resolution.  
    - Entry: `plan::plan(main_doc, all_docs, sources)` → `Result<ExecutionPlan, Vec<LemmaError>>`.
 
-4. **Evaluation** (`lemma/src/evaluation/`)  
+4. **Evaluation** (`engine/src/evaluation/`)  
    - **Expression** (`expression.rs`): evaluates expressions against an **EvaluationContext**; produces **OperationResult** (Value or Veto).  
    - **Operations** (`operations.rs`): **OperationResult**, **OperationKind**, proof-related types.  
    - **Proof** (`proof.rs`): proof trees for explanations.  
    - **Response** (`response.rs`): **Response**, **RuleResult**, **Facts**.  
    - Only runs after a successful plan; any “impossible” state must panic/unreachable.
 
-5. **Computation** (`lemma/src/computation/`)  
+5. **Computation** (`engine/src/computation/`)  
    - **Arithmetic** (`arithmetic.rs`): division by zero (and similar) returns **Veto**, not panic.  
    - **Comparison**, **datetime**, **units**: used by evaluation; must preserve “no silent defaults” and use Veto where specified.  
    - Scale comparison and conversion use **same scale family** (via `TypeExtends::Custom`’s `family` field and `LemmaType::same_scale_family`), not exact type equality, so types in the same extension chain (e.g. `type x = scale ...` and `type x2 = x ...`) are compatible.
 
-6. **Engine** (`lemma/src/engine.rs`)  
+6. **Engine** (`engine/src/engine.rs`)  
    - **Engine** holds documents, sources, and **execution plans**.  
    - `add_lemma_code` → parse then `plan(...)`; on success, stores execution plan.  
    - `evaluate` runs the plan; no document parsing during evaluate.
 
-7. **Errors** (`lemma/src/error.rs`)  
+7. **Errors** (`engine/src/error.rs`)  
    - **LemmaError**: Parse, Semantic, Inversion, Runtime, Engine, MissingFact, CircularDependency, ResourceLimitExceeded, MultipleErrors.  
    - **LemmaResult&lt;T&gt;** = `Result<T, LemmaError>`.
 
@@ -255,7 +255,7 @@ See **documentation/reference.md** and **documentation/index.md** for full synta
 ## 6. Testing and development
 
 - **Use TDD.** Failing tests define missing or broken behaviour; do not hide or remove them to make the suite pass.
-- **Unit tests** live in the same module (to allow testing private functions); **integration tests** in `lemma/tests/`.
+- **Unit tests** live in the same module (to allow testing private functions); **integration tests** in `engine/tests/`.
 - Run tests with **cargo nextest**, not `cargo test`.
 - When adding features, add tests that lock in the intended behaviour (including Veto propagation and error cases).
 

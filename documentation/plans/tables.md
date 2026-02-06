@@ -1,6 +1,6 @@
 # Tables
 
-Programmers are familiar with lists, objects, arrays, maps, collections, but business people go hard on tables.
+Programmers are familiar with lists, objects, arrays, maps, collections, but business people vibe on tables.
 
 ```lemma
 
