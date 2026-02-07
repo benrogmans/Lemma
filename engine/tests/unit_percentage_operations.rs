@@ -1,4 +1,6 @@
 use lemma::{Engine, LemmaResult};
+mod common;
+use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -8,7 +10,8 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
     // This is shown in the README as a feature - it must work
-    engine.add_lemma_code(
+    add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc pricing
 
@@ -72,7 +75,8 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
 fn test_unit_add_percentage() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
-    engine.add_lemma_code(
+    add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc tax_calculation
 
@@ -119,7 +123,8 @@ fn test_unit_add_percentage() -> LemmaResult<()> {
 fn test_various_unit_percentage_operations() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
-    engine.add_lemma_code(
+    add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc unit_percentage_ops
 
@@ -215,7 +220,8 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
 fn test_complex_discount_scenario() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
-    engine.add_lemma_code(
+    add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc complex_pricing
 
@@ -292,7 +298,8 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
 fn test_percentage_arithmetic() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
-    engine.add_lemma_code(
+    add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc percentage_ops
 
@@ -432,7 +439,8 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
 fn test_averaging_percentages() -> LemmaResult<()> {
     let mut engine = Engine::new();
 
-    engine.add_lemma_code(
+    add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc avg_percentages
 

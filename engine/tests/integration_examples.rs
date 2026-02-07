@@ -3,6 +3,8 @@
 //! Ensures all example files in cli/tests/integrations/examples/ are valid and can be evaluated
 
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -28,8 +30,7 @@ fn load_examples() -> Engine {
     for path in examples {
         let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("Failed to read {}: {}", path, e));
-        engine
-            .add_lemma_code(&content, path)
+        add_lemma_code_blocking(&mut engine, &content, path)
             .unwrap_or_else(|e| panic!("Failed to parse {}: {}", path, e));
     }
 

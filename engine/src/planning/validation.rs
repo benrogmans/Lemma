@@ -40,11 +40,8 @@ pub fn validate_types(
                 let src = &fact.source_location;
                 errors.push(LemmaError::engine(
                     "TypeDeclaration base cannot be empty",
-                    src.span.clone(),
-                    &src.attribute,
+                    src.clone(),
                     Arc::from(""),
-                    &src.doc_name,
-                    1,
                     None::<String>,
                 ));
             }
@@ -92,11 +89,8 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -110,11 +104,8 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -128,11 +119,8 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -153,11 +141,8 @@ pub fn validate_type_specifications(
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -168,11 +153,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} {} is less than minimum {}",
                                 type_name, def_value, def_unit, min
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -184,11 +166,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} {} is greater than maximum {}",
                                 type_name, def_value, def_unit, max
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -202,11 +181,8 @@ pub fn validate_type_specifications(
                         "Type '{}' is a scale type but has no units. Scale types must define at least one unit (e.g. -> unit eur 1).",
                         type_name
                     ),
-                    source.span.clone(),
-                    &source.attribute,
+                    source.clone(),
                     Arc::from(""),
-                    &source.doc_name,
-                    1,
                     None::<String>,
                 ));
             }
@@ -222,11 +198,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -239,11 +212,8 @@ pub fn validate_type_specifications(
                     {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     } else {
@@ -254,11 +224,8 @@ pub fn validate_type_specifications(
                     if unit.value <= Decimal::ZERO {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -281,11 +248,8 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -299,11 +263,8 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -317,11 +278,8 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -336,11 +294,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -352,11 +307,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -381,11 +333,8 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -399,11 +348,8 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -418,11 +364,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -434,11 +377,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -458,11 +398,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -475,11 +412,8 @@ pub fn validate_type_specifications(
                     {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     } else {
@@ -490,11 +424,8 @@ pub fn validate_type_specifications(
                     if unit.value <= Decimal::ZERO {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -515,11 +446,8 @@ pub fn validate_type_specifications(
                 if min > max {
                     errors.push(LemmaError::engine(
                         format!("Type '{}' has invalid range: minimum length {} is greater than maximum length {}", type_name, min, max),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -531,11 +459,8 @@ pub fn validate_type_specifications(
                     if *len < *min {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has inconsistent length constraint: length {} is less than minimum {}", type_name, len, min),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -544,11 +469,8 @@ pub fn validate_type_specifications(
                     if *len > *max {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has inconsistent length constraint: length {} is greater than maximum {}", type_name, len, max),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -566,11 +488,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value length {} is less than minimum {}",
                                 type_name, def_len, min
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -582,11 +501,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value length {} is greater than maximum {}",
                                 type_name, def_len, max
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -595,11 +511,8 @@ pub fn validate_type_specifications(
                     if def_len != *len {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' default value length {} does not match required length {}", type_name, def_len, len),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -610,11 +523,8 @@ pub fn validate_type_specifications(
                             "Type '{}' default value '{}' is not in allowed options: {:?}",
                             type_name, def, options
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -635,11 +545,8 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid date range: minimum {} is after maximum {}",
                             type_name, min, max
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -654,11 +561,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default date {} is before minimum {}",
                                 type_name, def, min
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -670,11 +574,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default date {} is after maximum {}",
                                 type_name, def, max
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -696,11 +597,8 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid time range: minimum {} is after maximum {}",
                             type_name, min, max
                         ),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -715,11 +613,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default time {} is before minimum {}",
                                 type_name, def, min
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -731,11 +626,8 @@ pub fn validate_type_specifications(
                                 "Type '{}' default time {} is after maximum {}",
                                 type_name, def, max
                             ),
-                            source.span.clone(),
-                            &source.attribute,
+                            source.clone(),
                             Arc::from(""),
-                            &source.doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -941,29 +833,17 @@ fn expected_constraint_name(c: ExpectedRuleTypeConstraint) -> &'static str {
     }
 }
 
-fn doc_start_line_for(doc_name: &str, all_docs: &[LemmaDoc]) -> usize {
-    all_docs
-        .iter()
-        .find(|d| d.name == doc_name)
-        .map(|d| d.start_line)
-        .unwrap_or(1)
-}
-
 fn push_document_interface_error(
     errors: &mut Vec<LemmaError>,
     source: &Source,
     message: impl Into<String>,
     sources: &HashMap<String, String>,
-    all_docs: &[LemmaDoc],
 ) {
     let source_text = sources.get(&source.attribute).cloned().unwrap_or_default();
     errors.push(LemmaError::engine(
         message.into(),
-        source.span.clone(),
-        source.attribute.clone(),
+        source.clone(),
         Arc::from(source_text),
-        source.doc_name.clone(),
-        doc_start_line_for(&source.doc_name, all_docs),
         None::<String>,
     ));
 }
@@ -1004,7 +884,6 @@ pub fn validate_document_interfaces(
                         doc_name, fact_path, required_rule
                     ),
                     sources,
-                    all_docs,
                 );
                 continue;
             }
@@ -1056,7 +935,6 @@ pub fn validate_document_interfaces(
                                     expected_constraint_name(constraint),
                                 ),
                                 sources,
-                                all_docs,
                             );
                         }
                     }

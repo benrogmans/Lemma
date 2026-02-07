@@ -1,4 +1,6 @@
 use lemma::{Engine, LiteralValue, Target};
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -13,9 +15,7 @@ fn test_recursive_rule_reference_expansion_enables_solving() {
     "#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test")
-        .expect("Failed to parse lemma code");
+    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse lemma code");
 
     // Invert: total = 122
     let result = engine.invert(

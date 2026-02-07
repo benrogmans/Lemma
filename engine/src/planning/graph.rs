@@ -33,7 +33,6 @@ pub(crate) struct Graph {
     rules: IndexMap<RulePath, RuleNode>,
     sources: HashMap<String, String>,
     execution_order: Vec<RulePath>,
-    all_docs: HashMap<String, LemmaDoc>,
     /// Resolved types per document (from TypeRegistry during build). Used for unit lookups
     /// (e.g. result type of "number in usd") without re-resolving.
     pub(crate) resolved_types: HashMap<String, ResolvedDocumentTypes>,
@@ -190,18 +189,6 @@ impl Graph {
         Arc::from(source_text.as_str())
     }
 
-    fn doc_start_line_for(&self, source: &Source) -> usize {
-        self.all_docs
-            .get(&source.doc_name)
-            .map(|d| d.start_line)
-            .unwrap_or_else(|| {
-                unreachable!(
-                    "BUG: missing document '{}' while computing error doc_start_line",
-                    source.doc_name
-                )
-            })
-    }
-
     fn topological_sort(&self) -> Result<Vec<RulePath>, Vec<LemmaError>> {
         let mut in_degree: HashMap<RulePath, usize> = HashMap::new();
         let mut dependents: HashMap<RulePath, Vec<RulePath>> = HashMap::new();
@@ -277,7 +264,6 @@ impl Graph {
                 ),
                 first_source.clone(),
                 self.source_text_for(first_source),
-                self.doc_start_line_for(first_source),
                 cycle,
                 None::<String>,
             )]);
@@ -316,12 +302,13 @@ impl Graph {
         all_docs: &[LemmaDoc],
         sources: HashMap<String, String>,
     ) -> Result<Graph, Vec<LemmaError>> {
-        // Create and populate TypeRegistry
+        // Create and populate TypeRegistry; collect all registration errors before returning.
         let mut type_registry = TypeRegistry::new();
+        let mut type_errors = Vec::new();
         for doc in all_docs {
             for type_def in &doc.types {
                 if let Err(e) = type_registry.register_type(&doc.name, type_def.clone()) {
-                    return Err(vec![e]);
+                    type_errors.push(e);
                 }
             }
         }
@@ -332,7 +319,7 @@ impl Graph {
             sources,
             all_docs: all_docs.iter().map(|doc| (doc.name.clone(), doc)).collect(),
             resolved_types: HashMap::new(),
-            errors: Vec::new(),
+            errors: type_errors,
         };
 
         // Pre-resolve named types for every document up-front.
@@ -371,9 +358,14 @@ impl Graph {
                 Err(e) => builder.errors.push(e),
             }
         }
-        if !builder.errors.is_empty() {
-            return Err(builder.errors);
-        }
+
+        // Do NOT return early here — continue with build_document even when
+        // type resolution produced errors.  build_document handles missing
+        // resolved types gracefully (push error & skip the affected fact)
+        // and this lets us collect *all* errors (doc references, unit
+        // lookups, cross-doc fact resolution, …) in a single pass rather
+        // than forcing the user to fix type errors before any other problems
+        // are reported.
 
         builder.build_document(main_doc, Vec::new(), HashMap::new(), &mut type_registry)?;
 
@@ -386,10 +378,6 @@ impl Graph {
             rules: builder.rules,
             sources: builder.sources,
             execution_order: Vec::new(),
-            all_docs: all_docs
-                .iter()
-                .map(|doc| (doc.name.clone(), doc.clone()))
-                .collect(),
             resolved_types: builder.resolved_types,
         };
 
@@ -471,26 +459,11 @@ impl<'a> GraphBuilder<'a> {
         Arc::from(source_text.as_str())
     }
 
-    fn doc_start_line_for(&self, source: &Source) -> usize {
-        self.all_docs
-            .get(&source.doc_name)
-            .map(|d| d.start_line)
-            .unwrap_or_else(|| {
-                unreachable!(
-                    "BUG: missing document '{}' while computing error doc_start_line",
-                    source.doc_name
-                )
-            })
-    }
-
     fn engine_error(&self, message: impl Into<String>, source: &Source) -> LemmaError {
         LemmaError::engine(
             message.into(),
-            source.span.clone(),
-            source.attribute.clone(),
+            source.clone(),
             self.source_text_for(source),
-            source.doc_name.clone(),
-            self.doc_start_line_for(source),
             None::<String>,
         )
     }
@@ -513,9 +486,13 @@ impl<'a> GraphBuilder<'a> {
             );
         };
 
-        // Get resolved types for the source document
-        // If 'from' is specified, resolve from that document; otherwise use context_doc
-        let source_doc = from.as_deref().unwrap_or(context_doc);
+        // Get resolved types for the source document.
+        // If 'from' is specified, resolve from that document; otherwise use context_doc.
+        // DocRef.name is already the clean name (@ stripped by parser).
+        let source_doc = from
+            .as_ref()
+            .map(|r| r.name.as_str())
+            .unwrap_or(context_doc);
 
         // Try to resolve as a primitive type first (number, boolean, etc.)
         let (base_lemma_type, extends) = if let Some(specs) = Graph::resolve_primitive_type(base) {
@@ -627,7 +604,7 @@ impl<'a> GraphBuilder<'a> {
 
                 match seg_fact {
                     Some(f) => match &f.value {
-                        ParsedFactValue::DocumentReference(next_doc) => next_doc.clone(),
+                        ParsedFactValue::DocumentReference(doc_ref) => doc_ref.name.clone(),
                         _ => {
                             return Err(vec![self.engine_error(
                                 format!(
@@ -859,13 +836,14 @@ impl<'a> GraphBuilder<'a> {
                 );
             }
             ParsedFactValue::DocumentReference(_) => {
-                // Use effective_doc_refs for the actual doc name (accounts for bound doc refs)
+                // Use effective_doc_refs for the actual doc name (accounts for bound doc refs).
+                // DocRef.name is already clean (@ stripped by parser).
                 let effective_doc_name = effective_doc_refs
                     .get(&fact.reference.fact)
                     .cloned()
                     .unwrap_or_else(|| {
-                        if let ParsedFactValue::DocumentReference(name) = &effective_value {
-                            name.clone()
+                        if let ParsedFactValue::DocumentReference(doc_ref) = &effective_value {
+                            doc_ref.name.clone()
                         } else {
                             unreachable!(
                                 "BUG: effective_value is DocumentReference but pattern didn't match"
@@ -913,13 +891,17 @@ impl<'a> GraphBuilder<'a> {
                     }
                 };
 
-            if let ParsedFactValue::DocumentReference(original_doc_name) = &fact_ref.value {
-                // Only use effective_doc_refs for the FIRST segment
-                // Subsequent segments use the actual document references from traversed documents
+            if let ParsedFactValue::DocumentReference(original_doc_ref) = &fact_ref.value {
+                // Only use effective_doc_refs for the FIRST segment.
+                // Subsequent segments use the actual document references from traversed documents.
+                // DocRef.name is already the clean name (@ stripped by parser).
                 let doc_name = if index == 0 {
-                    effective_doc_refs.get(segment).unwrap_or(original_doc_name)
+                    effective_doc_refs
+                        .get(segment)
+                        .map(|s| s.as_str())
+                        .unwrap_or(&original_doc_ref.name)
                 } else {
-                    original_doc_name
+                    &original_doc_ref.name
                 };
 
                 let next_doc = match self.all_docs.get(doc_name) {
@@ -934,7 +916,7 @@ impl<'a> GraphBuilder<'a> {
                 };
                 path_segments.push(PathSegment {
                     fact: segment.clone(),
-                    doc: doc_name.clone(),
+                    doc: doc_name.to_string(),
                 });
                 current_facts_map = next_doc
                     .facts
@@ -959,12 +941,13 @@ impl<'a> GraphBuilder<'a> {
         fact_bindings: FactBindings,
         type_registry: &mut TypeRegistry,
     ) -> Result<(), Vec<LemmaError>> {
-        // Step 1: Initial effective_doc_refs from this document's local facts
+        // Step 1: Initial effective_doc_refs from this document's local facts.
+        // DocRef.name is already the clean name (@ stripped by the parser).
         let mut effective_doc_refs: HashMap<String, String> = HashMap::new();
         for fact in doc.facts.iter() {
             if fact.reference.segments.is_empty() {
-                if let ParsedFactValue::DocumentReference(doc_name) = &fact.value {
-                    effective_doc_refs.insert(fact.reference.fact.clone(), doc_name.clone());
+                if let ParsedFactValue::DocumentReference(doc_ref) = &fact.value {
+                    effective_doc_refs.insert(fact.reference.fact.clone(), doc_ref.name.clone());
                 }
             }
         }
@@ -978,10 +961,11 @@ impl<'a> GraphBuilder<'a> {
                 if let ParsedFactValue::DocumentReference(_) = &fact.value {
                     let mut binding_key = current_segment_names.clone();
                     binding_key.push(fact.reference.fact.clone());
-                    if let Some((ParsedFactValue::DocumentReference(bound_doc), _)) =
+                    if let Some((ParsedFactValue::DocumentReference(bound_doc_ref), _)) =
                         fact_bindings.get(&binding_key)
                     {
-                        effective_doc_refs.insert(fact.reference.fact.clone(), bound_doc.clone());
+                        effective_doc_refs
+                            .insert(fact.reference.fact.clone(), bound_doc_ref.name.clone());
                     }
                 }
             }
@@ -1062,7 +1046,6 @@ impl<'a> GraphBuilder<'a> {
             }
             Err(e) => {
                 self.errors.push(e);
-                return Err(self.errors.clone());
             }
         }
 
@@ -1343,12 +1326,16 @@ impl<'a> GraphBuilder<'a> {
             ast::ExpressionKind::UnresolvedUnitLiteral(_number, unit_name) => {
                 let expr_source = expr.source_location.clone();
 
-                let document_types = self.resolved_types.get(&current_doc.name).unwrap_or_else(|| {
-                    unreachable!(
-                        "Internal error: resolved types not found for document '{}' - types should have been resolved before processing rules (even empty documents have resolved types with empty maps)",
-                        current_doc.name
-                    )
-                });
+                let Some(document_types) = self.resolved_types.get(&current_doc.name) else {
+                    self.errors.push(self.engine_error(
+                        format!(
+                            "Cannot resolve unit '{}': types were not resolved for document '{}'",
+                            unit_name, current_doc.name
+                        ),
+                        &expr_source,
+                    ));
+                    return None;
+                };
 
                 let lemma_type = match document_types.unit_index.get(unit_name) {
                     Some(lemma_type) => lemma_type.clone(),
@@ -1516,11 +1503,8 @@ impl<'a> GraphBuilder<'a> {
                             .unwrap_or(msg);
                         self.errors.push(LemmaError::semantic(
                             full_msg,
-                            expr.source_location.span.clone(),
-                            expr.source_location.attribute.clone(),
+                            expr.source_location.clone(),
                             self.source_text_for(&expr.source_location),
-                            expr.source_location.doc_name.clone(),
-                            self.doc_start_line_for(&expr.source_location),
                             None::<String>,
                         ));
                         return None;
@@ -1653,11 +1637,8 @@ fn compute_all_rule_types(
                             "Unless clause condition in rule '{}' must be boolean, got {:?}",
                             rule_path.rule, condition_type
                         ),
-                        condition_source.span.clone(),
-                        condition_source.attribute.clone(),
+                        condition_source.clone(),
                         graph.source_text_for(condition_source),
-                        condition_source.doc_name.clone(),
-                        graph.doc_start_line_for(condition_source),
                         None::<String>,
                     ));
                 }
@@ -1705,11 +1686,8 @@ fn compute_all_rule_types(
                             existing_type.name(),
                             branch_index,
                             result_type.name()),
-                            rule_source.span.clone(),
-                            rule_source.attribute.clone(),
+                            rule_source.clone(),
                             graph.source_text_for(rule_source),
-                            rule_source.doc_name.clone(),
-                            graph.doc_start_line_for(rule_source),
                             None::<String>,
                         ));
                     }
@@ -1753,11 +1731,8 @@ fn compute_all_rule_types(
                     default_type.name(),
                     branch_index,
                     result_type.name()),
-                    rule_source.span.clone(),
-                    rule_source.attribute.clone(),
+                    rule_source.clone(),
                     graph.source_text_for(rule_source),
-                    rule_source.doc_name.clone(),
-                    graph.doc_start_line_for(rule_source),
                     None::<String>,
                 ));
             }
@@ -1849,11 +1824,19 @@ fn compute_expression_type(
                             .and_then(|dt| dt.unit_index.get(unit_name).cloned())
                         {
                             Some(lemma_type) => lemma_type,
-                            None => unreachable!(
-                                "BUG: unit '{}' not in document '{}' unit_index; validate_unit_conversion_types should have rejected this",
-                                unit_name,
-                                doc_name
-                            ),
+                            None => {
+                                push_engine_error_at(
+                                    errors,
+                                    graph,
+                                    expr_source,
+                                    format!(
+                                        "Cannot resolve unit '{}' for document '{}' (types may not have been resolved)",
+                                        unit_name,
+                                        doc_name
+                                    ),
+                                );
+                                primitive_number().clone()
+                            }
                         }
                     } else {
                         source_type
@@ -1868,11 +1851,19 @@ fn compute_expression_type(
                             .and_then(|dt| dt.unit_index.get(unit_name).cloned())
                         {
                             Some(lemma_type) => lemma_type,
-                            None => unreachable!(
-                                "BUG: unit '{}' not in document '{}' unit_index; validate_unit_conversion_types should have rejected this",
-                                unit_name,
-                                doc_name
-                            ),
+                            None => {
+                                push_engine_error_at(
+                                    errors,
+                                    graph,
+                                    expr_source,
+                                    format!(
+                                        "Cannot resolve unit '{}' for document '{}' (types may not have been resolved)",
+                                        unit_name,
+                                        doc_name
+                                    ),
+                                );
+                                primitive_number().clone()
+                            }
                         }
                     } else {
                         source_type
@@ -1898,11 +1889,8 @@ fn push_engine_error_at(
 ) {
     errors.push(LemmaError::engine(
         message.into(),
-        source.span.clone(),
-        source.attribute.clone(),
+        source.clone(),
         graph.source_text_for(source),
-        source.doc_name.clone(),
-        graph.doc_start_line_for(source),
         None::<String>,
     ));
 }
@@ -2493,11 +2481,8 @@ fn compute_fact_type(
                         "Rule reference '{}' must use '?' (did you mean '{}?')",
                         fact_path, fact_path
                     ),
-                    fact_source.span.clone(),
-                    fact_source.attribute.clone(),
+                    fact_source.clone(),
                     graph.source_text_for(fact_source),
-                    fact_source.doc_name.clone(),
-                    graph.doc_start_line_for(fact_source),
                     None::<String>,
                 ));
             } else {
@@ -2505,11 +2490,8 @@ fn compute_fact_type(
                 // that doesn't exist. That's a semantic error.
                 errors.push(LemmaError::semantic(
                     format!("Unknown fact reference '{}'", fact_path),
-                    fact_source.span.clone(),
-                    fact_source.attribute.clone(),
+                    fact_source.clone(),
                     graph.source_text_for(fact_source),
-                    fact_source.doc_name.clone(),
-                    graph.doc_start_line_for(fact_source),
                     None::<String>,
                 ));
             }
@@ -2972,7 +2954,7 @@ mod tests {
                 segments: Vec::new(),
                 fact: "contract".to_string(),
             },
-            value: ParsedFactValue::DocumentReference("nonexistent".to_string()),
+            value: ParsedFactValue::DocumentReference(crate::DocRef::local("nonexistent")),
             source_location: test_source(),
         };
         doc = doc.add_fact(fact);
@@ -3121,5 +3103,93 @@ mod tests {
         assert!(errors
             .iter()
             .any(|e| e.to_string().contains("Fact 'nonexistent' not found")));
+    }
+
+    #[test]
+    fn test_type_registration_collects_multiple_errors() {
+        use crate::parsing::ast::TypeDef;
+
+        let type_source = Source::new(
+            "a.lemma",
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "doc_a",
+        );
+        let doc_a = create_test_doc("doc_a")
+            .with_attribute("a.lemma".to_string())
+            .add_type(TypeDef::Regular {
+                source_location: type_source.clone(),
+                name: "money".to_string(),
+                parent: "number".to_string(),
+                constraints: None,
+            })
+            .add_type(TypeDef::Regular {
+                source_location: type_source,
+                name: "money".to_string(),
+                parent: "number".to_string(),
+                constraints: None,
+            });
+
+        let type_source_b = Source::new(
+            "b.lemma",
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            "doc_b",
+        );
+        let doc_b = create_test_doc("doc_b")
+            .with_attribute("b.lemma".to_string())
+            .add_type(TypeDef::Regular {
+                source_location: type_source_b.clone(),
+                name: "length".to_string(),
+                parent: "number".to_string(),
+                constraints: None,
+            })
+            .add_type(TypeDef::Regular {
+                source_location: type_source_b,
+                name: "length".to_string(),
+                parent: "number".to_string(),
+                constraints: None,
+            });
+
+        let mut sources = HashMap::new();
+        sources.insert(
+            "a.lemma".to_string(),
+            "doc doc_a\ntype money = number\ntype money = number".to_string(),
+        );
+        sources.insert(
+            "b.lemma".to_string(),
+            "doc doc_b\ntype length = number\ntype length = number".to_string(),
+        );
+
+        let result = Graph::build(&doc_a, &[doc_a.clone(), doc_b.clone()], sources);
+        assert!(result.is_err(), "Should fail with duplicate type errors");
+        let errors = result.unwrap_err();
+        assert!(
+            errors.len() >= 2,
+            "Should collect duplicate type error from each document, got {}",
+            errors.len()
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.to_string().contains("Type 'money' is already defined")),
+            "Should report duplicate 'money' in doc_a: {:?}",
+            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.to_string().contains("Type 'length' is already defined")),
+            "Should report duplicate 'length' in doc_b: {:?}",
+            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
     }
 }

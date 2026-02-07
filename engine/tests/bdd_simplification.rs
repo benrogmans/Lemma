@@ -1,4 +1,6 @@
 use lemma::{Engine, LiteralValue, Target};
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -18,7 +20,7 @@ fn bdd_unification_simplifies_to_single_atom() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     let solutions = engine
         .invert(

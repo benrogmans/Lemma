@@ -1,4 +1,6 @@
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 
 #[test]
 fn necessary_facts_include_nested_doc_facts_for_local_rule_deps() {
@@ -26,7 +28,7 @@ rule total = calc.total?
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     // Local-rule interface: cashier.total depends on pricing.total (via calc.total?),
     // so cashier's necessary facts must include nested facts like calc.price.
@@ -80,9 +82,12 @@ fn get_facts_errors_on_unknown_document() {
 #[test]
 fn get_facts_errors_on_unknown_rule() {
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code("doc test\nfact x = 1\nrule y = x", "test.lemma")
-        .unwrap();
+    add_lemma_code_blocking(
+        &mut engine,
+        "doc test\nfact x = 1\nrule y = x",
+        "test.lemma",
+    )
+    .unwrap();
 
     let result = engine.get_facts("test", &["nonexistent".to_string()]);
     assert!(result.is_err(), "Expected error for unknown rule");

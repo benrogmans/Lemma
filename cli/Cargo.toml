@@ -17,6 +17,7 @@ clap.workspace = true
 anyhow.workspace = true
 ariadne.workspace = true
 chrono.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 walkdir = "2.4"
 super-table = { version = "1.1.1", features = ["custom_styling"] }
 inquire = { version = "0.9", features = ["date"] }
@@ -25,7 +26,6 @@ strip-ansi-escapes = "0.2"
 
 # Server dependencies (optional)
 axum = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
 tower = { workspace = true, features = ["util"], optional = true }
 tower-http = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
@@ -33,9 +33,12 @@ serde_json = { workspace = true, optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
+[lints.rust]
+dead_code = "deny"
+
 [features]
 default = ["server", "mcp"]
-server = ["axum", "tokio", "tower", "tower-http", "serde", "serde_json", "tracing", "tracing-subscriber"]
+server = ["axum", "tower", "tower-http", "serde", "serde_json", "tracing", "tracing-subscriber"]
 mcp = ["serde", "serde_json", "tracing", "tracing-subscriber"]
 
 [dev-dependencies]

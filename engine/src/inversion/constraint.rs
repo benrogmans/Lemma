@@ -165,11 +165,12 @@ impl Constraint {
                             _ => {
                                 return Err(LemmaError::engine(
                                     "Constraint expression must be boolean",
-                                    expr_source.0,
-                                    &expr_source.1,
+                                    crate::Source::new(
+                                        expr_source.1.clone(),
+                                        expr_source.0.clone(),
+                                        expr_source.2.clone(),
+                                    ),
                                     Arc::from(""),
-                                    &expr_source.2,
-                                    1,
                                     None::<String>,
                                 ));
                             }
@@ -221,11 +222,12 @@ impl Constraint {
                                     "Cannot convert expression kind to constraint: {:?}",
                                     std::mem::discriminant(&other)
                                 ),
-                                expr_source.0,
-                                &expr_source.1,
+                                crate::Source::new(
+                                    expr_source.1.clone(),
+                                    expr_source.0.clone(),
+                                    expr_source.2.clone(),
+                                ),
                                 Arc::from(""),
-                                &expr_source.2,
-                                1,
                                 None::<String>,
                             ));
                         }

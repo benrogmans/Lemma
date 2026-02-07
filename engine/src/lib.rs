@@ -54,6 +54,7 @@ pub mod inversion;
 pub mod limits;
 pub mod parsing;
 pub mod planning;
+pub mod registry;
 pub mod serialization;
 
 #[cfg(target_arch = "wasm32")]
@@ -79,6 +80,11 @@ pub use planning::semantics::{
     SemanticDurationUnit, TypeSpecification, ValueKind,
 };
 pub use planning::ExecutionPlan;
+#[cfg(feature = "registry")]
+pub use registry::LemmaBase;
+pub use registry::{
+    resolve_registry_references, Registry, RegistryBundle, RegistryError, RegistryErrorKind,
+};
 
 /// Result type for Lemma operations
 pub type LemmaResult<T> = Result<T, LemmaError>;

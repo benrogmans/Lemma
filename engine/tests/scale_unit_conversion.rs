@@ -1,4 +1,6 @@
 use lemma::evaluation::OperationResult;
+mod common;
+use common::add_lemma_code_blocking;
 use lemma::Engine;
 use lemma::ValueKind;
 use rust_decimal::Decimal;
@@ -19,7 +21,7 @@ rule check = accept
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate(
@@ -56,7 +58,7 @@ rule check = accept
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate(
@@ -93,7 +95,7 @@ rule check = accept
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let err = engine
         .evaluate(
@@ -124,7 +126,7 @@ rule check = accept
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let err = engine
         .evaluate(
@@ -150,7 +152,7 @@ rule price_usd = 100 eur in usd
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("pricing", vec![], HashMap::new()).unwrap();
     let rule_result = response
@@ -190,7 +192,7 @@ rule price_gbp = 100 eur in gbp
 "#;
 
     let mut engine = Engine::new();
-    let err = engine.add_lemma_code(code, "test.lemma").unwrap_err();
+    let err = add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap_err();
     let msg = err.to_string();
 
     assert!(msg.contains("Unknown unit 'gbp'"), "actual error: {msg}");

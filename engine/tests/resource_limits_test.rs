@@ -1,4 +1,6 @@
 use lemma::{Engine, LemmaError, ResourceLimits};
+mod common;
+use common::add_lemma_code_blocking;
 
 #[test]
 fn test_file_size_limit() {
@@ -12,7 +14,7 @@ fn test_file_size_limit() {
     // Create a file larger than 100 bytes
     let large_code = "doc test\nfact x = 1\n".repeat(10); // ~200 bytes
 
-    let result = engine.add_lemma_code(&large_code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, &large_code, "test.lemma");
 
     match result {
         Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
@@ -32,7 +34,7 @@ fn test_file_size_just_under_limit() {
     let mut engine = Engine::with_limits(limits);
     let code = "doc test\nfact x = 1\nrule y = x + 1"; // Small file
 
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(result.is_ok(), "Small file should be accepted");
 }
 
@@ -44,12 +46,12 @@ fn test_fact_value_size_limit() {
     };
 
     let mut engine = Engine::with_limits(limits);
-    engine
-        .add_lemma_code(
-            "doc test\nfact name = [text]\nrule result = name",
-            "test.lemma",
-        )
-        .unwrap();
+    add_lemma_code_blocking(
+        &mut engine,
+        "doc test\nfact name = [text]\nrule result = name",
+        "test.lemma",
+    )
+    .unwrap();
 
     let large_string = "a".repeat(100);
     let mut facts = std::collections::HashMap::new();
@@ -84,7 +86,7 @@ fn test_fact_value_size_limit() {
 //         code.push(')');
 //     }
 
-//     let result = engine.add_lemma_code(&code, "test.lemma");
+//     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
 
 //     match result {
 //         Err(lemma::LemmaError::ResourceLimitExceeded { limit_name, .. }) => {

@@ -1,4 +1,6 @@
 use lemma::{ValueKind, *};
+mod common;
+use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -12,7 +14,7 @@ rule net_multiplier = 1 - discount
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("pricing", vec![], HashMap::new()).unwrap();
     let result = response
@@ -41,7 +43,7 @@ rule double_meeting = meeting_length * 2
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("scheduling", vec![], HashMap::new())
@@ -75,7 +77,7 @@ rule end = start + 7 days
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("dates", vec![], HashMap::new()).unwrap();
     let result = response.results.get("end").unwrap().result.value().unwrap();
@@ -103,7 +105,7 @@ rule can_access = is_active and not is_premium
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("logic", vec![], HashMap::new()).unwrap();
     let result = response
@@ -134,7 +136,7 @@ rule message = greeting
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("strings", vec![], HashMap::new()).unwrap();
     let result = response

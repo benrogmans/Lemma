@@ -13,21 +13,21 @@ let client: LanguageClient | undefined;
 function resolveServerPath(raw: string): string {
   const folder = workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
   const expanded = raw.replace(/\$\{workspaceFolder\}/g, folder);
-  if (expanded !== "lemma-lsp") {
+  if (expanded !== "lsp") {
     return expanded;
   }
   if (folder) {
-    const inRepo = path.join(folder, "target", "release", "lemma-lsp");
+    const inRepo = path.join(folder, "target", "release", "lsp");
     if (fs.existsSync(inRepo)) {
       return inRepo;
     }
   }
-  return "lemma-lsp";
+  return "lsp";
 }
 
 export function activate(context: ExtensionContext): void {
   const config = workspace.getConfiguration("lemma");
-  const rawPath: string = config.get<string>("lspServerPath", "lemma-lsp");
+  const rawPath: string = config.get<string>("lspServerPath", "lsp");
   const serverPath = resolveServerPath(rawPath);
 
   const serverOptions: ServerOptions = {
@@ -46,6 +46,9 @@ export function activate(context: ExtensionContext): void {
     synchronize: {
       fileEvents: workspace.createFileSystemWatcher("**/*.lemma"),
     },
+    // Diagnostics: the LSP server sends textDocument/publishDiagnostics with an array of
+    // Diagnostic per file. The client forwards them as-is; multiple diagnostics per file
+    // (e.g. one per registry error) are all shown. No filtering or merging on the JS side.
   };
 
   client = new LanguageClient(

@@ -3,6 +3,8 @@
 //! Unit-resolution and TypeRegistry behavior tests live in `src/planning/types.rs`.
 
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -22,9 +24,7 @@ rule product = price1 * price2
 rule quotient = price1 / price2"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price1".to_string(), "10 eur".to_string());
@@ -57,7 +57,7 @@ fact distance = [length]
 rule invalid = price + distance"#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
 
     // Should fail during planning/validation
     assert!(
@@ -87,9 +87,7 @@ rule scaled = price * multiplier
 rule divided = price / multiplier"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "10 eur".to_string());
@@ -117,9 +115,7 @@ rule scaled = multiplier * price
 rule divided = multiplier / price"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("multiplier".to_string(), "2".to_string());
@@ -143,9 +139,7 @@ fact multiplier = [number]
 rule result = ratio_value * multiplier"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio_value".to_string(), "0.5".to_string());
@@ -169,9 +163,7 @@ rule product = ratio1 * ratio2
 rule quotient = ratio1 / ratio2"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio1".to_string(), "0.5".to_string());
@@ -198,9 +190,7 @@ fact price = [money]
 rule result = ratio_value * price"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio_value".to_string(), "0.5".to_string());
@@ -226,9 +216,7 @@ fact ratio_value = [ratio]
 rule result = price * ratio_value"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "10 eur".to_string());
@@ -255,9 +243,7 @@ rule is_greater = price1 > price2
 rule is_equal = price1 == price2"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price1".to_string(), "10 eur".to_string());
@@ -287,7 +273,7 @@ fact distance = [length]
 rule invalid = price > distance"#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
 
     assert!(
         result.is_err(),
@@ -315,7 +301,7 @@ fact threshold = [number]
 rule is_above = price > threshold"#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(result.is_err(), "Should reject scale vs number comparison");
 }
 
@@ -340,9 +326,7 @@ rule modulo = a % divisor
 rule power = a ^ exponent"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("a".to_string(), "10 eur".to_string());
@@ -381,7 +365,7 @@ rule modulo = price % distance
 rule power = price ^ distance"#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
 
     assert!(
         result.is_err(),
@@ -412,9 +396,7 @@ rule modulo = a % b
 rule power = a ^ b"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("a".to_string(), "10".to_string());
@@ -446,9 +428,7 @@ fact price2 = [money]
 rule total = price1 + price2"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price1".to_string(), "10 eur".to_string());
@@ -490,9 +470,7 @@ fact multiplier = [number]
 rule result = price * multiplier"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "10 eur".to_string());
@@ -520,9 +498,7 @@ fact multiplier = [number]
 rule result = ratio_value * multiplier"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio_value".to_string(), "0.5".to_string());
@@ -558,9 +534,7 @@ fact ratio2 = [ratio]
 rule result = ratio1 * ratio2"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio1".to_string(), "0.5".to_string());
@@ -599,9 +573,7 @@ fact price = [money]
 rule result = ratio_value * price"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio_value".to_string(), "0.5".to_string());
@@ -636,9 +608,7 @@ rule with_tax = discounted? * tax_multiplier
 rule total = with_tax? * quantity"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("base_price".to_string(), "100 eur".to_string());
@@ -670,9 +640,7 @@ fact number_value = [number]
 rule result = scale_value * number_value"#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Should parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("scale_value".to_string(), "10 eur".to_string());

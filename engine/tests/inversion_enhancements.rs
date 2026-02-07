@@ -1,4 +1,6 @@
 use lemma::{Engine, LiteralValue, Target};
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -12,9 +14,7 @@ fn test_rule_reference_expansion_simple_constant() {
     "#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
 
     // Invert for total_price = 121, given no facts
     let result = engine.invert(
@@ -46,9 +46,7 @@ fn test_enhanced_error_message_lists_values() {
     "#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
 
     // Try to invert for a value that doesn't exist in the rule outputs
     let result = engine.invert(

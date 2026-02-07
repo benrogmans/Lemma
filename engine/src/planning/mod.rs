@@ -22,6 +22,7 @@ pub use types::TypeRegistry;
 use crate::parsing::ast::LemmaDoc;
 use crate::LemmaError;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Builds an execution plan from Lemma documents.
 ///
@@ -32,9 +33,41 @@ pub fn plan(
     all_docs: &[LemmaDoc],
     sources: HashMap<String, String>,
 ) -> Result<ExecutionPlan, Vec<LemmaError>> {
-    validate_all_documents(all_docs)?;
+    // Collect pre-graph validation errors.  Duplicate document names are fatal
+    // (they cause HashMap key conflicts), so we return immediately for those.
+    // Other validation errors (e.g. structural type issues) are collected and
+    // merged with graph-build errors so the caller sees as many diagnostics as
+    // possible in a single pass.
+    let validation_errors = match validate_all_documents(all_docs, &sources) {
+        Ok(()) => Vec::new(),
+        Err(errs) => {
+            // If any error is a duplicate-document-name error, return immediately —
+            // the graph builder relies on unique document names.
+            let has_fatal = errs
+                .iter()
+                .any(|e| e.message().contains("Duplicate document name"));
+            if has_fatal {
+                return Err(errs);
+            }
+            errs
+        }
+    };
 
-    let graph = graph::Graph::build(main_doc, all_docs, sources)?;
+    let graph = match graph::Graph::build(main_doc, all_docs, sources) {
+        Ok(graph) => {
+            if !validation_errors.is_empty() {
+                return Err(validation_errors);
+            }
+            graph
+        }
+        Err(mut build_errors) => {
+            // Merge pre-validation errors in front so they appear first.
+            let mut all_errors = validation_errors;
+            all_errors.append(&mut build_errors);
+            return Err(all_errors);
+        }
+    };
+
     let execution_plan = execution_plan::build_execution_plan(&graph, &main_doc.name);
     let value_errors = execution_plan::validate_literal_facts_against_types(&execution_plan);
     if !value_errors.is_empty() {
@@ -43,9 +76,57 @@ pub fn plan(
     Ok(execution_plan)
 }
 
-/// Validate all documents
-fn validate_all_documents(all_docs: &[LemmaDoc]) -> Result<(), Vec<LemmaError>> {
+/// Validate all documents before building the graph.
+///
+/// This checks for duplicate document names (which would silently overwrite each other
+/// in HashMap-based lookups) and validates types in each document.
+fn validate_all_documents(
+    all_docs: &[LemmaDoc],
+    sources: &HashMap<String, String>,
+) -> Result<(), Vec<LemmaError>> {
     let mut errors = Vec::new();
+
+    // Detect duplicate document names. Two documents with the same name would silently
+    // overwrite each other in the HashMap used by Graph::build. This must be a fatal error.
+    let mut seen_document_names: HashMap<&str, &LemmaDoc> = HashMap::new();
+    for doc in all_docs {
+        if let Some(earlier_doc) = seen_document_names.get(doc.name.as_str()) {
+            let attribute = doc.attribute.as_deref().unwrap_or(&doc.name);
+            let source_text: Arc<str> = sources
+                .get(attribute)
+                .map(|text| Arc::from(text.as_str()))
+                .unwrap_or_else(|| Arc::from(""));
+            let earlier_attribute = earlier_doc
+                .attribute
+                .as_deref()
+                .unwrap_or(&earlier_doc.name);
+            errors.push(LemmaError::semantic(
+                format!(
+                    "Duplicate document name '{}' (previously declared in '{}')",
+                    doc.name, earlier_attribute
+                ),
+                Source::new(
+                    attribute,
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: doc.start_line,
+                        col: 0,
+                    },
+                    doc.name.clone(),
+                ),
+                source_text,
+                None::<String>,
+            ));
+        } else {
+            seen_document_names.insert(&doc.name, doc);
+        }
+    }
+
+    // Return duplicate-name errors immediately — no point validating types if names collide.
+    if !errors.is_empty() {
+        return Err(errors);
+    }
 
     // Pass all_docs to validate_types so cross-document type imports can resolve
     for doc in all_docs {
@@ -320,5 +401,159 @@ rule getx = one.x
             one_x_type.name()
         );
         assert!(one_x_type.is_number(), "money should be number-based");
+    }
+
+    #[test]
+    fn test_duplicate_document_names_are_rejected() {
+        let source_a = r#"doc pricing
+fact base_price = 100"#;
+        let source_b = r#"doc pricing
+fact base_price = 200"#;
+
+        let docs_a = parse(source_a, "file_a.lemma", &ResourceLimits::default()).unwrap();
+        let docs_b = parse(source_b, "file_b.lemma", &ResourceLimits::default()).unwrap();
+
+        let all_docs: Vec<_> = docs_a.into_iter().chain(docs_b).collect();
+        let mut sources = HashMap::new();
+        sources.insert("file_a.lemma".to_string(), source_a.to_string());
+        sources.insert("file_b.lemma".to_string(), source_b.to_string());
+
+        let result = plan(&all_docs[0], &all_docs, sources);
+
+        assert!(
+            result.is_err(),
+            "Duplicate document names should cause a validation error"
+        );
+        let errors = result.unwrap_err();
+        let error_string = errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(
+            error_string.contains("Duplicate document name"),
+            "Error should mention duplicate document name: {}",
+            error_string
+        );
+        assert!(
+            error_string.contains("pricing"),
+            "Error should mention the duplicate name 'pricing': {}",
+            error_string
+        );
+    }
+
+    #[test]
+    fn test_plan_with_registry_style_doc_names() {
+        let source = r#"doc user/workspace/somedoc
+fact quantity = 10
+
+doc user/workspace/example
+fact inventory = doc @user/workspace/somedoc
+rule total_quantity = inventory.quantity"#;
+
+        let docs = parse(source, "registry_bundle.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(docs.len(), 2);
+
+        let example_doc = docs
+            .iter()
+            .find(|d| d.name == "user/workspace/example")
+            .expect("should find user/workspace/example");
+
+        let mut sources = HashMap::new();
+        sources.insert("registry_bundle.lemma".to_string(), source.to_string());
+
+        let result = plan(example_doc, &docs, sources);
+        assert!(
+            result.is_ok(),
+            "Planning with @... document names should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_multiple_independent_errors_are_all_reported() {
+        // A document referencing a non-existing type import AND a non-existing
+        // document should report errors for BOTH, not just stop at the first.
+        let source = r#"doc demo
+type money from nonexistent_type_source
+fact helper = doc nonexistent_doc
+fact price = 10
+rule total = helper.value + price"#;
+
+        let docs = parse(source, "test.lemma", &ResourceLimits::default()).unwrap();
+
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), source.to_string());
+
+        let result = plan(&docs[0], &docs, sources);
+        assert!(result.is_err(), "Planning should fail with multiple errors");
+
+        let errors = result.unwrap_err();
+        let all_messages: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+        let combined = all_messages.join("\n");
+
+        // Must report the type resolution error (shows up as "Unknown type: 'money'")
+        assert!(
+            combined.contains("Unknown type") && combined.contains("money"),
+            "Should report type import error for 'money'. Got:\n{}",
+            combined
+        );
+
+        // Must ALSO report the document reference error — this is the bug we fixed:
+        // previously only the type error was reported and the doc reference error
+        // was swallowed by the early return.
+        assert!(
+            combined.contains("nonexistent_doc"),
+            "Should report doc reference error for 'nonexistent_doc'. Got:\n{}",
+            combined
+        );
+
+        // Should have at least 2 distinct kinds of errors (type + doc ref)
+        assert!(
+            errors.len() >= 2,
+            "Expected at least 2 errors, got {}: {}",
+            errors.len(),
+            combined
+        );
+    }
+
+    #[test]
+    fn test_type_error_does_not_suppress_cross_doc_fact_error() {
+        // When a type import fails, errors about cross-document fact references
+        // (e.g. ext.some_fact where ext is a doc ref to a non-existing doc)
+        // must still be reported.
+        let source = r#"doc demo
+type currency from missing_doc
+fact ext = doc also_missing
+rule val = ext.some_fact"#;
+
+        let docs = parse(source, "test.lemma", &ResourceLimits::default()).unwrap();
+
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), source.to_string());
+
+        let result = plan(&docs[0], &docs, sources);
+        assert!(result.is_err());
+
+        let errors = result.unwrap_err();
+        let combined: String = errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // The type error about 'currency' should be reported
+        assert!(
+            combined.contains("currency"),
+            "Should report type error about 'currency'. Got:\n{}",
+            combined
+        );
+
+        // The document reference error about 'also_missing' should ALSO be reported
+        assert!(
+            combined.contains("also_missing"),
+            "Should report error about 'also_missing'. Got:\n{}",
+            combined
+        );
     }
 }

@@ -2,6 +2,7 @@ use super::Rule;
 use crate::error::LemmaError;
 use crate::parsing::ast::Span;
 use crate::parsing::ast::*;
+use crate::Source;
 
 use chrono::{Datelike, Timelike};
 use pest::iterators::Pair;
@@ -28,11 +29,8 @@ pub(crate) fn parse_literal(
         Rule::duration_literal => parse_duration_literal(pair, attribute, doc_name),
         _ => Err(LemmaError::engine(
             format!("Unsupported literal type: {:?}", pair.as_rule()),
-            Span::from_pest_span(pair.as_span()),
-            attribute,
+            Source::new(attribute, Span::from_pest_span(pair.as_span()), doc_name),
             Arc::from(pair.as_str()),
-            doc_name,
-            1,
             None::<String>,
         )),
     }
@@ -63,11 +61,8 @@ fn parse_number_literal(
             _ => {
                 return Err(LemmaError::engine(
                     "Unexpected number literal structure",
-                    span,
-                    attribute,
+                    Source::new(attribute, span, doc_name),
                     Arc::from(pair_str),
-                    doc_name,
-                    1,
                     None::<String>,
                 ));
             }
@@ -108,11 +103,8 @@ fn parse_boolean_literal(
             let span = Span::from_pest_span(pair.as_span());
             return Err(LemmaError::engine(
                 format!("Invalid boolean: '{}'\n             Expected one of: true, false, yes, no, accept, reject", pair.as_str()),
-                span,
-                attribute,
+                Source::new(attribute, span, doc_name),
                 Arc::from(pair.as_str()),
-                doc_name,
-                1,
                 None::<String>,
             ));
         }
@@ -142,11 +134,8 @@ fn parse_percent_literal(
                 _ => {
                     return Err(LemmaError::engine(
                         "Expected number in percent literal",
-                        inner_span,
-                        attribute,
+                        Source::new(attribute, inner_span, doc_name),
                         Arc::from(pair_str),
-                        doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -155,11 +144,8 @@ fn parse_percent_literal(
     }
     Err(LemmaError::engine(
         "Invalid percent literal: missing number",
-        pair_span,
-        attribute,
+        Source::new(attribute, pair_span, doc_name),
         Arc::from(pair_str),
-        doc_name,
-        1,
         None::<String>,
     ))
 }
@@ -184,11 +170,8 @@ fn parse_duration_literal(
                     _ => {
                         return Err(LemmaError::engine(
                             "Expected number in duration literal",
-                            inner_span,
-                            attribute,
+                            Source::new(attribute, inner_span, doc_name),
                             Arc::from(pair_str),
-                            doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -205,22 +188,16 @@ fn parse_duration_literal(
     let value = number.ok_or_else(|| {
         LemmaError::engine(
             "Missing number in duration literal",
-            span.clone(),
-            attribute,
+            Source::new(attribute, span.clone(), doc_name),
             Arc::from(pair_str),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
     let unit_string = unit_str.ok_or_else(|| {
         LemmaError::engine(
             "Missing unit in duration literal",
-            span,
-            attribute,
+            Source::new(attribute, span, doc_name),
             Arc::from(pair_str),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
@@ -258,11 +235,8 @@ pub(crate) fn parse_duration_unit_string(
         "microsecond" | "microseconds" => Ok(DurationUnit::Microsecond),
         _ => Err(LemmaError::engine(
             format!("Unknown duration unit: '{}'. Expected one of: years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds", unit_str),
-            span,
-            attribute,
+            Source::new(attribute, span, doc_name),
             source_text,
-            doc_name,
-            1,
             None::<String>,
         )),
     }
@@ -308,11 +282,8 @@ pub(crate) fn parse_number_unit_literal(
     parse_number_unit_string(s).map_err(|msg| {
         LemmaError::engine(
             msg,
-            span,
-            attribute,
+            Source::new(attribute, span, doc_name),
             Arc::from(s),
-            doc_name,
-            1,
             None::<String>,
         )
     })
@@ -367,11 +338,13 @@ fn parse_datetime_literal(
 
     Err(LemmaError::engine(
         format!("Invalid date/time format: '{}'\n         Expected one of:\n         - Date: YYYY-MM-DD (e.g., 2024-01-15)\n         - DateTime: YYYY-MM-DDTHH:MM:SS (e.g., 2024-01-15T14:30:00)\n         - With timezone: YYYY-MM-DDTHH:MM:SSZ or +HH:MM (e.g., 2024-01-15T14:30:00Z)\n         Note: Month must be 1-12, day must be valid for the month (no Feb 30), hours 0-23, minutes/seconds 0-59", datetime_str),
-        Span::from_pest_span(pair.as_span()),
-        attribute,
+        Source::new(
+            attribute,
+            Span::from_pest_span(pair.as_span()),
+            doc_name,
+        )
+,
         Arc::from(datetime_str),
-        doc_name,
-        1,
         None::<String>,
     ))
 }
@@ -407,11 +380,13 @@ fn parse_time_literal(
 
     Err(LemmaError::engine(
         format!("Invalid time format: '{}'\n         Expected: HH:MM or HH:MM:SS (e.g., 14:30 or 14:30:00)\n         With timezone: HH:MM:SSZ or +HH:MM (e.g., 14:30:00Z or 14:30:00+01:00)\n         Note: Hours must be 0-23, minutes and seconds must be 0-59", time_str),
-        Span::from_pest_span(pair.as_span()),
-        attribute,
+        Source::new(
+            attribute,
+            Span::from_pest_span(pair.as_span()),
+            doc_name,
+        )
+,
         Arc::from(time_str),
-        doc_name,
-        1,
         None::<String>,
     ))
 }
@@ -430,22 +405,16 @@ fn parse_scientific_number(
     let mantissa_pair = inner.next().ok_or_else(|| {
         LemmaError::engine(
             "Missing mantissa in scientific notation",
-            span.clone(),
-            attribute,
+            Source::new(attribute, span.clone(), doc_name),
             Arc::from(pair_str),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
     let exponent_pair = inner.next().ok_or_else(|| {
         LemmaError::engine(
             "Missing exponent in scientific notation",
-            span.clone(),
-            attribute,
+            Source::new(attribute, span.clone(), doc_name),
             Arc::from(pair_str),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
@@ -466,11 +435,8 @@ fn parse_scientific_number(
                 MAX_DECIMAL_EXPONENT,
                 MAX_DECIMAL_EXPONENT
             ),
-            exponent_span.clone(),
-            attribute,
+            Source::new(attribute, exponent_span.clone(), doc_name),
             Arc::from(exponent_pair.as_str()),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
@@ -478,11 +444,8 @@ fn parse_scientific_number(
     let power_of_ten = decimal_pow10(exponent).ok_or_else(|| {
         LemmaError::engine(
             format!("Exponent {} is out of range\n             Maximum supported exponent is ±{} (values up to ~10^28)", exponent, MAX_DECIMAL_EXPONENT),
-            exponent_span,
-            attribute,
+            Source::new(attribute, exponent_span, doc_name),
             Arc::from(exponent_pair.as_str()),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
@@ -494,11 +457,8 @@ fn parse_scientific_number(
                     "Number overflow: result of {}e{} exceeds maximum value (~10^28)",
                     mantissa, exponent
                 ),
-                span,
-                attribute,
+                Source::new(attribute, span, doc_name),
                 Arc::from(pair_str),
-                doc_name,
-                1,
                 None::<String>,
             )
         })
@@ -509,11 +469,8 @@ fn parse_scientific_number(
                     "Precision error: result of {}e{} has too many decimal places (max 28)",
                     mantissa, exponent
                 ),
-                span,
-                attribute,
+                Source::new(attribute, span, doc_name),
                 Arc::from(pair_str),
-                doc_name,
-                1,
                 None::<String>,
             )
         })
@@ -547,11 +504,8 @@ fn parse_decimal_number(
     Decimal::from_str(&clean_number).map_err(|_| {
         LemmaError::engine(
             format!("Invalid number: '{}'\n             Expected a valid decimal number (e.g., 42, 3.14, 1_000_000, 1,000,000)\n             Note: Use underscores or commas as thousand separators if needed", number_str),
-            span,
-            attribute,
+            Source::new(attribute, span, doc_name),
             source_text,
-            doc_name,
-            1,
             None::<String>,
         )
     })

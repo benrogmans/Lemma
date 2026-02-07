@@ -3,6 +3,8 @@ use rust_decimal::{prelude::FromPrimitive, Decimal};
 use std::{collections::HashMap, str::FromStr};
 
 use lemma::{Engine, ValueKind};
+mod common;
+use common::add_lemma_code_blocking;
 
 /// Get the result of a rule evaluation.
 /// Panics if the rule is not found (test failure).
@@ -31,7 +33,7 @@ doc test
 fact x = {}
 rule result = x * 0
 "#, n);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let result = get_rule_result(&mut engine, "test", "result");
         let val = result
@@ -51,7 +53,7 @@ doc test
 fact x = {}
 rule result = x * 1
 "#, n);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let result = get_rule_result(&mut engine, "test", "result");
         let val = result
@@ -73,7 +75,7 @@ doc test
 fact x = {}
 rule result = x + 0
 "#, n);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let result = get_rule_result(&mut engine, "test", "result");
         let val = result
@@ -96,7 +98,7 @@ fact x = {}
 rule eq_self = x == x
 rule lte_self = x <= x
 "#, n);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let result = get_rule_result(&mut engine, "test", "eq_self");
         let val = result.value().expect("Expected value result, got veto").clone();
@@ -119,7 +121,7 @@ doc test
 fact x = [number]
 rule doubled = x * 2
 "#;
-        engine.add_lemma_code(code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
         let mut facts: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         facts.insert("x".to_string(), format!("{}", n));
@@ -151,7 +153,7 @@ fact b = {}
 rule sum1 = a + b
 rule sum2 = b + a
 "#, a, b);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let v1_result = get_rule_result(&mut engine, "test", "sum1");
         let v1 = v1_result.value().expect("Expected value, got veto").clone();
@@ -174,7 +176,7 @@ fact b = {}
 rule prod1 = a * b
 rule prod2 = b * a
 "#, a, b);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let v1_result = get_rule_result(&mut engine, "test", "prod1");
         let v1 = v1_result.value().expect("Expected value, got veto").clone();
@@ -198,7 +200,7 @@ fact c = {}
 rule sum1 = (a + b) + c
 rule sum2 = a + (b + c)
 "#, a, b, c);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let v1_result = get_rule_result(&mut engine, "test", "sum1");
         let v1 = v1_result.value().expect("Expected value, got veto").clone();
@@ -222,7 +224,7 @@ fact c = {}
 rule prod1 = (a * b) * c
 rule prod2 = a * (b * c)
 "#, a, b, c);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let v1_result = get_rule_result(&mut engine, "test", "prod1");
         let v1 = v1_result.value().expect("Expected value, got veto").clone();
@@ -246,7 +248,7 @@ fact c = {}
 rule dist1 = a * (b + c)
 rule dist2 = (a * b) + (a * c)
 "#, a, b, c);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let v1_result = get_rule_result(&mut engine, "test", "dist1");
         let v1 = v1_result.value().expect("Expected value, got veto").clone();
@@ -267,7 +269,7 @@ doc test
 fact x = {}
 rule double_neg = -(-x)
 "#, n);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let result = get_rule_result(&mut engine, "test", "double_neg");
 
@@ -292,7 +294,7 @@ fact b = {}
 rule sub = a - b
 rule add_neg = a + (-b)
 "#, a, b);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let v1_result = get_rule_result(&mut engine, "test", "sub");
         let v1 = v1_result.value().expect("Expected value, got veto").clone();
@@ -315,7 +317,7 @@ fact b = {}
 rule product = a * b
 rule back = product? / b
 "#, a, b);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let result = get_rule_result(&mut engine, "test", "back");
 
@@ -338,7 +340,7 @@ doc test
 fact b = {}
 rule double_not = not (not b)
 "#, b);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let result = get_rule_result(&mut engine, "test", "double_not");
 
@@ -361,7 +363,7 @@ fact b = {}
 rule and1 = a and b
 rule and2 = b and a
 "#, a, b);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let v1_result = get_rule_result(&mut engine, "test", "and1");
         let v1 = v1_result.value().expect("Expected value, got veto").clone();
@@ -383,7 +385,7 @@ fact b = {}
 rule or1 = a or b
 rule or2 = b or a
 "#, a, b);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let v1_result = get_rule_result(&mut engine, "test", "or1");
         let v1 = v1_result.value().expect("Expected value, got veto").clone();
@@ -410,7 +412,7 @@ rule ab = a < b
 rule bc = b < c
 rule ac = a < c
 "#, min, mid, max);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let ab_result = get_rule_result(&mut engine, "test", "ab");
         let ab = ab_result.value().expect("Expected value, got veto").clone();
@@ -437,7 +439,7 @@ rule discount = 0
   unless x > 20 then 20
   unless x > 50 then 50
 "#, n);
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let result = get_rule_result(&mut engine, "test", "discount");
 
@@ -478,7 +480,7 @@ rule commutative2 = 5 + x
 "#,
             n
         );
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let result = get_rule_result(&mut engine, "test", "zero");
 
@@ -563,7 +565,7 @@ rule a_eq_a = a == a
 rule a_lte_a = a <= a
 rule a_gte_a = a >= a
 "#;
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     let result = get_rule_result(&mut engine, "test", "a_eq_a");
 
@@ -620,7 +622,7 @@ doc test
 fact duration = 60 minutes
 rule to_hours = duration in hours
 "#;
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     let result = get_rule_result(&mut engine, "test", "to_hours");
 
@@ -654,7 +656,7 @@ fact base = 200
 fact rate = 10%
 rule result = base * rate
 "#;
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     let result = get_rule_result(&mut engine, "test", "result");
 
@@ -689,7 +691,7 @@ rule back_div = product? / b
 "#,
             a, b
         );
-        engine.add_lemma_code(&code, "test").unwrap();
+        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
         let result = get_rule_result(&mut engine, "test", "back_sub");
 

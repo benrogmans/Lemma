@@ -12,6 +12,8 @@ enum ParseOutcome {
 
 /// A single file tracked by the workspace.
 struct TrackedFile {
+    /// The latest URL for this file (used for publishing diagnostics).
+    url: Url,
     /// The latest text content of the file (from the editor buffer or disk).
     text: String,
     /// The parsed outcome: either successfully parsed docs or parse errors.
@@ -34,33 +36,33 @@ pub struct FileDiagnostics {
 ///
 /// Tracks all `.lemma` files in the workspace, their parsed ASTs,
 /// and supports re-parsing and re-planning when files change.
+///
+/// Keyed by **attribute** (file path string or URL string) so that the same
+/// physical file is tracked exactly once, regardless of how the URL is constructed.
+#[derive(Default)]
 pub struct WorkspaceModel {
-    /// Map from file URL to tracked file state.
-    files: HashMap<Url, TrackedFile>,
+    /// Map from source attribute to tracked file state.
+    files: HashMap<String, TrackedFile>,
     /// Resource limits used during parsing.
     limits: ResourceLimits,
 }
 
 impl WorkspaceModel {
     pub fn new() -> Self {
-        Self {
-            files: HashMap::new(),
-            limits: ResourceLimits::default(),
-        }
+        Self::default()
     }
 
-    /// Derive a stable source attribute from a URL.
-    ///
-    /// Uses the file path if available, otherwise the full URL string.
+    /// Derive a stable source attribute from a URL (path or URL string).
     fn attribute_for_url(url: &Url) -> String {
-        url.to_file_path()
-            .map(|path| path.to_string_lossy().to_string())
-            .unwrap_or_else(|_| url.to_string())
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(path) = url.to_file_path() {
+            return path.to_string_lossy().to_string();
+        }
+        url.to_string()
     }
 
-    /// Add or update a file in the workspace.
-    ///
-    /// Parses the content immediately. Planning is deferred to `validate_workspace`.
+    /// Add or update a file in the workspace. Parses immediately.
+    /// If a different URL maps to the same attribute (path), the old entry is replaced.
     pub fn update_file(&mut self, url: Url, text: String) {
         let attribute = Self::attribute_for_url(&url);
         let parse_outcome = match parse(&text, &attribute, &self.limits) {
@@ -68,8 +70,9 @@ impl WorkspaceModel {
             Err(error) => ParseOutcome::Failed(vec![error]),
         };
         self.files.insert(
-            url,
+            attribute,
             TrackedFile {
+                url,
                 text,
                 parse_outcome,
             },
@@ -78,11 +81,12 @@ impl WorkspaceModel {
 
     /// Remove a file from the workspace.
     pub fn remove_file(&mut self, url: &Url) {
-        self.files.remove(url);
+        let attribute = Self::attribute_for_url(url);
+        self.files.remove(&attribute);
     }
 
     /// Collect all successfully parsed LemmaDoc ASTs across the entire workspace.
-    fn all_parsed_docs(&self) -> Vec<LemmaDoc> {
+    pub fn all_parsed_docs(&self) -> Vec<LemmaDoc> {
         let mut all_docs = Vec::new();
         for tracked in self.files.values() {
             if let ParseOutcome::Success(docs) = &tracked.parse_outcome {
@@ -93,99 +97,97 @@ impl WorkspaceModel {
     }
 
     /// Build the sources map (attribute -> source text) for planning.
-    fn sources_map(&self) -> HashMap<String, String> {
-        let mut sources = HashMap::new();
-        for (url, tracked) in &self.files {
-            let attribute = Self::attribute_for_url(url);
-            sources.insert(attribute, tracked.text.clone());
-        }
-        sources
+    pub fn sources_map(&self) -> HashMap<String, String> {
+        self.files
+            .iter()
+            .map(|(attribute, tracked)| (attribute.clone(), tracked.text.clone()))
+            .collect()
+    }
+
+    /// Resource limits used for parsing and registry resolution.
+    pub fn limits(&self) -> &ResourceLimits {
+        &self.limits
+    }
+
+    /// Map source attribute to (Url, text) for diagnostics. One entry per file.
+    pub fn attribute_to_url_and_text(&self) -> HashMap<String, (Url, String)> {
+        self.files
+            .iter()
+            .map(|(attribute, tracked)| {
+                (
+                    attribute.clone(),
+                    (tracked.url.clone(), tracked.text.clone()),
+                )
+            })
+            .collect()
     }
 
     /// Run a full workspace validation: parse errors + planning errors for all files.
-    ///
-    /// Returns diagnostics grouped by file. Each file gets:
-    /// - Its own parse errors (if parsing failed).
-    /// - Planning errors attributed to this file (filtered by source attribute).
-    ///
-    /// This is the method called after the debounce window settles.
     pub fn validate_workspace(&self) -> Vec<FileDiagnostics> {
         let all_docs = self.all_parsed_docs();
         let sources = self.sources_map();
+        self.validate_workspace_with_resolved_docs(&all_docs, &sources)
+    }
 
-        // Run plan() for each successfully parsed document's main doc.
-        // Collect all planning errors, keyed by their source attribute.
+    /// Run planning with pre-resolved docs. Returns one FileDiagnostics per workspace file.
+    pub fn validate_workspace_with_resolved_docs(
+        &self,
+        resolved_docs: &[LemmaDoc],
+        sources: &HashMap<String, String>,
+    ) -> Vec<FileDiagnostics> {
         let mut planning_errors_by_attribute: HashMap<String, Vec<LemmaError>> = HashMap::new();
 
-        for (url, tracked) in &self.files {
-            let attribute = Self::attribute_for_url(url);
-
+        for (attribute, tracked) in &self.files {
             if let ParseOutcome::Success(docs) = &tracked.parse_outcome {
                 for doc in docs {
-                    match lemma::planning::plan(doc, &all_docs, sources.clone()) {
-                        Ok(_) => {
-                            // Planning succeeded for this document — no errors.
-                        }
-                        Err(errors) => {
-                            for error in errors {
-                                // Determine which file this error belongs to based on its
-                                // source location attribute. Errors without a location are
-                                // attributed to the file that owns the document being planned.
-                                let error_attribute = error
-                                    .location()
-                                    .map(|source| source.attribute.clone())
-                                    .unwrap_or_else(|| attribute.clone());
-
-                                planning_errors_by_attribute
-                                    .entry(error_attribute)
-                                    .or_default()
-                                    .push(error);
-                            }
+                    if let Err(errors) = lemma::planning::plan(doc, resolved_docs, sources.clone())
+                    {
+                        for error in errors {
+                            let err_attr = error
+                                .location()
+                                .map(|s| s.attribute.clone())
+                                .unwrap_or_else(|| attribute.clone());
+                            planning_errors_by_attribute
+                                .entry(err_attr)
+                                .or_default()
+                                .push(error);
                         }
                     }
                 }
             }
         }
 
-        // Build per-file diagnostics.
         let mut results = Vec::new();
-
-        for (url, tracked) in &self.files {
-            let attribute = Self::attribute_for_url(url);
+        for (attribute, tracked) in &self.files {
             let mut file_errors = Vec::new();
-
-            // Add parse errors for this file.
             if let ParseOutcome::Failed(parse_errors) = &tracked.parse_outcome {
                 file_errors.extend(parse_errors.iter().cloned());
             }
-
-            // Add planning errors attributed to this file.
-            if let Some(plan_errors) = planning_errors_by_attribute.remove(&attribute) {
+            if let Some(plan_errors) = planning_errors_by_attribute.remove(attribute) {
                 file_errors.extend(plan_errors);
             }
-
             results.push(FileDiagnostics {
-                url: url.clone(),
+                url: tracked.url.clone(),
                 text: tracked.text.clone(),
-                attribute,
+                attribute: attribute.clone(),
                 errors: file_errors,
             });
         }
-
         results
     }
 
     /// Get the current text content for a file, if tracked.
     pub fn get_file_text(&self, url: &Url) -> Option<&str> {
-        self.files.get(url).map(|tracked| tracked.text.as_str())
+        let attribute = Self::attribute_for_url(url);
+        self.files
+            .get(&attribute)
+            .map(|tracked| tracked.text.as_str())
     }
 
     /// Get parse errors for a single file (fast path, no planning).
-    ///
-    /// Used to immediately publish parse-level diagnostics before the
-    /// debounced full workspace validation runs.
     pub fn get_parse_errors(&self, url: &Url) -> Vec<LemmaError> {
-        match self.files.get(url) {
+        let attribute = Self::attribute_for_url(url);
+        match self.files.get(&attribute) {
             Some(tracked) => match &tracked.parse_outcome {
                 ParseOutcome::Failed(errors) => errors.clone(),
                 ParseOutcome::Success(_) => Vec::new(),
@@ -201,7 +203,8 @@ mod tests {
 
     impl WorkspaceModel {
         fn contains_file(&self, url: &Url) -> bool {
-            self.files.contains_key(url)
+            let attribute = Self::attribute_for_url(url);
+            self.files.contains_key(&attribute)
         }
     }
 
@@ -316,5 +319,21 @@ mod tests {
 
         let errors = workspace.get_parse_errors(&url);
         assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn same_file_different_urls_produces_single_entry() {
+        let mut workspace = WorkspaceModel::new();
+        let url1 = url_from_path("/tmp/test.lemma");
+        let url2 = url_from_path("/tmp/test.lemma");
+        workspace.update_file(url1, "doc test\nfact x = 10".to_string());
+        workspace.update_file(url2, "doc test\nfact x = 20".to_string());
+
+        let results = workspace.validate_workspace();
+        assert_eq!(
+            results.len(),
+            1,
+            "Same file should produce exactly one entry"
+        );
     }
 }

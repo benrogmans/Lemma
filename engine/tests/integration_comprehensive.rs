@@ -1,4 +1,6 @@
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -35,10 +37,8 @@ rule contract_valid = is_salary_valid? and vacation_days_ok? and is_adult?
     unless not is_adult? then veto "Employee must be 18 or older"
 "#;
 
-    engine.add_lemma_code(base_contract, "test.lemma").unwrap();
-    engine
-        .add_lemma_code(employment_terms, "test.lemma")
-        .unwrap();
+    add_lemma_code_blocking(&mut engine, base_contract, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, employment_terms, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("employment_terms", vec![], HashMap::new())
@@ -100,7 +100,7 @@ rule net_income = income - tax_amount?
 rule effective_rate = (tax_amount? / income) * 100%
 "#;
 
-    engine.add_lemma_code(tax_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, tax_doc, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("tax_calculation", vec![], HashMap::new())
@@ -161,7 +161,7 @@ rule status = "LOW"
   unless exceeds_threshold? then "HIGH"
 "#;
 
-    engine.add_lemma_code(config_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, config_doc, "test.lemma").unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("threshold".to_string(), "500".to_string());
@@ -224,7 +224,7 @@ rule is_phase2_complete = today > phase2_end?
 rule is_on_schedule = elapsed_time? <= phase1_duration + phase2_duration
 "#;
 
-    engine.add_lemma_code(timeline_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, timeline_doc, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("project_timeline", vec![], HashMap::new())
@@ -265,7 +265,7 @@ fact timespan = 30 days
 rule end_date = start + timespan
 "#;
 
-    engine.add_lemma_code(doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
     let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     let end_date = response
@@ -298,7 +298,7 @@ fact timespan = 30 days
 rule start_date = end - timespan
 "#;
 
-    engine.add_lemma_code(doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
     let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     let start_date = response
@@ -331,7 +331,7 @@ fact end = 2024-02-14
 rule timespan = end - start
 "#;
 
-    engine.add_lemma_code(doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
     let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     let duration = response
@@ -365,7 +365,7 @@ rule date1_before_date2 = date1 < date2
 rule date1_after_date2 = date1 > date2
 "#;
 
-    engine.add_lemma_code(doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
     let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 
     let before = response
@@ -403,7 +403,7 @@ fact flag = true
 rule result_true = flag and 100 or 50
 "#;
 
-    let result = engine.add_lemma_code(doc, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, doc, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing boolean and number in logical expression"
@@ -420,7 +420,7 @@ fact needs_extra = true
 rule extra_charge = needs_extra and 10 or 0
 "#;
 
-    let result = engine.add_lemma_code(doc, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, doc, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing boolean and money in logical expression"
@@ -438,7 +438,7 @@ rule multiplier = value > 50 and 2 or 1
 rule result = value * multiplier
 "#;
 
-    let result = engine.add_lemma_code(doc, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, doc, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing boolean comparison result and numbers in logical expression"
@@ -459,7 +459,7 @@ fact system_healthy = true
 rule status = system_healthy and "OK"
 "#;
 
-    let result = engine.add_lemma_code(doc, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, doc, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing boolean and text in logical expression"
@@ -485,7 +485,7 @@ fact flag = false
 rule result = flag or "default"
 "#;
 
-    let result = engine.add_lemma_code(doc, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, doc, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing boolean and text in 'or' expression"
@@ -523,8 +523,8 @@ fact value = 500
 rule is_valid = value >= config.min_value and value <= config.max_value
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(child_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, child_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("child", vec![], HashMap::new()).unwrap();
 
@@ -557,8 +557,8 @@ fact salary = 75000
 rule is_valid = salary >= base_contract.min_salary and salary <= base_contract.max_salary
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(child_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, child_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("child", vec![], HashMap::new()).unwrap();
 
@@ -590,8 +590,8 @@ fact base_contract = doc base
 rule probation_end = base_contract.project_start + base_contract.probation_period
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(child_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, child_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("child", vec![], HashMap::new()).unwrap();
 

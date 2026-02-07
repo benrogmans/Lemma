@@ -3,8 +3,9 @@ resolver = "3"
 members = [
     "cli",
     "engine",
-    "engine/lemma-lsp",
+    "engine/lsp",
 ]
+default-members = ["cli"]
 exclude = ["engine/fuzz"]
 
 [workspace.package]

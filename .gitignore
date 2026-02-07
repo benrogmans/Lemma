@@ -1,12 +1,12 @@
 /target
 
 # WASM build output
-lemma/pkg/
+engine/pkg/
 
 # Fuzz testing artifacts
-lemma/fuzz/artifacts/
-lemma/fuzz/corpus/
-lemma/fuzz/target/
+engine/fuzz/artifacts/
+engine/fuzz/corpus/
+engine/fuzz/target/
 
 # Coverage artifacts
 coverage/

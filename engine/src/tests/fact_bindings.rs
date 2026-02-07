@@ -10,8 +10,9 @@ fact contract = doc employment_contract"#;
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].facts.len(), 2);
 
-    if let FactValue::DocumentReference(doc_name) = &result[0].facts[1].value {
-        assert_eq!(doc_name, "employment_contract");
+    if let FactValue::DocumentReference(doc_ref) = &result[0].facts[1].value {
+        assert_eq!(doc_ref.name, "employment_contract");
+        assert!(!doc_ref.is_registry);
     } else {
         panic!("Expected DocumentReference");
     }
@@ -34,8 +35,9 @@ fact contract.base.rate = 100"#;
         result[0].facts[0].reference,
         crate::parsing::ast::FactReference::from_path(vec!["contract".to_string()])
     );
-    if let FactValue::DocumentReference(doc_name) = &result[0].facts[0].value {
-        assert_eq!(doc_name, "employment_contract");
+    if let FactValue::DocumentReference(doc_ref) = &result[0].facts[0].value {
+        assert_eq!(doc_ref.name, "employment_contract");
+        assert!(!doc_ref.is_registry);
     } else {
         panic!("Expected DocumentReference");
     }
@@ -84,8 +86,9 @@ fact contract.base.rate = 100"#;
         result[0].facts[4].reference,
         crate::parsing::ast::FactReference::from_path(vec!["contract".to_string(), "base".to_string()])
     );
-    if let FactValue::DocumentReference(doc_name) = &result[0].facts[4].value {
-        assert_eq!(doc_name, "base_contract");
+    if let FactValue::DocumentReference(doc_ref) = &result[0].facts[4].value {
+        assert_eq!(doc_ref.name, "base_contract");
+        assert!(!doc_ref.is_registry);
     } else {
         panic!("Expected DocumentReference");
     }

@@ -1,4 +1,6 @@
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 use lemma::LiteralValue;
 use lemma::ValueKind;
 use std::collections::HashMap;
@@ -20,7 +22,7 @@ rule with_spaces = not  (  x  )
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
 

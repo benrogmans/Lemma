@@ -386,6 +386,55 @@ pub enum MathematicalComputation {
     Round,
 }
 
+/// A reference to a document, with a flag indicating whether the `@` registry
+/// qualifier was present in the source.  The `name` field always contains the
+/// plain document name (without `@`); `is_registry` is `true` when the author
+/// wrote `@name`, signalling that the document should be fetched from a registry.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DocRef {
+    /// Plain document name (never contains `@`).
+    pub name: String,
+    /// `true` when the source used the `@` qualifier (registry reference).
+    pub is_registry: bool,
+}
+
+impl std::fmt::Display for DocRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_registry {
+            write!(f, "@{}", self.name)
+        } else {
+            write!(f, "{}", self.name)
+        }
+    }
+}
+
+impl DocRef {
+    /// Create a local (non-registry) document reference.
+    pub fn local(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            is_registry: false,
+        }
+    }
+
+    /// Create a registry document reference.
+    pub fn registry(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            is_registry: true,
+        }
+    }
+
+    /// Parse a raw reference string that may start with `@`.
+    /// Strips the `@` and sets `is_registry` accordingly.
+    pub fn parse(raw: &str) -> Self {
+        match raw.strip_prefix('@') {
+            Some(stripped) => Self::registry(stripped),
+            None => Self::local(raw),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 /// Parse-time fact value (before type resolution)
@@ -393,12 +442,12 @@ pub enum FactValue {
     /// A literal value (parse-time; type will be resolved during planning)
     Literal(Value),
     /// A reference to another document
-    DocumentReference(String),
-    /// A type declaration
+    DocumentReference(DocRef),
+    /// A type declaration (inline type annotation on a fact)
     TypeDeclaration {
         base: String,
         constraints: Option<Vec<(String, Vec<String>)>>,
-        from: Option<String>,
+        from: Option<DocRef>,
     },
 }
 
@@ -524,7 +573,13 @@ impl fmt::Display for FactValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FactValue::Literal(v) => write!(f, "{}", v),
-            FactValue::DocumentReference(doc) => write!(f, "doc {}", doc),
+            FactValue::DocumentReference(doc_ref) => {
+                if doc_ref.is_registry {
+                    write!(f, "doc @{}", doc_ref.name)
+                } else {
+                    write!(f, "doc {}", doc_ref.name)
+                }
+            }
             FactValue::TypeDeclaration {
                 base,
                 constraints,
@@ -967,7 +1022,7 @@ pub enum TypeDef {
         source_location: Source,
         name: String,
         source_type: String,
-        from: String,
+        from: DocRef,
         constraints: Option<Vec<(String, Vec<String>)>>,
     },
     Inline {
@@ -975,7 +1030,7 @@ pub enum TypeDef {
         parent: String,
         constraints: Option<Vec<(String, Vec<String>)>>,
         fact_ref: FactReference,
-        from: Option<String>,
+        from: Option<DocRef>,
     },
 }
 

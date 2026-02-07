@@ -1,4 +1,6 @@
 use lemma::{Engine, LiteralValue, Target};
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -20,7 +22,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     let solutions = engine
         .invert(

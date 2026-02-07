@@ -1,4 +1,6 @@
 use lemma::{Engine, FactPath, LiteralValue, Target, TargetOp};
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 /// Test TargetOp::Gt (Greater Than)
@@ -13,7 +15,7 @@ fn target_operator_greater_than() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Question: "What base prices result in final price > $100?"
     let solutions = engine
@@ -54,7 +56,7 @@ fn target_operator_less_than_or_equal() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Question: "What monthly costs keep annual cost <= $50,000?"
     let solutions = engine
@@ -91,7 +93,7 @@ fn target_operator_greater_than_or_equal() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Question: "What base salaries give total comp >= $120,000?"
     let solutions = engine
@@ -130,7 +132,7 @@ fn boolean_not_operator() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Question: "What conditions trigger veto?"
     let solutions = engine
@@ -173,8 +175,8 @@ fn cross_document_simple() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(base_doc, "base").unwrap();
-    engine.add_lemma_code(derived_doc, "derived").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "base").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_doc, "derived").unwrap();
 
     // Question: "What order_total gives final_total of $85?"
     let solutions = engine
@@ -217,8 +219,8 @@ fn cross_document_rule_references() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(config_doc, "config").unwrap();
-    engine.add_lemma_code(order_doc, "order").unwrap();
+    add_lemma_code_blocking(&mut engine, config_doc, "config").unwrap();
+    add_lemma_code_blocking(&mut engine, order_doc, "order").unwrap();
 
     let mut given = HashMap::new();
     given.insert("settings.min_threshold".to_string(), "1000".to_string());
@@ -266,11 +268,9 @@ fn cross_document_multi_level() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(global_doc, "global").unwrap();
-    engine.add_lemma_code(regional_doc, "regional").unwrap();
-    engine
-        .add_lemma_code(transaction_doc, "transaction")
-        .unwrap();
+    add_lemma_code_blocking(&mut engine, global_doc, "global").unwrap();
+    add_lemma_code_blocking(&mut engine, regional_doc, "regional").unwrap();
+    add_lemma_code_blocking(&mut engine, transaction_doc, "transaction").unwrap();
 
     let mut given = HashMap::new();
     given.insert(
@@ -327,8 +327,8 @@ fn cross_document_piecewise() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(base_doc, "base").unwrap();
-    engine.add_lemma_code(pricing_doc, "pricing").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "base").unwrap();
+    add_lemma_code_blocking(&mut engine, pricing_doc, "pricing").unwrap();
 
     let mut given = HashMap::new();
     given.insert("subtotal".to_string(), "100".to_string());
@@ -374,7 +374,7 @@ fn complex_boolean_not_and_combination() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Question: "What conditions cause veto?"
     let solutions = engine
@@ -406,7 +406,7 @@ fn target_operator_not_equal() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Question: "What status values are NOT complete?"
     let result = engine.invert(

@@ -32,22 +32,16 @@ pub(crate) fn parse_fact_definition(
     let name = fact_name.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: fact_definition missing reference",
-            span.clone(),
-            attribute,
+            Source::new(attribute, span.clone(), doc_name),
             Arc::from(""),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
     let value = fact_value.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: fact_definition missing fact_value",
-            span.clone(),
-            attribute,
+            Source::new(attribute, span.clone(), doc_name),
             Arc::from(""),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
@@ -91,22 +85,16 @@ pub(crate) fn parse_fact_binding(
     let binding_ref_path = fact_reference_path.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: fact_binding missing fact_reference",
-            span.clone(),
-            attribute,
+            Source::new(attribute, span.clone(), doc_name),
             Arc::from(""),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
     let value = fact_value.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: fact_binding missing fact_value",
-            span.clone(),
-            attribute,
+            Source::new(attribute, span.clone(), doc_name),
             Arc::from(""),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
@@ -131,11 +119,8 @@ fn parse_fact_reference_path(
     if parts.is_empty() {
         return Err(LemmaError::engine(
             "Grammar error: fact_reference has no segments",
-            span,
-            attribute,
+            Source::new(attribute, span, doc_name),
             Arc::from(text),
-            doc_name,
-            1,
             None::<String>,
         ));
     }
@@ -166,11 +151,8 @@ fn parse_fact_value(
     }
     Err(LemmaError::engine(
         "Grammar error: fact_value must contain literal, type_declaration, inline_type_definition, or doc_reference",
-        span,
-        attribute,
+        Source::new(attribute, span, doc_name),
         Arc::from(pair_str),
-        doc_name,
-        1,
         None::<String>,
     ))
 }
@@ -189,11 +171,8 @@ fn parse_type_declaration(
     let type_name_def = pair.into_inner().next().ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: type_declaration must contain type_name_def",
-            span,
-            attribute,
+            Source::new(attribute, span, doc_name),
             Arc::from(pair_str),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
@@ -222,11 +201,8 @@ fn parse_inline_type_definition(
     let type_arrow_chain = pair.into_inner().next().ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: inline_type_definition must contain type_arrow_chain",
-            span,
-            attribute,
+            Source::new(attribute, span, doc_name),
             Arc::from(pair_str),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
@@ -249,24 +225,20 @@ fn parse_fact_document_reference(
 ) -> Result<FactValue, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
     let pair_str = pair.as_str();
-    let doc_name = pair
+    let raw_doc_name = pair
         .into_inner()
         .next()
         .ok_or_else(|| {
             LemmaError::engine(
                 "Grammar error: doc_reference must contain doc_name",
-                span,
-                attribute,
+                Source::new(attribute, span, doc_name),
                 Arc::from(pair_str),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?
-        .as_str()
-        .to_string();
+        .as_str();
 
-    Ok(FactValue::DocumentReference(doc_name))
+    Ok(FactValue::DocumentReference(DocRef::parse(raw_doc_name)))
 }
 
 fn parse_fact_literal(
@@ -280,11 +252,8 @@ fn parse_fact_literal(
     let literal_pair = inner.next().ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: literal must contain a literal value",
-            span,
-            attribute,
+            Source::new(attribute, span, doc_name),
             Arc::from(pair_str),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
@@ -307,8 +276,9 @@ fact contract = doc employment_contract"#;
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].facts.len(), 2);
 
-        if let FactValue::DocumentReference(doc_name) = &result[0].facts[1].value {
-            assert_eq!(doc_name, "employment_contract");
+        if let FactValue::DocumentReference(doc_ref) = &result[0].facts[1].value {
+            assert_eq!(doc_ref.name, "employment_contract");
+            assert!(!doc_ref.is_registry);
         } else {
             panic!("Expected DocumentReference");
         }
@@ -331,8 +301,9 @@ fact contract.base.rate = 100"#;
             result[0].facts[0].reference,
             crate::FactReference::from_path(vec!["contract".to_string()])
         );
-        if let FactValue::DocumentReference(doc_name) = &result[0].facts[0].value {
-            assert_eq!(doc_name, "employment_contract");
+        if let FactValue::DocumentReference(doc_ref) = &result[0].facts[0].value {
+            assert_eq!(doc_ref.name, "employment_contract");
+            assert!(!doc_ref.is_registry);
         } else {
             panic!("Expected DocumentReference");
         }
@@ -381,8 +352,9 @@ fact contract.base.rate = 100"#;
             result[0].facts[4].reference,
             crate::FactReference::from_path(vec!["contract".to_string(), "base".to_string()])
         );
-        if let FactValue::DocumentReference(doc_name) = &result[0].facts[4].value {
-            assert_eq!(doc_name, "base_contract");
+        if let FactValue::DocumentReference(doc_ref) = &result[0].facts[4].value {
+            assert_eq!(doc_ref.name, "base_contract");
+            assert!(!doc_ref.is_registry);
         } else {
             panic!("Expected DocumentReference");
         }

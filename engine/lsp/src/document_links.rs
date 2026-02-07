@@ -109,17 +109,47 @@ fn byte_offset_to_position(text: &str, byte_offset: usize) -> Position {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::StubRegistry;
+    use lemma::registry::{Registry, RegistryBundle, RegistryError, RegistryErrorKind};
+
+    /// Test-only Registry: predictable URLs for document link tests (no resolution).
+    struct TestLinkRegistry;
+
+    #[async_trait::async_trait]
+    impl Registry for TestLinkRegistry {
+        async fn resolve_doc(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
+            Err(RegistryError {
+                message: format!(
+                    "TestLinkRegistry does not resolve documents: '{}'",
+                    identifier
+                ),
+                kind: RegistryErrorKind::Other,
+            })
+        }
+
+        async fn resolve_type(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
+            Err(RegistryError {
+                message: format!(
+                    "TestLinkRegistry does not resolve type imports: '{}'",
+                    identifier
+                ),
+                kind: RegistryErrorKind::Other,
+            })
+        }
+
+        fn url_for_id(&self, identifier: &str) -> Option<String> {
+            Some(format!("https://test.lemma.dev/{}", identifier))
+        }
+    }
 
     #[test]
     fn finds_doc_reference_with_at_prefix() {
         let text = "doc example\nfact ext = doc @user/workspace/somedoc";
-        let registry = StubRegistry::new();
+        let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 1);
         assert_eq!(
             links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://registry.lemma.dev/user/workspace/somedoc")
+            Some("https://test.lemma.dev/user/workspace/somedoc")
         );
         // The link should span from '@' to the end of the identifier.
         assert_eq!(links[0].range.start.line, 1);
@@ -129,28 +159,29 @@ mod tests {
     #[test]
     fn finds_type_import_with_at_prefix() {
         let text = "doc example\ntype money from @lemma/std/finance";
-        let registry = StubRegistry::new();
+        let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 1);
         assert_eq!(
             links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://registry.lemma.dev/lemma/std/finance")
+            Some("https://test.lemma.dev/lemma/std/finance")
         );
     }
 
     #[test]
     fn finds_multiple_at_references() {
+        // Doc declarations don't use @, so only the two references produce links.
         let text =
-            "doc @org/proj/main\nfact other = doc @org/proj/helper\ntype t from @org/proj/types";
-        let registry = StubRegistry::new();
+            "doc org/proj/main\nfact other = doc @org/proj/helper\ntype t from @org/proj/types";
+        let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
-        assert_eq!(links.len(), 3);
+        assert_eq!(links.len(), 2);
     }
 
     #[test]
     fn no_links_when_no_at_references() {
         let text = "doc example\nfact x = 10\nrule y = x + 1";
-        let registry = StubRegistry::new();
+        let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert!(links.is_empty());
     }
@@ -158,7 +189,7 @@ mod tests {
     #[test]
     fn at_sign_without_valid_identifier_is_ignored() {
         let text = "doc example\nfact x = @123invalid";
-        let registry = StubRegistry::new();
+        let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert!(
             links.is_empty(),
@@ -169,7 +200,7 @@ mod tests {
     #[test]
     fn at_sign_at_end_of_text_is_ignored() {
         let text = "doc example\nfact x = @";
-        let registry = StubRegistry::new();
+        let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert!(links.is_empty());
     }
@@ -177,12 +208,12 @@ mod tests {
     #[test]
     fn trailing_dot_is_stripped_from_identifier() {
         let text = "See doc @user/workspace/somedoc.";
-        let registry = StubRegistry::new();
+        let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 1);
         assert_eq!(
             links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://registry.lemma.dev/user/workspace/somedoc")
+            Some("https://test.lemma.dev/user/workspace/somedoc")
         );
     }
 }

@@ -1,4 +1,6 @@
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -17,7 +19,7 @@ rule expected = 150
 rule test_passes = price_after_discount? == expected?
 "#;
 
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
     let response = engine
         .evaluate("test_money_minus_percentage", vec![], HashMap::new())
         .unwrap();
@@ -48,7 +50,7 @@ rule expected = 110
 rule test_passes = price_with_markup? == expected?
 "#;
 
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
     let response = engine
         .evaluate("test_money_plus_percentage", vec![], HashMap::new())
         .unwrap();
@@ -76,7 +78,7 @@ rule expected = 150
 rule test_passes = result? == expected?
 "#;
 
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
     let response = engine
         .evaluate("test_number_times_percentage", vec![], HashMap::new())
         .unwrap();
@@ -105,7 +107,7 @@ rule expected = 150
 rule test_passes = final_price? == expected?
 "#;
 
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
     let response = engine
         .evaluate("test_with_rule_reference", vec![], HashMap::new())
         .unwrap();
@@ -136,7 +138,7 @@ rule expected = 72
 rule test_passes = after_second? == expected?
 "#;
 
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
     let response = engine
         .evaluate("test_chained_percentages", vec![], HashMap::new())
         .unwrap();

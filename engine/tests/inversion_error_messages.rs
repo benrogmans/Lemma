@@ -1,4 +1,6 @@
 use lemma::{Engine, LiteralValue, Target};
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -13,9 +15,7 @@ fn test_better_error_for_invalid_value() {
     "#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
 
     // Try to invert for a value that doesn't exist (15)
     let result = engine.invert(
@@ -45,9 +45,7 @@ fn test_better_error_for_veto_mismatch() {
     "#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
 
     // Try to find a veto that doesn't exist
     let result = engine.invert(
@@ -77,9 +75,7 @@ fn test_error_with_no_satisfiable_branches() {
     "#;
 
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
 
     // Give facts that make all branches false
     let mut given = HashMap::new();

@@ -11,7 +11,8 @@ import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const PROJECT_ROOT = join(__dirname, '..');
+const PROJECT_ROOT = join(__dirname, '..');       // engine/
+const LSP_ROOT = join(PROJECT_ROOT, 'lsp');       // engine/lsp/
 const WORKSPACE_ROOT = join(__dirname, '../..');
 
 /**
@@ -21,8 +22,8 @@ function parseCargoMetadata() {
   // Read workspace Cargo.toml
   const workspaceToml = readFileSync(join(WORKSPACE_ROOT, 'Cargo.toml'), 'utf8');
 
-  // Read package Cargo.toml
-  const packageToml = readFileSync(join(PROJECT_ROOT, 'Cargo.toml'), 'utf8');
+  // Read LSP package Cargo.toml (the one we build for WASM)
+  const packageToml = readFileSync(join(LSP_ROOT, 'Cargo.toml'), 'utf8');
 
   // Extract workspace.package section
   const workspaceMatch = workspaceToml.match(/^\[workspace\.package\]\n((?:[^\[].*\n)*)/m);
@@ -72,16 +73,25 @@ function parseCargoMetadata() {
 }
 
 /**
- * Build WASM package
+ * Build WASM package (engine + LSP in one artifact from the lsp crate).
  */
 export function build() {
-  console.log('Building WASM package...');
+  console.log('Building WASM package (engine + LSP)...');
 
-  // Run wasm-pack with web target (works in both browser and Node.js)
+  // Build the lsp crate for wasm32; it includes the engine and re-exports WasmEngine (playground uses only that).
+  // Output to engine/pkg so the playground can load lemma.js from ../pkg/
+  const env = {
+    ...process.env,
+    CARGO_PROFILE_RELEASE_OPT_LEVEL: 'z',
+    CARGO_PROFILE_RELEASE_LTO: 'true',
+    CARGO_PROFILE_RELEASE_STRIP: 'true',
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '1'
+  };
   try {
-    execSync('wasm-pack build --target web --out-dir pkg', {
+    execSync('wasm-pack build --target web --out-dir ../pkg', {
       stdio: 'inherit',
-      cwd: PROJECT_ROOT
+      cwd: LSP_ROOT,
+      env
     });
   } catch (error) {
     console.error('Failed to build WASM:', error.message);
@@ -91,20 +101,20 @@ export function build() {
   // Parse metadata from Cargo.toml files
   const metadata = parseCargoMetadata();
 
-  // Create package.json
+  // Create package.json (lsp crate outputs lsp.js, lsp_bg.wasm)
   const packageJson = {
     name: "@benrogmans/lemma-engine",
     version: metadata.version,
     description: metadata.description,
     type: "module",
-    main: "lemma.js",
-    types: "lemma.d.ts",
+    main: "lsp.js",
+    types: "lsp.d.ts",
     files: [
-      "lemma_bg.wasm",
-      "lemma.js",
-      "lemma.d.ts",
-      "lemma_bg.js",
-      "lemma_bg.wasm.d.ts"
+      "lsp_bg.wasm",
+      "lsp.js",
+      "lsp.d.ts",
+      "lsp_bg.js",
+      "lsp_bg.wasm.d.ts"
     ],
     keywords: [...metadata.keywords, "wasm", "webassembly"],
     author: metadata.author,
@@ -119,7 +129,7 @@ export function build() {
     }
   };
 
-  // Write package.json to pkg directory
+  // Write package.json to engine/pkg directory
   const outputPath = join(PROJECT_ROOT, 'pkg', 'package.json');
   writeFileSync(outputPath, JSON.stringify(packageJson, null, 2) + '\n');
 
@@ -130,8 +140,6 @@ export function build() {
   writeFileSync(readmeDest, readmeContent);
 
   console.log('✓ WASM package built successfully');
-  console.log(`✓ Created package.json for @benrogmans/lemma-engine@${metadata.version}`);
-  console.log('✓ Copied README.md to pkg directory');
 }
 
 // CLI interface

@@ -14,16 +14,17 @@ pub fn from_json(json: &[u8], plan: &ExecutionPlan) -> Result<HashMap<String, St
     let map: HashMap<String, Value> = serde_json::from_slice(json).map_err(|e| {
         LemmaError::engine(
             format!("JSON parse error: {}", e),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<input>",
+            crate::Source::new(
+                "<input>",
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                &plan.doc_name,
+            ),
             Arc::from(""),
-            &plan.doc_name,
-            1,
             None::<String>,
         )
     })?;

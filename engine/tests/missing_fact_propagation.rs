@@ -1,4 +1,6 @@
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 /// Test that when a rule in a referenced document fails due to missing facts,
@@ -25,8 +27,8 @@ fact rules.base_price = 500
 rule total = rules.final_total?
 "#;
 
-    engine.add_lemma_code(private_doc, "private.lemma").unwrap();
-    engine.add_lemma_code(main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
 
     // Evaluate with missing quantity fact
     let response = engine
@@ -82,8 +84,8 @@ fact rules.base_price = 500
 rule total = rules.final_total?
 "#;
 
-    engine.add_lemma_code(private_doc, "private.lemma").unwrap();
-    engine.add_lemma_code(main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("rules.base_price".to_string(), "9".to_string());
@@ -132,7 +134,7 @@ fact discount = [percent]
 rule total = price * quantity - discount
 "#;
 
-    engine.add_lemma_code(doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
 
     // Evaluate with no facts provided
     let response = engine.evaluate("test_doc", vec![], HashMap::new()).unwrap();
@@ -186,7 +188,7 @@ rule subtotal = price * quantity
 rule message = "Order processed"
 "#;
 
-    engine.add_lemma_code(doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("price".to_string(), "10".to_string());
@@ -248,8 +250,8 @@ fact rules.base_price = 500
 rule total = rules.total?
 "#;
 
-    engine.add_lemma_code(private_doc, "private.lemma").unwrap();
-    engine.add_lemma_code(main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("rules.base_price".to_string(), "100".to_string());

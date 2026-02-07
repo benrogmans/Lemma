@@ -3,6 +3,8 @@
 /// These tests ensure that the engine correctly validates that fact bindings
 /// match the expected types declared in the document, preventing type confusion bugs.
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -14,7 +16,7 @@ rule doubled = age * 2
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let mut facts = HashMap::new();
     facts.insert("age".to_string(), "twenty".to_string());
@@ -41,7 +43,7 @@ rule total = price * quantity
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "expensive".to_string());
@@ -97,7 +99,7 @@ rule total = base_price * 1.2
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let mut facts = HashMap::new();
     facts.insert("base_price".to_string(), "sixty".to_string());
@@ -125,7 +127,7 @@ rule total = price * 1.1
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "100".to_string());
@@ -150,7 +152,7 @@ rule result = line.total?
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
 
     assert!(
         result.is_err(),

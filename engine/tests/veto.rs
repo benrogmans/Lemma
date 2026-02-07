@@ -7,6 +7,8 @@
 //! 4. Veto in unless clause conditions or results will apply to the dependent rule
 
 use lemma::{Engine, LiteralValue, OperationResult};
+mod common;
+use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -21,7 +23,7 @@ rule is_adult = age >= 18
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("age_check", vec![], HashMap::new())
@@ -48,7 +50,7 @@ rule is_valid = value > 0
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("validation", vec![], HashMap::new())
@@ -72,7 +74,7 @@ rule is_adult = age >= 18
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("age_check", vec![], HashMap::new())
@@ -101,7 +103,7 @@ rule eligible = age >= 18 and score >= 80
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("validation", vec![], HashMap::new())
@@ -130,7 +132,7 @@ rule eligible = age >= 18 and score >= 80
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("validation", vec![], HashMap::new())
@@ -158,7 +160,7 @@ rule valid_compensation = salary >= 40000
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("salary_check", vec![], HashMap::new())
@@ -189,7 +191,7 @@ rule can_drive = age >= 16
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("mixed_validation", vec![], HashMap::new())
@@ -216,7 +218,7 @@ rule can_ship = package_weight <= 50
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("weight_check", vec![], HashMap::new())
@@ -243,7 +245,7 @@ rule is_affordable = price <= 1000
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("pricing_check", vec![], HashMap::new())
@@ -271,7 +273,7 @@ rule is_valid_date = event_date >= min_date
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("date_validation", vec![], HashMap::new())
@@ -298,7 +300,7 @@ rule is_complete = completion >= 95%
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("completion_check", vec![], HashMap::new())
@@ -327,7 +329,7 @@ rule eligible = has_permission
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("eligibility", vec![], HashMap::new())
@@ -355,7 +357,7 @@ rule within_budget = expenses < income
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("budget_check", vec![], HashMap::new())
@@ -382,7 +384,7 @@ rule is_active = status == "active"
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("status_check", vec![], HashMap::new())
@@ -411,7 +413,7 @@ rule double_value = value * 2
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("multi_rule", vec![], HashMap::new())
@@ -460,7 +462,7 @@ rule is_valid = value > 0
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("edge_case", vec![], HashMap::new())
@@ -484,7 +486,7 @@ rule valid = age >= 18
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("special_chars", vec![], HashMap::new())
@@ -518,7 +520,7 @@ rule valid = value > 0
     );
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(&code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, &code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("long_message", vec![], HashMap::new())
@@ -546,7 +548,7 @@ rule check = value > 10
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("priority_test", vec![], HashMap::new())
@@ -575,7 +577,7 @@ rule eligible = age >= 18 and score >= 80
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("double_veto", vec![], HashMap::new())
@@ -600,7 +602,7 @@ rule eligible = age >= 18
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("or_condition", vec![], HashMap::new())
@@ -627,7 +629,7 @@ rule can_proceed = true
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("negation_test", vec![], HashMap::new())

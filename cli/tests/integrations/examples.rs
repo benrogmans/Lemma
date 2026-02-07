@@ -406,17 +406,46 @@ fn test_example_11_document_composition() {
 }
 
 #[test]
+fn test_example_12_registry_references() {
+    let temp_dir = TempDir::new().unwrap();
+    let example_file = examples_dir().join("12_registry_references.lemma");
+
+    fs::copy(
+        &example_file,
+        temp_dir.path().join("12_registry_references.lemma"),
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("registry_demo")
+        .arg("--dir")
+        .arg(temp_dir.path());
+
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("LemmaBase").or(predicate::str::contains("Registry")));
+}
+
+#[test]
 fn test_all_examples_parse_via_cli() {
-    // This test ensures all example files can be parsed by the CLI
+    // This test ensures all example files can be parsed by the CLI.
+    // Files with external @... registry references are excluded because they
+    // require network access (or a running registry) to resolve.
     let temp_dir = TempDir::new().unwrap();
     let examples_path = examples_dir();
 
-    // Copy all example files to temp directory
+    let registry_examples: &[&str] = &["12_registry_references.lemma"];
+
+    // Copy all example files to temp directory (skip registry examples)
     for entry in fs::read_dir(&examples_path).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
         if path.extension().map(|e| e == "lemma").unwrap_or(false) {
-            let filename = path.file_name().unwrap();
+            let filename = path.file_name().unwrap().to_str().unwrap();
+            if registry_examples.contains(&filename) {
+                continue;
+            }
             fs::copy(&path, temp_dir.path().join(filename)).unwrap();
         }
     }

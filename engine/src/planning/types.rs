@@ -9,6 +9,7 @@
 use crate::error::LemmaError;
 use crate::parsing::ast::{FactReference, Span, TypeDef};
 use crate::planning::semantics::{self, LemmaType, TypeExtends, TypeSpecification};
+use crate::Source;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -62,11 +63,8 @@ impl TypeRegistry {
                 if doc_types.contains_key(name) {
                     return Err(LemmaError::engine(
                         format!("Type '{}' is already defined in document '{}'", name, doc),
-                        def_loc.span.clone(),
-                        &def_loc.attribute,
+                        def_loc.clone(),
                         Arc::from(""),
-                        &def_loc.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -88,11 +86,8 @@ impl TypeRegistry {
                             "Inline type definition for fact '{}' is already defined in document '{}'",
                             fact_ref.fact, doc
                         ),
-                        def_loc.span.clone(),
-                        &def_loc.attribute,
+                        def_loc.clone(),
                         Arc::from(""),
-                        &def_loc.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -242,6 +237,7 @@ impl TypeRegistry {
                     LemmaError::Inversion(details) => details.message.clone(),
                     LemmaError::Runtime(details) => details.message.clone(),
                     LemmaError::MissingFact(details) => details.message.clone(),
+                    LemmaError::Registry { details, .. } => details.message.clone(),
                     LemmaError::ResourceLimitExceeded {
                         limit_name,
                         limit_value,
@@ -265,6 +261,7 @@ impl TypeRegistry {
                             LemmaError::Inversion(details) => details.message.clone(),
                             LemmaError::Runtime(details) => details.message.clone(),
                             LemmaError::MissingFact(details) => details.message.clone(),
+                            LemmaError::Registry { details, .. } => details.message.clone(),
                             LemmaError::ResourceLimitExceeded {
                                 limit_name,
                                 limit_value,
@@ -285,16 +282,17 @@ impl TypeRegistry {
                 .join("; ");
             return Err(LemmaError::engine(
                 &combined_message,
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<internal>",
+                Source::new(
+                    "<internal>",
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    doc,
+                ),
                 Arc::from(""),
-                doc,
-                1,
                 None::<String>,
             ));
         }
@@ -318,7 +316,7 @@ impl TypeRegistry {
         if visited.contains(&key) {
             return Err(LemmaError::circular_dependency(
                 format!("Circular dependency detected in type resolution: {}", key),
-                crate::parsing::source::Source::new(
+                Source::new(
                     "<internal>",
                     crate::parsing::ast::Span {
                         start: 0,
@@ -329,7 +327,6 @@ impl TypeRegistry {
                     doc,
                 ),
                 std::sync::Arc::from(""),
-                1,
                 vec![],
                 None::<String>,
             ));
@@ -386,11 +383,9 @@ impl TypeRegistry {
                 visited.remove(&key);
                 return Err(LemmaError::engine(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
-                    Span { start: 0, end: 0, line: 1, col: 0 },
-                    "<internal>",
+                    Source::new("<internal>", Span { start: 0, end: 0, line: 1, col: 0 }, doc)
+,
                     Arc::from(""),
-                    doc,
-                    1,
                     None::<String>,
                 ));
             }
@@ -418,6 +413,7 @@ impl TypeRegistry {
                             LemmaError::Inversion(details) => details.message.clone(),
                             LemmaError::Runtime(details) => details.message.clone(),
                             LemmaError::MissingFact(details) => details.message.clone(),
+                            LemmaError::Registry { details, .. } => details.message.clone(),
                             LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
                                 format!("Resource limit exceeded: {} (limit: {}, actual: {}). {}", limit_name, limit_value, actual_value, suggestion)
                             },
@@ -430,6 +426,7 @@ impl TypeRegistry {
                                     LemmaError::Inversion(details) => details.message.clone(),
                                     LemmaError::Runtime(details) => details.message.clone(),
                                     LemmaError::MissingFact(details) => details.message.clone(),
+                                    LemmaError::Registry { details, .. } => details.message.clone(),
                                     LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
                                         format!("Resource limit exceeded: {} (limit: {}, actual: {}). {}", limit_name, limit_value, actual_value, suggestion)
                                     },
@@ -441,16 +438,8 @@ impl TypeRegistry {
                         .join("; ");
                     return Err(LemmaError::engine(
                         &combined_message,
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        &type_def.source_location().attribute,
+                        type_def.source_location().clone(),
                         Arc::from(""),
-                        doc,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -465,7 +454,7 @@ impl TypeRegistry {
         let extends = if self.resolve_primitive_type(&parent).is_some() {
             TypeExtends::Primitive
         } else {
-            let parent_doc = from.as_deref().unwrap_or(doc);
+            let parent_doc = from.as_ref().map(|r| r.name.as_str()).unwrap_or(doc);
             let family = self
                 .resolve_type_internal(parent_doc, &parent, visited)
                 .ok()
@@ -490,7 +479,7 @@ impl TypeRegistry {
         &self,
         doc: &str,
         parent: &str,
-        from: &Option<String>,
+        from: &Option<crate::parsing::ast::DocRef>,
         visited: &mut HashSet<String>,
         source: &crate::Source,
     ) -> Result<Option<TypeSpecification>, LemmaError> {
@@ -499,8 +488,9 @@ impl TypeRegistry {
             return Ok(Some(specs));
         }
 
-        // Otherwise resolve as a custom type in the specified document (or same document if not specified)
-        let parent_doc = from.as_deref().unwrap_or(doc);
+        // Otherwise resolve as a custom type in the specified document (or same document if not specified).
+        // DocRef.name is already the clean name (@ stripped by parser).
+        let parent_doc = from.as_ref().map(|r| r.name.as_str()).unwrap_or(doc);
         match self.resolve_type_internal(parent_doc, parent, visited) {
             Ok(Some(t)) => Ok(Some(t.specifications)),
             Ok(None) => {
@@ -515,11 +505,8 @@ impl TypeRegistry {
                     // Type was never registered - invalid parent type
                     Err(LemmaError::engine(
                         format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ))
                 } else {
@@ -564,11 +551,8 @@ impl TypeRegistry {
                 Err(e) => {
                     errors.push(LemmaError::engine(
                         format!("Failed to apply constraint '{}': {}", command, e),
-                        source.span.clone(),
-                        &source.attribute,
+                        source.clone(),
                         Arc::from(""),
-                        &source.doc_name,
-                        1,
                         None::<String>,
                     ));
                     specs = specs_clone;
@@ -608,11 +592,8 @@ impl TypeRegistry {
                 // Inline type definitions should have valid parent types
                 return Err(LemmaError::engine(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
-                    def_loc.span.clone(),
-                    &def_loc.attribute,
+                    def_loc.clone(),
                     Arc::from(""),
-                    &def_loc.doc_name,
-                    1,
                     None::<String>,
                 ));
             }
@@ -635,6 +616,7 @@ impl TypeRegistry {
                             LemmaError::Inversion(details) => details.message.clone(),
                             LemmaError::Runtime(details) => details.message.clone(),
                             LemmaError::MissingFact(details) => details.message.clone(),
+                            LemmaError::Registry { details, .. } => details.message.clone(),
                             LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
                                 format!("Resource limit exceeded: {} (limit: {}, actual: {}). {}", limit_name, limit_value, actual_value, suggestion)
                             },
@@ -647,6 +629,7 @@ impl TypeRegistry {
                                     LemmaError::Inversion(details) => details.message.clone(),
                                     LemmaError::Runtime(details) => details.message.clone(),
                                     LemmaError::MissingFact(details) => details.message.clone(),
+                                    LemmaError::Registry { details, .. } => details.message.clone(),
                                     LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
                                         format!("Resource limit exceeded: {} (limit: {}, actual: {}). {}", limit_name, limit_value, actual_value, suggestion)
                                     },
@@ -658,16 +641,17 @@ impl TypeRegistry {
                         .join("; ");
                     return Err(LemmaError::engine(
                         &combined_message,
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        &def_loc.attribute,
+                        Source::new(
+                            &def_loc.attribute,
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                            &def_loc.doc_name,
+                        ),
                         Arc::from(""),
-                        &def_loc.doc_name,
-                        1,
                         None::<String>,
                     ));
                 }
@@ -680,7 +664,7 @@ impl TypeRegistry {
         let extends = if self.resolve_primitive_type(parent).is_some() {
             TypeExtends::Primitive
         } else {
-            let parent_doc = from.as_deref().unwrap_or(doc);
+            let parent_doc = from.as_ref().map(|r| r.name.as_str()).unwrap_or(doc);
             let family = self
                 .resolve_type_internal(parent_doc, parent, visited)
                 .ok()
@@ -723,16 +707,10 @@ impl TypeRegistry {
                             "Unit '{}' is defined more than once in type '{}'",
                             unit, type_name
                         ),
-                        source.map(|s| s.span.clone()).unwrap_or(Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        }),
-                        source.map(|s| s.attribute.as_str()).unwrap_or("<input>"),
+                        source
+                            .cloned()
+                            .expect("BUG: named type definition must have source location"),
                         Arc::from(""),
-                        source.map(|s| s.doc_name.as_str()).unwrap_or(doc),
-                        1,
                         None::<String>,
                     ));
                 }
@@ -768,16 +746,10 @@ impl TypeRegistry {
                         "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
                         unit, doc, existing_name, type_name
                     ),
-                    source.map(|s| s.span.clone()).unwrap_or(Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    }),
-                    source.map(|s| s.attribute.as_str()).unwrap_or("<input>"),
+                    source
+                        .cloned()
+                        .expect("BUG: named type definition must have source location"),
                     Arc::from(""),
-                    source.map(|s| s.doc_name.as_str()).unwrap_or(doc),
-                    1,
                     None::<String>,
                 ));
             }
@@ -812,16 +784,10 @@ impl TypeRegistry {
                         "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
                         unit, doc, existing_name, type_name
                     ),
-                    source.map(|s| s.span.clone()).unwrap_or(Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    }),
-                    source.map(|s| s.attribute.as_str()).unwrap_or("<input>"),
+                    source
+                        .cloned()
+                        .expect("BUG: named type definition must have source location"),
                     Arc::from(""),
-                    source.map(|s| s.doc_name.as_str()).unwrap_or(doc),
-                    1,
                     None::<String>,
                 ));
             }

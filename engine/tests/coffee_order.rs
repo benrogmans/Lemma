@@ -2,6 +2,8 @@
 //!
 //! Tests type imports, inline type declarations with constraints, and complex rule chains
 
+mod common;
+use common::add_lemma_code_blocking;
 use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -75,11 +77,9 @@ rule discount_amount = subtotal? * loyalty_discount?
 rule total = subtotal? - discount_amount?
 "#;
 
-    engine
-        .add_lemma_code(examples, "examples.lemma")
+    add_lemma_code_blocking(&mut engine, examples, "examples.lemma")
         .expect("Failed to parse examples");
-    engine
-        .add_lemma_code(coffee_order, "coffee_order.lemma")
+    add_lemma_code_blocking(&mut engine, coffee_order, "coffee_order.lemma")
         .expect("Failed to parse coffee_order");
 
     engine

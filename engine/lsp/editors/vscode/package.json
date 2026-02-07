@@ -45,8 +45,8 @@
       "properties": {
         "lemma.lspServerPath": {
           "type": "string",
-          "default": "lemma-lsp",
-          "description": "Path to the lemma-lsp binary. If not absolute, the binary is looked up on $PATH."
+          "default": "lsp",
+          "description": "Path to the lsp binary. If not absolute, the binary is looked up on $PATH."
         }
       }
     }

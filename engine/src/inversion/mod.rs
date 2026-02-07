@@ -155,16 +155,17 @@ pub fn invert(
     let executable_rule = plan.get_rule(rule_name).ok_or_else(|| {
         LemmaError::engine(
             format!("Rule not found: {}.{}", plan.doc_name, rule_name),
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<inversion>",
+            Source::new(
+                "<inversion>",
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                plan.doc_name.clone(),
+            ),
             std::sync::Arc::from(""),
-            plan.doc_name.clone(),
-            1,
             None::<String>,
         )
     })?;
@@ -445,6 +446,16 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    fn add_lemma_code_blocking(
+        engine: &mut Engine,
+        code: &str,
+        source: &str,
+    ) -> crate::LemmaResult<()> {
+        tokio::runtime::Runtime::new()
+            .expect("tokio runtime")
+            .block_on(engine.add_lemma_code(code, source))
+    }
+
     #[test]
     fn test_format_target_eq() {
         let target = Target::value(LiteralValue::number(Decimal::from(42)));
@@ -540,7 +551,7 @@ rule another = base?
 "#;
 
         let mut engine = Engine::new();
-        engine.add_lemma_code(code, "test.lemma").unwrap();
+        add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
         let inv = engine
             .invert(
@@ -581,7 +592,7 @@ rule another = base?
 "#;
 
         let mut engine = Engine::new();
-        engine.add_lemma_code(code, "test.lemma").unwrap();
+        add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
         let inv = engine
             .invert(
@@ -612,7 +623,7 @@ rule another = base?
 "#;
 
         let mut engine = Engine::new();
-        engine.add_lemma_code(code, "test.lemma").unwrap();
+        add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
         let inv = engine
             .invert(
@@ -680,7 +691,7 @@ rule another = base?
 "#;
 
         let mut engine = Engine::new();
-        engine.add_lemma_code(code, "test.lemma").unwrap();
+        add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
         let inv = engine
             .invert("example", "another", Target::any_veto(), HashMap::new())

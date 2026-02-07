@@ -2,8 +2,8 @@ use crate::parsing::ast::Span;
 
 /// Unified source location information
 ///
-/// Combines source file identifier, span, and document name
-/// for consistent source location tracking across the codebase.
+/// Combines source file identifier, span, and document name.
+/// Pass this type through; do not unpack into (attribute, span, doc_name).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Source {
     /// Source file identifier (e.g., filename or "<input>")
@@ -17,7 +17,7 @@ pub struct Source {
 }
 
 impl Source {
-    /// Create a new Source
+    /// Create a new Source.
     #[must_use]
     pub fn new(attribute: impl Into<String>, span: Span, doc_name: impl Into<String>) -> Self {
         Self {

@@ -76,11 +76,8 @@ pub fn parse(
 
             Err(LemmaError::parse(
                 e.variant.to_string(),
-                pest_span,
-                attribute,
+                crate::parsing::source::Source::new(attribute, pest_span, "<parse-error>"),
                 Arc::from(content),
-                "<parse-error>",
-                1,
                 None::<String>,
             ))
         }
@@ -113,7 +110,7 @@ fn parse_doc(
             }
             Rule::doc_declaration => {
                 for decl_inner in header_item.into_inner() {
-                    if decl_inner.as_rule() == Rule::doc_name {
+                    if decl_inner.as_rule() == Rule::doc_name_local {
                         doc_name = Some(decl_inner.as_str().to_string());
                         break;
                     }
@@ -126,16 +123,17 @@ fn parse_doc(
     let name = doc_name.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: doc missing doc_declaration",
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            attribute,
+            crate::parsing::source::Source::new(
+                attribute,
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "<parse-error>",
+            ),
             std::sync::Arc::from(""),
-            "<parse-error>",
-            1,
             None::<String>,
         )
     })?;
@@ -520,12 +518,12 @@ fact age = 25
     }
 
     #[test]
-    fn parse_registry_doc_name_with_at_prefix() {
-        let input = r#"doc @user/workspace/somedoc
+    fn parse_registry_style_doc_name() {
+        let input = r#"doc user/workspace/somedoc
 fact name = "Alice""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "@user/workspace/somedoc");
+        assert_eq!(result[0].name, "user/workspace/somedoc");
     }
 
     #[test]
@@ -536,8 +534,9 @@ fact external = doc @user/workspace/somedoc"#;
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].facts.len(), 1);
         match &result[0].facts[0].value {
-            crate::FactValue::DocumentReference(doc_name) => {
-                assert_eq!(doc_name, "@user/workspace/somedoc");
+            crate::FactValue::DocumentReference(doc_ref) => {
+                assert_eq!(doc_ref.name, "user/workspace/somedoc");
+                assert!(doc_ref.is_registry, "expected registry reference");
             }
             other => panic!("Expected DocumentReference, got: {:?}", other),
         }
@@ -553,7 +552,8 @@ fact price = [money]"#;
         assert_eq!(result[0].types.len(), 1);
         match &result[0].types[0] {
             crate::TypeDef::Import { from, name, .. } => {
-                assert_eq!(from, "@lemma/std/finance");
+                assert_eq!(from.name, "lemma/std/finance");
+                assert!(from.is_registry, "expected registry reference");
                 assert_eq!(name, "money");
             }
             other => panic!("Expected Import type, got: {:?}", other),
@@ -562,16 +562,16 @@ fact price = [money]"#;
 
     #[test]
     fn parse_multiple_registry_docs_in_same_file() {
-        let input = r#"doc @user/workspace/doc_a
+        let input = r#"doc user/workspace/doc_a
 fact x = 10
 
-doc @user/workspace/doc_b
+doc user/workspace/doc_b
 fact y = 20
 fact a = doc @user/workspace/doc_a"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].name, "@user/workspace/doc_a");
-        assert_eq!(result[1].name, "@user/workspace/doc_b");
+        assert_eq!(result[0].name, "user/workspace/doc_a");
+        assert_eq!(result[1].name, "user/workspace/doc_b");
     }
 
     #[test]

@@ -18,17 +18,7 @@
 
         #editor {
             width: 100%;
-            height: 300px;
-            border: 1px solid #ccc;
-            border-radius: 3px;
-        }
-
-        .section {
-            margin: 20px 0;
-            padding: 15px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            background: #f9f9f9;
+            height: 400px;
         }
 
         .hint {
@@ -37,31 +27,36 @@
             font-size: 13px;
         }
 
-        /* --- Floating status panel --- */
+        /* --- Editor + status bar (IDE-style) --- */
 
-        #status {
-            position: fixed;
-            right: 18px;
-            bottom: 18px;
-            width: min(520px, calc(100vw - 36px));
-            max-height: min(45vh, 420px);
-            overflow: auto;
-            padding: 12px;
-            border-radius: 8px;
-            border: 1px solid #ddd;
-            background: rgba(255, 255, 255, 0.98);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.14);
-            z-index: 9999;
+        .editor-wrap {
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            overflow: hidden;
         }
-        #status.ok  { border-color: #28a745; background: rgba(212, 237, 218, 0.96); }
-        #status.err { border-color: #dc3545; background: rgba(248, 215, 218, 0.96); }
-        #status.warn { border-color: #ffc107; background: rgba(255, 243, 205, 0.96); }
-        #status .title { font-weight: 600; margin-bottom: 6px; }
-        #status .message {
-            white-space: pre-wrap;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        .editor-wrap #editor {
+            border: none;
+            border-radius: 0;
+        }
+        #status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 22px;
+            padding: 2px 10px;
+            border-top: 1px solid #ddd;
+            background: #f4f4f4;
             font-size: 12px;
-            line-height: 1.45;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            color: #333;
+        }
+        #status.ok  { background: #f4f4f4; border-top-color: #e8e8e8; }
+        #status.err { background: #f8d7da; border-top-color: #dc3545; color: #721c24; }
+        #status.warn { background: #fff3cd; border-top-color: #ffc107; color: #856404; }
+        #status .status-text {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         /* --- Document cards --- */
@@ -186,15 +181,14 @@
 <body>
     <h1>Lemma WASM Playground</h1>
 
-    <div id="status" class="warn">
-        <div class="title">Loading</div>
-        <div class="message">Initializing WASM module</div>
-    </div>
-
     <div class="section">
-        <h2>Lemma code</h2>
-        <div id="editor"></div>
-        <div class="hint">Edits auto-load. Errors are shown in the floating panel (bottom-right).</div>
+        <div class="editor-wrap">
+            <div id="editor"></div>
+            <div id="status" class="warn">
+                <span class="status-text">Initializing…</span>
+            </div>
+        </div>
+        <div class="hint">Edits auto-load. Diagnostics appear inline.</div>
     </div>
 
     <div class="section">
@@ -203,8 +197,8 @@
     </div>
 
     <script type="module">
-        import init, { WasmEngine } from '../pkg/lemma.js';
-        import { registerLemmaLanguage } from '../syntax/monaco.js';
+        import init, { WasmEngine } from '../pkg/lsp.js';
+        import { registerLemmaLanguage } from './monaco.js';
 
         // ---------------------------------------------------------------
         // State
@@ -212,8 +206,33 @@
 
         let engine = null;
         let monacoEditor = null;
+        let monacoInstance = null;
         let editorReady = false;
         let loadTimer = null;
+        let diagnosticsTimer = null;
+
+        function refreshEditorDiagnostics() {
+            if (!engine || !monacoEditor || !monacoInstance) return;
+            const model = monacoEditor.getModel();
+            if (!model) return;
+            const code = monacoEditor.getValue();
+            try {
+                const raw = engine.getDiagnostics(code, 'wasm.lemma');
+                const data = JSON.parse(raw);
+                const list = Array.isArray(data) ? data : (data && Array.isArray(data.diagnostics) ? data.diagnostics : []);
+                const markers = list.map(function (d) {
+                    return {
+                        severity: 8,
+                        message: d.message || 'Error',
+                        startLineNumber: d.startLine || 1,
+                        startColumn: d.startColumn || 1,
+                        endLineNumber: d.endLine || 1,
+                        endColumn: d.endColumn || 1
+                    };
+                });
+                monacoInstance.editor.setModelMarkers(model, 'lemma', markers);
+            } catch (_) {}
+        }
 
         const state = {
             docs: [],
@@ -232,8 +251,9 @@
             if (kind === 'ok') element.classList.add('ok');
             else if (kind === 'err') element.classList.add('err');
             else element.classList.add('warn');
-            element.querySelector('.title').textContent = title;
-            element.querySelector('.message').textContent = message || '';
+            const text = message ? title + ': ' + message : (title || '');
+            element.querySelector('.status-text').textContent = text;
+            element.title = text;
         }
 
         // ---------------------------------------------------------------
@@ -872,44 +892,17 @@
             return response.doc;
         }
 
-        function updateDiagnostics() {
-            if (!monacoEditor) return;
-            const model = monacoEditor.getModel();
-            if (!model) return;
-            const code = monacoEditor.getValue();
-            try {
-                const diagEngine = new WasmEngine();
-                const raw = diagEngine.getDiagnostics(code, 'wasm.lemma');
-                const list = JSON.parse(raw);
-                const markers = Array.isArray(list) ? list.map(function (d) {
-                    return {
-                        severity: monaco.MarkerSeverity.Error,
-                        message: d.message || 'Error',
-                        startLineNumber: d.startLine || 1,
-                        startColumn: d.startColumn || 1,
-                        endLineNumber: d.endLine || 1,
-                        endColumn: d.endColumn || 1,
-                    };
-                }) : [];
-                monaco.editor.setModelMarkers(model, 'lemma', markers);
-            } catch (e) {
-                monaco.editor.setModelMarkers(model, 'lemma', []);
-            }
-        }
-
-        function loadCode() {
+        async function loadCode() {
             if (!monacoEditor) return;
 
             const code = monacoEditor.getValue();
 
-            updateDiagnostics();
-
-            // Create a fresh engine for each load
             engine = new WasmEngine();
 
             let addResult;
             try {
-                addResult = JSON.parse(engine.addLemmaCode(code, 'wasm.lemma'));
+                const raw = await engine.addLemmaCode(code, 'wasm.lemma');
+                addResult = JSON.parse(raw);
             } catch (parseError) {
                 setStatus('err', 'Exception while loading', parseError.message || String(parseError));
                 return;
@@ -953,6 +946,7 @@
 
             state.docs = newDocs;
             patchDocCards();
+            refreshEditorDiagnostics();
         }
 
         function scheduleLoad(immediate) {
@@ -972,13 +966,12 @@
         // Evaluate and clear
         // ---------------------------------------------------------------
 
-        function evaluateDoc(docName) {
-            // Ensure the engine has the latest code (state survives reload)
+        async function evaluateDoc(docName) {
             if (loadTimer !== null) {
                 clearTimeout(loadTimer);
                 loadTimer = null;
             }
-            loadCode();
+            await loadCode();
 
             if (!engine) return;
 
@@ -1054,61 +1047,132 @@
         }
 
         // ---------------------------------------------------------------
-        // Initialization
+        // Initialization (fail loudly: every failure shows in status + console)
         // ---------------------------------------------------------------
 
-        require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+        function showError(phase, err) {
+            const msg = err && (err.message || String(err));
+            setStatus('err', phase, msg || 'Unknown error');
+            console.error('Lemma playground [' + phase + ']:', msg, err);
+        }
 
-        require(['vs/editor/editor.main'], function () {
-            registerLemmaLanguage(monaco);
-
-            monacoEditor = monaco.editor.create(document.getElementById('editor'), {
-                value: [
-                    'doc pricing',
-                    '',
-                    'type money = scale',
-                    '  -> unit eur 1',
-                    '  -> unit usd 1.19',
-                    '',
-                    'fact quantity = 10',
-                    'fact is_member = false',
-                    'fact price = [money]',
-                    '',
-                    'rule discount = 0%',
-                    '  unless quantity >= 10 then 10%',
-                    '  unless quantity >= 50 then 20%',
-                    '  unless is_member then 15%',
-                    '',
-                    'rule total = price - discount?',
-                    '  unless price > 100 usd then veto "This price is too high."',
-                ].join('\n'),
-                language: 'lemma',
-                theme: 'vs',
-                automaticLayout: true,
-                minimap: { enabled: false },
-                scrollBeyondLastLine: false,
-            });
-
-            monacoEditor.onDidChangeModelContent(function () {
-                scheduleLoad(false);
-            });
-
-            editorReady = true;
-            scheduleLoad(true);
+        window.addEventListener('unhandledrejection', function (event) {
+            showError('Unhandled error', event.reason);
         });
 
-        async function initializeWasm() {
+        const wasmReady = (async function () {
             try {
+                setStatus('warn', 'Initializing WASM…');
                 await init();
                 engine = new WasmEngine();
-                setStatus('ok', 'WASM ready', 'Auto-loading Lemma code');
-                scheduleLoad(true);
+                setStatus('warn', 'Loading Monaco…');
             } catch (error) {
-                setStatus('err', 'Failed to load WASM', error.message || String(error));
+                showError('WASM failed', error);
+                throw error;
+            }
+        })();
+
+        let editorLoadTimeoutId = null;
+        let editorPollId = null;
+
+        function clearEditorLoading() {
+            if (editorLoadTimeoutId) { clearTimeout(editorLoadTimeoutId); editorLoadTimeoutId = null; }
+            if (editorPollId) { clearInterval(editorPollId); editorPollId = null; }
+        }
+
+        async function initEditor(monaco) {
+            if (editorReady) return;
+            clearEditorLoading();
+            try {
+                registerLemmaLanguage(monaco);
+
+                const editorEl = document.getElementById('editor');
+                if (!editorEl) throw new Error('DOM element #editor not found');
+
+                monacoEditor = monaco.editor.create(editorEl, {
+                    value: [
+                        'doc pricing',
+                        '',
+                        'type money = scale',
+                        '  -> unit eur 1',
+                        '  -> unit usd 1.19',
+                        '',
+                        'fact quantity = 10',
+                        'fact is_member = false',
+                        'fact price = [money]',
+                        '',
+                        'rule discount = 0%',
+                        '  unless quantity >= 10 then 10%',
+                        '  unless quantity >= 50 then 20%',
+                        '  unless is_member then 15%',
+                        '',
+                        'rule total = price - discount?',
+                        '  unless price > 100 usd then veto "This price is too high."',
+                        '',
+                    ].join('\n'),
+                    language: 'lemma',
+                    theme: 'vs',
+                    automaticLayout: true,
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                });
+
+                monacoInstance = monaco;
+                monacoEditor.onDidChangeModelContent(function () {
+                    scheduleLoad(false);
+                    if (diagnosticsTimer) clearTimeout(diagnosticsTimer);
+                    diagnosticsTimer = setTimeout(function () {
+                        diagnosticsTimer = null;
+                        refreshEditorDiagnostics();
+                    }, 300);
+                });
+
+                editorReady = true;
+                setStatus('ok', 'Ready');
+                refreshEditorDiagnostics();
+                scheduleLoad(true);
+            } catch (err) {
+                showError('Editor failed', err);
             }
         }
 
-        initializeWasm();
+        editorLoadTimeoutId = setTimeout(function () {
+            if (editorReady) return;
+            clearEditorLoading();
+            showError('Editor load timeout', new Error('Monaco did not appear within 25s.'));
+        }, 25000);
+
+        editorPollId = setInterval(function () {
+            if (editorReady) return;
+            const monaco = self.monaco;
+            if (!monaco) return;
+            clearEditorLoading();
+            initEditor(monaco);
+        }, 200);
+
+        const loaderRequire = self.require;
+        if (!loaderRequire) {
+            clearEditorLoading();
+            showError('Loader missing', new Error('Monaco loader (require) not on self. Add script src=".../loader.js" before this script.'));
+        } else {
+            loaderRequire.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+            loaderRequire(
+                ['vs/editor/editor.main'],
+                function (monacoFromModule) {
+                    const monaco = monacoFromModule || self.monaco;
+                    if (monaco && !editorReady) {
+                        initEditor(monaco);
+                    } else if (!editorReady) {
+                        clearEditorLoading();
+                        showError('Monaco API missing', new Error('vs/editor/editor.main loaded but no API (module export or self.monaco).'));
+                    }
+                },
+                function (err) {
+                    clearEditorLoading();
+                    showError('Monaco failed to load', err && (err.message || err.requireType || err.requireModules) || err);
+                }
+            );
+        }
     </script>
 </body>
 </html>

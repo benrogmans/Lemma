@@ -1,4 +1,6 @@
 use lemma::{Bound, Domain, Engine, FactPath, LemmaError, LiteralValue, Target, ValueKind};
+mod common;
+use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -12,7 +14,7 @@ rule r = 0
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let inv = engine
         .invert(
@@ -52,7 +54,7 @@ rule r = 0
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let inv = engine
         .invert(
@@ -92,7 +94,7 @@ rule r = 0
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let inv = engine
         .invert(
@@ -133,7 +135,7 @@ rule r = 0
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let inv = engine
         .invert(
@@ -182,7 +184,7 @@ rule r = 0
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let inv = engine
         .invert(
@@ -226,7 +228,7 @@ rule r = 0
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let err = engine
         .invert(
@@ -250,7 +252,7 @@ rule r = 0
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let err = engine
         .invert(

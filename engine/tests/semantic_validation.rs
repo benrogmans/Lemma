@@ -1,4 +1,6 @@
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 
 #[test]
 fn test_rule_reference_without_question_mark_fails() {
@@ -14,7 +16,7 @@ rule calculated = base * 2
 rule buggy_usage = calculated + 50
 "#;
 
-    let result = engine.add_lemma_code(lemma_code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
 
     assert!(
         result.is_err(),
@@ -41,7 +43,7 @@ fact multiplier = 2
 rule buggy_usage = base? * multiplier?
 "#;
 
-    let result = engine.add_lemma_code(lemma_code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
 
     assert!(
         result.is_err(),
@@ -69,7 +71,7 @@ rule calculated = base * 2
 rule correct_usage = calculated? + 50
 "#;
 
-    let result = engine.add_lemma_code(lemma_code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
     assert!(
         result.is_ok(),
         "Should succeed when using ? for rule reference: {:?}",
@@ -90,7 +92,7 @@ fact multiplier = 2
 rule correct_usage = base * multiplier
 "#;
 
-    let result = engine.add_lemma_code(lemma_code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
     assert!(
         result.is_ok(),
         "Should succeed when not using ? for fact reference: {:?}",
@@ -113,7 +115,7 @@ rule discount = 0%
   unless is_valid then 10%
 "#;
 
-    let result = engine.add_lemma_code(lemma_code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
 
     assert!(
         result.is_err(),
@@ -141,7 +143,7 @@ fact employee = doc base_doc
 rule buggy = employee.annual + 1000
 "#;
 
-    let result = engine.add_lemma_code(lemma_code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
 
     assert!(
         result.is_err(),
@@ -168,7 +170,7 @@ fact employee = doc base_doc
 rule buggy = employee.salary? * 2
 "#;
 
-    let result = engine.add_lemma_code(lemma_code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
 
     assert!(
         result.is_err(),

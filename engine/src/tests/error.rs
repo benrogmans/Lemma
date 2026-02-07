@@ -70,11 +70,13 @@ fn test_error_creation_and_display() {
 
     let engine_error = LemmaError::engine(
         "Something went wrong",
-        Span { start: 0, end: 0, line: 1, col: 0 },
-        "<test>",
+        crate::parsing::source::Source::new(
+            "<test>",
+            Span { start: 0, end: 0, line: 1, col: 0 },
+            "<test>",
+        )
+,
         Arc::from(""),
-        "<test>",
-        1,
         None::<String>,
     );
     assert!(format!("{engine_error}").contains("Engine error: Something went wrong"));
@@ -85,9 +87,9 @@ fn test_error_creation_and_display() {
             "<test>",
             Span { start: 0, end: 0, line: 1, col: 0 },
             "<test>",
-        ),
+        )
+,
         Arc::from(""),
-        1,
         vec![],
         None::<String>,
     );

@@ -5,6 +5,8 @@
 //! number ± ratio fact semantics (e.g. 100 - discount = 100 * (1 - discount)).
 
 use lemma::evaluation::OperationResult;
+mod common;
+use common::add_lemma_code_blocking;
 use lemma::planning::semantics::ValueKind;
 use lemma::{Engine, LiteralValue};
 use rust_decimal::Decimal;
@@ -24,7 +26,7 @@ rule is_above_30 = savings_ratio? > 30%
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("savings", vec![], HashMap::new()).unwrap();
 
@@ -71,7 +73,7 @@ rule tier = "low"
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("summary", vec![], HashMap::new()).unwrap();
     let tier = response.results.get("tier").expect("tier");
@@ -94,7 +96,7 @@ rule above_20_permille = as_permille? > 20 permille
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("permille_doc", vec![], HashMap::new())
@@ -128,7 +130,7 @@ rule bad_conv = x in not_a_unit
 "#;
 
     let mut engine = Engine::new();
-    let err = engine.add_lemma_code(code, "test.lemma").unwrap_err();
+    let err = add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap_err();
 
     let msg = format!("{:?}", err);
     assert!(
@@ -153,7 +155,7 @@ rule in_usd = amount in usd
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("pricing", vec![], HashMap::new()).unwrap();
     let in_eur = response.results.get("in_eur").expect("in_eur");
@@ -178,7 +180,7 @@ rule price = 100 - discount
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine
         .evaluate(
@@ -236,7 +238,7 @@ rule compared = plus_five? > 25%
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("chained", vec![], HashMap::new()).unwrap();
     let pct = response.results.get("pct").expect("pct");
@@ -281,7 +283,7 @@ rule share_above_20 = share_pct? > 20%
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("mixed", vec![], HashMap::new()).unwrap();
     let as_eur = response.results.get("as_eur").expect("as_eur");
@@ -328,7 +330,7 @@ rule exceeds = discount > threshold
 "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let response = engine.evaluate("compare", vec![], HashMap::new()).unwrap();
     let meets = response.results.get("meets").expect("meets");

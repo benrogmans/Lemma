@@ -1,13 +1,13 @@
 use lemma::{Engine, LiteralValue, Target};
+mod common;
+use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
 fn setup_engine(code: &str) -> Engine {
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(code, "test")
-        .expect("Failed to add code");
+    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to add code");
     engine
 }
 

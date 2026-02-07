@@ -1,3 +1,5 @@
+mod common;
+use common::add_lemma_code_blocking;
 use lemma::{Engine, LemmaError};
 use std::collections::HashMap;
 
@@ -12,7 +14,8 @@ use std::collections::HashMap;
 fn test_duplicate_fact_definition_error() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc test
         fact salary = 50000
@@ -44,7 +47,8 @@ fn test_duplicate_fact_definition_error() {
 fn test_duplicate_rule_definition_error() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc test
         fact x = 10
@@ -77,7 +81,8 @@ fn test_duplicate_rule_definition_error() {
 fn test_duplicate_fact_shows_name() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc test
         fact name = "Alice"
@@ -114,17 +119,17 @@ fn test_duplicate_fact_shows_name() {
 fn test_runtime_error_division_by_zero() {
     let mut engine = Engine::new();
 
-    engine
-        .add_lemma_code(
-            r#"
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
         doc test
         fact numerator = 100
         fact denominator = 0
         rule result = numerator / denominator
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+        "test.lemma",
+    )
+    .unwrap();
 
     let response = engine
         .evaluate("test", vec![], HashMap::new())
@@ -155,17 +160,17 @@ fn test_runtime_error_division_by_zero() {
 fn test_runtime_error_division_by_zero_with_cli_facts() {
     let mut engine = Engine::new();
 
-    engine
-        .add_lemma_code(
-            r#"
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
         doc test
         fact hours_worked = [number]
         fact salary = 50000
         rule hourly_rate = salary / hours_worked
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+        "test.lemma",
+    )
+    .unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("hours_worked".to_string(), "0".to_string());
@@ -198,7 +203,8 @@ fn test_transpile_error_self_referencing_rule() {
     let mut engine = Engine::new();
 
     // Self-referencing rules are caught during transpilation
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc test
         rule x = x? + 1
@@ -227,7 +233,8 @@ fn test_transpile_error_self_referencing_rule() {
 fn test_validation_error_type_mismatch_text_in_arithmetic() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc test
         fact name = "Alice"
@@ -257,7 +264,8 @@ fn test_validation_error_type_mismatch_text_in_arithmetic() {
 fn test_validation_error_boolean_in_arithmetic() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc test
         fact is_active = true
@@ -291,7 +299,8 @@ fn test_validation_error_boolean_in_arithmetic() {
 fn test_duplicate_error_contains_fact_name() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc my_document
         fact price = 100
@@ -315,7 +324,8 @@ fn test_duplicate_error_contains_fact_name() {
 fn test_duplicate_error_is_reported() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc test
         fact x = 10
@@ -339,7 +349,8 @@ fn test_duplicate_error_is_reported() {
 fn test_duplicate_in_second_doc_is_caught() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc first_doc
         fact a = 1
@@ -370,7 +381,8 @@ fn test_duplicate_in_second_doc_is_caught() {
 fn test_error_display_contains_duplicate_info() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc test
         fact value = 100
@@ -398,17 +410,17 @@ fn test_error_display_contains_duplicate_info() {
 fn test_division_by_zero_returns_veto_with_message() {
     let mut engine = Engine::new();
 
-    engine
-        .add_lemma_code(
-            r#"
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
         doc test
         fact x = 100
         fact y = 0
         rule result = x / y
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+        "test.lemma",
+    )
+    .unwrap();
 
     let response = engine
         .evaluate("test", vec![], HashMap::new())
@@ -439,7 +451,8 @@ fn test_division_by_zero_returns_veto_with_message() {
 fn test_circular_dependency_has_helpful_suggestion() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc test
         rule x = y?
@@ -475,7 +488,7 @@ fact line3 = 2
 fact line4 = 3
 fact line4 = 4"#;
 
-    let result = engine.add_lemma_code(lemma_code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
 
     match result {
         Err(LemmaError::Engine(details)) => {
@@ -495,17 +508,17 @@ fact line4 = 4"#;
 fn test_division_by_zero_returns_veto() {
     let mut engine = Engine::new();
 
-    engine
-        .add_lemma_code(
-            r#"
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
         doc test
         fact numerator = 42
         fact denominator = 0
         rule division_result = numerator / denominator
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+        "test.lemma",
+    )
+    .unwrap();
 
     let response = engine
         .evaluate("test", vec![], HashMap::new())
@@ -532,7 +545,8 @@ fn test_division_by_zero_returns_veto() {
 fn test_duplicate_detected_from_database_source() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc contract
         fact amount = 1000
@@ -556,7 +570,8 @@ fn test_duplicate_detected_from_database_source() {
 fn test_duplicate_detected_from_api_source() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc policy
         rule rate = 1.5
@@ -580,7 +595,8 @@ fn test_duplicate_detected_from_api_source() {
 fn test_duplicate_detected_from_runtime_source() {
     let mut engine = Engine::new();
 
-    let result = engine.add_lemma_code(
+    let result = add_lemma_code_blocking(
+        &mut engine,
         r#"
         doc runtime_doc
         fact x = 5

@@ -1,3 +1,5 @@
+mod common;
+use common::add_lemma_code_blocking;
 use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -22,10 +24,8 @@ fact quantity = 10
 rule line_total = pricing.final_price? * quantity
 "#;
 
-    engine.add_lemma_code(base_doc, "pricing.lemma").unwrap();
-    engine
-        .add_lemma_code(line_item_doc, "line_item.lemma")
-        .unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "pricing.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, line_item_doc, "line_item.lemma").unwrap();
 
     let response = engine
         .evaluate("line_item", vec![], HashMap::new())
@@ -71,9 +71,9 @@ fact middle_ref = doc middle
 rule top_calc = middle_ref.middle_calc?
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(middle_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(top_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, middle_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, top_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
 
@@ -126,10 +126,10 @@ fact line.quantity = 100
 rule order_total = line.line_total?
 "#;
 
-    engine.add_lemma_code(pricing_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(wholesale_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(line_item_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(order_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, pricing_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, wholesale_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, line_item_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, order_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("order", vec![], HashMap::new()).unwrap();
 
@@ -170,9 +170,9 @@ fact settings = doc middle
 rule final_value = settings.config.value * 2
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(middle_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(top_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, middle_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, top_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
     let final_value = response
@@ -219,9 +219,9 @@ fact line.quantity = 5
 rule order_total = line.line_total?
 "#;
 
-    engine.add_lemma_code(pricing_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(line_item_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(order_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, pricing_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, line_item_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, order_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("order", vec![], HashMap::new()).unwrap();
 
@@ -270,9 +270,9 @@ rule total2 = path2.base.total?
 rule difference = total2? - total1?
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(wrapper_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(comparison_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, wrapper_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, comparison_doc, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("comparison", vec![], HashMap::new())
@@ -346,9 +346,9 @@ rule sum = c1.doubled? + c2.tripled?
 rule product = c1.value * c2.value
 "#;
 
-    engine.add_lemma_code(config1_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(config2_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(combined_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, config1_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, config2_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, combined_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("combined", vec![], HashMap::new()).unwrap();
 
@@ -406,9 +406,9 @@ fact middle_config = doc middle
 rule final_result = middle_config.x_squared_plus_ten? * 2
 "#;
 
-    engine.add_lemma_code(base_doc, "base.lemma").unwrap();
-    engine.add_lemma_code(middle_doc, "middle.lemma").unwrap();
-    engine.add_lemma_code(top_doc, "top.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, middle_doc, "middle.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, top_doc, "top.lemma").unwrap();
 
     let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
 
@@ -455,8 +455,8 @@ rule wholesale_final = wholesale.final_price?
 rule price_difference = retail_final? - wholesale_final?
 "#;
 
-    engine.add_lemma_code(pricing_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(scenario_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, pricing_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, scenario_doc, "test.lemma").unwrap();
 
     let response = engine
         .evaluate("scenarios", vec![], HashMap::new())
@@ -533,10 +533,10 @@ fact cc.aa = doc b
 rule yy = cc.y?
 "#;
 
-    engine.add_lemma_code(doc_a, "test.lemma").unwrap();
-    engine.add_lemma_code(doc_b, "test.lemma").unwrap();
-    engine.add_lemma_code(doc_c, "test.lemma").unwrap();
-    let err = engine.add_lemma_code(doc_d, "test.lemma").unwrap_err();
+    add_lemma_code_blocking(&mut engine, doc_a, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc_b, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc_c, "test.lemma").unwrap();
+    let err = add_lemma_code_blocking(&mut engine, doc_d, "test.lemma").unwrap_err();
 
     let err_str = err.to_string();
     // We must reject the bad binding. Either we report at the binding site (preferred)

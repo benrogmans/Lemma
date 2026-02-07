@@ -256,7 +256,8 @@ fn list_command(root: &PathBuf) -> Result<()> {
             file_count += 1;
             let path = entry.path();
             let source_id = path.to_string_lossy().to_string();
-            engine.add_lemma_code(&fs::read_to_string(path)?, &source_id)?;
+            tokio::runtime::Runtime::new()?
+                .block_on(engine.add_lemma_code(&fs::read_to_string(path)?, &source_id))?;
         }
     }
 
@@ -340,7 +341,8 @@ fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> 
         if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
             let path = entry.path();
             let source_id = path.to_string_lossy().to_string();
-            engine.add_lemma_code(&fs::read_to_string(path)?, &source_id)?;
+            tokio::runtime::Runtime::new()?
+                .block_on(engine.add_lemma_code(&fs::read_to_string(path)?, &source_id))?;
         }
     }
 

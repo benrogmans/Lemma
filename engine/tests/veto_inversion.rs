@@ -1,4 +1,6 @@
 use lemma::{Bound, Domain, Engine, FactPath, LiteralValue, Target};
+mod common;
+use common::add_lemma_code_blocking;
 
 #[test]
 fn veto_query_specific_message() {
@@ -12,7 +14,7 @@ fn veto_query_specific_message() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Query: "What weight values trigger 'too heavy' veto?"
     let response = engine
@@ -46,7 +48,7 @@ fn veto_query_any_veto() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Query: "What weight values trigger ANY veto?"
     let response = engine
@@ -84,7 +86,7 @@ fn veto_query_with_value_branches_filters_correctly() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Query: "What discount values trigger any veto?"
     let response = engine
@@ -177,7 +179,7 @@ fn veto_non_veto_value_queries_exclude_vetoes() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Query: "What discount values give final_price = 90?"
     let response = engine
@@ -213,7 +215,7 @@ fn veto_multiple_facts_multiple_vetoes() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Query: "What conditions trigger any veto?"
     let response = engine

@@ -1,4 +1,6 @@
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 /// Test cross-document fact references (should work)
@@ -18,8 +20,8 @@ fact base_data = doc base
 rule total = base_data.price * base_data.quantity
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
@@ -48,8 +50,8 @@ fact base_data = doc base
 rule derived_value = base_data.doubled? + 10
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let derived_value = response
@@ -79,8 +81,8 @@ fact employee = doc base_employee
 rule manager_bonus = employee.annual_salary? * 0.15
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("manager", vec![], HashMap::new()).unwrap();
     let bonus = response
@@ -112,8 +114,8 @@ fact config.quantity = 3
 rule derived_total = config.total?
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
@@ -150,9 +152,9 @@ fact order_info = doc order
 rule total_days = settings.standard_processing_days? + order_info.processing_days?
 "#;
 
-    engine.add_lemma_code(config_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(order_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, config_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, order_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
@@ -183,8 +185,8 @@ rule status = "invalid"
   unless base_data.is_valid? then "valid"
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let status = response
@@ -213,8 +215,8 @@ fact base_data = doc base
 rule combined = base_data.input + base_data.calculated?
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let combined = response
@@ -246,8 +248,8 @@ fact data.y = 200
 rule sum = data.x + data.y + data.z
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let sum = response
@@ -280,8 +282,8 @@ fact config.quantity = 3
 rule total = config.price * config.quantity
 "#;
 
-    engine.add_lemma_code(base_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
     let total = response
@@ -321,9 +323,9 @@ fact base2.base.price = 79
 rule total2 = base2.base.total?
 "#;
 
-    engine.add_lemma_code(example1_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(example2_doc, "test.lemma").unwrap();
-    engine.add_lemma_code(example3_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, example1_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, example2_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, example3_doc, "test.lemma").unwrap();
 
     let response = engine.evaluate("example3", vec![], HashMap::new()).unwrap();
 

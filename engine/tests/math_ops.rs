@@ -1,10 +1,12 @@
 use lemma::{Engine, LemmaResult};
+mod common;
+use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::{collections::HashMap, str::FromStr};
 
 fn run(code: &str, rule: &str) -> LemmaResult<String> {
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test.lemma")?;
+    add_lemma_code_blocking(&mut engine, code, "test.lemma")?;
     let resp = engine.evaluate("test", vec![rule.to_string()], HashMap::new())?;
     let v = resp
         .results
@@ -146,17 +148,17 @@ fn test_nested_math_ops() -> LemmaResult<()> {
 fn test_sqrt_negative_and_log_domain_errors() {
     // sqrt of negative and log of non-positive should yield runtime errors
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(
-            r#"
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
         doc test
         rule bad_sqrt = sqrt -1
         rule bad_log0 = log 0
         rule bad_log_neg = log -5
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+        "test.lemma",
+    )
+    .unwrap();
 
     // Evaluate all rules and expect a Veto result (runtime error)
     let res1 = engine
@@ -206,15 +208,15 @@ fn test_sqrt_negative_and_log_domain_errors() {
 fn test_inverse_trig_domain_error() {
     // asin(x) domain is [-1,1]; asin(2) should return Veto
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(
-            r#"
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
         doc test
         rule bad_asin = asin 2
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+        "test.lemma",
+    )
+    .unwrap();
 
     let response = engine
         .evaluate("test", vec!["bad_asin".to_string()], HashMap::new())

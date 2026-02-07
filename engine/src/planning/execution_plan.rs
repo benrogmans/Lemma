@@ -216,16 +216,17 @@ impl ExecutionPlan {
                         name,
                         available.join(", ")
                     ),
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<input>",
+                    Source::new(
+                        "<input>",
+                        crate::parsing::ast::Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        &self.doc_name,
+                    ),
                     std::sync::Arc::from(""),
-                    &self.doc_name,
-                    1,
                     None::<String>,
                 )
             })?;
@@ -234,16 +235,17 @@ impl ExecutionPlan {
             let fact_data = self.facts.get(&fact_path).ok_or_else(|| {
                 LemmaError::engine(
                     format!("Unknown fact: {}", name),
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<input>",
+                    Source::new(
+                        "<input>",
+                        crate::parsing::ast::Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        &self.doc_name,
+                    ),
                     std::sync::Arc::from(""),
-                    &self.doc_name,
-                    1,
                     None::<String>,
                 )
             })?;
@@ -255,16 +257,17 @@ impl ExecutionPlan {
                         "Fact '{}' is a document reference; cannot provide a value.",
                         name
                     ),
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    "<input>",
+                    Source::new(
+                        "<input>",
+                        crate::parsing::ast::Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        &self.doc_name,
+                    ),
                     std::sync::Arc::from(""),
-                    &self.doc_name,
-                    1,
                     None::<String>,
                 )
             })?;
@@ -288,22 +291,16 @@ impl ExecutionPlan {
                         expected_type.name(),
                         e
                     ),
-                    fact_source.span.clone(),
-                    &fact_source.attribute,
+                    fact_source.clone(),
                     source_text.clone(),
-                    &fact_source.doc_name,
-                    1,
                     None::<String>,
                 )
             })?;
             let semantic_value = semantics::value_to_semantic(&parsed_value).map_err(|e| {
                 LemmaError::engine(
                     format!("Failed to convert fact '{}' value: {}", name, e),
-                    fact_source.span.clone(),
-                    &fact_source.attribute,
+                    fact_source.clone(),
                     source_text.clone(),
-                    &fact_source.doc_name,
-                    1,
                     None::<String>,
                 )
             })?;
@@ -335,11 +332,8 @@ impl ExecutionPlan {
                         expected_type.name(),
                         msg
                     ),
-                    fact_source.span.clone(),
-                    &fact_source.attribute,
+                    fact_source.clone(),
                     source_text.clone(),
-                    &fact_source.doc_name,
-                    1,
                     None::<String>,
                 )
             })?;
@@ -464,11 +458,8 @@ pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<
                     expected_type.name(),
                     msg
                 ),
-                span,
-                attribute,
+                Source::new(attribute, span, doc_name),
                 source_text,
-                doc_name,
-                1,
                 None::<String>,
             ));
         }
@@ -492,18 +483,28 @@ mod tests {
         ResourceLimits::default()
     }
 
+    fn add_lemma_code_blocking(
+        engine: &mut Engine,
+        code: &str,
+        source: &str,
+    ) -> crate::LemmaResult<()> {
+        tokio::runtime::Runtime::new()
+            .expect("tokio runtime")
+            .block_on(engine.add_lemma_code(code, source))
+    }
+
     #[test]
     fn test_with_raw_values() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
                 doc test
                 fact age = [number -> default 25]
                 "#,
-                "test.lemma",
-            )
-            .unwrap();
+            "test.lemma",
+        )
+        .unwrap();
 
         let plan = engine.get_execution_plan("test").unwrap().clone();
         let fact_path = FactPath::new(vec![], "age".to_string());
@@ -524,15 +525,15 @@ mod tests {
     #[test]
     fn test_with_raw_values_type_mismatch() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
                 doc test
                 fact age = [number]
                 "#,
-                "test.lemma",
-            )
-            .unwrap();
+            "test.lemma",
+        )
+        .unwrap();
 
         let plan = engine.get_execution_plan("test").unwrap().clone();
 
@@ -545,15 +546,15 @@ mod tests {
     #[test]
     fn test_with_raw_values_unknown_fact() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
                 doc test
                 fact known = [number]
                 "#,
-                "test.lemma",
-            )
-            .unwrap();
+            "test.lemma",
+        )
+        .unwrap();
 
         let plan = engine.get_execution_plan("test").unwrap().clone();
 
@@ -566,18 +567,18 @@ mod tests {
     #[test]
     fn test_with_raw_values_nested() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
                 doc private
                 fact base_price = [number]
 
                 doc test
                 fact rules = doc private
                 "#,
-                "test.lemma",
-            )
-            .unwrap();
+            "test.lemma",
+        )
+        .unwrap();
 
         let plan = engine.get_execution_plan("test").unwrap().clone();
 

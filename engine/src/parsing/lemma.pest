@@ -95,8 +95,9 @@ doc_body = {
     (type_import | type_definition | fact_definition | fact_binding | rule_definition | SPACE)*
 }
 
-doc_declaration = { ^"doc" ~ SPACE+ ~ doc_name }
+doc_declaration = { ^"doc" ~ SPACE+ ~ doc_name_local }
 
+doc_name_local = { doc_identifier ~ ("/" ~ doc_identifier)* }
 doc_name       = { "@"? ~ doc_identifier ~ ("/" ~ doc_identifier)* }
 doc_identifier = { ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_" | "-" | "/" | "." )* }
 

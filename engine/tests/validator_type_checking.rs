@@ -1,4 +1,6 @@
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 
 #[test]
 fn test_logical_and_requires_boolean_operands() {
@@ -8,7 +10,7 @@ rule result = 5 and true
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(result.is_err(), "Should reject non-boolean in 'and'");
     assert!(result.unwrap_err().to_string().contains("boolean"));
 }
@@ -21,7 +23,7 @@ rule result = "hello" or false
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(result.is_err(), "Should reject non-boolean in 'or'");
     assert!(result.unwrap_err().to_string().contains("boolean"));
 }
@@ -35,7 +37,7 @@ rule result = 10
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(result.is_err(), "Unless condition must be boolean");
 }
 
@@ -49,7 +51,7 @@ rule doubled = rate
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_ok(),
         "Percentage types should be consistent: {:?}",
@@ -67,7 +69,7 @@ rule check = name == "Bob" and age > 25
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_ok(),
         "Text and number comparisons should be allowed separately: {:?}",
@@ -85,7 +87,7 @@ rule is_valid_range = end > start
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_ok(),
         "Date comparison should be allowed: {:?}",
@@ -103,7 +105,7 @@ rule converted = (value * 60) in seconds
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_ok(),
         "Duration conversion should work: {:?}",
@@ -120,7 +122,7 @@ rule as_percentage = ratio in percent
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_ok(),
         "Number to percentage conversion should work: {:?}",
@@ -139,7 +141,7 @@ rule result = 100
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_ok(),
         "Veto should not conflict with other return types: {:?}",
@@ -157,7 +159,7 @@ rule value = "default"
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing text and number types"
@@ -180,7 +182,7 @@ rule value = 2024-01-01
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing date and number types"
@@ -204,7 +206,7 @@ rule check = x < y
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_ok(),
         "Boolean results should be consistent: {:?}",
@@ -223,7 +225,7 @@ rule sum = a + b
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_ok(),
         "Arithmetic should infer number type: {:?}",
@@ -243,7 +245,7 @@ rule value = 10
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_ok(),
         "All number branches should be consistent: {:?}",
@@ -262,7 +264,7 @@ rule value = 10
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(result.is_err(), "Mixed number/text should be rejected");
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -283,7 +285,7 @@ rule another = derived?
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_ok(),
         "Rule reference types should propagate: {:?}",
@@ -300,7 +302,7 @@ rule is_afternoon = meeting_time > 12:00:00
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_ok(),
         "Time type should be validated correctly: {:?}",
@@ -318,7 +320,7 @@ rule result = time1 and time2
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject time values in logical operators"
@@ -336,7 +338,7 @@ rule value = 14:30:00
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.add_lemma_code(code, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing time and number types"

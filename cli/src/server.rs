@@ -133,6 +133,7 @@ pub mod http {
 
         temp_engine
             .add_lemma_code(&payload.code, &source_id)
+            .await
             .map_err(|e| {
                 error!("Failed to parse code: {}", e);
                 (

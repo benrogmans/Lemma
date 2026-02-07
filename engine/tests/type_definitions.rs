@@ -1,4 +1,6 @@
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -27,10 +29,8 @@ fact twenties = [adult_age -> maximum 30]
 rule total = age + adult_age + twenties
 "#;
 
-    engine.add_lemma_code(age_doc, "age.lemma").unwrap();
-    engine
-        .add_lemma_code(test_types_doc, "test_types.lemma")
-        .unwrap();
+    add_lemma_code_blocking(&mut engine, age_doc, "age.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, test_types_doc, "test_types.lemma").unwrap();
 
     let mut facts = HashMap::new();
     facts.insert("age".to_string(), "25".to_string());

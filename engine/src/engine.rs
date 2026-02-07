@@ -1,7 +1,9 @@
 use crate::evaluation::Evaluator;
 use crate::parsing::ast::{LemmaDoc, Span};
+use crate::parsing::source::Source;
 use crate::planning::plan;
 use crate::planning::semantics::{FactPath, LemmaType};
+use crate::registry::Registry;
 use crate::{parse, LemmaError, LemmaResult, ResourceLimits, Response};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -10,12 +12,18 @@ use std::sync::Arc;
 ///
 /// Pure Rust implementation that evaluates Lemma docs directly from the AST.
 /// Uses pre-built execution plans that are self-contained and ready for evaluation.
+///
+/// An optional Registry can be configured to resolve external `@...` references.
+/// When a Registry is set, `add_lemma_code` will automatically resolve `@...`
+/// references by fetching source text from the Registry, parsing it, and including
+/// the resulting Lemma docs in the document set before planning.
 pub struct Engine {
     execution_plans: HashMap<String, crate::planning::ExecutionPlan>,
     documents: HashMap<String, LemmaDoc>,
     sources: HashMap<String, String>,
     evaluator: Evaluator,
     limits: ResourceLimits,
+    registry: Option<Arc<dyn Registry>>,
 }
 
 impl Default for Engine {
@@ -26,6 +34,7 @@ impl Default for Engine {
             sources: HashMap::new(),
             evaluator: Evaluator,
             limits: ResourceLimits::default(),
+            registry: Self::default_registry(),
         }
     }
 }
@@ -35,7 +44,27 @@ impl Engine {
         Self::default()
     }
 
-    /// Create an engine with custom resource limits
+    /// Return the default registry based on enabled features.
+    ///
+    /// When the `registry` feature is enabled, the default registry is `LemmaBase`,
+    /// which resolves `@...` references by fetching Lemma source from LemmaBase.com.
+    ///
+    /// When the `registry` feature is disabled, no registry is configured and
+    /// `@...` references will fail during resolution.
+    fn default_registry() -> Option<Arc<dyn Registry>> {
+        #[cfg(feature = "registry")]
+        {
+            Some(Arc::new(crate::registry::LemmaBase::new()))
+        }
+        #[cfg(not(feature = "registry"))]
+        {
+            None
+        }
+    }
+
+    /// Create an engine with custom resource limits.
+    ///
+    /// Uses the default registry (LemmaBase when the `registry` feature is enabled).
     pub fn with_limits(limits: ResourceLimits) -> Self {
         Self {
             execution_plans: HashMap::new(),
@@ -43,10 +72,24 @@ impl Engine {
             sources: HashMap::new(),
             evaluator: Evaluator,
             limits,
+            registry: Self::default_registry(),
         }
     }
 
-    pub fn add_lemma_code(&mut self, lemma_code: &str, source: &str) -> LemmaResult<()> {
+    /// Configure a Registry for resolving external `@...` references.
+    ///
+    /// When set, `add_lemma_code` will resolve `@...` references automatically
+    /// by fetching source text from the Registry before planning.
+    pub fn with_registry(mut self, registry: Arc<dyn Registry>) -> Self {
+        self.registry = Some(registry);
+        self
+    }
+
+    /// Add Lemma source code and (when a registry is configured) resolve any `@...` references.
+    ///
+    /// Async because registry resolution may perform network I/O. Call from an async context
+    /// or use a runtime to block (e.g. in tests or CLI).
+    pub async fn add_lemma_code(&mut self, lemma_code: &str, source: &str) -> LemmaResult<()> {
         let new_docs = parse(lemma_code, source, &self.limits)?;
 
         for doc in &new_docs {
@@ -55,60 +98,53 @@ impl Engine {
             self.documents.insert(doc.name.clone(), doc.clone());
         }
 
-        // Collect all documents (existing + new)
+        if let Some(registry) = &self.registry {
+            let docs_to_resolve: Vec<LemmaDoc> = self.documents.values().cloned().collect();
+            let resolved_docs = crate::registry::resolve_registry_references(
+                docs_to_resolve,
+                &mut self.sources,
+                registry.as_ref(),
+                &self.limits,
+            )
+            .await?;
+            self.documents.clear();
+            for doc in &resolved_docs {
+                self.documents.insert(doc.name.clone(), doc.clone());
+            }
+        }
+
         let all_docs: Vec<LemmaDoc> = self.documents.values().cloned().collect();
 
-        // Build execution plans for all new documents
         for doc in &new_docs {
-            let execution_plan = plan(doc, &all_docs, self.sources.clone()).map_err(|errs| {
-                if errs.is_empty() {
-                    use crate::parsing::ast::Span;
-                    let attribute = doc.attribute.as_deref().unwrap_or(&doc.name);
-                    let source_text = self
-                        .sources
-                        .get(attribute)
-                        .map(|s| s.as_str())
-                        .unwrap_or("");
-                    LemmaError::engine(
-                        format!("Failed to build execution plan for document: {}", doc.name),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: doc.start_line,
-                            col: 0,
-                        },
-                        attribute,
-                        std::sync::Arc::from(source_text),
-                        doc.name.clone(),
-                        doc.start_line,
-                        None::<String>,
-                    )
-                } else {
-                    errs.into_iter().next().unwrap_or_else(|| {
-                        use crate::parsing::ast::Span;
+            let execution_plan =
+                plan(doc, &all_docs, self.sources.clone()).map_err(|errs| match errs.len() {
+                    0 => {
                         let attribute = doc.attribute.as_deref().unwrap_or(&doc.name);
                         let source_text = self
                             .sources
                             .get(attribute)
                             .map(|s| s.as_str())
                             .unwrap_or("");
+                        use crate::parsing::ast::Span;
                         LemmaError::engine(
                             format!("Failed to build execution plan for document: {}", doc.name),
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: doc.start_line,
-                                col: 0,
-                            },
-                            attribute,
+                            Source::new(
+                                attribute,
+                                Span {
+                                    start: 0,
+                                    end: 0,
+                                    line: doc.start_line,
+                                    col: 0,
+                                },
+                                doc.name.clone(),
+                            ),
                             std::sync::Arc::from(source_text),
-                            doc.name.clone(),
-                            doc.start_line,
                             None::<String>,
                         )
-                    })
-                }
-            })?;
+                    }
+                    1 => errs.into_iter().next().unwrap(),
+                    _ => LemmaError::MultipleErrors(errs),
+                })?;
 
             self.execution_plans
                 .insert(doc.name.clone(), execution_plan);
@@ -169,16 +205,17 @@ impl Engine {
         let plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
                 format!("Document '{}' not found", doc_name),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<engine>",
+                Source::new(
+                    "<engine>",
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    doc_name,
+                ),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?;
@@ -195,16 +232,17 @@ impl Engine {
                 let rule = plan.get_rule(rule_name).ok_or_else(|| {
                     LemmaError::engine(
                         format!("Rule '{}' not found in document '{}'", rule_name, doc_name),
-                        Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        "<engine>",
+                        Source::new(
+                            "<engine>",
+                            Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                            doc_name,
+                        ),
                         Arc::from(""),
-                        doc_name,
-                        1,
                         None::<String>,
                     )
                 })?;
@@ -242,16 +280,17 @@ impl Engine {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
                 format!("Document '{}' not found", doc_name),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<engine>",
+                Source::new(
+                    "<engine>",
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    doc_name,
+                ),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?;
@@ -282,16 +321,17 @@ impl Engine {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
                 format!("Document '{}' not found", doc_name),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<engine>",
+                Source::new(
+                    "<engine>",
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    doc_name,
+                ),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?;
@@ -317,16 +357,17 @@ impl Engine {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
                 format!("Document '{}' not found", doc_name),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<engine>",
+                Source::new(
+                    "<engine>",
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    doc_name,
+                ),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?;
@@ -349,16 +390,17 @@ impl Engine {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
                 format!("Document '{}' not found", doc_name),
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<engine>",
+                Source::new(
+                    "<engine>",
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    doc_name,
+                ),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?;
@@ -395,21 +437,27 @@ mod tests {
     use rust_decimal::Decimal;
     use std::str::FromStr;
 
+    fn add_lemma_code_blocking(engine: &mut Engine, code: &str, source: &str) -> LemmaResult<()> {
+        tokio::runtime::Runtime::new()
+            .expect("tokio runtime")
+            .block_on(engine.add_lemma_code(code, source))
+    }
+
     #[test]
     fn test_evaluate_document_all_rules() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
         doc test
         fact x = 10
         fact y = 5
         rule sum = x + y
         rule product = x * y
     "#,
-                "test.lemma",
-            )
-            .unwrap();
+            "test.lemma",
+        )
+        .unwrap();
 
         let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
         assert_eq!(response.results.len(), 2);
@@ -442,16 +490,16 @@ mod tests {
     #[test]
     fn test_evaluate_empty_facts() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
         doc test
         fact price = 100
         rule total = price * 2
     "#,
-                "test.lemma",
-            )
-            .unwrap();
+            "test.lemma",
+        )
+        .unwrap();
 
         let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
         assert_eq!(response.results.len(), 1);
@@ -466,16 +514,16 @@ mod tests {
     #[test]
     fn test_evaluate_boolean_rule() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
         doc test
         fact age = 25
         rule is_adult = age >= 18
     "#,
-                "test.lemma",
-            )
-            .unwrap();
+            "test.lemma",
+        )
+        .unwrap();
 
         let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
         assert_eq!(
@@ -487,17 +535,17 @@ mod tests {
     #[test]
     fn test_evaluate_with_unless_clause() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
         doc test
         fact quantity = 15
         rule discount = 0
           unless quantity >= 10 then 10
     "#,
-                "test.lemma",
-            )
-            .unwrap();
+            "test.lemma",
+        )
+        .unwrap();
 
         let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
         assert_eq!(
@@ -519,27 +567,27 @@ mod tests {
     #[test]
     fn test_multiple_documents() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
         doc doc1
         fact x = 10
         rule result = x * 2
     "#,
-                "doc1.lemma",
-            )
-            .unwrap();
+            "doc1.lemma",
+        )
+        .unwrap();
 
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
         doc doc2
         fact y = 5
         rule result = y * 3
     "#,
-                "doc2.lemma",
-            )
-            .unwrap();
+            "doc2.lemma",
+        )
+        .unwrap();
 
         let response1 = engine.evaluate("doc1", vec![], HashMap::new()).unwrap();
         assert_eq!(
@@ -561,17 +609,17 @@ mod tests {
     #[test]
     fn test_runtime_error_mapping() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
         doc test
         fact numerator = 10
         fact denominator = 0
         rule division = numerator / denominator
     "#,
-                "test.lemma",
-            )
-            .unwrap();
+            "test.lemma",
+        )
+        .unwrap();
 
         let result = engine.evaluate("test", vec![], HashMap::new());
         // Division by zero returns a Veto (not an error) in the new evaluation design
@@ -603,9 +651,9 @@ mod tests {
     #[test]
     fn test_rules_sorted_by_source_order() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
         doc test
         fact a = 1
         fact b = 2
@@ -613,9 +661,9 @@ mod tests {
         rule y = a * b
         rule x = a - b
     "#,
-                "test.lemma",
-            )
-            .unwrap();
+            "test.lemma",
+        )
+        .unwrap();
 
         let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
         assert_eq!(response.results.len(), 3);
@@ -656,18 +704,18 @@ mod tests {
     #[test]
     fn test_rule_filtering_evaluates_dependencies() {
         let mut engine = Engine::new();
-        engine
-            .add_lemma_code(
-                r#"
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"
         doc test
         fact base = 100
         rule subtotal = base * 2
         rule tax = subtotal? * 10%
         rule total = subtotal? + tax?
     "#,
-                "test.lemma",
-            )
-            .unwrap();
+            "test.lemma",
+        )
+        .unwrap();
 
         // Request only 'total', but it depends on 'subtotal' and 'tax'
         let response = engine
@@ -685,6 +733,271 @@ mod tests {
             crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
                 Decimal::from_str("220").unwrap()
             )))
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Registry integration tests
+    // -------------------------------------------------------------------
+
+    use crate::registry::{RegistryBundle, RegistryError};
+
+    /// Minimal test registry for engine-level tests.
+    struct EngineTestRegistry {
+        bundles: std::collections::HashMap<String, RegistryBundle>,
+    }
+
+    impl EngineTestRegistry {
+        fn new() -> Self {
+            Self {
+                bundles: std::collections::HashMap::new(),
+            }
+        }
+
+        fn add(&mut self, identifier: &str, source: &str) {
+            self.bundles.insert(
+                identifier.to_string(),
+                RegistryBundle {
+                    lemma_source: source.to_string(),
+                    attribute: format!("@{}", identifier),
+                },
+            );
+        }
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+    #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+    impl Registry for EngineTestRegistry {
+        async fn resolve_doc(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
+            self.bundles.get(identifier).cloned().ok_or(RegistryError {
+                message: format!("not found: {}", identifier),
+                kind: crate::registry::RegistryErrorKind::NotFound,
+            })
+        }
+
+        async fn resolve_type(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
+            self.bundles.get(identifier).cloned().ok_or(RegistryError {
+                message: format!("not found: {}", identifier),
+                kind: crate::registry::RegistryErrorKind::NotFound,
+            })
+        }
+
+        fn url_for_id(&self, identifier: &str) -> Option<String> {
+            Some(format!("https://test/{}", identifier))
+        }
+    }
+
+    /// Build an engine with no registry (regardless of feature flags).
+    fn engine_without_registry() -> Engine {
+        Engine {
+            execution_plans: HashMap::new(),
+            documents: HashMap::new(),
+            sources: HashMap::new(),
+            evaluator: Evaluator,
+            limits: ResourceLimits::default(),
+            registry: None,
+        }
+    }
+
+    #[test]
+    fn add_lemma_code_with_registry_resolves_and_evaluates_external_doc() {
+        let mut registry = EngineTestRegistry::new();
+        registry.add(
+            "org/project/helper",
+            "doc org/project/helper\nfact quantity = 42",
+        );
+
+        let mut engine = engine_without_registry().with_registry(Arc::new(registry));
+
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"doc main_doc
+fact external = doc @org/project/helper
+rule value = external.quantity"#,
+            "main.lemma",
+        )
+        .expect("add_lemma_code should succeed with registry resolving the external doc");
+
+        let response = engine
+            .evaluate("main_doc", vec![], HashMap::new())
+            .expect("evaluate should succeed");
+
+        let value_result = response
+            .results
+            .get("value")
+            .expect("rule 'value' should exist");
+        assert_eq!(
+            value_result.result,
+            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
+                Decimal::from_str("42").unwrap()
+            )))
+        );
+    }
+
+    #[test]
+    fn add_lemma_code_without_registry_and_no_external_refs_works() {
+        let mut engine = engine_without_registry();
+
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"doc local_only
+fact price = 100
+rule doubled = price * 2"#,
+            "local.lemma",
+        )
+        .expect("add_lemma_code should succeed without registry when there are no @... references");
+
+        let response = engine
+            .evaluate("local_only", vec![], HashMap::new())
+            .expect("evaluate should succeed");
+
+        assert!(response.results.contains_key("doubled"));
+    }
+
+    #[test]
+    fn add_lemma_code_without_registry_and_external_ref_fails() {
+        let mut engine = engine_without_registry();
+
+        let result = add_lemma_code_blocking(
+            &mut engine,
+            r#"doc main_doc
+fact external = doc @org/project/missing
+rule value = external.quantity"#,
+            "main.lemma",
+        );
+
+        assert!(
+            result.is_err(),
+            "Should fail when @... reference exists but no registry is configured"
+        );
+    }
+
+    #[test]
+    fn add_lemma_code_with_registry_error_propagates_as_registry_error() {
+        // Empty registry — every lookup returns "not found"
+        let registry = EngineTestRegistry::new();
+
+        let mut engine = engine_without_registry().with_registry(Arc::new(registry));
+
+        let result = add_lemma_code_blocking(
+            &mut engine,
+            r#"doc main_doc
+fact external = doc @org/project/missing
+rule value = external.quantity"#,
+            "main.lemma",
+        );
+
+        assert!(
+            result.is_err(),
+            "Should fail when registry cannot resolve the @... reference"
+        );
+        let error = result.unwrap_err();
+        let registry_err = match &error {
+            LemmaError::Registry { .. } => &error,
+            LemmaError::MultipleErrors(inner) => inner
+                .iter()
+                .find(|e| matches!(e, LemmaError::Registry { .. }))
+                .expect("MultipleErrors should contain at least one Registry error"),
+            other => panic!(
+                "Expected LemmaError::Registry or MultipleErrors, got: {}",
+                other
+            ),
+        };
+        match registry_err {
+            LemmaError::Registry {
+                identifier, kind, ..
+            } => {
+                assert_eq!(identifier, "org/project/missing");
+                assert_eq!(*kind, crate::registry::RegistryErrorKind::NotFound);
+            }
+            _ => unreachable!(),
+        }
+        // The Display output should also mention the identifier and kind.
+        let error_message = error.to_string();
+        assert!(
+            error_message.contains("org/project/missing"),
+            "Error should mention the unresolved identifier: {}",
+            error_message
+        );
+        assert!(
+            error_message.contains("not found"),
+            "Error should mention the error kind: {}",
+            error_message
+        );
+    }
+
+    #[test]
+    fn with_registry_replaces_default_registry() {
+        let mut registry = EngineTestRegistry::new();
+        registry.add("custom/doc", "doc custom/doc\nfact x = 99");
+
+        let mut engine = Engine::new().with_registry(Arc::new(registry));
+
+        add_lemma_code_blocking(
+            &mut engine,
+            r#"doc main_doc
+fact ext = doc @custom/doc
+rule val = ext.x"#,
+            "main.lemma",
+        )
+        .expect("with_registry should replace the default registry");
+
+        let response = engine
+            .evaluate("main_doc", vec![], HashMap::new())
+            .expect("evaluate should succeed");
+
+        let val_result = response
+            .results
+            .get("val")
+            .expect("rule 'val' should exist");
+        assert_eq!(
+            val_result.result,
+            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
+                Decimal::from_str("99").unwrap()
+            )))
+        );
+    }
+
+    #[test]
+    fn add_lemma_code_returns_all_errors_not_just_first() {
+        // When a document has multiple independent errors (type import from
+        // non-existing doc AND doc reference to non-existing doc), the Engine
+        // should surface all of them, not just the first one.
+        let mut engine = engine_without_registry();
+
+        let result = add_lemma_code_blocking(
+            &mut engine,
+            r#"doc demo
+type money from nonexistent_type_source
+fact helper = doc nonexistent_doc
+fact price = 10
+rule total = helper.value + price"#,
+            "test.lemma",
+        );
+
+        assert!(result.is_err(), "Should fail with multiple errors");
+        let error = result.unwrap_err();
+        let error_message = error.to_string();
+
+        // The type resolution error should be present
+        assert!(
+            error_message.contains("money"),
+            "Should mention type error about 'money'. Got:\n{}",
+            error_message
+        );
+
+        // The doc reference error should ALSO be present (not swallowed)
+        assert!(
+            error_message.contains("nonexistent_doc"),
+            "Should mention doc reference error about 'nonexistent_doc'. Got:\n{}",
+            error_message
+        );
+
+        // The error should be a MultipleErrors variant since there are 2+ errors
+        assert!(
+            matches!(error, LemmaError::MultipleErrors(_)),
+            "Expected MultipleErrors, got: {}",
+            error_message
         );
     }
 }

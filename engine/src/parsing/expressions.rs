@@ -29,11 +29,8 @@ fn parse_literal_expression(
         pair.into_inner().next().ok_or_else(|| {
             LemmaError::engine(
                 "Empty literal wrapper",
-                span,
-                attribute,
+                Source::new(attribute, span, doc_name),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?
@@ -176,16 +173,17 @@ pub(crate) fn parse_primary(
     }
     Err(LemmaError::engine(
         "Empty primary expression",
-        Span {
-            start: 0,
-            end: 0,
-            line: 1,
-            col: 0,
-        },
-        attribute,
+        Source::new(
+            attribute,
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+            doc_name,
+        ),
         Arc::from(""),
-        doc_name,
-        1,
         None::<String>,
     ))
 }
@@ -232,11 +230,8 @@ fn parse_expression_impl(
                 inner.next().ok_or_else(|| {
                     LemmaError::engine(
                         "Missing left operand in logical OR expression",
-                        span,
-                        attribute,
+                        Source::new(attribute, span, doc_name),
                         Arc::from(""),
-                        doc_name,
-                        1,
                         None::<String>,
                     )
                 })?,
@@ -375,11 +370,8 @@ fn parse_expression_impl(
             "Invalid expression: unable to parse '{}' as any valid expression type",
             pair.as_str()
         ),
-        span,
-        attribute,
+        Source::new(attribute, span, doc_name),
         Arc::from(""),
-        doc_name,
-        1,
         None::<String>,
     ))
 }
@@ -417,11 +409,8 @@ fn parse_and_operand(
             let first = inner.next().ok_or_else(|| {
                 LemmaError::engine(
                     "Empty and_operand",
-                    span,
-                    attribute,
+                    Source::new(attribute, span, doc_name),
                     Arc::from(""),
-                    doc_name,
-                    1,
                     None::<String>,
                 )
             })?;
@@ -455,11 +444,8 @@ fn parse_and_expression(
         pairs.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing left operand in logical AND expression",
-                span,
-                attribute,
+                Source::new(attribute, span, doc_name),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?,
@@ -493,11 +479,8 @@ fn parse_base_expression(
         inner.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing left term in base_expression",
-                span.clone(),
-                attribute,
+                Source::new(attribute, span.clone(), doc_name),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?,
@@ -514,11 +497,8 @@ fn parse_base_expression(
                 let span = Span::from_pest_span(op_pair.as_span());
                 return Err(LemmaError::engine(
                     format!("Unexpected operator in base_expression: {:?}", other),
-                    span,
-                    attribute,
+                    Source::new(attribute, span, doc_name),
                     Arc::from(""),
-                    doc_name,
-                    1,
                     None::<String>,
                 ));
             }
@@ -527,11 +507,8 @@ fn parse_base_expression(
         let right_term_pair = inner.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing right term after + or - in base_expression",
-                span.clone(),
-                attribute,
+                Source::new(attribute, span.clone(), doc_name),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?;
@@ -576,22 +553,16 @@ fn parse_conversion_expression(
     let base_expr = base.ok_or_else(|| {
         LemmaError::engine(
             "Missing base expression in conversion_expression",
-            span.clone(),
-            attribute,
+            Source::new(attribute, span.clone(), doc_name),
             Arc::from(""),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
     let unit_name = unit.ok_or_else(|| {
         LemmaError::engine(
             "Missing unit in conversion_expression",
-            span.clone(),
-            attribute,
+            Source::new(attribute, span.clone(), doc_name),
             Arc::from(""),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
@@ -637,11 +608,8 @@ fn parse_term(
         pairs.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing left power in term",
-                span.clone(),
-                attribute,
+                Source::new(attribute, span.clone(), doc_name),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?,
@@ -659,11 +627,8 @@ fn parse_term(
                 let span = Span::from_pest_span(op_pair.as_span());
                 return Err(LemmaError::engine(
                     format!("Unexpected operator in term: {:?}", op_pair.as_rule()),
-                    span,
-                    attribute,
+                    Source::new(attribute, span, doc_name),
                     Arc::from(""),
-                    doc_name,
-                    1,
                     None::<String>,
                 ));
             }
@@ -673,11 +638,8 @@ fn parse_term(
             pairs.next().ok_or_else(|| {
                 LemmaError::engine(
                     "Missing right power in term",
-                    span.clone(),
-                    attribute,
+                    Source::new(attribute, span.clone(), doc_name),
                     Arc::from(""),
-                    doc_name,
-                    1,
                     None::<String>,
                 )
             })?,
@@ -705,11 +667,8 @@ fn parse_power(
         pairs.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing factor in power",
-                span.clone(),
-                attribute,
+                Source::new(attribute, span.clone(), doc_name),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?,
@@ -724,11 +683,8 @@ fn parse_power(
                 pairs.next().ok_or_else(|| {
                     LemmaError::engine(
                         "Missing right power in power expression",
-                        span.clone(),
-                        attribute,
+                        Source::new(attribute, span.clone(), doc_name),
                         Arc::from(""),
-                        doc_name,
-                        1,
                         None::<String>,
                     )
                 })?,
@@ -779,11 +735,8 @@ fn parse_factor(
     } else {
         return Err(LemmaError::engine(
             "Missing expression after unary operator",
-            span,
-            attribute,
+            Source::new(attribute, span, doc_name),
             Arc::from(""),
-            doc_name,
-            1,
             None::<String>,
         ));
     };
@@ -820,11 +773,8 @@ fn parse_comparison_expression(
         pairs.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing left operand in comparison expression",
-                span.clone(),
-                attribute,
+                Source::new(attribute, span.clone(), doc_name),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             )
         })?,
@@ -840,11 +790,8 @@ fn parse_comparison_expression(
                 let inner_pair = op_pair.into_inner().next().ok_or_else(|| {
                     LemmaError::engine(
                         "Empty comparison operator",
-                        inner_span,
-                        attribute,
+                        Source::new(attribute, inner_span, doc_name),
                         Arc::from(""),
-                        doc_name,
-                        1,
                         None::<String>,
                     )
                 })?;
@@ -861,11 +808,8 @@ fn parse_comparison_expression(
                         let inner_span = Span::from_pest_span(inner_pair.as_span());
                         return Err(LemmaError::engine(
                             format!("Invalid comparison operator: {:?}", inner_pair.as_rule()),
-                            inner_span,
-                            attribute,
+                            Source::new(attribute, inner_span, doc_name),
                             Arc::from(""),
-                            doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -883,11 +827,8 @@ fn parse_comparison_expression(
                 let op_span = Span::from_pest_span(op_pair.as_span());
                 return Err(LemmaError::engine(
                     format!("Invalid comparison operator: {:?}", op_pair.as_rule()),
-                    op_span,
-                    attribute,
+                    Source::new(attribute, op_span, doc_name),
                     Arc::from(""),
-                    doc_name,
-                    1,
                     None::<String>,
                 ));
             }
@@ -897,11 +838,8 @@ fn parse_comparison_expression(
             pairs.next().ok_or_else(|| {
                 LemmaError::engine(
                     "Missing right operand in comparison expression",
-                    span.clone(),
-                    attribute,
+                    Source::new(attribute, span.clone(), doc_name),
                     Arc::from(""),
-                    doc_name,
-                    1,
                     None::<String>,
                 )
             })?,
@@ -931,11 +869,8 @@ fn parse_not_expression(
     let operand_pair = inner.next().ok_or_else(|| {
         LemmaError::engine(
             "not: missing expression",
-            span,
-            attribute,
+            Source::new(attribute, span, doc_name),
             Arc::from(""),
-            doc_name,
-            1,
             None::<String>,
         )
     })?;
@@ -1018,11 +953,8 @@ fn parse_logical_expression(
             let span = Span::from_pest_span(pair.as_span());
             return Err(LemmaError::engine(
                 "Mathematical operator missing operand",
-                span,
-                attribute,
+                Source::new(attribute, span, doc_name),
                 Arc::from(""),
-                doc_name,
-                1,
                 None::<String>,
             ));
         }
@@ -1051,11 +983,8 @@ fn parse_logical_expression(
                 let span = Span::from_pest_span(node.as_span());
                 return Err(LemmaError::engine(
                     "not: missing expression",
-                    span,
-                    attribute,
+                    Source::new(attribute, span, doc_name),
                     Arc::from(""),
-                    doc_name,
-                    1,
                     None::<String>,
                 ));
             }
@@ -1090,11 +1019,8 @@ fn parse_logical_expression(
                         let span = Span::from_pest_span(node.as_span());
                         return Err(LemmaError::engine(
                             "Unknown mathematical operator",
-                            span,
-                            attribute,
+                            Source::new(attribute, span, doc_name),
                             Arc::from(""),
-                            doc_name,
-                            1,
                             None::<String>,
                         ));
                     }
@@ -1130,11 +1056,8 @@ fn parse_logical_expression(
                 let span = Span::from_pest_span(node.as_span());
                 return Err(LemmaError::engine(
                     "Mathematical operator missing operand",
-                    span,
-                    attribute,
+                    Source::new(attribute, span, doc_name),
                     Arc::from(""),
-                    doc_name,
-                    1,
                     None::<String>,
                 ));
             }
@@ -1143,11 +1066,8 @@ fn parse_logical_expression(
     }
     Err(LemmaError::engine(
         "Empty logical expression",
-        span,
-        attribute,
+        Source::new(attribute, span, doc_name),
         Arc::from(""),
-        doc_name,
-        1,
         None::<String>,
     ))
 }

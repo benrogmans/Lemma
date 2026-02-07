@@ -1,3 +1,5 @@
+mod common;
+use common::add_lemma_code_blocking;
 use lemma::{Engine, LemmaResult};
 use std::collections::HashMap;
 
@@ -18,8 +20,8 @@ fact user_age = [age from age]
 rule is_adult = user_age >= 18
 "#;
 
-    engine.add_lemma_code(age_doc, "age.lemma")?;
-    engine.add_lemma_code(test_doc, "test.lemma")?;
+    add_lemma_code_blocking(&mut engine, age_doc, "age.lemma")?;
+    add_lemma_code_blocking(&mut engine, test_doc, "test.lemma")?;
 
     let mut facts = HashMap::new();
     facts.insert("user_age".to_string(), "25".to_string());
@@ -66,8 +68,8 @@ fact user_age = [age from age -> maximum 120]
 rule is_senior = user_age >= 65
 "#;
 
-    engine.add_lemma_code(age_doc, "age.lemma")?;
-    engine.add_lemma_code(test_doc, "test.lemma")?;
+    add_lemma_code_blocking(&mut engine, age_doc, "age.lemma")?;
+    add_lemma_code_blocking(&mut engine, test_doc, "test.lemma")?;
 
     let mut facts = HashMap::new();
     facts.insert("user_age".to_string(), "70".to_string());

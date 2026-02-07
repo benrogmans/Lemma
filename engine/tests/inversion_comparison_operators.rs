@@ -1,4 +1,6 @@
 use lemma::{Engine, FactPath, LiteralValue, OperationResult, Target, TargetOp};
+mod common;
+use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -15,7 +17,7 @@ fn premium_greater_than_or_equal() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Find ages where premium >= 80
     let solutions = engine
@@ -63,7 +65,7 @@ fn discount_greater_than_threshold() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Find quantities where discount > 5%
     let solutions = engine
@@ -111,7 +113,7 @@ fn price_less_than_budget() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Find combinations where total < 100
     let solutions = engine
@@ -152,7 +154,7 @@ fn temperature_in_comfortable_range() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Find temps where comfort >= 2 (most comfortable)
     let solutions = engine
@@ -195,7 +197,7 @@ fn get_valid_domain_with_threshold() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // First, find when shipping_cost <= 0 (free shipping)
     let solutions = engine
@@ -236,7 +238,7 @@ fn all_comparison_operators() {
     "#;
 
     let mut engine = Engine::new();
-    engine.add_lemma_code(code, "test").unwrap();
+    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Test all operators
     let test_cases = vec![

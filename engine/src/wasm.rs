@@ -1,12 +1,14 @@
 use crate::planning::plan;
 use crate::{parse, Engine, LemmaError, ResourceLimits};
 use serde_json::json;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WasmEngine {
-    engine: Engine,
+    engine: Rc<RefCell<Engine>>,
 }
 
 #[wasm_bindgen]
@@ -15,29 +17,36 @@ impl WasmEngine {
     pub fn new() -> Self {
         console_error_panic_hook::set_once();
         WasmEngine {
-            engine: Engine::new(),
+            engine: Rc::new(RefCell::new(Engine::new())),
         }
     }
 
+    /// Add Lemma source code. Returns a Promise that resolves to a JSON string result.
     #[wasm_bindgen(js_name = addLemmaCode)]
-    pub fn add_lemma_code(&mut self, code: &str, source: &str) -> String {
-        match self.engine.add_lemma_code(code, source) {
-            Ok(_) => to_json_response(json!({
-                "success": true,
-                "message": "Document added successfully"
-            })),
-            Err(e) => to_json_error(&e),
-        }
+    pub fn add_lemma_code(&self, code: &str, source: &str) -> js_sys::Promise {
+        let code = code.to_string();
+        let source = source.to_string();
+        let engine = self.engine.clone();
+        wasm_bindgen_futures::future_to_promise(async move {
+            let result = engine.borrow_mut().add_lemma_code(&code, &source).await;
+            match result {
+                Ok(()) => Ok(JsValue::from_str(&to_json_response(json!({
+                    "success": true,
+                    "message": "Document added successfully"
+                })))),
+                Err(e) => Ok(JsValue::from_str(&to_json_error(&e))),
+            }
+        })
     }
 
     #[wasm_bindgen(js_name = evaluate)]
-    pub fn evaluate(&mut self, doc_name: &str, fact_values_json: &str) -> String {
+    pub fn evaluate(&self, doc_name: &str, fact_values_json: &str) -> String {
         self.evaluate_rules(doc_name, "[]", fact_values_json)
     }
 
     #[wasm_bindgen(js_name = evaluateRules)]
     pub fn evaluate_rules(
-        &mut self,
+        &self,
         doc_name: &str,
         rule_names_json: &str,
         fact_values_json: &str,
@@ -53,7 +62,11 @@ impl WasmEngine {
             fact_values_json.as_bytes()
         };
 
-        match self.engine.evaluate_json(doc_name, rule_names, json_bytes) {
+        match self
+            .engine
+            .borrow()
+            .evaluate_json(doc_name, rule_names, json_bytes)
+        {
             Ok(response) => {
                 let response_json = serde_json::to_value(&response).unwrap_or_else(|_| json!({}));
                 to_json_response(json!({
@@ -69,7 +82,7 @@ impl WasmEngine {
     pub fn list_documents(&self) -> String {
         to_json_response(json!({
             "success": true,
-            "documents": self.engine.list_documents()
+            "documents": self.engine.borrow().list_documents()
         }))
     }
 
@@ -88,7 +101,7 @@ impl WasmEngine {
             Err(msg) => return to_json_error_string(&msg),
         };
 
-        let necessary_facts = match self.engine.get_facts(doc_name, &rule_names) {
+        let necessary_facts = match self.engine.borrow().get_facts(doc_name, &rule_names) {
             Ok(facts) => facts,
             Err(e) => return to_json_error_string(&e.to_string()),
         };
@@ -176,6 +189,16 @@ fn format_error(error: &LemmaError) -> String {
         LemmaError::Inversion(details) => format!("Inversion Error: {}", details.message),
         LemmaError::Runtime(details) => format!("Runtime Error: {}", details.message),
         LemmaError::Engine(details) => format!("Engine Error: {}", details.message),
+        LemmaError::Registry {
+            details,
+            identifier,
+            kind,
+        } => {
+            format!(
+                "Registry Error ({}): @{}: {}",
+                kind, identifier, details.message
+            )
+        }
         LemmaError::MissingFact(details) => format!("Missing Fact: {}", details.message),
         LemmaError::CircularDependency { details, .. } => {
             format!("Circular Dependency: {}", details.message)

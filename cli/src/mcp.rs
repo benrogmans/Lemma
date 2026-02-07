@@ -256,10 +256,13 @@ pub mod server {
                 .map(String::from)
                 .unwrap_or_else(|| format!("doc_{}", chrono::Utc::now().timestamp_millis()));
 
-            self.engine.add_lemma_code(code, &source_id).map_err(|e| {
-                error!("Failed to add document: {}", e);
-                McpError::internal_error(format!("Failed to parse document: {e}"))
-            })?;
+            tokio::runtime::Runtime::new()
+                .map_err(|e| McpError::internal_error(e.to_string()))?
+                .block_on(self.engine.add_lemma_code(code, &source_id))
+                .map_err(|e| {
+                    error!("Failed to add document: {}", e);
+                    McpError::internal_error(format!("Failed to parse document: {e}"))
+                })?;
 
             info!("Document added: {}", source_id);
 

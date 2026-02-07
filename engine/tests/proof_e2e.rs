@@ -1,4 +1,6 @@
 use lemma::{Engine, LiteralValue, OperationResult};
+mod common;
+use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -14,7 +16,7 @@ fact base_value = 100
 rule doubled = base_value * 2
 "#;
 
-    engine.add_lemma_code(doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
     let response = engine
         .evaluate("test_proof", vec![], HashMap::new())
         .unwrap();
@@ -65,7 +67,7 @@ rule doubled = base_value * 2
 rule quadruple = doubled? * 2
 "#;
 
-    engine.add_lemma_code(doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
     let response = engine
         .evaluate("test_proof_ref", vec![], HashMap::new())
         .unwrap();
@@ -135,7 +137,7 @@ rule discount_percentage = 0%
   unless is_premium then 15%
 "#;
 
-    engine.add_lemma_code(doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
     let response = engine
         .evaluate("test_unless", vec![], HashMap::new())
         .unwrap();
@@ -202,7 +204,7 @@ rule age_validation = accept
   unless age < 18 then veto "Must be 18 or older"
 "#;
 
-    engine.add_lemma_code(doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
     let response = engine
         .evaluate("test_veto", vec![], HashMap::new())
         .unwrap();
@@ -248,8 +250,8 @@ fact base_ref = doc base
 rule result = base_ref.doubled? + 50
 "#;
 
-    engine.add_lemma_code(base_doc, "base.lemma").unwrap();
-    engine.add_lemma_code(main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
 
     let response = engine.evaluate("main", vec![], HashMap::new()).unwrap();
 
@@ -321,8 +323,8 @@ fact base_ref = doc base
 rule use_cross_doc = base_ref.doubled? + 1
 "#;
 
-    engine.add_lemma_code(base_doc, "base.lemma").unwrap();
-    engine.add_lemma_code(main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
 
     let response = engine.evaluate("main", vec![], HashMap::new()).unwrap();
 
@@ -386,8 +388,8 @@ fact base_ref = doc base
 rule use_doubled = base_ref.doubled? + 10
 "#;
 
-    engine.add_lemma_code(base_doc, "base.lemma").unwrap();
-    engine.add_lemma_code(main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
 
     let response = engine.evaluate("main", vec![], HashMap::new()).unwrap();
 

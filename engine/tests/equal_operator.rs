@@ -1,12 +1,14 @@
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
 fn test_equal_operator_numbers() {
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(
-            r#"
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
 doc test_equal_numbers
 
 fact a = 42
@@ -16,9 +18,9 @@ fact c = 100
 rule equal_true = a == b
 rule equal_false = a == c
 "#,
-            "test.lemma",
-        )
-        .unwrap();
+        "test.lemma",
+    )
+    .unwrap();
 
     let response = engine
         .evaluate("test_equal_numbers", vec![], HashMap::new())
@@ -34,9 +36,9 @@ rule equal_false = a == c
 #[test]
 fn test_equal_operator_text() {
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(
-            r#"
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
 doc test_equal_text
 
 fact greeting = "hello"
@@ -45,9 +47,9 @@ fact other = "world"
 rule same_greeting = greeting == "hello"
 rule different_greeting = greeting == other
 "#,
-            "test.lemma",
-        )
-        .unwrap();
+        "test.lemma",
+    )
+    .unwrap();
 
     let response = engine
         .evaluate("test_equal_text", vec![], HashMap::new())
@@ -63,9 +65,9 @@ rule different_greeting = greeting == other
 #[test]
 fn test_equal_operator_money() {
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(
-            r#"
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
 doc test_equal_money
 
 fact price_a = 100
@@ -75,9 +77,9 @@ fact price_c = 50
 rule same_price = price_a == price_b
 rule different_price = price_a == price_c
 "#,
-            "test.lemma",
-        )
-        .unwrap();
+        "test.lemma",
+    )
+    .unwrap();
 
     let response = engine
         .evaluate("test_equal_money", vec![], HashMap::new())
@@ -93,9 +95,9 @@ rule different_price = price_a == price_c
 #[test]
 fn test_equal_operator_booleans() {
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(
-            r#"
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
 doc test_equal_booleans
 
 fact flag_a = true
@@ -105,9 +107,9 @@ fact flag_c = false
 rule both_true = flag_a == flag_b
 rule mixed = flag_a == flag_c
 "#,
-            "test.lemma",
-        )
-        .unwrap();
+        "test.lemma",
+    )
+    .unwrap();
 
     let response = engine
         .evaluate("test_equal_booleans", vec![], HashMap::new())
@@ -123,9 +125,9 @@ rule mixed = flag_a == flag_c
 #[test]
 fn test_equal_operator_in_conditions() {
     let mut engine = Engine::new();
-    engine
-        .add_lemma_code(
-            r#"
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
 doc test_equal_conditions
 
 fact status = "active"
@@ -135,9 +137,9 @@ rule message = "inactive"
   unless status == "active" then "active"
   unless count == 10 then "count is 10"
 "#,
-            "test.lemma",
-        )
-        .unwrap();
+        "test.lemma",
+    )
+    .unwrap();
 
     let response = engine
         .evaluate("test_equal_conditions", vec![], HashMap::new())

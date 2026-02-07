@@ -1,4 +1,6 @@
 use lemma::Engine;
+mod common;
+use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -25,9 +27,7 @@ fact time_london = 2024-03-15T15:00:00+00:00
 rule are_equal = time_nyc == time_london
     "#;
 
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
 
     if let lemma::LiteralValue {
         value: lemma::ValueKind::Boolean(value),
@@ -50,9 +50,7 @@ fact time_tokyo = 2024-03-15T10:00:00+09:00
 rule nyc_is_later = time_nyc > time_tokyo
     "#;
 
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
 
     if let lemma::LiteralValue {
         value: lemma::ValueKind::Boolean(value),
@@ -74,9 +72,7 @@ fact start_time = 2024-03-15T10:00:00+01:00
 rule later = start_time + 2 hours
     "#;
 
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
 
     if let lemma::LiteralValue {
         value: lemma::ValueKind::Date(date),
@@ -109,9 +105,7 @@ fact west_coast = 2024-03-15T09:00:00-08:00
 rule later = west_coast + 3 hours
     "#;
 
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
 
     if let lemma::LiteralValue {
         value: lemma::ValueKind::Date(date),
@@ -139,9 +133,7 @@ fact evening = 2024-03-15T23:00:00+05:30
 rule next_day = evening + 2 hours
     "#;
 
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
 
     if let lemma::LiteralValue {
         value: lemma::ValueKind::Date(date),
@@ -174,9 +166,7 @@ fact time2 = 2024-03-15T16:00:00+01:00
 rule hours_diff = time2 - time1
     "#;
 
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
 
     if let lemma::LiteralValue {
         value: lemma::ValueKind::Duration(seconds, _),
@@ -201,9 +191,7 @@ fact india_time = 2024-03-15T14:30:00+05:30
 rule utc_equivalent = india_time
     "#;
 
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
 
     if let lemma::LiteralValue {
         value: lemma::ValueKind::Date(date),
@@ -230,9 +218,7 @@ fact nepal_time = 2024-03-15T14:30:00+05:45
 rule preserved = nepal_time
     "#;
 
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
 
     if let lemma::LiteralValue {
         value: lemma::ValueKind::Date(date),
@@ -266,9 +252,7 @@ fact hawaii = 2024-03-15T12:00:00-10:00
 rule later = hawaii + 1 hour
     "#;
 
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
 
     if let lemma::LiteralValue {
         value: lemma::ValueKind::Date(date),
@@ -295,9 +279,7 @@ fact kiribati = 2024-03-15T12:00:00+14:00
 rule earlier = kiribati - 1 hour
     "#;
 
-    engine
-        .add_lemma_code(code, "test.lemma")
-        .expect("Failed to parse");
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
 
     if let lemma::LiteralValue {
         value: lemma::ValueKind::Date(date),

@@ -89,7 +89,7 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -158,7 +158,7 @@ jobs:
       - name: Run fuzz targets (90s each)
         run: |
           cd engine/fuzz
-          for target in fuzz_parser fuzz_expressions fuzz_literals fuzz_deeply_nested fuzz_fact_overrides; do
+          for target in fuzz_parser fuzz_expressions fuzz_literals fuzz_deeply_nested fuzz_fact_bindings; do
             echo "Running $target..."
             cargo +nightly fuzz run $target -- -max_total_time=30 || true
           done
