@@ -4,7 +4,7 @@
 
 Redesign the API server so that `lemma server` automatically generates a typed REST API with interactive OpenAPI documentation based on the loaded Lemma documents. Add a `--watch` flag for live-reloading when `.lemma` files change.
 
-## Status: not started
+## Status: done
 
 ## Auto-generated routes
 
@@ -75,20 +75,23 @@ The server converts structured POST input to the engine's `HashMap<String, Strin
 
 ## Scalar interactive documentation
 
-Served as a static HTML response at `/docs` with no Rust dependencies:
+Served as a static HTML response at `/docs`. The Scalar API reference JavaScript bundle is vendored (embedded at compile time via `include_str!`) so the server has zero external runtime dependencies — no CDN required.
 
 ```html
 <!doctype html>
 <html>
 <head><title>Lemma API</title></head>
 <body>
-  <script id="api-reference" data-url="/openapi.json"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  <div id="app"></div>
+  <script src="/scalar.js"></script>
+  <script>
+    Scalar.createApiReference('#app', { url: '/openapi.json' })
+  </script>
 </body>
 </html>
 ```
 
-Scalar loads from CDN and provides a built-in "Try it" feature for making requests directly from the documentation.
+Scalar provides a built-in "Try it" feature for making requests directly from the documentation.
 
 ## Watch mode (`--watch`)
 
@@ -104,7 +107,7 @@ Scalar loads from CDN and provides a built-in "Try it" feature for making reques
 - `lemma-openapi` — new shared crate for Lemma-to-OpenAPI mapping (depends on `lemma-engine` and `serde_json`)
 - `notify` — filesystem watcher, for `--watch` mode
 - `serde_json` — already present
-- No additional dependencies for the documentation UI (Scalar loads from CDN)
+- Scalar API reference JS is vendored at compile time (no CDN dependency)
 
 ## What gets removed
 

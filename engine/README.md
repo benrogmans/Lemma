@@ -22,25 +22,26 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.7.3"
+lemma-engine = "0.7.4"
 ```
 
 ### Minimal example
 
 ```rust
 use lemma::Engine;
+use std::collections::HashMap;
 
 let mut engine = Engine::new();
 
-engine.add_lemma_code(r#"
+engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
     doc compensation
     fact base_salary = 60000
     fact bonus_rate = 10%
     rule bonus = base_salary * bonus_rate
     rule total = base_salary + bonus?
-"#, "compensation.lemma")?;
+"#.into())]))?;
 
-let response = engine.evaluate("compensation", None, None)?;
+let response = engine.evaluate("compensation", vec![], HashMap::new())?;
 
 for result in response.results {
     if let Some(value) = result.result {
@@ -57,7 +58,7 @@ use std::collections::HashMap;
 
 let mut engine = Engine::new();
 
-engine.add_lemma_code(r#"
+engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
     doc shipping
 
     fact weight = 5 kilogram
@@ -70,13 +71,13 @@ engine.add_lemma_code(r#"
     rule valid = weight <= 30 kilogram
       unless veto "Package too heavy for shipping"
 
-"#, "shipping.lemma")?;
+"#.into())]))?;
 
 let mut values = HashMap::new();
 values.insert("weight".to_string(), "12 kilogram".to_string());
 values.insert("destination".to_string(), "international".to_string());
 
-let response = engine.evaluate("shipping", None, Some(values))?;
+let response = engine.evaluate("shipping", vec![], values)?;
 ```
 
 ### Inverse reasoning
@@ -92,7 +93,7 @@ use rust_decimal::Decimal;
 
 let mut engine = Engine::new();
 
-engine.add_lemma_code(r#"
+engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
     doc pricing
     fact quantity = [number]
     fact is_vip = false
@@ -101,7 +102,7 @@ engine.add_lemma_code(r#"
       unless quantity >= 10 then 10%
       unless quantity >= 50 then 20%
       unless is_vip then 25%
-"#, "pricing.lemma")?;
+"#.into())]))?;
 
 // Find what quantity gives a 30% discount
 use rust_decimal::Decimal;

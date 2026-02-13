@@ -146,8 +146,5 @@ rule message = "inactive"
         .unwrap();
 
     let message = response.results.get("message").unwrap();
-    assert_eq!(
-        message.result.value().unwrap().to_string(),
-        "\"count is 10\""
-    );
+    assert_eq!(message.result.value().unwrap().to_string(), "count is 10");
 }

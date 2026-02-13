@@ -1,7 +1,6 @@
 use crate::evaluation::Evaluator;
 use crate::parsing::ast::{LemmaDoc, Span};
 use crate::parsing::source::Source;
-use crate::planning::plan;
 use crate::planning::semantics::{FactPath, LemmaType};
 use crate::registry::Registry;
 use crate::{parse, LemmaError, LemmaResult, ResourceLimits, Response};
@@ -14,7 +13,7 @@ use std::sync::Arc;
 /// Uses pre-built execution plans that are self-contained and ready for evaluation.
 ///
 /// An optional Registry can be configured to resolve external `@...` references.
-/// When a Registry is set, `add_lemma_code` will automatically resolve `@...`
+/// When a Registry is set, `add_lemma_files` will automatically resolve `@...`
 /// references by fetching source text from the Registry, parsing it, and including
 /// the resulting Lemma docs in the document set before planning.
 pub struct Engine {
@@ -78,79 +77,80 @@ impl Engine {
 
     /// Configure a Registry for resolving external `@...` references.
     ///
-    /// When set, `add_lemma_code` will resolve `@...` references automatically
+    /// When set, `add_lemma_files` will resolve `@...` references automatically
     /// by fetching source text from the Registry before planning.
     pub fn with_registry(mut self, registry: Arc<dyn Registry>) -> Self {
         self.registry = Some(registry);
         self
     }
 
-    /// Add Lemma source code and (when a registry is configured) resolve any `@...` references.
+    /// Add Lemma source files and (when a registry is configured) resolve any `@...` references.
     ///
-    /// Async because registry resolution may perform network I/O. Call from an async context
-    /// or use a runtime to block (e.g. in tests or CLI).
-    pub async fn add_lemma_code(&mut self, lemma_code: &str, source: &str) -> LemmaResult<()> {
-        let new_docs = parse(lemma_code, source, &self.limits)?;
+    /// - Resolves registry references **once** for all documents
+    /// - Validates and resolves types **once** across all documents
+    /// - Collects **all** errors across all files (parse, registry, planning) instead of aborting on the first
+    ///
+    /// `files` maps source identifiers (e.g. file paths) to source code.
+    /// For a single file, pass a one-entry `HashMap`.
+    pub async fn add_lemma_files(
+        &mut self,
+        files: HashMap<String, String>,
+    ) -> Result<(), Vec<LemmaError>> {
+        let mut errors: Vec<LemmaError> = Vec::new();
+        let mut all_new_docs: Vec<LemmaDoc> = Vec::new();
 
-        for doc in &new_docs {
-            let attribute = doc.attribute.clone().unwrap_or_else(|| doc.name.clone());
-            self.sources.insert(attribute, lemma_code.to_owned());
-            self.documents.insert(doc.name.clone(), doc.clone());
+        // 1. Parse all files, collect parse errors
+        for (source_id, code) in &files {
+            match parse(code, source_id, &self.limits) {
+                Ok(new_docs) => {
+                    for doc in &new_docs {
+                        let attribute = doc.attribute.clone().unwrap_or_else(|| doc.name.clone());
+                        self.sources.insert(attribute, code.clone());
+                        self.documents.insert(doc.name.clone(), doc.clone());
+                    }
+                    all_new_docs.extend(new_docs);
+                }
+                Err(e) => errors.push(e),
+            }
         }
 
+        // 2. Resolve registry references once for all documents
         if let Some(registry) = &self.registry {
             let docs_to_resolve: Vec<LemmaDoc> = self.documents.values().cloned().collect();
-            let resolved_docs = crate::registry::resolve_registry_references(
+            match crate::registry::resolve_registry_references(
                 docs_to_resolve,
                 &mut self.sources,
                 registry.as_ref(),
                 &self.limits,
             )
-            .await?;
-            self.documents.clear();
-            for doc in &resolved_docs {
-                self.documents.insert(doc.name.clone(), doc.clone());
+            .await
+            {
+                Ok(resolved_docs) => {
+                    self.documents.clear();
+                    for doc in resolved_docs {
+                        self.documents.insert(doc.name.clone(), doc);
+                    }
+                }
+                Err(e) => match e {
+                    LemmaError::MultipleErrors(inner) => errors.extend(inner),
+                    other => errors.push(other),
+                },
             }
         }
 
+        // 3. Plan all new documents at once (validates and resolves types once)
+        let docs_to_plan: Vec<&LemmaDoc> = all_new_docs.iter().collect();
         let all_docs: Vec<LemmaDoc> = self.documents.values().cloned().collect();
+        let (plans, plan_errors) =
+            crate::planning::plan(&docs_to_plan, &all_docs, self.sources.clone());
+        self.execution_plans.extend(plans);
+        errors.extend(plan_errors);
 
-        for doc in &new_docs {
-            let execution_plan =
-                plan(doc, &all_docs, self.sources.clone()).map_err(|errs| match errs.len() {
-                    0 => {
-                        let attribute = doc.attribute.as_deref().unwrap_or(&doc.name);
-                        let source_text = self
-                            .sources
-                            .get(attribute)
-                            .map(|s| s.as_str())
-                            .unwrap_or("");
-                        use crate::parsing::ast::Span;
-                        LemmaError::engine(
-                            format!("Failed to build execution plan for document: {}", doc.name),
-                            Source::new(
-                                attribute,
-                                Span {
-                                    start: 0,
-                                    end: 0,
-                                    line: doc.start_line,
-                                    col: 0,
-                                },
-                                doc.name.clone(),
-                            ),
-                            std::sync::Arc::from(source_text),
-                            None::<String>,
-                        )
-                    }
-                    1 => errs.into_iter().next().unwrap(),
-                    _ => LemmaError::MultipleErrors(errs),
-                })?;
-
-            self.execution_plans
-                .insert(doc.name.clone(), execution_plan);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
-
-        Ok(())
     }
 
     pub fn remove_document(&mut self, doc_name: &str) {
@@ -438,9 +438,16 @@ mod tests {
     use std::str::FromStr;
 
     fn add_lemma_code_blocking(engine: &mut Engine, code: &str, source: &str) -> LemmaResult<()> {
+        let files: HashMap<String, String> =
+            std::iter::once((source.to_string(), code.to_string())).collect();
         tokio::runtime::Runtime::new()
             .expect("tokio runtime")
-            .block_on(engine.add_lemma_code(code, source))
+            .block_on(engine.add_lemma_files(files))
+            .map_err(|errs| match errs.len() {
+                0 => unreachable!("add_lemma_files returned Err with empty error list"),
+                1 => errs.into_iter().next().unwrap(),
+                _ => LemmaError::MultipleErrors(errs),
+            })
     }
 
     #[test]
@@ -800,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn add_lemma_code_with_registry_resolves_and_evaluates_external_doc() {
+    fn add_lemma_files_with_registry_resolves_and_evaluates_external_doc() {
         let mut registry = EngineTestRegistry::new();
         registry.add(
             "org/project/helper",
@@ -816,7 +823,7 @@ fact external = doc @org/project/helper
 rule value = external.quantity"#,
             "main.lemma",
         )
-        .expect("add_lemma_code should succeed with registry resolving the external doc");
+        .expect("add_lemma_files should succeed with registry resolving the external doc");
 
         let response = engine
             .evaluate("main_doc", vec![], HashMap::new())
@@ -835,7 +842,7 @@ rule value = external.quantity"#,
     }
 
     #[test]
-    fn add_lemma_code_without_registry_and_no_external_refs_works() {
+    fn add_lemma_files_without_registry_and_no_external_refs_works() {
         let mut engine = engine_without_registry();
 
         add_lemma_code_blocking(
@@ -845,7 +852,9 @@ fact price = 100
 rule doubled = price * 2"#,
             "local.lemma",
         )
-        .expect("add_lemma_code should succeed without registry when there are no @... references");
+        .expect(
+            "add_lemma_files should succeed without registry when there are no @... references",
+        );
 
         let response = engine
             .evaluate("local_only", vec![], HashMap::new())
@@ -855,7 +864,7 @@ rule doubled = price * 2"#,
     }
 
     #[test]
-    fn add_lemma_code_without_registry_and_external_ref_fails() {
+    fn add_lemma_files_without_registry_and_external_ref_fails() {
         let mut engine = engine_without_registry();
 
         let result = add_lemma_code_blocking(
@@ -873,7 +882,7 @@ rule value = external.quantity"#,
     }
 
     #[test]
-    fn add_lemma_code_with_registry_error_propagates_as_registry_error() {
+    fn add_lemma_files_with_registry_error_propagates_as_registry_error() {
         // Empty registry — every lookup returns "not found"
         let registry = EngineTestRegistry::new();
 
@@ -959,7 +968,7 @@ rule val = ext.x"#,
     }
 
     #[test]
-    fn add_lemma_code_returns_all_errors_not_just_first() {
+    fn add_lemma_files_returns_all_errors_not_just_first() {
         // When a document has multiple independent errors (type import from
         // non-existing doc AND doc reference to non-existing doc), the Engine
         // should surface all of them, not just the first one.

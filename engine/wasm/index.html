@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lemma WASM Playground</title>
-    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+    <script src="vendor/vs/loader.js"></script>
     <style>
         body {
             font-family: system-ui, -apple-system, sans-serif;
@@ -1155,7 +1155,7 @@
             clearEditorLoading();
             showError('Loader missing', new Error('Monaco loader (require) not on self. Add script src=".../loader.js" before this script.'));
         } else {
-            loaderRequire.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+            loaderRequire.config({ paths: { vs: 'vendor/vs' } });
             loaderRequire(
                 ['vs/editor/editor.main'],
                 function (monacoFromModule) {

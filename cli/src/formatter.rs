@@ -1,6 +1,6 @@
 use lemma::evaluation::proof::{NonMatchedBranch, ProofNode, ValueSource};
 use lemma::planning::semantics::{FactPath, FactValue, TypeSpecification, ValueKind};
-use lemma::{ExecutionPlan, LiteralValue, OperationResult, Response, RuleResult};
+use lemma::{DocumentSchema, ExecutionPlan, LiteralValue, OperationResult, Response, RuleResult};
 use std::collections::HashSet;
 use super_table::{presets, Cell, CellAlignment, Table};
 
@@ -103,10 +103,10 @@ impl Formatter {
     pub fn format_workspace_summary(
         &self,
         file_count: usize,
-        doc_count: usize,
-        doc_stats: &[(String, usize, usize)],
+        schemas: &[DocumentSchema],
     ) -> String {
         let mut output = String::new();
+        let doc_count = schemas.len();
         let file_word = if file_count == 1 { "file" } else { "files" };
         let doc_word = if doc_count == 1 {
             "document"
@@ -114,21 +114,80 @@ impl Formatter {
             "documents"
         };
         output.push_str(&format!(
-            "Found {} {} in {} {}\n\n",
+            "Found {} {} in {} {}\n",
             doc_count, doc_word, file_count, file_word
         ));
 
-        let mut table = Table::new();
-        table.load_preset(presets::UTF8_FULL);
-        table.set_header(vec!["Document", "Facts", "Rules"]);
-        for (doc_name, facts, rules) in doc_stats {
-            table.add_row(vec![
-                doc_name.as_str(),
-                &facts.to_string(),
-                &rules.to_string(),
+        for schema in schemas {
+            output.push('\n');
+
+            let mut table = Table::new();
+            table.load_preset(presets::UTF8_FULL);
+
+            table.set_style(super_table::TableComponent::HeaderLines, '─');
+            table.set_style(super_table::TableComponent::LeftHeaderIntersection, '├');
+            table.set_style(super_table::TableComponent::MiddleHeaderIntersections, '┼');
+            table.set_style(super_table::TableComponent::RightHeaderIntersection, '┤');
+            table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
+            table.set_style(super_table::TableComponent::HorizontalLines, '─');
+
+            table.set_header(vec![
+                Cell::new(&schema.doc).set_alignment(CellAlignment::Left),
+                Cell::new(""),
+                Cell::new(""),
             ]);
+
+            if schema.facts.is_empty() && schema.rules.is_empty() {
+                table.add_row(vec![
+                    Cell::new("(no facts or rules)").set_alignment(CellAlignment::Left),
+                    Cell::new(""),
+                    Cell::new(""),
+                ]);
+                output.push_str(&table.to_string());
+                continue;
+            }
+
+            let mut col_name = Vec::new();
+            let mut col_type = Vec::new();
+            let mut col_default = Vec::new();
+
+            if !schema.facts.is_empty() {
+                col_name.push("Facts".to_string());
+                col_type.push(String::new());
+                col_default.push(String::new());
+                for (name, fact) in &schema.facts {
+                    col_name.push(format!("  {}", name));
+                    col_type.push(fact.fact_type.clone());
+                    col_default.push(fact.default.as_deref().unwrap_or("").to_string());
+                }
+            }
+
+            if !schema.facts.is_empty() && !schema.rules.is_empty() {
+                col_name.push(String::new());
+                col_type.push(String::new());
+                col_default.push(String::new());
+            }
+
+            if !schema.rules.is_empty() {
+                col_name.push("Rules".to_string());
+                col_type.push(String::new());
+                col_default.push(String::new());
+                for (name, rule) in &schema.rules {
+                    col_name.push(format!("  {}", name));
+                    col_type.push(rule.rule_type.clone());
+                    col_default.push(String::new());
+                }
+            }
+
+            table.add_row(vec![
+                Cell::new(col_name.join("\n")).set_alignment(CellAlignment::Left),
+                Cell::new(col_type.join("\n")).set_alignment(CellAlignment::Left),
+                Cell::new(col_default.join("\n")).set_alignment(CellAlignment::Left),
+            ]);
+
+            output.push_str(&table.to_string());
         }
-        output.push_str(&table.to_string());
+
         output
     }
 

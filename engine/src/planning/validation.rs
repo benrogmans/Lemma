@@ -23,7 +23,7 @@ use std::sync::Arc;
 /// are handled during graph building where types are actually needed.
 pub fn validate_types(
     document: &LemmaDoc,
-    _all_docs: Option<&[LemmaDoc]>,
+    sources: &HashMap<String, String>,
 ) -> Result<(), Vec<LemmaError>> {
     let mut errors = Vec::new();
 
@@ -41,7 +41,7 @@ pub fn validate_types(
                 errors.push(LemmaError::engine(
                     "TypeDeclaration base cannot be empty",
                     src.clone(),
-                    Arc::from(""),
+                    super::source_text_for(sources, src),
                     None::<String>,
                 ));
             }
@@ -68,6 +68,7 @@ pub fn validate_type_specifications(
     specs: &TypeSpecification,
     type_name: &str,
     source: &Source,
+    source_text: Arc<str>,
 ) -> Vec<LemmaError> {
     let mut errors = Vec::new();
 
@@ -90,7 +91,7 @@ pub fn validate_type_specifications(
                             type_name, min, max
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -105,7 +106,7 @@ pub fn validate_type_specifications(
                             type_name, d
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -120,7 +121,7 @@ pub fn validate_type_specifications(
                             type_name, prec
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -142,7 +143,7 @@ pub fn validate_type_specifications(
                                 .join(", ")
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -154,7 +155,7 @@ pub fn validate_type_specifications(
                                 type_name, def_value, def_unit, min
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -167,7 +168,7 @@ pub fn validate_type_specifications(
                                 type_name, def_value, def_unit, max
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -182,7 +183,7 @@ pub fn validate_type_specifications(
                         type_name
                     ),
                     source.clone(),
-                    Arc::from(""),
+                    source_text.clone(),
                     None::<String>,
                 ));
             }
@@ -199,7 +200,7 @@ pub fn validate_type_specifications(
                                 type_name
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -213,7 +214,7 @@ pub fn validate_type_specifications(
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     } else {
@@ -225,7 +226,7 @@ pub fn validate_type_specifications(
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -249,7 +250,7 @@ pub fn validate_type_specifications(
                             type_name, min, max
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -264,7 +265,7 @@ pub fn validate_type_specifications(
                             type_name, d
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -279,7 +280,7 @@ pub fn validate_type_specifications(
                             type_name, prec
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -295,7 +296,7 @@ pub fn validate_type_specifications(
                                 type_name, def, min
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -308,7 +309,7 @@ pub fn validate_type_specifications(
                                 type_name, def, max
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -334,7 +335,7 @@ pub fn validate_type_specifications(
                             type_name, d
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -349,7 +350,7 @@ pub fn validate_type_specifications(
                             type_name, min, max
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -365,7 +366,7 @@ pub fn validate_type_specifications(
                                 type_name, def, min
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -378,7 +379,7 @@ pub fn validate_type_specifications(
                                 type_name, def, max
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -399,7 +400,7 @@ pub fn validate_type_specifications(
                                 type_name
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -413,7 +414,7 @@ pub fn validate_type_specifications(
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     } else {
@@ -425,7 +426,7 @@ pub fn validate_type_specifications(
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -447,7 +448,7 @@ pub fn validate_type_specifications(
                     errors.push(LemmaError::engine(
                         format!("Type '{}' has invalid range: minimum length {} is greater than maximum length {}", type_name, min, max),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -460,7 +461,7 @@ pub fn validate_type_specifications(
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has inconsistent length constraint: length {} is less than minimum {}", type_name, len, min),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -470,7 +471,7 @@ pub fn validate_type_specifications(
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has inconsistent length constraint: length {} is greater than maximum {}", type_name, len, max),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -489,7 +490,7 @@ pub fn validate_type_specifications(
                                 type_name, def_len, min
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -502,7 +503,7 @@ pub fn validate_type_specifications(
                                 type_name, def_len, max
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -512,7 +513,7 @@ pub fn validate_type_specifications(
                         errors.push(LemmaError::engine(
                             format!("Type '{}' default value length {} does not match required length {}", type_name, def_len, len),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -524,7 +525,7 @@ pub fn validate_type_specifications(
                             type_name, def, options
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -546,7 +547,7 @@ pub fn validate_type_specifications(
                             type_name, min, max
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -562,7 +563,7 @@ pub fn validate_type_specifications(
                                 type_name, def, min
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -575,7 +576,7 @@ pub fn validate_type_specifications(
                                 type_name, def, max
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -598,7 +599,7 @@ pub fn validate_type_specifications(
                             type_name, min, max
                         ),
                         source.clone(),
-                        Arc::from(""),
+                        source_text.clone(),
                         None::<String>,
                     ));
                 }
@@ -614,7 +615,7 @@ pub fn validate_type_specifications(
                                 type_name, def, min
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -627,7 +628,7 @@ pub fn validate_type_specifications(
                                 type_name, def, max
                             ),
                             source.clone(),
-                            Arc::from(""),
+                            source_text.clone(),
                             None::<String>,
                         ));
                     }
@@ -990,7 +991,7 @@ mod tests {
         let mut doc = make_doc("test");
         doc.facts.push(make_fact("age"));
 
-        let result = validate_types(&doc, None);
+        let result = validate_types(&doc, &HashMap::new());
         assert!(result.is_ok());
     }
 
@@ -1005,7 +1006,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1023,7 +1024,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert!(errors.is_empty());
     }
 
@@ -1039,7 +1040,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1058,7 +1059,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1077,7 +1078,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert!(errors.is_empty());
     }
 
@@ -1092,7 +1093,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1110,7 +1111,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1129,7 +1130,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1148,7 +1149,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert!(errors.is_empty());
     }
 
@@ -1164,7 +1165,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1182,7 +1183,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].to_string().contains("minimum")
@@ -1201,7 +1202,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert!(errors.is_empty());
     }
 
@@ -1216,7 +1217,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].to_string().contains("minimum")
@@ -1252,7 +1253,9 @@ mod tests {
         };
 
         // Register and resolve the type to get its specifications
-        let mut type_registry = TypeRegistry::new();
+        let mut sources = HashMap::new();
+        sources.insert("<test>".to_string(), String::new());
+        let mut type_registry = TypeRegistry::new(sources);
         type_registry
             .register_type("test", type_def)
             .expect("Should register type");
@@ -1266,8 +1269,12 @@ mod tests {
             .get("invalid_money")
             .expect("Should have invalid_money type");
         let src = test_source("test");
-        let errors =
-            validate_type_specifications(&lemma_type.specifications, "invalid_money", &src);
+        let errors = validate_type_specifications(
+            &lemma_type.specifications,
+            "invalid_money",
+            &src,
+            Arc::from(""),
+        );
         assert!(!errors.is_empty());
         assert!(errors.iter().any(|e| e
             .to_string()

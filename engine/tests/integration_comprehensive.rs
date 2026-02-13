@@ -181,7 +181,7 @@ rule status = "LOW"
         .values()
         .find(|r| r.rule.name == "status")
         .unwrap();
-    assert_eq!(status.result.value().unwrap().to_string(), "\"LOW\"");
+    assert_eq!(status.result.value().unwrap().to_string(), "LOW");
 
     let mut facts2 = std::collections::HashMap::new();
     facts2.insert("threshold".to_string(), "150".to_string());
@@ -194,7 +194,7 @@ rule status = "LOW"
         .values()
         .find(|r| r.rule.name == "status")
         .unwrap();
-    assert_eq!(status2.result.value().unwrap().to_string(), "\"HIGH\"");
+    assert_eq!(status2.result.value().unwrap().to_string(), "HIGH");
 
     engine.remove_document("dynamic_config");
 }

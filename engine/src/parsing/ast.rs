@@ -544,10 +544,7 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Number(n) => write!(f, "{}", n),
-            Value::Text(s) => {
-                let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-                write!(f, "\"{}\"", escaped)
-            }
+            Value::Text(s) => write!(f, "{}", s),
             Value::Date(dt) => write!(f, "{}", dt),
             Value::Boolean(b) => write!(f, "{}", b),
             Value::Time(time) => write!(f, "{}", time),

@@ -91,7 +91,7 @@ High-level flow:
 
 6. **Engine** (`engine/src/engine.rs`)  
    - **Engine** holds documents, sources, and **execution plans**.  
-   - `add_lemma_code` → parse then `plan(...)`; on success, stores execution plan.  
+   - `add_lemma_files` → parse, resolve registry references, then `plan(...)` all documents at once; on success, stores execution plans.  
    - `evaluate` runs the plan; no document parsing during evaluate.
 
 7. **Errors** (`engine/src/error.rs`)  

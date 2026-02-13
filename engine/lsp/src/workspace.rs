@@ -137,24 +137,29 @@ impl WorkspaceModel {
     ) -> Vec<FileDiagnostics> {
         let mut planning_errors_by_attribute: HashMap<String, Vec<LemmaError>> = HashMap::new();
 
+        // Collect all docs to plan from successfully parsed files.
+        let mut docs_to_plan: Vec<&LemmaDoc> = Vec::new();
+        let mut doc_attribute_map: HashMap<String, String> = HashMap::new();
         for (attribute, tracked) in &self.files {
             if let ParseOutcome::Success(docs) = &tracked.parse_outcome {
                 for doc in docs {
-                    if let Err(errors) = lemma::planning::plan(doc, resolved_docs, sources.clone())
-                    {
-                        for error in errors {
-                            let err_attr = error
-                                .location()
-                                .map(|s| s.attribute.clone())
-                                .unwrap_or_else(|| attribute.clone());
-                            planning_errors_by_attribute
-                                .entry(err_attr)
-                                .or_default()
-                                .push(error);
-                        }
-                    }
+                    docs_to_plan.push(doc);
+                    doc_attribute_map.insert(doc.name.clone(), attribute.clone());
                 }
             }
+        }
+
+        // Plan all documents at once (validates and resolves types once).
+        let (_plans, errors) = lemma::planning::plan(&docs_to_plan, resolved_docs, sources.clone());
+        for error in errors {
+            let err_attr = error
+                .location()
+                .map(|s| s.attribute.clone())
+                .unwrap_or_default();
+            planning_errors_by_attribute
+                .entry(err_attr)
+                .or_default()
+                .push(error);
         }
 
         let mut results = Vec::new();

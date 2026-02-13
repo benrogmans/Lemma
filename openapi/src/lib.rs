@@ -1,0 +1,1082 @@
+//! OpenAPI 3.1 specification generator for Lemma documents.
+//!
+//! Takes a Lemma `Engine` and produces a complete OpenAPI specification as JSON.
+//! Used by both `lemma server` (CLI) and LemmaBase.com for consistent API docs.
+
+use lemma::{Engine, ExecutionPlan, LemmaType, TypeSpecification};
+use serde_json::{json, Map, Value};
+use std::collections::HashMap;
+
+/// Generate a complete OpenAPI 3.1 specification from a Lemma engine.
+///
+/// The specification includes:
+/// - Document endpoints (`/@{doc_name}` and `/@{doc_name}/{rules}`)
+/// - GET operations with query parameters
+/// - POST operations with JSON request bodies
+/// - Response schemas with rule result shapes
+/// - Meta routes (`/`, `/health`, `/openapi.json`, `/docs`)
+pub fn generate_openapi(engine: &Engine) -> Value {
+    let mut paths = Map::new();
+    let mut components_schemas = Map::new();
+
+    let document_names = {
+        let mut names = engine.list_documents();
+        names.sort();
+        names
+    };
+
+    // Document routes (rendered first so they appear above Meta in the sidebar)
+    for doc_name in &document_names {
+        if let Some(plan) = engine.get_execution_plan(doc_name) {
+            let facts = collect_input_facts(plan);
+            let rule_names = collect_rule_names(plan);
+
+            // Response schema for this document
+            let response_schema_name = format!("{}_response", doc_name);
+            components_schemas.insert(
+                response_schema_name.clone(),
+                build_response_schema(plan, &rule_names),
+            );
+
+            // POST body schema
+            let post_body_schema_name = format!("{}_request", doc_name);
+            components_schemas.insert(
+                post_body_schema_name.clone(),
+                build_post_request_schema(&facts),
+            );
+
+            // /@{doc_name} path (all rules)
+            let all_rules_path = format!("/@{}", doc_name);
+            paths.insert(
+                all_rules_path,
+                build_document_path_item(
+                    doc_name,
+                    &facts,
+                    &response_schema_name,
+                    &post_body_schema_name,
+                    None,
+                ),
+            );
+
+            // /@{doc_name}/{rules} path (filtered rules)
+            let filtered_rules_path = format!("/@{}/{{rules}}", doc_name);
+            paths.insert(
+                filtered_rules_path,
+                build_document_path_item(
+                    doc_name,
+                    &facts,
+                    &response_schema_name,
+                    &post_body_schema_name,
+                    Some(&rule_names),
+                ),
+            );
+        }
+    }
+
+    // Meta routes (listed after document routes so they appear below in the sidebar)
+    paths.insert("/".to_string(), index_path_item(&document_names, engine));
+    paths.insert("/health".to_string(), health_path_item());
+    paths.insert("/openapi.json".to_string(), openapi_json_path_item());
+    // Note: /docs is deliberately excluded from the spec — it serves the
+    // documentation UI itself and showing it inside that UI is circular.
+
+    // Tag ordering: document tags first, then Meta at the bottom.
+    let mut tags = Vec::new();
+    for doc_name in &document_names {
+        tags.push(json!({
+            "name": doc_name,
+            "description": format!("Evaluate rules in the '{}' document", doc_name)
+        }));
+    }
+    tags.push(json!({
+        "name": "Meta",
+        "description": "Server metadata and introspection endpoints"
+    }));
+
+    json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "Lemma API",
+            "description": "Auto-generated REST API from Lemma documents.",
+            "version": env!("CARGO_PKG_VERSION")
+        },
+        "tags": tags,
+        "paths": Value::Object(paths),
+        "components": {
+            "schemas": Value::Object(components_schemas)
+        }
+    })
+}
+
+/// Information about a single input fact for OpenAPI generation.
+struct InputFact {
+    /// The fact name as it appears in the API (e.g. "quantity", "is_member").
+    name: String,
+    /// The resolved Lemma type for this fact.
+    lemma_type: LemmaType,
+    /// Whether this fact has a default value (making it optional in the API).
+    has_default: bool,
+}
+
+/// Collect all input facts (value and type-declaration facts) from a plan.
+/// Only includes facts local to the document (no path segments).
+fn collect_input_facts(plan: &ExecutionPlan) -> Vec<InputFact> {
+    let mut facts: Vec<InputFact> = plan
+        .facts
+        .iter()
+        .filter(|(path, _)| path.segments.is_empty())
+        .filter_map(|(path, data)| {
+            data.schema_type().map(|lemma_type| InputFact {
+                name: path.fact.clone(),
+                lemma_type: lemma_type.clone(),
+                has_default: data.value().is_some(),
+            })
+        })
+        .collect();
+    facts.sort_by(|a, b| a.name.cmp(&b.name));
+    facts
+}
+
+/// Collect rule names from the plan (local rules only, sorted).
+fn collect_rule_names(plan: &ExecutionPlan) -> Vec<String> {
+    let mut names: Vec<String> = plan
+        .rules
+        .iter()
+        .filter(|r| r.path.segments.is_empty())
+        .map(|r| r.name.clone())
+        .collect();
+    names.sort();
+    names
+}
+
+// ---------------------------------------------------------------------------
+// Meta route path items
+// ---------------------------------------------------------------------------
+
+fn index_path_item(document_names: &[String], engine: &Engine) -> Value {
+    let doc_items: Vec<Value> = document_names
+        .iter()
+        .map(|name| {
+            let (facts_count, rules_count) = engine
+                .get_execution_plan(name)
+                .map(|p| {
+                    let facts_count = p
+                        .facts
+                        .iter()
+                        .filter(|(path, _)| path.segments.is_empty())
+                        .filter(|(_, data)| data.schema_type().is_some())
+                        .count();
+                    let rules_count = p
+                        .rules
+                        .iter()
+                        .filter(|r| r.path.segments.is_empty())
+                        .count();
+                    (facts_count, rules_count)
+                })
+                .unwrap_or((0, 0));
+            json!({
+                "name": name,
+                "facts": facts_count,
+                "rules": rules_count
+            })
+        })
+        .collect();
+
+    json!({
+        "get": {
+            "operationId": "listDocuments",
+            "summary": "List all available documents",
+            "tags": ["Meta"],
+            "responses": {
+                "200": {
+                    "description": "List of loaded Lemma documents",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": { "type": "string" },
+                                        "facts": { "type": "integer" },
+                                        "rules": { "type": "integer" }
+                                    },
+                                    "required": ["name", "facts", "rules"]
+                                }
+                            },
+                            "example": doc_items
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn health_path_item() -> Value {
+    json!({
+        "get": {
+            "operationId": "healthCheck",
+            "summary": "Health check",
+            "tags": ["Meta"],
+            "responses": {
+                "200": {
+                    "description": "Server is healthy",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "status": { "type": "string" },
+                                    "service": { "type": "string" },
+                                    "version": { "type": "string" }
+                                },
+                                "required": ["status", "service", "version"]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn openapi_json_path_item() -> Value {
+    json!({
+        "get": {
+            "operationId": "getOpenApiSpec",
+            "summary": "OpenAPI 3.1 specification",
+            "tags": ["Meta"],
+            "responses": {
+                "200": {
+                    "description": "OpenAPI specification as JSON",
+                    "content": {
+                        "application/json": {
+                            "schema": { "type": "object" }
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Document path items
+// ---------------------------------------------------------------------------
+
+fn build_document_path_item(
+    doc_name: &str,
+    facts: &[InputFact],
+    response_schema_name: &str,
+    post_body_schema_name: &str,
+    with_rules_param: Option<&[String]>,
+) -> Value {
+    let response_ref = json!({
+        "$ref": format!("#/components/schemas/{}", response_schema_name)
+    });
+    let body_ref = json!({
+        "$ref": format!("#/components/schemas/{}", post_body_schema_name)
+    });
+
+    let error_response = json!({
+        "description": "Evaluation error",
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "error": { "type": "string" }
+                    },
+                    "required": ["error"]
+                }
+            }
+        }
+    });
+
+    let tag = doc_name.to_string();
+
+    // GET query parameters
+    let mut get_parameters: Vec<Value> = facts.iter().map(build_query_parameter).collect();
+
+    // POST and GET both share the rules path parameter when present
+    if with_rules_param.is_some() {
+        let rules_param = json!({
+            "name": "rules",
+            "in": "path",
+            "required": true,
+            "description": "Comma-separated list of rule names to evaluate",
+            "schema": { "type": "string" },
+            "example": with_rules_param
+                .filter(|r| !r.is_empty())
+                .map(|r| r.join(","))
+                .unwrap_or_default()
+        });
+        get_parameters.insert(0, rules_param.clone());
+    }
+
+    let get_summary = if with_rules_param.is_some() {
+        format!("Evaluate selected rules in '{}'", doc_name)
+    } else {
+        format!("Evaluate all rules in '{}'", doc_name)
+    };
+
+    let post_summary = if with_rules_param.is_some() {
+        format!("Evaluate selected rules in '{}' (JSON body)", doc_name)
+    } else {
+        format!("Evaluate all rules in '{}' (JSON body)", doc_name)
+    };
+
+    let get_operation_id = if with_rules_param.is_some() {
+        format!("get_{}_filtered", doc_name)
+    } else {
+        format!("get_{}", doc_name)
+    };
+
+    let post_operation_id = if with_rules_param.is_some() {
+        format!("post_{}_filtered", doc_name)
+    } else {
+        format!("post_{}", doc_name)
+    };
+
+    let mut post_parameters: Vec<Value> = Vec::new();
+    if with_rules_param.is_some() {
+        post_parameters.push(json!({
+            "name": "rules",
+            "in": "path",
+            "required": true,
+            "description": "Comma-separated list of rule names to evaluate",
+            "schema": { "type": "string" },
+            "example": with_rules_param
+                .filter(|r| !r.is_empty())
+                .map(|r| r.join(","))
+                .unwrap_or_default()
+        }));
+    }
+
+    let path_item = json!({
+        "get": {
+            "operationId": get_operation_id,
+            "summary": get_summary,
+            "tags": [tag],
+            "parameters": get_parameters,
+            "responses": {
+                "200": {
+                    "description": "Evaluation results",
+                    "content": {
+                        "application/json": {
+                            "schema": response_ref
+                        }
+                    }
+                },
+                "400": error_response,
+                "404": {
+                    "description": "Document not found",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "error": { "type": "string" }
+                                },
+                                "required": ["error"]
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "post": {
+            "operationId": post_operation_id,
+            "summary": post_summary,
+            "tags": [tag],
+            "parameters": post_parameters,
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": body_ref
+                    }
+                }
+            },
+            "responses": {
+                "200": {
+                    "description": "Evaluation results",
+                    "content": {
+                        "application/json": {
+                            "schema": response_ref
+                        }
+                    }
+                },
+                "400": error_response,
+                "404": {
+                    "description": "Document not found",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "error": { "type": "string" }
+                                },
+                                "required": ["error"]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    path_item
+}
+
+// ---------------------------------------------------------------------------
+// Query parameter generation (GET — all string typed)
+// ---------------------------------------------------------------------------
+
+fn build_query_parameter(fact: &InputFact) -> Value {
+    let description = build_get_parameter_description(&fact.lemma_type);
+    let mut param = json!({
+        "name": fact.name,
+        "in": "query",
+        "required": !fact.has_default,
+        "description": description,
+        "schema": { "type": "string" }
+    });
+
+    // For text types with options, add enum to the schema
+    if let TypeSpecification::Text { ref options, .. } = fact.lemma_type.specifications {
+        if !options.is_empty() {
+            param["schema"]["enum"] =
+                Value::Array(options.iter().map(|o| Value::String(o.clone())).collect());
+        }
+    }
+
+    // Add example values
+    if let Some(example) = build_get_example(&fact.lemma_type) {
+        param["example"] = Value::String(example);
+    }
+
+    param
+}
+
+fn build_get_parameter_description(lemma_type: &LemmaType) -> String {
+    let mut parts = Vec::new();
+
+    let type_name = type_base_name(lemma_type);
+    parts.push(format!("Type: {}", type_name));
+
+    match &lemma_type.specifications {
+        TypeSpecification::Number {
+            minimum, maximum, ..
+        } => {
+            if let Some(min) = minimum {
+                parts.push(format!("Minimum: {}", min));
+            }
+            if let Some(max) = maximum {
+                parts.push(format!("Maximum: {}", max));
+            }
+        }
+        TypeSpecification::Scale {
+            minimum,
+            maximum,
+            units,
+            ..
+        } => {
+            let unit_names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
+            if !unit_names.is_empty() {
+                parts.push(format!("Units: {}", unit_names.join(", ")));
+                parts.push(format!("Format: value+unit (e.g. 100+{})", unit_names[0]));
+            }
+            if let Some(min) = minimum {
+                parts.push(format!("Minimum: {}", min));
+            }
+            if let Some(max) = maximum {
+                parts.push(format!("Maximum: {}", max));
+            }
+        }
+        TypeSpecification::Ratio {
+            minimum,
+            maximum,
+            units,
+            ..
+        } => {
+            let unit_names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
+            if !unit_names.is_empty() {
+                parts.push(format!("Units: {}", unit_names.join(", ")));
+                parts.push("Format: value+unit (e.g. 21+percent)".to_string());
+            }
+            if let Some(min) = minimum {
+                parts.push(format!("Minimum: {}", min));
+            }
+            if let Some(max) = maximum {
+                parts.push(format!("Maximum: {}", max));
+            }
+        }
+        TypeSpecification::Text { options, .. } => {
+            if !options.is_empty() {
+                parts.push(format!("Options: {}", options.join(", ")));
+            }
+        }
+        TypeSpecification::Boolean { .. } => {
+            parts.push("Values: true, false".to_string());
+        }
+        TypeSpecification::Date { .. } => {
+            parts.push("Format: YYYY-MM-DD (e.g. 2024-01-15)".to_string());
+        }
+        TypeSpecification::Time { .. } => {
+            parts.push("Format: HH:MM:SS (e.g. 14:30:00)".to_string());
+        }
+        TypeSpecification::Duration { .. } => {
+            parts.push("Format: value+unit (e.g. 40+hours)".to_string());
+            parts.push("Units: years, months, weeks, days, hours, minutes, seconds".to_string());
+        }
+        TypeSpecification::Veto { .. } => {}
+    }
+
+    parts.join(". ")
+}
+
+fn build_get_example(lemma_type: &LemmaType) -> Option<String> {
+    match &lemma_type.specifications {
+        TypeSpecification::Number { .. } => Some("10".to_string()),
+        TypeSpecification::Scale { units, .. } => {
+            if let Some(first_unit) = units.iter().next() {
+                Some(format!("100+{}", first_unit.name))
+            } else {
+                Some("100".to_string())
+            }
+        }
+        TypeSpecification::Ratio { units, .. } => {
+            if let Some(first_unit) = units.iter().next() {
+                Some(format!("21+{}", first_unit.name))
+            } else {
+                Some("0.21".to_string())
+            }
+        }
+        TypeSpecification::Text { options, .. } => {
+            if let Some(first) = options.first() {
+                Some(first.clone())
+            } else {
+                Some("example".to_string())
+            }
+        }
+        TypeSpecification::Boolean { .. } => Some("true".to_string()),
+        TypeSpecification::Date { .. } => Some("2024-01-15".to_string()),
+        TypeSpecification::Time { .. } => Some("14:30:00".to_string()),
+        TypeSpecification::Duration { .. } => Some("40+hours".to_string()),
+        TypeSpecification::Veto { .. } => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POST request body schema generation (JSON — native types)
+// ---------------------------------------------------------------------------
+
+fn build_post_request_schema(facts: &[InputFact]) -> Value {
+    let mut properties = Map::new();
+    let mut required = Vec::new();
+
+    for fact in facts {
+        properties.insert(
+            fact.name.clone(),
+            build_post_property_schema(&fact.lemma_type),
+        );
+        if !fact.has_default {
+            required.push(Value::String(fact.name.clone()));
+        }
+    }
+
+    let mut schema = json!({
+        "type": "object",
+        "properties": Value::Object(properties)
+    });
+    if !required.is_empty() {
+        schema["required"] = Value::Array(required);
+    }
+    schema
+}
+
+fn build_post_property_schema(lemma_type: &LemmaType) -> Value {
+    match &lemma_type.specifications {
+        TypeSpecification::Number {
+            minimum, maximum, ..
+        } => {
+            let mut schema = json!({ "type": "number" });
+            if let Some(min) = minimum {
+                schema["minimum"] = json!(min.to_string().parse::<f64>().unwrap_or(0.0));
+            }
+            if let Some(max) = maximum {
+                schema["maximum"] = json!(max.to_string().parse::<f64>().unwrap_or(0.0));
+            }
+            schema
+        }
+        TypeSpecification::Scale {
+            minimum,
+            maximum,
+            units,
+            ..
+        } => {
+            let unit_names: Vec<Value> = units
+                .iter()
+                .map(|u| Value::String(u.name.clone()))
+                .collect();
+
+            let mut value_schema = json!({ "type": "number" });
+            if let Some(min) = minimum {
+                value_schema["minimum"] = json!(min.to_string().parse::<f64>().unwrap_or(0.0));
+            }
+            if let Some(max) = maximum {
+                value_schema["maximum"] = json!(max.to_string().parse::<f64>().unwrap_or(0.0));
+            }
+
+            if unit_names.is_empty() {
+                value_schema
+            } else {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "value": value_schema,
+                        "unit": {
+                            "type": "string",
+                            "enum": unit_names
+                        }
+                    },
+                    "required": ["value", "unit"]
+                })
+            }
+        }
+        TypeSpecification::Ratio {
+            minimum,
+            maximum,
+            units,
+            ..
+        } => {
+            let unit_names: Vec<Value> = units
+                .iter()
+                .map(|u| Value::String(u.name.clone()))
+                .collect();
+
+            let mut value_schema = json!({ "type": "number" });
+            if let Some(min) = minimum {
+                value_schema["minimum"] = json!(min.to_string().parse::<f64>().unwrap_or(0.0));
+            }
+            if let Some(max) = maximum {
+                value_schema["maximum"] = json!(max.to_string().parse::<f64>().unwrap_or(0.0));
+            }
+
+            if unit_names.is_empty() {
+                value_schema
+            } else {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "value": value_schema,
+                        "unit": {
+                            "type": "string",
+                            "enum": unit_names
+                        }
+                    },
+                    "required": ["value"]
+                })
+            }
+        }
+        TypeSpecification::Text { options, .. } => {
+            let mut schema = json!({ "type": "string" });
+            if !options.is_empty() {
+                schema["enum"] =
+                    Value::Array(options.iter().map(|o| Value::String(o.clone())).collect());
+            }
+            schema
+        }
+        TypeSpecification::Boolean { .. } => {
+            json!({ "type": "boolean" })
+        }
+        TypeSpecification::Date { .. } => {
+            json!({ "type": "string", "format": "date" })
+        }
+        TypeSpecification::Time { .. } => {
+            json!({ "type": "string", "format": "time" })
+        }
+        TypeSpecification::Duration { .. } => {
+            json!({
+                "type": "object",
+                "properties": {
+                    "value": { "type": "number" },
+                    "unit": {
+                        "type": "string",
+                        "enum": [
+                            "years", "months", "weeks", "days",
+                            "hours", "minutes", "seconds"
+                        ]
+                    }
+                },
+                "required": ["value", "unit"]
+            })
+        }
+        TypeSpecification::Veto { .. } => {
+            json!({ "type": "string" })
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Response schema generation
+// ---------------------------------------------------------------------------
+
+fn build_response_schema(plan: &ExecutionPlan, rule_names: &[String]) -> Value {
+    let mut properties = Map::new();
+
+    for rule_name in rule_names {
+        if let Some(rule) = plan.rules.iter().find(|r| &r.name == rule_name) {
+            let result_type_name = type_base_name(&rule.rule_type);
+            properties.insert(
+                rule_name.clone(),
+                json!({
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "value": {
+                                    "type": "string",
+                                    "description": format!("Computed value (type: {})", result_type_name)
+                                }
+                            },
+                            "required": ["value"]
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "veto_reason": {
+                                    "type": "string",
+                                    "description": "Reason the rule was vetoed (no value produced)"
+                                }
+                            }
+                        }
+                    ]
+                }),
+            );
+        }
+    }
+
+    json!({
+        "type": "object",
+        "properties": Value::Object(properties)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Get a human-readable base type name for display purposes.
+fn type_base_name(lemma_type: &LemmaType) -> String {
+    if let Some(ref name) = lemma_type.name {
+        return name.clone();
+    }
+    match &lemma_type.specifications {
+        TypeSpecification::Boolean { .. } => "boolean".to_string(),
+        TypeSpecification::Number { .. } => "number".to_string(),
+        TypeSpecification::Scale { .. } => "scale".to_string(),
+        TypeSpecification::Text { .. } => "text".to_string(),
+        TypeSpecification::Date { .. } => "date".to_string(),
+        TypeSpecification::Time { .. } => "time".to_string(),
+        TypeSpecification::Duration { .. } => "duration".to_string(),
+        TypeSpecification::Ratio { .. } => "ratio".to_string(),
+        TypeSpecification::Veto { .. } => "veto".to_string(),
+    }
+}
+
+/// Convert structured POST JSON input into the flat `HashMap<String, String>` format
+/// that the engine expects.
+///
+/// For example:
+/// - `{"quantity": 10}` → `("quantity", "10")`
+/// - `{"price": {"value": 100, "unit": "eur"}}` → `("price", "100 eur")`
+/// - `{"is_member": true}` → `("is_member", "true")`
+/// - `{"deadline": "2024-01-15"}` → `("deadline", "2024-01-15")`
+pub fn json_body_to_fact_values(body: &Value) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+
+    if let Value::Object(map) = body {
+        for (key, value) in map {
+            if value.is_null() {
+                continue;
+            }
+            let string_value = structured_value_to_string(value);
+            result.insert(key.clone(), string_value);
+        }
+    }
+
+    result
+}
+
+/// Convert a single JSON value (potentially a structured object with value+unit)
+/// into the string format the engine expects.
+fn structured_value_to_string(value: &Value) -> String {
+    match value {
+        Value::Object(obj) => {
+            // Structured format: {"value": N, "unit": "u"} → "N u"
+            if let (Some(val), Some(unit)) = (obj.get("value"), obj.get("unit")) {
+                let val_str = match val {
+                    Value::Number(n) => n.to_string(),
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                let unit_str = match unit {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                format!("{} {}", val_str, unit_str)
+            } else if let Some(val) = obj.get("value") {
+                // Object with only "value" (no unit), e.g. ratio without unit
+                match val {
+                    Value::Number(n) => n.to_string(),
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                }
+            } else {
+                serde_json::to_string(value).unwrap_or_default()
+            }
+        }
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => String::new(),
+        Value::Array(_) => serde_json::to_string(value).unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_engine_with_code(code: &str) -> Engine {
+        let mut engine = Engine::new();
+        let files: std::collections::HashMap<String, String> =
+            std::iter::once(("test.lemma".to_string(), code.to_string())).collect();
+        tokio::runtime::Runtime::new()
+            .expect("tokio runtime")
+            .block_on(engine.add_lemma_files(files))
+            .expect("failed to parse lemma code");
+        engine
+    }
+
+    #[test]
+    fn test_generate_openapi_has_required_fields() {
+        let engine =
+            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+        let spec = generate_openapi(&engine);
+
+        assert_eq!(spec["openapi"], "3.1.0");
+        assert!(spec["info"]["title"].is_string());
+        assert!(spec["tags"].is_array());
+        assert!(spec["paths"].is_object());
+        assert!(spec["components"]["schemas"].is_object());
+    }
+
+    #[test]
+    fn test_generate_openapi_tags_order_documents_before_meta() {
+        let engine =
+            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+        let spec = generate_openapi(&engine);
+
+        let tags = spec["tags"].as_array().expect("tags should be array");
+        assert_eq!(tags.len(), 2);
+        // Document tags come first
+        assert_eq!(tags[0]["name"], "pricing");
+        // Meta tag comes last
+        assert_eq!(tags[1]["name"], "Meta");
+    }
+
+    #[test]
+    fn test_generate_openapi_meta_routes() {
+        let engine =
+            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+        let spec = generate_openapi(&engine);
+
+        assert!(spec["paths"]["/"].is_object());
+        assert!(spec["paths"]["/health"].is_object());
+        assert!(spec["paths"]["/openapi.json"].is_object());
+        // /docs is deliberately excluded from the spec (it serves the UI itself)
+        assert!(spec["paths"]["/docs"].is_null());
+    }
+
+    #[test]
+    fn test_generate_openapi_document_routes() {
+        let engine =
+            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+        let spec = generate_openapi(&engine);
+
+        assert!(spec["paths"]["/@pricing"].is_object());
+        assert!(spec["paths"]["/@pricing/{rules}"].is_object());
+
+        // GET and POST operations present
+        assert!(spec["paths"]["/@pricing"]["get"].is_object());
+        assert!(spec["paths"]["/@pricing"]["post"].is_object());
+    }
+
+    #[test]
+    fn test_generate_openapi_schemas() {
+        let engine =
+            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+        let spec = generate_openapi(&engine);
+
+        assert!(spec["components"]["schemas"]["pricing_response"].is_object());
+        assert!(spec["components"]["schemas"]["pricing_request"].is_object());
+    }
+
+    #[test]
+    fn test_json_body_to_fact_values_simple_types() {
+        let body = json!({
+            "quantity": 10,
+            "name": "Alice",
+            "is_member": true
+        });
+        let facts = json_body_to_fact_values(&body);
+
+        assert_eq!(facts.get("quantity").unwrap(), "10");
+        assert_eq!(facts.get("name").unwrap(), "Alice");
+        assert_eq!(facts.get("is_member").unwrap(), "true");
+    }
+
+    #[test]
+    fn test_json_body_to_fact_values_structured_with_unit() {
+        let body = json!({
+            "price": { "value": 100, "unit": "eur" }
+        });
+        let facts = json_body_to_fact_values(&body);
+
+        assert_eq!(facts.get("price").unwrap(), "100 eur");
+    }
+
+    #[test]
+    fn test_json_body_to_fact_values_structured_without_unit() {
+        let body = json!({
+            "rate": { "value": 0.21 }
+        });
+        let facts = json_body_to_fact_values(&body);
+
+        assert_eq!(facts.get("rate").unwrap(), "0.21");
+    }
+
+    #[test]
+    fn test_json_body_to_fact_values_skips_null() {
+        let body = json!({
+            "quantity": 10,
+            "optional": null
+        });
+        let facts = json_body_to_fact_values(&body);
+
+        assert_eq!(facts.len(), 1);
+        assert!(facts.contains_key("quantity"));
+        assert!(!facts.contains_key("optional"));
+    }
+
+    #[test]
+    fn test_json_body_to_fact_values_duration() {
+        let body = json!({
+            "workweek": { "value": 40, "unit": "hours" }
+        });
+        let facts = json_body_to_fact_values(&body);
+
+        assert_eq!(facts.get("workweek").unwrap(), "40 hours");
+    }
+
+    #[test]
+    fn test_generate_openapi_multiple_documents() {
+        let mut engine = Engine::new();
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let mut files = std::collections::HashMap::new();
+        files.insert(
+            "pricing.lemma".to_string(),
+            "doc pricing\nfact quantity = 10\nrule total = quantity * 2".to_string(),
+        );
+        files.insert(
+            "shipping.lemma".to_string(),
+            "doc shipping\nfact weight = 5\nrule cost = weight * 3".to_string(),
+        );
+        runtime
+            .block_on(engine.add_lemma_files(files))
+            .expect("failed to parse");
+
+        let spec = generate_openapi(&engine);
+
+        assert!(spec["paths"]["/@pricing"].is_object());
+        assert!(spec["paths"]["/@shipping"].is_object());
+        assert!(spec["paths"]["/@pricing/{rules}"].is_object());
+        assert!(spec["paths"]["/@shipping/{rules}"].is_object());
+    }
+
+    #[test]
+    fn test_query_parameter_for_text_with_options() {
+        let engine = create_engine_with_code(
+            "doc test\nfact product = [text -> option \"A\" -> option \"B\"]\nrule result = product",
+        );
+        let spec = generate_openapi(&engine);
+
+        let params = &spec["paths"]["/@test"]["get"]["parameters"];
+        let product_param = params
+            .as_array()
+            .expect("parameters should be array")
+            .iter()
+            .find(|p| p["name"] == "product")
+            .expect("should have product parameter");
+
+        assert!(product_param["schema"]["enum"].is_array());
+        let enums = product_param["schema"]["enum"].as_array().unwrap();
+        assert_eq!(enums.len(), 2);
+        assert_eq!(enums[0], "A");
+        assert_eq!(enums[1], "B");
+    }
+
+    #[test]
+    fn test_post_schema_boolean_uses_native_type() {
+        let engine = create_engine_with_code(
+            "doc test\nfact is_active = [boolean]\nrule result = is_active",
+        );
+        let spec = generate_openapi(&engine);
+
+        let schema = &spec["components"]["schemas"]["test_request"];
+        assert_eq!(schema["properties"]["is_active"]["type"], "boolean");
+    }
+
+    #[test]
+    fn test_post_schema_number_uses_native_type() {
+        let engine =
+            create_engine_with_code("doc test\nfact quantity = [number]\nrule result = quantity");
+        let spec = generate_openapi(&engine);
+
+        let schema = &spec["components"]["schemas"]["test_request"];
+        assert_eq!(schema["properties"]["quantity"]["type"], "number");
+    }
+
+    #[test]
+    fn test_post_schema_date_uses_string_format() {
+        let engine =
+            create_engine_with_code("doc test\nfact deadline = [date]\nrule result = deadline");
+        let spec = generate_openapi(&engine);
+
+        let schema = &spec["components"]["schemas"]["test_request"];
+        assert_eq!(schema["properties"]["deadline"]["type"], "string");
+        assert_eq!(schema["properties"]["deadline"]["format"], "date");
+    }
+
+    #[test]
+    fn test_fact_with_default_is_not_required() {
+        let engine = create_engine_with_code(
+            "doc test\nfact quantity = 10\nfact name = [text]\nrule result = quantity",
+        );
+        let spec = generate_openapi(&engine);
+
+        let schema = &spec["components"]["schemas"]["test_request"];
+        let required = schema["required"]
+            .as_array()
+            .expect("required should be array");
+
+        // "name" should be required (type-only, no default)
+        assert!(required.contains(&Value::String("name".to_string())));
+        // "quantity" should NOT be required (has default value of 10)
+        assert!(!required.contains(&Value::String("quantity".to_string())));
+    }
+}

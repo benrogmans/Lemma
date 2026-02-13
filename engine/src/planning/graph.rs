@@ -4,7 +4,7 @@ use crate::planning::semantics::{
     conversion_target_to_semantic, parse_number_unit, primitive_boolean, primitive_date,
     primitive_duration, primitive_number, primitive_ratio, primitive_scale, primitive_text,
     primitive_time, value_to_semantic, ArithmeticComputation, Expression, ExpressionKind, FactData,
-    FactPath, LemmaType, LiteralValue, PathSegment, RulePath, SemanticConversionTarget, Span,
+    FactPath, LemmaType, LiteralValue, PathSegment, RulePath, SemanticConversionTarget,
     TypeExtends, TypeSpecification, ValueKind,
 };
 use crate::planning::types::{ResolvedDocumentTypes, TypeRegistry};
@@ -296,31 +296,40 @@ struct GraphBuilder<'a> {
     errors: Vec<LemmaError>,
 }
 
+/// Pre-built type state shared across multiple `Graph::build` calls.
+///
+/// Created once by [`Graph::prepare_types`] and reused for each document
+/// being planned, avoiding redundant type registration and resolution.
+#[derive(Clone)]
+pub(crate) struct PreparedTypes {
+    pub type_registry: TypeRegistry,
+    pub resolved_types: HashMap<String, ResolvedDocumentTypes>,
+}
+
 impl Graph {
-    pub(crate) fn build(
-        main_doc: &LemmaDoc,
+    /// Register all named types from all documents and resolve them.
+    ///
+    /// Returns the prepared type state plus any global type errors
+    /// (unknown types, duplicate types, specification violations).
+    ///
+    /// Call this once and pass the result to [`Graph::build`] for each
+    /// document being planned.
+    pub(crate) fn prepare_types(
         all_docs: &[LemmaDoc],
-        sources: HashMap<String, String>,
-    ) -> Result<Graph, Vec<LemmaError>> {
-        // Create and populate TypeRegistry; collect all registration errors before returning.
-        let mut type_registry = TypeRegistry::new();
-        let mut type_errors = Vec::new();
+        sources: &HashMap<String, String>,
+    ) -> (PreparedTypes, Vec<LemmaError>) {
+        let mut type_registry = TypeRegistry::new(sources.clone());
+        let mut errors: Vec<LemmaError> = Vec::new();
+        let mut resolved_types: HashMap<String, ResolvedDocumentTypes> = HashMap::new();
+
+        // Register all named type definitions from every document.
         for doc in all_docs {
             for type_def in &doc.types {
                 if let Err(e) = type_registry.register_type(&doc.name, type_def.clone()) {
-                    type_errors.push(e);
+                    errors.push(e);
                 }
             }
         }
-
-        let mut builder = GraphBuilder {
-            facts: IndexMap::new(),
-            rules: IndexMap::new(),
-            sources,
-            all_docs: all_docs.iter().map(|doc| (doc.name.clone(), doc)).collect(),
-            resolved_types: HashMap::new(),
-            errors: type_errors,
-        };
 
         // Pre-resolve named types for every document up-front.
         //
@@ -334,30 +343,67 @@ impl Graph {
                 Ok(document_types) => {
                     // Validate type specifications for all resolved named types
                     for (type_name, lemma_type) in &document_types.named_types {
-                        let source = Source::new(
-                            "<type>",
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: doc.start_line,
-                                col: 0,
-                            },
-                            doc.name.clone(),
-                        );
+                        // Find the original TypeDef to get its real source location
+                        let source = doc
+                            .types
+                            .iter()
+                            .find(|td| match td {
+                                ast::TypeDef::Regular { name, .. }
+                                | ast::TypeDef::Import { name, .. } => name == type_name,
+                                ast::TypeDef::Inline { .. } => false,
+                            })
+                            .map(|td| td.source_location().clone())
+                            .unwrap_or_else(|| {
+                                unreachable!(
+                                    "BUG: resolved named type '{}' has no corresponding TypeDef in document '{}'",
+                                    type_name, doc.name
+                                )
+                            });
                         let mut spec_errors = validate_type_specifications(
                             &lemma_type.specifications,
                             type_name,
                             &source,
+                            super::source_text_for(sources, &source),
                         );
-                        builder.errors.append(&mut spec_errors);
+                        errors.append(&mut spec_errors);
                     }
-                    builder
-                        .resolved_types
-                        .insert(doc.name.clone(), document_types);
+                    resolved_types.insert(doc.name.clone(), document_types);
                 }
-                Err(e) => builder.errors.push(e),
+                Err(e) => errors.push(e),
             }
         }
+
+        let prepared = PreparedTypes {
+            type_registry,
+            resolved_types,
+        };
+        (prepared, errors)
+    }
+
+    /// Build the dependency graph for a single document using pre-built types.
+    ///
+    /// The `prepared` types are cloned internally because `build_document`
+    /// registers inline type definitions and re-resolves types per document.
+    ///
+    /// Only reports per-document errors (doc references, inline types, rule
+    /// validation). Global type errors are returned separately by
+    /// [`prepare_types`](Self::prepare_types).
+    pub(crate) fn build(
+        main_doc: &LemmaDoc,
+        all_docs: &[LemmaDoc],
+        sources: HashMap<String, String>,
+        prepared: &PreparedTypes,
+    ) -> Result<Graph, Vec<LemmaError>> {
+        let mut type_registry = prepared.type_registry.clone();
+
+        let mut builder = GraphBuilder {
+            facts: IndexMap::new(),
+            rules: IndexMap::new(),
+            sources,
+            all_docs: all_docs.iter().map(|doc| (doc.name.clone(), doc)).collect(),
+            resolved_types: prepared.resolved_types.clone(),
+            errors: Vec::new(),
+        };
 
         // Do NOT return early here — continue with build_document even when
         // type resolution produced errors.  build_document handles missing
@@ -784,7 +830,12 @@ impl<'a> GraphBuilder<'a> {
                 let inferred_type = match value {
                     Value::Text(_) => primitive_text().clone(),
                     Value::Number(_) => primitive_number().clone(),
-                    Value::Scale(_, _) => primitive_scale().clone(),
+                    Value::Scale(_, unit) => self
+                        .resolved_types
+                        .get(&current_doc.name)
+                        .and_then(|dt| dt.unit_index.get(unit))
+                        .cloned()
+                        .unwrap_or_else(|| primitive_scale().clone()),
                     Value::Boolean(_) => primitive_boolean().clone(),
                     Value::Date(_) => primitive_date().clone(),
                     Value::Time(_) => primitive_time().clone(),
@@ -1019,33 +1070,42 @@ impl<'a> GraphBuilder<'a> {
             }
         }
 
-        // Resolve types for this document before adding facts
-        match type_registry.resolve_types(&doc.name) {
-            Ok(document_types) => {
-                for (fact_ref, lemma_type) in &document_types.inline_type_definitions {
-                    let type_name = format!("{} (inline)", fact_ref.fact);
-                    let fact = doc
-                        .facts
-                        .iter()
-                        .find(|f| &f.reference == fact_ref)
-                        .unwrap_or_else(|| {
-                            unreachable!(
-                                "BUG: inline type definition for '{}' has no corresponding fact in document '{}'",
-                                fact_ref.fact, doc.name
-                            )
-                        });
-                    let source = &fact.source_location;
-                    let mut spec_errors = validate_type_specifications(
-                        &lemma_type.specifications,
-                        &type_name,
-                        source,
-                    );
-                    self.errors.append(&mut spec_errors);
+        // Resolve inline types only — named types were already resolved by prepare_types.
+        // Take the existing ResolvedDocumentTypes (from prepare_types) as the base,
+        // so we never re-resolve named types and never produce duplicate errors.
+        //
+        // If prepare_types failed for this document, there is no entry in resolved_types.
+        // That failure was already reported — skip inline resolution entirely.
+        if let Some(existing_types) = self.resolved_types.remove(&doc.name) {
+            match type_registry.resolve_inline_types(&doc.name, existing_types) {
+                Ok(document_types) => {
+                    for (fact_ref, lemma_type) in &document_types.inline_type_definitions {
+                        let type_name = format!("{} (inline)", fact_ref.fact);
+                        let fact = doc
+                            .facts
+                            .iter()
+                            .find(|f| &f.reference == fact_ref)
+                            .unwrap_or_else(|| {
+                                unreachable!(
+                                    "BUG: inline type definition for '{}' has no corresponding fact in document '{}'",
+                                    fact_ref.fact, doc.name
+                                )
+                            });
+                        let source = &fact.source_location;
+                        let source_text = self.source_text_for(source);
+                        let mut spec_errors = validate_type_specifications(
+                            &lemma_type.specifications,
+                            &type_name,
+                            source,
+                            source_text,
+                        );
+                        self.errors.append(&mut spec_errors);
+                    }
+                    self.resolved_types.insert(doc.name.clone(), document_types);
                 }
-                self.resolved_types.insert(doc.name.clone(), document_types);
-            }
-            Err(e) => {
-                self.errors.push(e);
+                Err(e) => {
+                    self.errors.push(e);
+                }
             }
         }
 
@@ -1570,7 +1630,12 @@ impl<'a> GraphBuilder<'a> {
                 let lemma_type = match value {
                     Value::Text(_) => primitive_text().clone(),
                     Value::Number(_) => primitive_number().clone(),
-                    Value::Scale(_, _) => primitive_scale().clone(),
+                    Value::Scale(_, unit) => self
+                        .resolved_types
+                        .get(&current_doc.name)
+                        .and_then(|dt| dt.unit_index.get(unit))
+                        .cloned()
+                        .unwrap_or_else(|| primitive_scale().clone()),
                     Value::Boolean(_) => primitive_boolean().clone(),
                     Value::Date(_) => primitive_date().clone(),
                     Value::Time(_) => primitive_time().clone(),
@@ -2007,9 +2072,9 @@ fn validate_comparison_types(
         return;
     }
 
-    // Scales compare with scales of the same scale type only.
+    // Scales compare with scales of the same scale family only.
     if left_type.is_scale() && right_type.is_scale() {
-        if left_type.name != right_type.name {
+        if !left_type.same_scale_family(right_type) {
             push_engine_error_at(
                 errors,
                 graph,
@@ -2077,8 +2142,8 @@ fn validate_arithmetic_types(
         return;
     }
 
-    // CRITICAL: If both operands are different Scale types, reject ALL arithmetic operations
-    if left_type.is_scale() && right_type.is_scale() && left_type.name != right_type.name {
+    // CRITICAL: If both operands are from different Scale families, reject ALL arithmetic operations
+    if left_type.is_scale() && right_type.is_scale() && !left_type.same_scale_family(right_type) {
         push_engine_error_at(
             errors,
             graph,
@@ -2729,7 +2794,7 @@ fn compute_referenced_rules_by_path(graph: &Graph) -> HashMap<Vec<String>, HashS
 mod tests {
     use super::*;
 
-    use crate::parsing::ast::{BooleanValue, FactReference, RuleReference, Value};
+    use crate::parsing::ast::{BooleanValue, FactReference, RuleReference, Span, Value};
 
     fn test_source() -> Source {
         Source::new(
@@ -2748,6 +2813,29 @@ mod tests {
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), "doc test\n".to_string());
         sources
+    }
+
+    /// Test helper: prepare types and build graph in one call.
+    fn build_graph(
+        main_doc: &LemmaDoc,
+        all_docs: &[LemmaDoc],
+        sources: HashMap<String, String>,
+    ) -> Result<Graph, Vec<LemmaError>> {
+        let (prepared, type_errors) = Graph::prepare_types(all_docs, &sources);
+        match Graph::build(main_doc, all_docs, sources, &prepared) {
+            Ok(graph) => {
+                if type_errors.is_empty() {
+                    Ok(graph)
+                } else {
+                    Err(type_errors)
+                }
+            }
+            Err(mut doc_errors) => {
+                let mut all_errors = type_errors;
+                all_errors.append(&mut doc_errors);
+                Err(all_errors)
+            }
+        }
     }
 
     fn create_test_doc(name: &str) -> LemmaDoc {
@@ -2781,7 +2869,7 @@ mod tests {
         ));
         doc = doc.add_fact(create_literal_fact("name", Value::Text("John".to_string())));
 
-        let result = Graph::build(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&doc, &[doc.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -2813,7 +2901,7 @@ mod tests {
         };
         doc = doc.add_rule(rule);
 
-        let result = Graph::build(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&doc, &[doc.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -2837,7 +2925,7 @@ mod tests {
             source_location: test_source(),
         });
 
-        let result = Graph::build(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&doc, &[doc.clone()], test_sources());
         assert!(
             result.is_err(),
             "Overriding x.y must fail when x is not a document reference"
@@ -2859,7 +2947,7 @@ mod tests {
             source_location: test_source(),
         });
 
-        let result = Graph::build(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&doc, &[doc.clone()], test_sources());
         assert!(
             result.is_err(),
             "Fact and rule name collisions should be rejected"
@@ -2878,7 +2966,7 @@ mod tests {
             Value::Number(rust_decimal::Decimal::from(30)),
         ));
 
-        let result = Graph::build(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&doc, &[doc.clone()], test_sources());
         assert!(result.is_err(), "Should detect duplicate fact");
 
         let errors = result.unwrap_err();
@@ -2907,7 +2995,7 @@ mod tests {
         doc = doc.add_rule(rule1);
         doc = doc.add_rule(rule2);
 
-        let result = Graph::build(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&doc, &[doc.clone()], test_sources());
         assert!(result.is_err(), "Should detect duplicate rule");
 
         let errors = result.unwrap_err();
@@ -2936,7 +3024,7 @@ mod tests {
         };
         doc = doc.add_rule(rule);
 
-        let result = Graph::build(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&doc, &[doc.clone()], test_sources());
         assert!(result.is_err(), "Should detect missing fact");
 
         let errors = result.unwrap_err();
@@ -2959,7 +3047,7 @@ mod tests {
         };
         doc = doc.add_fact(fact);
 
-        let result = Graph::build(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&doc, &[doc.clone()], test_sources());
         assert!(result.is_err(), "Should detect missing document");
 
         let errors = result.unwrap_err();
@@ -2992,7 +3080,7 @@ mod tests {
         };
         doc = doc.add_rule(rule);
 
-        let result = Graph::build(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&doc, &[doc.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -3045,7 +3133,7 @@ mod tests {
             Value::Number(rust_decimal::Decimal::from(25)),
         ));
 
-        let result = Graph::build(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&doc, &[doc.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -3092,7 +3180,7 @@ mod tests {
         };
         doc = doc.add_rule(rule);
 
-        let result = Graph::build(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&doc, &[doc.clone()], test_sources());
         assert!(result.is_err(), "Should collect multiple errors");
 
         let errors = result.unwrap_err();
@@ -3169,7 +3257,7 @@ mod tests {
             "doc doc_b\ntype length = number\ntype length = number".to_string(),
         );
 
-        let result = Graph::build(&doc_a, &[doc_a.clone(), doc_b.clone()], sources);
+        let result = build_graph(&doc_a, &[doc_a.clone(), doc_b.clone()], sources);
         assert!(result.is_err(), "Should fail with duplicate type errors");
         let errors = result.unwrap_err();
         assert!(

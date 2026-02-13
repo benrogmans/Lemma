@@ -256,12 +256,19 @@ pub mod server {
                 .map(String::from)
                 .unwrap_or_else(|| format!("doc_{}", chrono::Utc::now().timestamp_millis()));
 
+            let files: std::collections::HashMap<String, String> =
+                std::iter::once((source_id.clone(), code.to_string())).collect();
             tokio::runtime::Runtime::new()
                 .map_err(|e| McpError::internal_error(e.to_string()))?
-                .block_on(self.engine.add_lemma_code(code, &source_id))
-                .map_err(|e| {
-                    error!("Failed to add document: {}", e);
-                    McpError::internal_error(format!("Failed to parse document: {e}"))
+                .block_on(self.engine.add_lemma_files(files))
+                .map_err(|errs| {
+                    let error = match errs.len() {
+                        0 => unreachable!("add_lemma_files returned Err with empty error list"),
+                        1 => errs.into_iter().next().unwrap(),
+                        _ => lemma::LemmaError::MultipleErrors(errs),
+                    };
+                    error!("Failed to add document: {}", error);
+                    McpError::internal_error(format!("Failed to parse document: {error}"))
                 })?;
 
             info!("Document added: {}", source_id);

@@ -4,12 +4,13 @@ members = [
     "cli",
     "engine",
     "engine/lsp",
+    "openapi",
 ]
 default-members = ["cli"]
 exclude = ["engine/fuzz"]
 
 [workspace.package]
-version = "0.7.3"
+version = "0.7.4"
 edition = "2021"
 authors = ["benrogmans <ben@amrai.nl>"]
 description = "A language that means business."

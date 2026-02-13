@@ -7,25 +7,27 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust
-//! use lemma::{Engine, LemmaResult};
+//! ```rust,no_run
+//! use lemma::Engine;
+//! use std::collections::HashMap;
 //!
-//! fn main() -> LemmaResult<()> {
-//!     let mut engine = Engine::new();
+//! let mut engine = Engine::new();
 //!
-//!     // Load Lemma code
-//!     engine.add_lemma_code(r#"
-//!         doc example
-//!         fact price = 100
-//!         fact quantity = 5
-//!         rule total = price * quantity
-//!     "#, "example.lemma")?;
+//! // Load Lemma code
+//! let mut files = HashMap::new();
+//! files.insert("example.lemma".to_string(), r#"
+//!     doc example
+//!     fact price = 100
+//!     fact quantity = 5
+//!     rule total = price * quantity
+//! "#.to_string());
 //!
-//!     // Evaluate the document (all rules, no fact values)
-//!     let response = engine.evaluate("example", vec![], std::collections::HashMap::new())?;
+//! tokio::runtime::Runtime::new().unwrap()
+//!     .block_on(engine.add_lemma_files(files))
+//!     .expect("failed to add files");
 //!
-//!     Ok(())
-//! }
+//! // Evaluate the document (all rules, no fact values)
+//! let response = engine.evaluate("example", vec![], HashMap::new()).unwrap();
 //! ```
 //!
 //! ## Core Concepts
@@ -79,7 +81,7 @@ pub use planning::semantics::{
     FactPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit, ScaleUnits,
     SemanticDurationUnit, TypeSpecification, ValueKind,
 };
-pub use planning::ExecutionPlan;
+pub use planning::{DocumentSchema, ExecutionPlan, FactSchema, RuleSchema};
 #[cfg(feature = "registry")]
 pub use registry::LemmaBase;
 pub use registry::{

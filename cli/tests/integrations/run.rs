@@ -220,3 +220,59 @@ this is not valid lemma syntax
         .failure()
         .stderr(predicate::str::contains("error").or(predicate::str::contains("Error")));
 }
+
+#[test]
+fn test_cli_reports_errors_from_all_files() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // File 1: valid
+    fs::write(
+        temp_dir.path().join("valid.lemma"),
+        r#"
+doc valid_doc
+fact price = 100
+rule doubled = price * 2
+"#,
+    )
+    .unwrap();
+
+    // File 2: broken (parse error)
+    fs::write(
+        temp_dir.path().join("broken_a.lemma"),
+        r#"
+doc broken_a
+this is not valid lemma
+"#,
+    )
+    .unwrap();
+
+    // File 3: broken (different parse error)
+    fs::write(
+        temp_dir.path().join("broken_b.lemma"),
+        r#"
+doc broken_b
+also invalid lemma syntax
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("valid_doc")
+        .arg("--dir")
+        .arg(temp_dir.path());
+
+    // Should fail, and the error output should mention BOTH broken files
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "Should fail when workspace has broken files"
+    );
+    assert!(
+        stderr.contains("broken_a") && stderr.contains("broken_b"),
+        "Should report errors from both broken files, got:\n{}",
+        stderr
+    );
+}

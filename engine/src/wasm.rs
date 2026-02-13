@@ -1,4 +1,3 @@
-use crate::planning::plan;
 use crate::{parse, Engine, LemmaError, ResourceLimits};
 use serde_json::json;
 use std::cell::RefCell;
@@ -28,13 +27,21 @@ impl WasmEngine {
         let source = source.to_string();
         let engine = self.engine.clone();
         wasm_bindgen_futures::future_to_promise(async move {
-            let result = engine.borrow_mut().add_lemma_code(&code, &source).await;
+            let files: HashMap<String, String> = std::iter::once((source, code)).collect();
+            let result = engine.borrow_mut().add_lemma_files(files).await;
             match result {
                 Ok(()) => Ok(JsValue::from_str(&to_json_response(json!({
                     "success": true,
                     "message": "Document added successfully"
                 })))),
-                Err(e) => Ok(JsValue::from_str(&to_json_error(&e))),
+                Err(errs) => {
+                    let error = match errs.len() {
+                        0 => unreachable!("add_lemma_files returned Err with empty error list"),
+                        1 => errs.into_iter().next().unwrap(),
+                        _ => LemmaError::MultipleErrors(errs),
+                    };
+                    Ok(JsValue::from_str(&to_json_error(&error)))
+                }
             }
         })
     }
@@ -263,17 +270,15 @@ fn collect_diagnostics(code: &str, source_attribute: &str) -> Vec<serde_json::Va
     let sources: HashMap<String, String> =
         std::iter::once((source_attribute.to_string(), code.to_string())).collect();
 
-    for doc in &docs {
-        if let Err(plan_errors) = plan(doc, &docs, sources.clone()) {
-            for err in plan_errors {
-                let err_attribute = err
-                    .location()
-                    .map(|s| s.attribute.as_str())
-                    .unwrap_or(source_attribute);
-                if err_attribute == source_attribute {
-                    result.push(lemma_error_to_diagnostic(&err, code, source_attribute));
-                }
-            }
+    let docs_to_plan: Vec<&crate::parsing::ast::LemmaDoc> = docs.iter().collect();
+    let (_plans, plan_errors) = crate::planning::plan(&docs_to_plan, &docs, sources);
+    for err in &plan_errors {
+        let err_attribute = err
+            .location()
+            .map(|s| s.attribute.as_str())
+            .unwrap_or(source_attribute);
+        if err_attribute == source_attribute {
+            result.push(lemma_error_to_diagnostic(err, code, source_attribute));
         }
     }
 

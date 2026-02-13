@@ -11,7 +11,9 @@ pub mod semantics;
 pub mod types;
 pub mod validation;
 
-pub use execution_plan::{Branch, ExecutableRule, ExecutionPlan};
+pub use execution_plan::{
+    Branch, DocumentSchema, ExecutableRule, ExecutionPlan, FactSchema, RuleSchema,
+};
 pub use semantics::{
     ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, Fact, FactData,
     FactPath, FactValue, LemmaType, LiteralValue, LogicalComputation, MathematicalComputation,
@@ -24,56 +26,80 @@ use crate::LemmaError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Builds an execution plan from Lemma documents.
+/// Look up the full source text for a source location from the sources map.
+/// Panics if the attribute is not found, because all source text must be
+/// registered before planning begins.
+pub(crate) fn source_text_for(sources: &HashMap<String, String>, source: &Source) -> Arc<str> {
+    let text = sources.get(&source.attribute).unwrap_or_else(|| {
+        unreachable!(
+            "BUG: missing source text for attribute '{}' (doc '{}')",
+            source.attribute, source.doc_name
+        )
+    });
+    Arc::from(text.as_str())
+}
+
+/// Build execution plans for one or more Lemma documents.
+///
+/// Performs all global work (validation, type registration, type resolution)
+/// **once** across all documents, then builds per-document graphs and
+/// execution plans, collecting all errors in a single pass.
+///
+/// Returns a tuple of (successful plans, all errors). Partial success is
+/// possible: some documents may produce valid plans while others fail.
+///
+/// `docs_to_plan` is the subset of `all_docs` for which execution plans should
+/// be built. `all_docs` includes every document in the workspace (needed for
+/// cross-document type resolution and doc references).
 ///
 /// The `sources` parameter maps source IDs (filenames) to their source code,
 /// needed for extracting original expression text in proofs.
 pub fn plan(
-    main_doc: &LemmaDoc,
+    docs_to_plan: &[&LemmaDoc],
     all_docs: &[LemmaDoc],
     sources: HashMap<String, String>,
-) -> Result<ExecutionPlan, Vec<LemmaError>> {
-    // Collect pre-graph validation errors.  Duplicate document names are fatal
-    // (they cause HashMap key conflicts), so we return immediately for those.
-    // Other validation errors (e.g. structural type issues) are collected and
-    // merged with graph-build errors so the caller sees as many diagnostics as
-    // possible in a single pass.
-    let validation_errors = match validate_all_documents(all_docs, &sources) {
-        Ok(()) => Vec::new(),
+) -> (HashMap<String, ExecutionPlan>, Vec<LemmaError>) {
+    let mut plans = HashMap::new();
+    let mut errors: Vec<LemmaError> = Vec::new();
+
+    // 1. Global validation once (duplicate doc names, structural checks).
+    //    Duplicate document names are fatal — they cause HashMap key conflicts
+    //    in Graph::build, so we must stop immediately.
+    match validate_all_documents(all_docs, &sources) {
+        Ok(()) => {}
         Err(errs) => {
-            // If any error is a duplicate-document-name error, return immediately —
-            // the graph builder relies on unique document names.
             let has_fatal = errs
                 .iter()
                 .any(|e| e.message().contains("Duplicate document name"));
             if has_fatal {
-                return Err(errs);
+                return (plans, errs);
             }
-            errs
+            errors.extend(errs);
         }
-    };
-
-    let graph = match graph::Graph::build(main_doc, all_docs, sources) {
-        Ok(graph) => {
-            if !validation_errors.is_empty() {
-                return Err(validation_errors);
-            }
-            graph
-        }
-        Err(mut build_errors) => {
-            // Merge pre-validation errors in front so they appear first.
-            let mut all_errors = validation_errors;
-            all_errors.append(&mut build_errors);
-            return Err(all_errors);
-        }
-    };
-
-    let execution_plan = execution_plan::build_execution_plan(&graph, &main_doc.name);
-    let value_errors = execution_plan::validate_literal_facts_against_types(&execution_plan);
-    if !value_errors.is_empty() {
-        return Err(value_errors);
     }
-    Ok(execution_plan)
+
+    // 2. Prepare types once (registration + named type resolution + spec validation).
+    let (prepared, type_errors) = graph::Graph::prepare_types(all_docs, &sources);
+    errors.extend(type_errors);
+
+    // 3. Per-doc: build graph + execution plan.
+    for doc in docs_to_plan {
+        match graph::Graph::build(doc, all_docs, sources.clone(), &prepared) {
+            Ok(graph) => {
+                let execution_plan = execution_plan::build_execution_plan(&graph, &doc.name);
+                let value_errors =
+                    execution_plan::validate_literal_facts_against_types(&execution_plan);
+                if value_errors.is_empty() {
+                    plans.insert(doc.name.clone(), execution_plan);
+                } else {
+                    errors.extend(value_errors);
+                }
+            }
+            Err(doc_errors) => errors.extend(doc_errors),
+        }
+    }
+
+    (plans, errors)
 }
 
 /// Validate all documents before building the graph.
@@ -91,11 +117,16 @@ fn validate_all_documents(
     let mut seen_document_names: HashMap<&str, &LemmaDoc> = HashMap::new();
     for doc in all_docs {
         if let Some(earlier_doc) = seen_document_names.get(doc.name.as_str()) {
-            let attribute = doc.attribute.as_deref().unwrap_or(&doc.name);
-            let source_text: Arc<str> = sources
-                .get(attribute)
-                .map(|text| Arc::from(text.as_str()))
-                .unwrap_or_else(|| Arc::from(""));
+            let source = Source::new(
+                doc.attribute.as_deref().unwrap_or(&doc.name),
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: doc.start_line,
+                    col: 0,
+                },
+                doc.name.clone(),
+            );
             let earlier_attribute = earlier_doc
                 .attribute
                 .as_deref()
@@ -105,17 +136,8 @@ fn validate_all_documents(
                     "Duplicate document name '{}' (previously declared in '{}')",
                     doc.name, earlier_attribute
                 ),
-                Source::new(
-                    attribute,
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: doc.start_line,
-                        col: 0,
-                    },
-                    doc.name.clone(),
-                ),
-                source_text,
+                source.clone(),
+                source_text_for(sources, &source),
                 None::<String>,
             ));
         } else {
@@ -130,7 +152,7 @@ fn validate_all_documents(
 
     // Pass all_docs to validate_types so cross-document type imports can resolve
     for doc in all_docs {
-        if let Err(doc_errors) = validation::validate_types(doc, Some(all_docs)) {
+        if let Err(doc_errors) = validation::validate_types(doc, sources) {
             errors.extend(doc_errors);
         }
     }
@@ -149,9 +171,46 @@ fn validate_all_documents(
 #[cfg(test)]
 mod internal_tests {
     use super::plan;
+    use crate::parsing::ast::LemmaDoc;
+    use crate::planning::execution_plan::ExecutionPlan;
     use crate::planning::semantics::{FactPath, PathSegment};
-    use crate::{parse, ResourceLimits};
+    use crate::{parse, LemmaError, ResourceLimits};
     use std::collections::HashMap;
+
+    /// Test helper: plan a single document and return the old-style Result.
+    /// Wraps the new `plan()` signature for tests that plan a single doc.
+    fn plan_single(
+        main_doc: &LemmaDoc,
+        all_docs: &[LemmaDoc],
+        sources: HashMap<String, String>,
+    ) -> Result<ExecutionPlan, Vec<LemmaError>> {
+        let docs_to_plan: Vec<&LemmaDoc> = vec![main_doc];
+        let (mut plans, errors) = plan(&docs_to_plan, all_docs, sources);
+        if !errors.is_empty() {
+            Err(errors)
+        } else {
+            plans.remove(&main_doc.name).map(Ok).unwrap_or_else(|| {
+                Err(vec![LemmaError::engine(
+                    format!(
+                        "No execution plan produced for document '{}'",
+                        main_doc.name
+                    ),
+                    crate::planning::semantics::Source::new(
+                        "<test>",
+                        crate::planning::semantics::Span {
+                            start: 0,
+                            end: 0,
+                            line: 1,
+                            col: 0,
+                        },
+                        main_doc.name.clone(),
+                    ),
+                    std::sync::Arc::from(""),
+                    None::<String>,
+                )])
+            })
+        }
+    }
 
     #[test]
     fn test_basic_validation() {
@@ -166,7 +225,7 @@ rule is_adult = age >= 18"#;
         sources.insert("test.lemma".to_string(), input.to_string());
 
         for doc in &docs {
-            let result = plan(doc, &docs, sources.clone());
+            let result = plan_single(doc, &docs, sources.clone());
             assert!(
                 result.is_ok(),
                 "Basic validation should pass: {:?}",
@@ -186,7 +245,7 @@ fact name = "Jane""#;
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan(&docs[0], &docs, sources);
+        let result = plan_single(&docs[0], &docs, sources);
 
         assert!(
             result.is_err(),
@@ -218,7 +277,7 @@ rule is_adult = age >= 21"#;
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan(&docs[0], &docs, sources);
+        let result = plan_single(&docs[0], &docs, sources);
 
         assert!(
             result.is_err(),
@@ -249,7 +308,7 @@ rule b = a?"#;
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan(&docs[0], &docs, sources);
+        let result = plan_single(&docs[0], &docs, sources);
 
         assert!(
             result.is_err(),
@@ -277,7 +336,7 @@ rule test2 = is_adult"#;
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan(&docs[0], &docs, sources);
+        let result = plan_single(&docs[0], &docs, sources);
 
         assert!(
             result.is_err(),
@@ -311,7 +370,7 @@ fact employee = doc person"#;
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan(&docs[0], &docs, sources);
+        let result = plan_single(&docs[0], &docs, sources);
 
         assert!(
             result.is_ok(),
@@ -331,7 +390,7 @@ fact contract = doc nonexistent"#;
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan(&docs[0], &docs, sources);
+        let result = plan_single(&docs[0], &docs, sources);
 
         assert!(
             result.is_err(),
@@ -377,7 +436,9 @@ rule getx = one.x
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc_two = docs.iter().find(|d| d.name == "two").unwrap();
 
-        let execution_plan = plan(doc_two, &docs, HashMap::new()).expect("planning should succeed");
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+        let execution_plan = plan_single(doc_two, &docs, sources).expect("planning should succeed");
 
         // Verify that one.x has type 'money' (resolved from doc one)
         let one_x_path = FactPath {
@@ -418,7 +479,7 @@ fact base_price = 200"#;
         sources.insert("file_a.lemma".to_string(), source_a.to_string());
         sources.insert("file_b.lemma".to_string(), source_b.to_string());
 
-        let result = plan(&all_docs[0], &all_docs, sources);
+        let result = plan_single(&all_docs[0], &all_docs, sources);
 
         assert!(
             result.is_err(),
@@ -462,7 +523,7 @@ rule total_quantity = inventory.quantity"#;
         let mut sources = HashMap::new();
         sources.insert("registry_bundle.lemma".to_string(), source.to_string());
 
-        let result = plan(example_doc, &docs, sources);
+        let result = plan_single(example_doc, &docs, sources);
         assert!(
             result.is_ok(),
             "Planning with @... document names should succeed: {:?}",
@@ -485,7 +546,7 @@ rule total = helper.value + price"#;
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), source.to_string());
 
-        let result = plan(&docs[0], &docs, sources);
+        let result = plan_single(&docs[0], &docs, sources);
         assert!(result.is_err(), "Planning should fail with multiple errors");
 
         let errors = result.unwrap_err();
@@ -532,7 +593,7 @@ rule val = ext.some_fact"#;
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), source.to_string());
 
-        let result = plan(&docs[0], &docs, sources);
+        let result = plan_single(&docs[0], &docs, sources);
         assert!(result.is_err());
 
         let errors = result.unwrap_err();

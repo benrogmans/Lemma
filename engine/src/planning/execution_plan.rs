@@ -176,7 +176,87 @@ fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
     }
 }
 
+/// Schema of a Lemma document: its typed facts (inputs) and rules (outputs).
+///
+/// Built from an [`ExecutionPlan`] via [`ExecutionPlan::document_schema`].
+/// Shared by the HTTP server, the CLI, and any other consumer that needs to
+/// describe a document's interface without evaluating it.
+#[derive(Debug, Clone, Serialize)]
+pub struct DocumentSchema {
+    /// Document name
+    pub doc: String,
+    /// Facts (inputs) keyed by name, with their types and optional defaults
+    pub facts: indexmap::IndexMap<String, FactSchema>,
+    /// Rules (outputs) keyed by name, with their computed types
+    pub rules: indexmap::IndexMap<String, RuleSchema>,
+}
+
+/// Schema for a single fact: type and optional default value.
+#[derive(Debug, Clone, Serialize)]
+pub struct FactSchema {
+    /// Type name (e.g. "number", "boolean", "money", user-defined type names)
+    #[serde(rename = "type")]
+    pub fact_type: String,
+    /// Default value as a display string, or `None` if the caller must supply it
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// Schema for a single rule: computed result type.
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleSchema {
+    /// Computed result type (e.g. "boolean", "scale", "money")
+    #[serde(rename = "type")]
+    pub rule_type: String,
+}
+
 impl ExecutionPlan {
+    /// Build a [`DocumentSchema`] summarising this plan's facts and rules.
+    ///
+    /// Only local facts (no cross-document segments) with a schema type are
+    /// included. Document-reference facts are excluded.
+    /// Only local rules (no cross-document segments) are included.
+    /// Results are sorted alphabetically by name for deterministic output.
+    pub fn document_schema(&self) -> DocumentSchema {
+        let mut fact_entries: Vec<(String, FactSchema)> = self
+            .facts
+            .iter()
+            .filter(|(path, _)| path.segments.is_empty())
+            .filter(|(_, data)| data.schema_type().is_some())
+            .map(|(path, data)| {
+                (
+                    path.fact.clone(),
+                    FactSchema {
+                        fact_type: data.schema_type().unwrap().name(),
+                        default: data.value().map(|v| v.to_string()),
+                    },
+                )
+            })
+            .collect();
+        fact_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut rule_entries: Vec<(String, RuleSchema)> = self
+            .rules
+            .iter()
+            .filter(|r| r.path.segments.is_empty())
+            .map(|r| {
+                (
+                    r.name.clone(),
+                    RuleSchema {
+                        rule_type: r.rule_type.name(),
+                    },
+                )
+            })
+            .collect();
+        rule_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        DocumentSchema {
+            doc: self.doc_name.clone(),
+            facts: fact_entries.into_iter().collect(),
+            rules: rule_entries.into_iter().collect(),
+        }
+    }
+
     /// Look up a fact by its path string (e.g., "age" or "rules.base_price").
     pub fn get_fact_path_by_str(&self, name: &str) -> Option<&FactPath> {
         self.facts.keys().find(|path| path.to_string() == name)
@@ -488,9 +568,16 @@ mod tests {
         code: &str,
         source: &str,
     ) -> crate::LemmaResult<()> {
+        let files: std::collections::HashMap<String, String> =
+            std::iter::once((source.to_string(), code.to_string())).collect();
         tokio::runtime::Runtime::new()
             .expect("tokio runtime")
-            .block_on(engine.add_lemma_code(code, source))
+            .block_on(engine.add_lemma_files(files))
+            .map_err(|errs| match errs.len() {
+                0 => unreachable!("add_lemma_files returned Err with empty error list"),
+                1 => errs.into_iter().next().unwrap(),
+                _ => crate::LemmaError::MultipleErrors(errs),
+            })
     }
 
     #[test]

@@ -1,116 +1,91 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
+use lemma::error::ErrorDetails;
 use lemma::LemmaError;
 
-/// Format a LemmaError with fancy terminal output using Ariadne
+/// Render an Ariadne error report for any error variant that carries ErrorDetails.
+///
+/// `error_type` is the human-readable category (e.g. "Parse error", "Engine error").
+/// `label_message` is the inline annotation on the source span (empty string for most variants).
+fn format_details(error_type: &str, details: &ErrorDetails, label_message: &str) -> String {
+    let mut output = Vec::new();
+
+    let header = format!(
+        "{}: {} (in doc '{}', file {}:{})",
+        error_type,
+        details.message,
+        details.source_location.doc_name,
+        details.source_location.attribute,
+        details.source_location.span.line
+    );
+
+    let mut report = Report::build(
+        ReportKind::Error,
+        &details.source_location.attribute,
+        details.source_location.span.start,
+    )
+    .with_message(header)
+    .with_label(
+        Label::new((
+            &details.source_location.attribute,
+            details.source_location.span.start..details.source_location.span.end,
+        ))
+        .with_message(label_message)
+        .with_color(Color::Red),
+    );
+
+    if let Some(suggestion) = &details.suggestion {
+        report = report.with_help(suggestion);
+    }
+
+    match report.finish().write(
+        (
+            &details.source_location.attribute,
+            Source::from(details.source_text.as_ref()),
+        ),
+        &mut output,
+    ) {
+        Ok(()) => String::from_utf8_lossy(&output).to_string(),
+        Err(_) => format!(
+            "{}: {} at {}:{}:{}",
+            error_type,
+            details.message,
+            details.source_location.attribute,
+            details.source_location.span.line,
+            details.source_location.span.col
+        ),
+    }
+}
+
+/// Format a LemmaError with rich terminal output using Ariadne
 pub fn format_error(error: &LemmaError) -> String {
     match error {
-        LemmaError::Parse(details)
-        | LemmaError::Semantic(details)
-        | LemmaError::Inversion(details)
-        | LemmaError::Runtime(details) => {
-            let mut output = Vec::new();
-
-            let error_type = match error {
-                LemmaError::Parse(_) => "Parse error",
-                LemmaError::Semantic(_) => "Semantic error",
-                LemmaError::Inversion(_) => "Inversion error",
-                LemmaError::Runtime(_) => "Runtime error",
-                _ => unreachable!(),
+        LemmaError::Parse(details) => format_details("Parse error", details, ""),
+        LemmaError::Semantic(details) => format_details("Semantic error", details, ""),
+        LemmaError::Inversion(details) => format_details("Inversion error", details, ""),
+        LemmaError::Runtime(details) => format_details("Runtime error", details, ""),
+        LemmaError::Engine(details) => format_details("Engine error", details, ""),
+        LemmaError::MissingFact(details) => format_details("Missing fact", details, ""),
+        LemmaError::CircularDependency { details, cycle } => {
+            let cycle_note = if cycle.is_empty() {
+                String::new()
+            } else {
+                let path: Vec<String> = cycle
+                    .iter()
+                    .map(|s| format!("{}:{}", s.doc_name, s.span.line))
+                    .collect();
+                format!(" [cycle: {}]", path.join(" -> "))
             };
-
-            let enhanced_message = format!(
-                "{error_type}: {} (in doc '{}', file {}:{})",
-                details.message,
-                details.source_location.doc_name,
-                details.source_location.attribute,
-                details.source_location.span.line
-            );
-
-            let mut report = Report::build(
-                ReportKind::Error,
-                &details.source_location.attribute,
-                details.source_location.span.start,
-            )
-            .with_message(enhanced_message)
-            .with_label(
-                Label::new((
-                    &details.source_location.attribute,
-                    details.source_location.span.start..details.source_location.span.end,
-                ))
-                .with_message("")
-                .with_color(Color::Red),
-            );
-
-            if let Some(suggestion) = &details.suggestion {
-                report = report.with_help(suggestion);
-            }
-
-            match report.finish().write(
-                (
-                    &details.source_location.attribute,
-                    Source::from(details.source_text.as_ref()),
-                ),
-                &mut output,
-            ) {
-                Ok(_) => String::from_utf8_lossy(&output).to_string(),
-                Err(_) => {
-                    // Fallback to simple format
-                    format!("{}", error)
-                }
-            }
+            format_details("Circular dependency", details, &cycle_note)
         }
-        LemmaError::Engine(details) => format!("Engine error: {}", details.message),
         LemmaError::Registry {
             details,
             identifier,
             kind,
-        } => {
-            let mut output = Vec::new();
-
-            let enhanced_message = format!(
-                "Registry error ({}): @{}: {} (in doc '{}', file {}:{})",
-                kind,
-                identifier,
-                details.message,
-                details.source_location.doc_name,
-                details.source_location.attribute,
-                details.source_location.span.line
-            );
-
-            let mut report = Report::build(
-                ReportKind::Error,
-                &details.source_location.attribute,
-                details.source_location.span.start,
-            )
-            .with_message(enhanced_message)
-            .with_label(
-                Label::new((
-                    &details.source_location.attribute,
-                    details.source_location.span.start..details.source_location.span.end,
-                ))
-                .with_message(format!("@{}", identifier))
-                .with_color(Color::Red),
-            );
-
-            if let Some(suggestion) = &details.suggestion {
-                report = report.with_help(suggestion);
-            }
-
-            match report.finish().write(
-                (
-                    &details.source_location.attribute,
-                    Source::from(details.source_text.as_ref()),
-                ),
-                &mut output,
-            ) {
-                Ok(_) => String::from_utf8_lossy(&output).to_string(),
-                Err(_) => format!("{}", error),
-            }
-        }
-        LemmaError::MissingFact(details) => format!("Missing fact: {}", details.message),
-        LemmaError::CircularDependency { details, .. } => {
-            format!("Circular dependency: {}", details.message)
-        }
+        } => format_details(
+            &format!("Registry error ({})", kind),
+            details,
+            &format!("@{}", identifier),
+        ),
         LemmaError::ResourceLimitExceeded {
             limit_name,
             limit_value,
@@ -122,12 +97,8 @@ pub fn format_error(error: &LemmaError) -> String {
             )
         }
         LemmaError::MultipleErrors(errors) => {
-            let mut result = String::from("Multiple errors occurred:\n\n");
-            for error in errors {
-                result.push_str(&format_error(error));
-                result.push_str("\n\n");
-            }
-            result
+            let formatted: Vec<String> = errors.iter().map(format_error).collect();
+            formatted.join("\n\n")
         }
     }
 }

@@ -1,0 +1,18 @@
+[package]
+name = "lemma-openapi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "OpenAPI 3.1 specification generator for Lemma documents."
+
+[dependencies]
+lemma = { package = "lemma-engine", version = "0.7.4", path = "../engine" }
+serde_json.workspace = true
+
+[lints.rust]
+dead_code = "deny"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

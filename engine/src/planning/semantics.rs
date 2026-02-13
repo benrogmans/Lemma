@@ -1305,6 +1305,7 @@ impl LemmaType {
     }
 
     /// Returns true if both types are scale and belong to the same scale family (same family name).
+    /// Two anonymous primitive scales (no name, no family) are considered compatible.
     #[must_use]
     pub fn same_scale_family(&self, other: &LemmaType) -> bool {
         if !self.is_scale() || !other.is_scale() {
@@ -1312,6 +1313,8 @@ impl LemmaType {
         }
         match (self.scale_family_name(), other.scale_family_name()) {
             (Some(self_family), Some(other_family)) => self_family == other_family,
+            // Two anonymous primitive scales are compatible with each other.
+            (None, None) => true,
             _ => false,
         }
     }
@@ -1961,7 +1964,7 @@ mod tests {
 
         assert_eq!(
             LiteralValue::text("hello".to_string()).display_value(),
-            "\"hello\""
+            "hello"
         );
         assert_eq!(LiteralValue::number(ten).display_value(), "10");
         assert_eq!(LiteralValue::from_bool(true).display_value(), "true");

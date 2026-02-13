@@ -195,7 +195,7 @@ rule status = "invalid"
         .find(|r| r.rule.name == "status")
         .unwrap();
 
-    assert_eq!(status.result.value().unwrap().to_string(), "\"valid\"");
+    assert_eq!(status.result.value().unwrap().to_string(), "valid");
 }
 
 /// Test that we can mix cross-doc fact and rule references

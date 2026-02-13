@@ -198,3 +198,80 @@ rule price_gbp = 100 eur in gbp
     assert!(msg.contains("Unknown unit 'gbp'"), "actual error: {msg}");
     assert!(msg.contains("Valid units:"), "actual error: {msg}");
 }
+
+#[test]
+fn named_scale_type_comparison_with_unit_literal() {
+    // Regression: planning rejected `package_weight > 1 kilogram` with
+    // "Cannot compare different scale types: scale and weight" because it
+    // used strict name equality instead of same_scale_family.
+    let code = r#"
+doc shipping
+
+type weight = scale -> unit kilogram 1.0
+
+fact package_weight = 2.5 kilogram
+
+rule base_shipping = 5.99
+    unless package_weight > 1 kilogram then 8.99
+    unless package_weight > 5 kilogram then 15.99
+"#;
+
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+
+    let response = engine.evaluate("shipping", vec![], HashMap::new()).unwrap();
+
+    let rule_result = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "base_shipping")
+        .unwrap();
+
+    // package_weight = 2.5 kg, which is > 1 kg but not > 5 kg, so second unless wins: 8.99
+    match &rule_result.result {
+        OperationResult::Value(v) => match &v.value {
+            ValueKind::Number(d) => {
+                assert_eq!(*d, Decimal::new(899, 2));
+            }
+            other => panic!("Expected Number value, got {:?}", other),
+        },
+        OperationResult::Veto(reason) => panic!("Expected value, got Veto({:?})", reason),
+    }
+}
+
+#[test]
+fn named_scale_type_arithmetic_within_same_family() {
+    // Regression: planning rejected arithmetic between values of the same
+    // scale family when their type names differed (e.g. "scale" vs "weight").
+    let code = r#"
+doc shipping
+
+type money = scale -> unit USD 1.00
+
+fact base_fee = 5.99 USD
+fact surcharge = 2.00 USD
+
+rule total = base_fee + surcharge
+"#;
+
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+
+    let response = engine.evaluate("shipping", vec![], HashMap::new()).unwrap();
+
+    let rule_result = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "total")
+        .unwrap();
+
+    match &rule_result.result {
+        OperationResult::Value(v) => match &v.value {
+            ValueKind::Scale(d, _) => {
+                assert_eq!(*d, Decimal::new(799, 2));
+            }
+            other => panic!("Expected Scale value, got {:?}", other),
+        },
+        OperationResult::Veto(reason) => panic!("Expected value, got Veto({:?})", reason),
+    }
+}

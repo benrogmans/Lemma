@@ -2,6 +2,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use lemma::Engine;
+use std::collections::HashMap;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(s) = std::str::from_utf8(data) {
@@ -14,6 +15,10 @@ fact y = 50
 rule test_expr = {}
 "#, s);
         
-        let _ = engine.add_lemma_code(&code, "fuzz_expr");
+        let files: HashMap<String, String> =
+            std::iter::once(("fuzz_expr".to_string(), code)).collect();
+        let _ = tokio::runtime::Runtime::new()
+            .expect("tokio runtime")
+            .block_on(engine.add_lemma_files(files));
     }
 });

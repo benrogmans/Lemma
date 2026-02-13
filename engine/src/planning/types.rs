@@ -7,15 +7,15 @@
 //! - Applying constraints to create final type specifications
 
 use crate::error::LemmaError;
-use crate::parsing::ast::{FactReference, Span, TypeDef};
+use crate::parsing::ast::{FactReference, TypeDef};
 use crate::planning::semantics::{self, LemmaType, TypeExtends, TypeSpecification};
-use crate::Source;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Fully resolved types for a single document
 /// After resolution, all imports are inlined - documents are independent
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedDocumentTypes {
     /// Named types: type_name -> fully resolved type
     pub named_types: HashMap<String, LemmaType>,
@@ -40,15 +40,32 @@ pub struct TypeRegistry {
     /// Inline type definitions per document: doc_name -> (fact_reference -> TypeDef)
     /// Stores inline type definitions keyed by their fact reference
     inline_type_definitions: HashMap<String, HashMap<FactReference, TypeDef>>,
+    /// Source text per file attribute, used for error reporting.
+    /// Maps source attribute (e.g. filename) to the full source code string.
+    sources: HashMap<String, String>,
 }
 
 impl TypeRegistry {
-    /// Create a new, empty registry
-    pub fn new() -> Self {
+    /// Create a new, empty registry with access to source text for error reporting.
+    pub fn new(sources: HashMap<String, String>) -> Self {
         TypeRegistry {
             named_types: HashMap::new(),
             inline_type_definitions: HashMap::new(),
+            sources,
         }
+    }
+
+    /// Look up the source text for a given source location.
+    /// Panics if the source attribute is not found in the sources map,
+    /// because that indicates a bug in the pipeline (all sources must be registered).
+    fn source_text_for(&self, source: &crate::Source) -> Arc<str> {
+        let text = self.sources.get(&source.attribute).unwrap_or_else(|| {
+            unreachable!(
+                "BUG: missing source text for attribute '{}' (doc '{}') in TypeRegistry",
+                source.attribute, source.doc_name
+            )
+        });
+        Arc::from(text.as_str())
     }
 
     /// Register a user-defined type for a given document
@@ -64,7 +81,7 @@ impl TypeRegistry {
                     return Err(LemmaError::engine(
                         format!("Type '{}' is already defined in document '{}'", name, doc),
                         def_loc.clone(),
-                        Arc::from(""),
+                        self.source_text_for(&def_loc),
                         None::<String>,
                     ));
                 }
@@ -87,7 +104,7 @@ impl TypeRegistry {
                             fact_ref.fact, doc
                         ),
                         def_loc.clone(),
-                        Arc::from(""),
+                        self.source_text_for(&def_loc),
                         None::<String>,
                     ));
                 }
@@ -115,6 +132,71 @@ impl TypeRegistry {
     /// Resolve only named types (for validation before inline type definitions are registered)
     pub fn resolve_named_types(&self, doc: &str) -> Result<ResolvedDocumentTypes, LemmaError> {
         self.resolve_types_internal(doc, false)
+    }
+
+    /// Resolve only inline type definitions and merge them into an existing
+    /// `ResolvedDocumentTypes` that already contains the named types.
+    ///
+    /// This avoids re-resolving named types that were already handled by
+    /// [`resolve_named_types`](Self::resolve_named_types) during the
+    /// `prepare_types` phase, preventing duplicate errors.
+    pub fn resolve_inline_types(
+        &self,
+        doc: &str,
+        mut existing: ResolvedDocumentTypes,
+    ) -> Result<ResolvedDocumentTypes, LemmaError> {
+        let mut errors = Vec::new();
+
+        // Resolve inline type definitions only
+        if let Some(doc_inline_types) = self.inline_type_definitions.get(doc) {
+            for (fact_ref, type_def) in doc_inline_types {
+                let mut visited = HashSet::new();
+                match self.resolve_inline_type_definition(doc, type_def, &mut visited)? {
+                    Some(resolved_type) => {
+                        existing
+                            .inline_type_definitions
+                            .insert(fact_ref.clone(), resolved_type);
+                    }
+                    None => {
+                        unreachable!(
+                            "BUG: registered inline type definition for fact '{}' could not be resolved (doc='{}')",
+                            fact_ref, doc
+                        );
+                    }
+                }
+            }
+        }
+
+        // Extend the unit index with units from inline type definitions
+        for (fact_ref, resolved_type) in &existing.inline_type_definitions {
+            let inline_type_name = format!("{}::{}", doc, fact_ref);
+            let e = if resolved_type.is_scale() {
+                self.add_scale_units_to_index(
+                    &mut existing.unit_index,
+                    resolved_type,
+                    doc,
+                    &inline_type_name,
+                )
+            } else if resolved_type.is_ratio() {
+                self.add_ratio_units_to_index(
+                    &mut existing.unit_index,
+                    resolved_type,
+                    doc,
+                    &inline_type_name,
+                )
+            } else {
+                Ok(())
+            };
+            if let Err(e) = e {
+                errors.push(e);
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(LemmaError::MultipleErrors(errors));
+        }
+
+        Ok(existing)
     }
 
     fn resolve_types_internal(
@@ -149,12 +231,7 @@ impl TypeRegistry {
             if let Some(doc_inline_types) = self.inline_type_definitions.get(doc) {
                 for (fact_ref, type_def) in doc_inline_types {
                     let mut visited = HashSet::new();
-                    match self.resolve_inline_type_definition(
-                        doc,
-                        fact_ref,
-                        type_def,
-                        &mut visited,
-                    )? {
+                    match self.resolve_inline_type_definition(doc, type_def, &mut visited)? {
                         Some(resolved_type) => {
                             inline_type_definitions.insert(fact_ref.clone(), resolved_type);
                         }
@@ -223,78 +300,9 @@ impl TypeRegistry {
             }
         }
 
-        // Return all collected errors if any
+        // Return all collected errors if any, each with its own real source location
         if !errors.is_empty() {
-            // Combine all errors into a single error message for now
-            // (Future: LSP can use Vec<LemmaError> for better diagnostics)
-            let combined_message = errors
-                .iter()
-                .map(|e| match e {
-                    LemmaError::Engine(details) => details.message.clone(),
-                    LemmaError::CircularDependency { details, .. } => details.message.clone(),
-                    LemmaError::Parse(details) => details.message.clone(),
-                    LemmaError::Semantic(details) => details.message.clone(),
-                    LemmaError::Inversion(details) => details.message.clone(),
-                    LemmaError::Runtime(details) => details.message.clone(),
-                    LemmaError::MissingFact(details) => details.message.clone(),
-                    LemmaError::Registry { details, .. } => details.message.clone(),
-                    LemmaError::ResourceLimitExceeded {
-                        limit_name,
-                        limit_value,
-                        actual_value,
-                        suggestion,
-                    } => {
-                        format!(
-                            "Resource limit exceeded: {} (limit: {}, actual: {}). {}",
-                            limit_name, limit_value, actual_value, suggestion
-                        )
-                    }
-                    LemmaError::MultipleErrors(errs) => errs
-                        .iter()
-                        .map(|e| match e {
-                            LemmaError::Engine(details) => details.message.clone(),
-                            LemmaError::CircularDependency { details, .. } => {
-                                details.message.clone()
-                            }
-                            LemmaError::Parse(details) => details.message.clone(),
-                            LemmaError::Semantic(details) => details.message.clone(),
-                            LemmaError::Inversion(details) => details.message.clone(),
-                            LemmaError::Runtime(details) => details.message.clone(),
-                            LemmaError::MissingFact(details) => details.message.clone(),
-                            LemmaError::Registry { details, .. } => details.message.clone(),
-                            LemmaError::ResourceLimitExceeded {
-                                limit_name,
-                                limit_value,
-                                actual_value,
-                                suggestion,
-                            } => {
-                                format!(
-                                    "Resource limit exceeded: {} (limit: {}, actual: {}). {}",
-                                    limit_name, limit_value, actual_value, suggestion
-                                )
-                            }
-                            LemmaError::MultipleErrors(_) => "Multiple errors".to_string(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                })
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(LemmaError::engine(
-                &combined_message,
-                Source::new(
-                    "<internal>",
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    doc,
-                ),
-                Arc::from(""),
-                None::<String>,
-            ));
+            return Err(LemmaError::MultipleErrors(errors));
         }
 
         Ok(ResolvedDocumentTypes {
@@ -314,19 +322,22 @@ impl TypeRegistry {
         // Cycle detection using doc::name key
         let key = format!("{}::{}", doc, name);
         if visited.contains(&key) {
+            let source_location = self
+                .named_types
+                .get(doc)
+                .and_then(|dt| dt.get(name))
+                .map(|td| td.source_location().clone())
+                .unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: circular dependency detected for type '{}::{}' but type definition not found in registry",
+                        doc, name
+                    )
+                });
+            let source_text = self.source_text_for(&source_location);
             return Err(LemmaError::circular_dependency(
                 format!("Circular dependency detected in type resolution: {}", key),
-                Source::new(
-                    "<internal>",
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    doc,
-                ),
-                std::sync::Arc::from(""),
+                source_location,
+                source_text,
                 vec![],
                 None::<String>,
             ));
@@ -381,11 +392,11 @@ impl TypeRegistry {
                 // Parent type not found - this is an error for named types
                 // (inline type definitions might have forward references, but named types should be resolvable)
                 visited.remove(&key);
+                let source = type_def.source_location().clone();
                 return Err(LemmaError::engine(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
-                    Source::new("<internal>", Span { start: 0, end: 0, line: 1, col: 0 }, doc)
-,
-                    Arc::from(""),
+                    source.clone(),
+                    self.source_text_for(&source),
                     None::<String>,
                 ));
             }
@@ -401,47 +412,7 @@ impl TypeRegistry {
                 Ok(specs) => specs,
                 Err(errors) => {
                     visited.remove(&key);
-                    // Combine all errors into a single error message for now
-                    // (Future: LSP can use Vec<LemmaError> for better diagnostics)
-                    let combined_message = errors
-                        .iter()
-                        .map(|e| match e {
-                            LemmaError::Engine(details) => details.message.clone(),
-                            LemmaError::CircularDependency { details, .. } => details.message.clone(),
-                            LemmaError::Parse(details) => details.message.clone(),
-                            LemmaError::Semantic(details) => details.message.clone(),
-                            LemmaError::Inversion(details) => details.message.clone(),
-                            LemmaError::Runtime(details) => details.message.clone(),
-                            LemmaError::MissingFact(details) => details.message.clone(),
-                            LemmaError::Registry { details, .. } => details.message.clone(),
-                            LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
-                                format!("Resource limit exceeded: {} (limit: {}, actual: {}). {}", limit_name, limit_value, actual_value, suggestion)
-                            },
-                            LemmaError::MultipleErrors(errs) => {
-                                errs.iter().map(|e| match e {
-                                    LemmaError::Engine(details) => details.message.clone(),
-                                    LemmaError::CircularDependency { details, .. } => details.message.clone(),
-                                    LemmaError::Parse(details) => details.message.clone(),
-                                    LemmaError::Semantic(details) => details.message.clone(),
-                                    LemmaError::Inversion(details) => details.message.clone(),
-                                    LemmaError::Runtime(details) => details.message.clone(),
-                                    LemmaError::MissingFact(details) => details.message.clone(),
-                                    LemmaError::Registry { details, .. } => details.message.clone(),
-                                    LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
-                                        format!("Resource limit exceeded: {} (limit: {}, actual: {}). {}", limit_name, limit_value, actual_value, suggestion)
-                                    },
-                                    LemmaError::MultipleErrors(_) => "Multiple errors".to_string(),
-                                }).collect::<Vec<_>>().join("; ")
-                            },
-                        })
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    return Err(LemmaError::engine(
-                        &combined_message,
-                        type_def.source_location().clone(),
-                        Arc::from(""),
-                        None::<String>,
-                    ));
+                    return Err(LemmaError::MultipleErrors(errors));
                 }
             }
         } else {
@@ -506,7 +477,7 @@ impl TypeRegistry {
                     Err(LemmaError::engine(
                         format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                         source.clone(),
-                        Arc::from(""),
+                        self.source_text_for(source),
                         None::<String>,
                     ))
                 } else {
@@ -552,7 +523,7 @@ impl TypeRegistry {
                     errors.push(LemmaError::engine(
                         format!("Failed to apply constraint '{}': {}", command, e),
                         source.clone(),
-                        Arc::from(""),
+                        self.source_text_for(source),
                         None::<String>,
                     ));
                     specs = specs_clone;
@@ -569,7 +540,6 @@ impl TypeRegistry {
     fn resolve_inline_type_definition(
         &self,
         doc: &str,
-        _fact_ref: &FactReference,
         type_def: &TypeDef,
         visited: &mut HashSet<String>,
     ) -> Result<Option<LemmaType>, LemmaError> {
@@ -593,7 +563,7 @@ impl TypeRegistry {
                 return Err(LemmaError::engine(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                     def_loc.clone(),
-                    Arc::from(""),
+                    self.source_text_for(&def_loc),
                     None::<String>,
                 ));
             }
@@ -604,56 +574,7 @@ impl TypeRegistry {
             match self.apply_constraints(parent_specs, constraints, &def_loc) {
                 Ok(specs) => specs,
                 Err(errors) => {
-                    // Combine all errors into a single error message for now
-                    // (Future: LSP can use Vec<LemmaError> for better diagnostics)
-                    let combined_message = errors
-                        .iter()
-                        .map(|e| match e {
-                            LemmaError::Engine(details) => details.message.clone(),
-                            LemmaError::CircularDependency { details, .. } => details.message.clone(),
-                            LemmaError::Parse(details) => details.message.clone(),
-                            LemmaError::Semantic(details) => details.message.clone(),
-                            LemmaError::Inversion(details) => details.message.clone(),
-                            LemmaError::Runtime(details) => details.message.clone(),
-                            LemmaError::MissingFact(details) => details.message.clone(),
-                            LemmaError::Registry { details, .. } => details.message.clone(),
-                            LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
-                                format!("Resource limit exceeded: {} (limit: {}, actual: {}). {}", limit_name, limit_value, actual_value, suggestion)
-                            },
-                            LemmaError::MultipleErrors(errs) => {
-                                errs.iter().map(|e| match e {
-                                    LemmaError::Engine(details) => details.message.clone(),
-                                    LemmaError::CircularDependency { details, .. } => details.message.clone(),
-                                    LemmaError::Parse(details) => details.message.clone(),
-                                    LemmaError::Semantic(details) => details.message.clone(),
-                                    LemmaError::Inversion(details) => details.message.clone(),
-                                    LemmaError::Runtime(details) => details.message.clone(),
-                                    LemmaError::MissingFact(details) => details.message.clone(),
-                                    LemmaError::Registry { details, .. } => details.message.clone(),
-                                    LemmaError::ResourceLimitExceeded { limit_name, limit_value, actual_value, suggestion } => {
-                                        format!("Resource limit exceeded: {} (limit: {}, actual: {}). {}", limit_name, limit_value, actual_value, suggestion)
-                                    },
-                                    LemmaError::MultipleErrors(_) => "Multiple errors".to_string(),
-                                }).collect::<Vec<_>>().join("; ")
-                            },
-                        })
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    return Err(LemmaError::engine(
-                        &combined_message,
-                        Source::new(
-                            &def_loc.attribute,
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            &def_loc.doc_name,
-                        ),
-                        Arc::from(""),
-                        None::<String>,
-                    ));
+                    return Err(LemmaError::MultipleErrors(errors));
                 }
             }
         } else {
@@ -700,17 +621,16 @@ impl TypeRegistry {
                         .named_types
                         .get(doc)
                         .and_then(|defs| defs.get(type_name))
-                        .map(|def| def.source_location());
+                        .map(|def| def.source_location().clone())
+                        .expect("BUG: named type definition must have source location");
 
                     return Err(LemmaError::engine(
                         format!(
                             "Unit '{}' is defined more than once in type '{}'",
                             unit, type_name
                         ),
-                        source
-                            .cloned()
-                            .expect("BUG: named type definition must have source location"),
-                        Arc::from(""),
+                        source.clone(),
+                        self.source_text_for(&source),
                         None::<String>,
                     ));
                 }
@@ -739,17 +659,16 @@ impl TypeRegistry {
                     .named_types
                     .get(doc)
                     .and_then(|defs| defs.get(type_name))
-                    .map(|def| def.source_location());
+                    .map(|def| def.source_location().clone())
+                    .expect("BUG: named type definition must have source location");
 
                 return Err(LemmaError::engine(
                     format!(
                         "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
                         unit, doc, existing_name, type_name
                     ),
-                    source
-                        .cloned()
-                        .expect("BUG: named type definition must have source location"),
-                    Arc::from(""),
+                    source.clone(),
+                    self.source_text_for(&source),
                     None::<String>,
                 ));
             }
@@ -777,17 +696,16 @@ impl TypeRegistry {
                     .named_types
                     .get(doc)
                     .and_then(|defs| defs.get(type_name))
-                    .map(|def| def.source_location());
+                    .map(|def| def.source_location().clone())
+                    .expect("BUG: named type definition must have source location");
 
                 return Err(LemmaError::engine(
                     format!(
                         "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
                         unit, doc, existing_name, type_name
                     ),
-                    source
-                        .cloned()
-                        .expect("BUG: named type definition must have source location"),
-                    Arc::from(""),
+                    source.clone(),
+                    self.source_text_for(&source),
                     None::<String>,
                 ));
             }
@@ -813,7 +731,7 @@ impl TypeRegistry {
 
 impl Default for TypeRegistry {
     fn default() -> Self {
-        Self::new()
+        Self::new(HashMap::new())
     }
 }
 
@@ -824,16 +742,23 @@ mod tests {
     use crate::ResourceLimits;
     use rust_decimal::Decimal;
 
+    fn test_registry() -> TypeRegistry {
+        let mut sources = HashMap::new();
+        sources.insert("<test>".to_string(), String::new());
+        sources.insert("test.lemma".to_string(), String::new());
+        TypeRegistry::new(sources)
+    }
+
     #[test]
     fn test_registry_creation() {
-        let registry = TypeRegistry::new();
+        let registry = test_registry();
         assert!(registry.named_types.is_empty());
         assert!(registry.inline_type_definitions.is_empty());
     }
 
     #[test]
     fn test_resolve_primitive_types() {
-        let registry = TypeRegistry::new();
+        let registry = test_registry();
 
         assert!(registry.resolve_primitive_type("boolean").is_some());
         assert!(registry.resolve_primitive_type("scale").is_some());
@@ -848,7 +773,7 @@ mod tests {
 
     #[test]
     fn test_register_named_type() {
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
                 "<test>",
@@ -872,7 +797,7 @@ mod tests {
     #[test]
     fn test_register_inline_type_definition() {
         use crate::parsing::ast::FactReference;
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         let fact_ref = FactReference::local("age".to_string());
         let type_def = TypeDef::Inline {
             source_location: crate::Source::new(
@@ -907,7 +832,7 @@ mod tests {
 
     #[test]
     fn test_register_duplicate_type_fails() {
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
                 "<test>",
@@ -933,7 +858,7 @@ mod tests {
 
     #[test]
     fn test_resolve_custom_type_from_primitive() {
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
                 "<test>",
@@ -967,7 +892,7 @@ type dice = number -> minimum 0 -> maximum 6"#;
         let doc = &docs[0];
 
         // Use TypeRegistry to resolve the type
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();
@@ -997,7 +922,7 @@ type money = scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#;
         let type_def = &doc.types[0];
 
         // Use TypeRegistry to resolve the type
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry.register_type(&doc.name, type_def.clone()).unwrap();
 
         let resolved_types = registry.resolve_types(&doc.name).unwrap();
@@ -1025,7 +950,7 @@ type price = number -> decimals 2 -> minimum 0"#;
         let doc = &docs[0];
 
         // Use TypeRegistry to resolve the type
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();
@@ -1053,7 +978,7 @@ type precise_number = number -> decimals 4"#;
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();
@@ -1077,7 +1002,7 @@ type weight = scale -> unit kg 1 -> decimals 3"#;
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();
@@ -1101,7 +1026,7 @@ type ratio_type = ratio -> decimals 2"#;
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();
@@ -1129,7 +1054,7 @@ type percentage = ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();
@@ -1173,7 +1098,7 @@ type money2 = money -> unit usd 1.24"#;
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         for type_def in &doc.types {
             registry.register_type(&doc.name, type_def.clone()).unwrap();
         }
@@ -1212,7 +1137,7 @@ type invalid = nonexistent_type -> minimum 0"#;
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();
@@ -1237,7 +1162,7 @@ type invalid = choice -> option "a""#;
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();
@@ -1269,7 +1194,7 @@ type money2 = money
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         for type_def in &doc.types {
             registry.register_type(&doc.name, type_def.clone()).unwrap();
         }
@@ -1309,7 +1234,7 @@ type length_b = scale
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         for type_def in &doc.types {
             registry.register_type(&doc.name, type_def.clone()).unwrap();
         }
@@ -1337,7 +1262,7 @@ type price = number
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();
@@ -1363,7 +1288,7 @@ type money = scale
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();
@@ -1394,7 +1319,7 @@ type my_money = money
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         for type_def in &doc.types {
             registry.register_type(&doc.name, type_def.clone()).unwrap();
         }
@@ -1423,7 +1348,7 @@ type money = scale
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
 
-        let mut registry = TypeRegistry::new();
+        let mut registry = test_registry();
         registry
             .register_type(&doc.name, doc.types[0].clone())
             .unwrap();

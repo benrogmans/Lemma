@@ -376,7 +376,7 @@ use std::collections::HashMap;
 
 let mut engine = Engine::new();
 
-engine.add_lemma_code(r#"
+engine.add_lemma_files(HashMap::from([("pricing.lemma".into(), r#"
     doc pricing
     fact quantity = [number]
     fact is_vip = false
@@ -385,7 +385,7 @@ engine.add_lemma_code(r#"
       unless quantity >= 10 then 10%
       unless quantity >= 50 then 20%
       unless is_vip then 25%
-"#, "pricing.lemma")?;
+"#.into())]))?;
 
 // Find what gives a 25% discount
 use rust_decimal::Decimal;

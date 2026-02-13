@@ -85,11 +85,20 @@ enum Commands {
         #[arg(default_value = ".")]
         root: PathBuf,
     },
-    /// Start HTTP REST API server (default: localhost:3000)
+    /// Start HTTP REST API server with auto-generated typed endpoints (default: localhost:3000)
     ///
-    /// Runs a server that evaluates Lemma docs via HTTP POST requests.
-    /// Useful for integrating Lemma rules into web applications and microservices.
-    /// API: POST /evaluate with {code, facts}
+    /// Loads all .lemma files from the workspace and generates typed REST API endpoints
+    /// for each document. Interactive OpenAPI documentation is available at /docs.
+    ///
+    /// Routes:
+    ///   GET  /@{doc}             — evaluate all rules (facts as query params)
+    ///   POST /@{doc}             — evaluate all rules (facts as JSON body)
+    ///   GET  /@{doc}/{rules}     — evaluate specific rules (comma-separated)
+    ///   POST /@{doc}/{rules}     — evaluate specific rules (JSON body)
+    ///   GET  /                   — list all documents
+    ///   GET  /docs               — interactive API documentation
+    ///   GET  /openapi.json       — OpenAPI 3.1 specification
+    ///   GET  /health             — health check
     Server {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
@@ -100,6 +109,9 @@ enum Commands {
         /// Port number to listen on
         #[arg(short, long, default_value = "3000")]
         port: u16,
+        /// Watch workspace for .lemma file changes and reload automatically
+        #[arg(short, long)]
+        watch: bool,
     },
     /// Start MCP server for AI assistant integration (stdio)
     ///
@@ -137,7 +149,8 @@ fn main() {
             workdir,
             host,
             port,
-        } => server_command(workdir, host, *port),
+            watch,
+        } => server_command(workdir, host, *port, *watch),
         Commands::Mcp { workdir } => mcp_command(workdir),
     };
 
@@ -249,65 +262,49 @@ fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
 fn list_command(root: &PathBuf) -> Result<()> {
     let mut engine = Engine::new();
 
-    let mut file_count = 0;
-    for entry in WalkDir::new(root) {
-        let entry = entry?;
-        if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
-            file_count += 1;
-            let path = entry.path();
-            let source_id = path.to_string_lossy().to_string();
-            tokio::runtime::Runtime::new()?
-                .block_on(engine.add_lemma_code(&fs::read_to_string(path)?, &source_id))?;
-        }
-    }
+    let file_count = WalkDir::new(root)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("lemma"))
+        .count();
 
-    let documents = engine.list_documents();
+    load_workspace(&mut engine, root)?;
 
-    let mut doc_stats: Vec<(String, usize, usize)> = documents
+    let mut document_names = engine.list_documents();
+    document_names.sort();
+
+    let schemas: Vec<lemma::DocumentSchema> = document_names
         .iter()
-        .map(|doc_name| {
-            let (facts_count, rules_count) = engine
-                .get_execution_plan(doc_name)
-                .map(|p| (p.facts.len(), p.rules.len()))
-                .unwrap_or((0, 0));
-            (doc_name.clone(), facts_count, rules_count)
-        })
+        .filter_map(|name| engine.get_execution_plan(name))
+        .map(|plan| plan.document_schema())
         .collect();
-    doc_stats.sort_by(|a, b| a.0.cmp(&b.0));
 
     let formatter = Formatter;
     println!(
         "{}",
-        formatter.format_workspace_summary(file_count, documents.len(), &doc_stats)
+        formatter.format_workspace_summary(file_count, &schemas)
     );
 
     Ok(())
 }
 
-fn server_command(workdir: &Path, host: &str, port: u16) -> Result<()> {
-    #[cfg(feature = "server")]
-    {
-        use tokio::runtime::Runtime;
-        let rt = Runtime::new()?;
-        rt.block_on(async {
-            let mut engine = Engine::new();
-            load_workspace(&mut engine, workdir)?;
+fn server_command(workdir: &Path, host: &str, port: u16, watch: bool) -> Result<()> {
+    use tokio::runtime::Runtime;
+    let rt = Runtime::new()?;
+    rt.block_on(async {
+        let mut engine = Engine::new();
+        load_workspace_async(&mut engine, workdir).await?;
 
-            println!(
-                "Starting HTTP server with {} document(s) loaded",
-                engine.list_documents().len()
-            );
-            server::http::start_server(engine, host, port).await
-        })?;
-    }
-
-    #[cfg(not(feature = "server"))]
-    {
-        eprintln!("Error: Server feature not enabled");
-        eprintln!("Recompile with: cargo build --features server");
-        std::process::exit(1);
-    }
-
+        let document_count = engine.list_documents().len();
+        println!(
+            "Starting HTTP server with {} document(s) loaded",
+            document_count
+        );
+        if watch {
+            println!("Watch mode enabled — .lemma file changes will be reloaded automatically");
+        }
+        server::http::start_server(engine, host, port, watch, workdir.to_path_buf()).await
+    })?;
     Ok(())
 }
 
@@ -334,17 +331,49 @@ fn mcp_command(workdir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Load all .lemma files from the workspace directory
+/// Load all .lemma files from the workspace directory.
+///
+/// Collects all files then calls `add_lemma_files` once so that registry
+/// resolution runs a single time and all errors are collected.
 fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> {
+    let mut files = std::collections::HashMap::new();
     for entry in WalkDir::new(workdir) {
         let entry = entry?;
         if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
             let path = entry.path();
             let source_id = path.to_string_lossy().to_string();
-            tokio::runtime::Runtime::new()?
-                .block_on(engine.add_lemma_code(&fs::read_to_string(path)?, &source_id))?;
+            let code = fs::read_to_string(path)?;
+            files.insert(source_id, code);
         }
     }
+
+    tokio::runtime::Runtime::new()?
+        .block_on(engine.add_lemma_files(files))
+        .map_err(lemma::LemmaError::MultipleErrors)?;
+
+    Ok(())
+}
+
+/// Async version of `load_workspace` for use inside an existing tokio runtime.
+///
+/// Collects all files then calls `add_lemma_files` once so that registry
+/// resolution runs a single time and all errors are collected.
+async fn load_workspace_async(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> {
+    let mut files = std::collections::HashMap::new();
+    for entry in WalkDir::new(workdir) {
+        let entry = entry?;
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
+            let path = entry.path();
+            let source_id = path.to_string_lossy().to_string();
+            let code = fs::read_to_string(path)?;
+            files.insert(source_id, code);
+        }
+    }
+
+    engine
+        .add_lemma_files(files)
+        .await
+        .map_err(lemma::LemmaError::MultipleErrors)?;
 
     Ok(())
 }

@@ -451,9 +451,16 @@ mod tests {
         code: &str,
         source: &str,
     ) -> crate::LemmaResult<()> {
+        let files: std::collections::HashMap<String, String> =
+            std::iter::once((source.to_string(), code.to_string())).collect();
         tokio::runtime::Runtime::new()
             .expect("tokio runtime")
-            .block_on(engine.add_lemma_code(code, source))
+            .block_on(engine.add_lemma_files(files))
+            .map_err(|errs| match errs.len() {
+                0 => unreachable!("add_lemma_files returned Err with empty error list"),
+                1 => errs.into_iter().next().unwrap(),
+                _ => crate::LemmaError::MultipleErrors(errs),
+            })
     }
 
     #[test]
