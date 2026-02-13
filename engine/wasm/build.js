@@ -88,7 +88,7 @@ export function build() {
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '1'
   };
   try {
-    execSync('wasm-pack build --target web --out-dir ../pkg', {
+    execSync('wasm-pack build --target web --out-dir ../pkg --out-name lemma', {
       stdio: 'inherit',
       cwd: LSP_ROOT,
       env
@@ -101,20 +101,20 @@ export function build() {
   // Parse metadata from Cargo.toml files
   const metadata = parseCargoMetadata();
 
-  // Create package.json (lsp crate outputs lsp.js, lsp_bg.wasm)
+  // Create package.json (wasm-pack --out-name lemma produces lemma.js, lemma_bg.wasm)
   const packageJson = {
     name: "@benrogmans/lemma-engine",
     version: metadata.version,
     description: metadata.description,
     type: "module",
-    main: "lsp.js",
-    types: "lsp.d.ts",
+    main: "lemma.js",
+    types: "lemma.d.ts",
     files: [
-      "lsp_bg.wasm",
-      "lsp.js",
-      "lsp.d.ts",
-      "lsp_bg.js",
-      "lsp_bg.wasm.d.ts"
+      "lemma_bg.wasm",
+      "lemma.js",
+      "lemma.d.ts",
+      "lemma_bg.js",
+      "lemma_bg.wasm.d.ts"
     ],
     keywords: [...metadata.keywords, "wasm", "webassembly"],
     author: metadata.author,

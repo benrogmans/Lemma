@@ -20,9 +20,9 @@ impl WasmEngine {
         }
     }
 
-    /// Add Lemma source code. Returns a Promise that resolves to a JSON string result.
-    #[wasm_bindgen(js_name = addLemmaCode)]
-    pub fn add_lemma_code(&self, code: &str, source: &str) -> js_sys::Promise {
+    /// Add Lemma source (e.g. file contents). Returns a Promise that resolves to a JSON string result.
+    #[wasm_bindgen(js_name = addLemmaFile)]
+    pub fn add_lemma_file(&self, code: &str, source: &str) -> js_sys::Promise {
         let code = code.to_string();
         let source = source.to_string();
         let engine = self.engine.clone();
@@ -160,6 +160,20 @@ impl WasmEngine {
     pub fn get_diagnostics(&self, code: &str, source_attribute: &str) -> String {
         let diagnostics = collect_diagnostics(code, source_attribute);
         to_json_response(serde_json::to_value(&diagnostics).unwrap_or(json!([])))
+    }
+
+    /// Format Lemma source code. Returns a JSON string: `{ "success": true, "formatted": "..." }`
+    /// or `{ "success": false, "error": "..." }`. Only formats if the source parses successfully.
+    /// Call from JS (e.g. Monaco playground) to implement "Format" without an LSP; there is no on-save in the browser.
+    #[wasm_bindgen(js_name = formatSource)]
+    pub fn format_source(&self, code: &str, source_attribute: &str) -> String {
+        match crate::format_source(code, source_attribute) {
+            Ok(formatted) => to_json_response(json!({
+                "success": true,
+                "formatted": formatted
+            })),
+            Err(e) => to_json_error(&e),
+        }
     }
 }
 

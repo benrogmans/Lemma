@@ -46,12 +46,12 @@ const engine = new WasmEngine();
 
 ### Core Methods
 
-#### `addLemmaCode(code: string, filename: string): string`
+#### `addLemmaFile(code: string, filename: string): string`
 
 Adds a Lemma document to the engine.
 
 ```javascript
-const result = engine.addLemmaCode(`
+const result = engine.addLemmaFile(`
   doc employee_contract
 
   fact salary = 5000 eur
@@ -162,7 +162,7 @@ async function calculatePricing() {
 
   // Load the document
   const loadResult = JSON.parse(
-    engine.addLemmaCode(pricingDoc, 'pricing.lemma')
+    engine.addLemmaFile(pricingDoc, 'pricing.lemma')
   );
 
   if (!loadResult.success) {
@@ -263,7 +263,7 @@ async function typedExample() {
 ```javascript
 try {
   const result = JSON.parse(
-    engine.addLemmaCode('invalid syntax', 'bad.lemma')
+    engine.addLemmaFile('invalid syntax', 'bad.lemma')
   );
 
   if (!result.success) {

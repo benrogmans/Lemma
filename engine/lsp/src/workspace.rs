@@ -189,6 +189,14 @@ impl WorkspaceModel {
             .map(|tracked| tracked.text.as_str())
     }
 
+    /// Get the current text content and its source attribute for a file, if tracked.
+    pub fn get_file_text_and_attribute(&self, url: &Url) -> Option<(&str, &str)> {
+        let attribute = Self::attribute_for_url(url);
+        self.files
+            .get_key_value(&attribute)
+            .map(|(key, tracked)| (tracked.text.as_str(), key.as_str()))
+    }
+
     /// Get parse errors for a single file (fast path, no planning).
     pub fn get_parse_errors(&self, url: &Url) -> Vec<LemmaError> {
         let attribute = Self::attribute_for_url(url);

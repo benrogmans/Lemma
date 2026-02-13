@@ -24,6 +24,7 @@ pub(crate) fn parse_literal(
         Rule::text_literal => parse_string_literal(pair),
         Rule::boolean_literal => parse_boolean_literal(pair, attribute, doc_name),
         Rule::percent_literal => parse_percent_literal(pair, attribute, doc_name),
+        Rule::permille_literal => parse_permille_literal(pair, attribute, doc_name),
         Rule::date_time_literal => parse_datetime_literal(pair, attribute, doc_name),
         Rule::time_literal => parse_time_literal(pair, attribute, doc_name),
         Rule::duration_literal => parse_duration_literal(pair, attribute, doc_name),
@@ -144,6 +145,43 @@ fn parse_percent_literal(
     }
     Err(LemmaError::engine(
         "Invalid percent literal: missing number",
+        Source::new(attribute, pair_span, doc_name),
+        Arc::from(pair_str),
+        None::<String>,
+    ))
+}
+
+fn parse_permille_literal(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+) -> Result<Value, LemmaError> {
+    let pair_str = pair.as_str();
+    let pair_span = Span::from_pest_span(pair.as_span());
+    for inner_pair in pair.into_inner() {
+        if inner_pair.as_rule() == Rule::number_literal {
+            let inner_span = Span::from_pest_span(inner_pair.as_span());
+            let permille_value = parse_number_literal(inner_pair, attribute, doc_name)?;
+            match &permille_value {
+                Value::Number(n) => {
+                    // Convert permille (5) to ratio (0.005) for storage
+                    use rust_decimal::Decimal;
+                    let ratio_value = *n / Decimal::from(1000);
+                    return Ok(Value::Ratio(ratio_value, Some("permille".to_string())));
+                }
+                _ => {
+                    return Err(LemmaError::engine(
+                        "Expected number in permille literal",
+                        Source::new(attribute, inner_span, doc_name),
+                        Arc::from(pair_str),
+                        None::<String>,
+                    ));
+                }
+            }
+        }
+    }
+    Err(LemmaError::engine(
+        "Invalid permille literal: missing number",
         Source::new(attribute, pair_span, doc_name),
         Arc::from(pair_str),
         None::<String>,
@@ -610,6 +648,52 @@ fact x = 10%5"#;
         assert!(
             result.is_err(),
             "Percent literals like `10%5` must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_permille_double_percent_syntax() {
+        use crate::parsing::ast::Value;
+        use rust_decimal::Decimal;
+        use std::str::FromStr;
+
+        let input = "doc test\nrule x = 5%%";
+        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let rule = &docs[0].rules[0];
+        match &rule.expression.kind {
+            crate::parsing::ast::ExpressionKind::Literal(Value::Ratio(n, Some(unit))) => {
+                assert_eq!(*n, Decimal::from_str("0.005").unwrap());
+                assert_eq!(unit, "permille");
+            }
+            other => panic!("Expected Ratio permille literal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_permille_word_syntax() {
+        use crate::parsing::ast::Value;
+        use rust_decimal::Decimal;
+        use std::str::FromStr;
+
+        let input = "doc test\nrule x = 5 permille";
+        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let rule = &docs[0].rules[0];
+        match &rule.expression.kind {
+            crate::parsing::ast::ExpressionKind::Literal(Value::Ratio(n, Some(unit))) => {
+                assert_eq!(*n, Decimal::from_str("0.005").unwrap());
+                assert_eq!(unit, "permille");
+            }
+            other => panic!("Expected Ratio permille literal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_permille_literal_with_trailing_digits() {
+        let input = "doc test\nfact x = 10%%5";
+        let result = parse(input, "test.lemma", &ResourceLimits::default());
+        assert!(
+            result.is_err(),
+            "Permille literals like `10%%5` must be rejected"
         );
     }
 }

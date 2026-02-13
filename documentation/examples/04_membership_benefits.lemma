@@ -10,9 +10,12 @@ type discount_ratio = ratio
   -> minimum 0
   -> maximum 1
 
-rule discount_rate = 10 percent
+rule discount_rate = 10%
+
 rule free_shipping_threshold = 50
+
 rule points_multiplier = 1.5
+
 rule monthly_bonus_points = 100
 
 
@@ -31,7 +34,8 @@ fact membership = doc premium_membership
 rule discount = monthly_spend * membership.discount_rate?
 
 rule shipping_cost = 10
-  unless monthly_spend >= membership.free_shipping_threshold? then 0
+  unless monthly_spend >= membership.free_shipping_threshold?
+    then 0
 
 rule base_points = monthly_spend * membership.points_multiplier?
 

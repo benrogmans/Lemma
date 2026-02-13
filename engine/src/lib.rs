@@ -52,6 +52,7 @@ pub mod computation;
 pub mod engine;
 pub mod error;
 pub mod evaluation;
+pub mod formatting;
 pub mod inversion;
 pub mod limits;
 pub mod parsing;
@@ -69,6 +70,7 @@ pub use evaluation::operations::{
 };
 pub use evaluation::proof;
 pub use evaluation::response::{Facts, Response, RuleResult};
+pub use formatting::{format_docs, format_source};
 pub use inversion::{
     invert, Bound, DerivedExpression, Domain, InversionResponse, Solution, Target, TargetOp,
 };

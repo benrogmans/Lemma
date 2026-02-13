@@ -549,19 +549,47 @@ impl fmt::Display for Value {
             Value::Boolean(b) => write!(f, "{}", b),
             Value::Time(time) => write!(f, "{}", time),
             Value::Scale(n, u) => write!(f, "{} {}", n, u),
-            Value::Duration(n, u) => write!(f, "{} {:?}", n, u),
-            Value::Ratio(n, u) => {
-                let norm = n.normalize();
-                let s = if norm.fract().is_zero() {
-                    norm.trunc().to_string()
-                } else {
-                    norm.to_string()
-                };
-                match u {
-                    None => write!(f, "{}", s),
-                    Some(u) => write!(f, "{} {}", s, u),
+            Value::Duration(n, u) => write!(f, "{} {}", n, u),
+            Value::Ratio(n, u) => match u.as_deref() {
+                Some("percent") => {
+                    let display_value = *n * Decimal::from(100);
+                    let norm = display_value.normalize();
+                    let s = if norm.fract().is_zero() {
+                        norm.trunc().to_string()
+                    } else {
+                        norm.to_string()
+                    };
+                    write!(f, "{}%", s)
                 }
-            }
+                Some("permille") => {
+                    let display_value = *n * Decimal::from(1000);
+                    let norm = display_value.normalize();
+                    let s = if norm.fract().is_zero() {
+                        norm.trunc().to_string()
+                    } else {
+                        norm.to_string()
+                    };
+                    write!(f, "{}%%", s)
+                }
+                Some(unit) => {
+                    let norm = n.normalize();
+                    let s = if norm.fract().is_zero() {
+                        norm.trunc().to_string()
+                    } else {
+                        norm.to_string()
+                    };
+                    write!(f, "{} {}", s, unit)
+                }
+                None => {
+                    let norm = n.normalize();
+                    let s = if norm.fract().is_zero() {
+                        norm.trunc().to_string()
+                    } else {
+                        norm.to_string()
+                    };
+                    write!(f, "{}", s)
+                }
+            },
         }
     }
 }
@@ -805,16 +833,42 @@ impl fmt::Display for LemmaDoc {
         writeln!(f)?;
 
         if let Some(ref commentary) = self.commentary {
-            writeln!(f, "\"\"\"{}", commentary)?;
+            writeln!(f, "\"\"\"")?;
+            writeln!(f, "{}", commentary)?;
             writeln!(f, "\"\"\"")?;
         }
 
-        for fact in &self.facts {
-            write!(f, "{}", fact)?;
+        let named_types: Vec<_> = self
+            .types
+            .iter()
+            .filter(|t| !matches!(t, TypeDef::Inline { .. }))
+            .collect();
+        if !named_types.is_empty() {
+            writeln!(f)?;
+            for (index, type_def) in named_types.iter().enumerate() {
+                if index > 0 {
+                    writeln!(f)?;
+                }
+                write!(f, "{}", type_def)?;
+                writeln!(f)?;
+            }
         }
 
-        for rule in &self.rules {
-            write!(f, "{}", rule)?;
+        if !self.facts.is_empty() {
+            writeln!(f)?;
+            for fact in &self.facts {
+                write!(f, "{}", fact)?;
+            }
+        }
+
+        if !self.rules.is_empty() {
+            writeln!(f)?;
+            for (index, rule) in self.rules.iter().enumerate() {
+                if index > 0 {
+                    writeln!(f)?;
+                }
+                write!(f, "{}", rule)?;
+            }
         }
 
         Ok(())
@@ -839,17 +893,51 @@ impl fmt::Display for LemmaFact {
 impl fmt::Display for LemmaRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "rule {} = {}", self.name, self.expression)?;
-
         for unless_clause in &self.unless_clauses {
             write!(
                 f,
-                " unless {} then {}",
+                "\n  unless {} then {}",
                 unless_clause.condition, unless_clause.result
             )?;
         }
-
         writeln!(f)?;
         Ok(())
+    }
+}
+
+fn expression_precedence(kind: &ExpressionKind) -> u8 {
+    match kind {
+        ExpressionKind::LogicalOr(..) => 1,
+        ExpressionKind::LogicalAnd(..) => 2,
+        ExpressionKind::LogicalNegation(..) => 3,
+        ExpressionKind::Comparison(..) => 4,
+        ExpressionKind::UnitConversion(..) => 4,
+        ExpressionKind::Arithmetic(_, op, _) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => 5,
+            ArithmeticComputation::Multiply
+            | ArithmeticComputation::Divide
+            | ArithmeticComputation::Modulo => 6,
+            ArithmeticComputation::Power => 7,
+        },
+        ExpressionKind::MathematicalComputation(..) => 8,
+        ExpressionKind::Literal(..)
+        | ExpressionKind::FactReference(..)
+        | ExpressionKind::RuleReference(..)
+        | ExpressionKind::UnresolvedUnitLiteral(..)
+        | ExpressionKind::Veto(..) => 10,
+    }
+}
+
+fn write_expression_child(
+    f: &mut fmt::Formatter<'_>,
+    child: &Expression,
+    parent_prec: u8,
+) -> fmt::Result {
+    let child_prec = expression_precedence(&child.kind);
+    if child_prec < parent_prec {
+        write!(f, "({})", child)
+    } else {
+        write!(f, "{}", child)
     }
 }
 
@@ -860,22 +948,38 @@ impl fmt::Display for Expression {
             ExpressionKind::FactReference(r) => write!(f, "{}", r),
             ExpressionKind::RuleReference(rule_ref) => write!(f, "{}", rule_ref),
             ExpressionKind::Arithmetic(left, op, right) => {
-                write!(f, "{} {} {}", left, op, right)
+                let my_prec = expression_precedence(&self.kind);
+                write_expression_child(f, left, my_prec)?;
+                write!(f, " {} ", op)?;
+                write_expression_child(f, right, my_prec)
             }
             ExpressionKind::Comparison(left, op, right) => {
-                write!(f, "{} {} {}", left, op, right)
+                let my_prec = expression_precedence(&self.kind);
+                write_expression_child(f, left, my_prec)?;
+                write!(f, " {} ", op)?;
+                write_expression_child(f, right, my_prec)
             }
             ExpressionKind::UnitConversion(value, target) => {
-                write!(f, "{} in {}", value, target)
+                let my_prec = expression_precedence(&self.kind);
+                write_expression_child(f, value, my_prec)?;
+                write!(f, " in {}", target)
             }
             ExpressionKind::LogicalNegation(expr, _) => {
-                write!(f, "not {}", expr)
+                let my_prec = expression_precedence(&self.kind);
+                write!(f, "not ")?;
+                write_expression_child(f, expr, my_prec)
             }
             ExpressionKind::LogicalAnd(left, right) => {
-                write!(f, "{} and {}", left, right)
+                let my_prec = expression_precedence(&self.kind);
+                write_expression_child(f, left, my_prec)?;
+                write!(f, " and ")?;
+                write_expression_child(f, right, my_prec)
             }
             ExpressionKind::LogicalOr(left, right) => {
-                write!(f, "{} or {}", left, right)
+                let my_prec = expression_precedence(&self.kind);
+                write_expression_child(f, left, my_prec)?;
+                write!(f, " or ")?;
+                write_expression_child(f, right, my_prec)
             }
             ExpressionKind::MathematicalComputation(op, operand) => {
                 let op_name = match op {
@@ -893,10 +997,15 @@ impl fmt::Display for Expression {
                     MathematicalComputation::Ceil => "ceil",
                     MathematicalComputation::Round => "round",
                 };
-                write!(f, "{} {}", op_name, operand)
+                let my_prec = expression_precedence(&self.kind);
+                write!(f, "{} ", op_name)?;
+                write_expression_child(f, operand, my_prec)
             }
             ExpressionKind::Veto(veto) => match &veto.message {
-                Some(msg) => write!(f, "veto \"{}\"", msg),
+                Some(msg) => {
+                    let escaped = msg.replace('\\', "\\\\").replace('"', "\\\"");
+                    write!(f, "veto \"{}\"", escaped)
+                }
                 None => write!(f, "veto"),
             },
             ExpressionKind::UnresolvedUnitLiteral(number, unit_name) => {
@@ -983,15 +1092,21 @@ impl fmt::Display for TimezoneValue {
 
 impl fmt::Display for DateTimeValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-            self.year, self.month, self.day, self.hour, self.minute, self.second
-        )?;
-        if let Some(tz) = &self.timezone {
-            write!(f, "{}", tz)?;
+        let is_date_only =
+            self.hour == 0 && self.minute == 0 && self.second == 0 && self.timezone.is_none();
+        if is_date_only {
+            write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
+        } else {
+            write!(
+                f,
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+                self.year, self.month, self.day, self.hour, self.minute, self.second
+            )?;
+            if let Some(tz) = &self.timezone {
+                write!(f, "{}", tz)?;
+            }
+            Ok(())
         }
-        Ok(())
     }
 }
 
@@ -1043,6 +1158,48 @@ impl TypeDef {
             | TypeDef::Inline {
                 source_location, ..
             } => source_location,
+        }
+    }
+}
+
+impl fmt::Display for TypeDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TypeDef::Regular {
+                name,
+                parent,
+                constraints,
+                ..
+            } => {
+                write!(f, "type {} = {}", name, parent)?;
+                if let Some(constraints) = constraints {
+                    for (cmd, args) in constraints {
+                        write!(f, "\n  -> {}", cmd)?;
+                        for arg in args {
+                            write!(f, " {}", arg)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            TypeDef::Import {
+                name,
+                from,
+                constraints,
+                ..
+            } => {
+                write!(f, "type {} from {}", name, from)?;
+                if let Some(constraints) = constraints {
+                    for (cmd, args) in constraints {
+                        write!(f, " -> {}", cmd)?;
+                        for arg in args {
+                            write!(f, " {}", arg)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            TypeDef::Inline { .. } => Ok(()),
         }
     }
 }
@@ -1135,6 +1292,22 @@ mod tests {
             format!("{}", ConversionTarget::Unit("usd".to_string())),
             "usd"
         );
+    }
+
+    #[test]
+    fn test_value_ratio_display() {
+        use rust_decimal::Decimal;
+        use std::str::FromStr;
+        let percent = Value::Ratio(
+            Decimal::from_str("0.10").unwrap(),
+            Some("percent".to_string()),
+        );
+        assert_eq!(format!("{}", percent), "10%");
+        let permille = Value::Ratio(
+            Decimal::from_str("0.005").unwrap(),
+            Some("permille".to_string()),
+        );
+        assert_eq!(format!("{}", permille), "5%%");
     }
 
     // test_doc_type_display (MOVED TO planning/semantics.rs tests)

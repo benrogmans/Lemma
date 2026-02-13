@@ -123,6 +123,21 @@ enum Commands {
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
     },
+    /// Format .lemma files to canonical style
+    ///
+    /// Parses and re-emits .lemma files with consistent formatting.
+    /// Without flags, formats files in place. Use --check for CI.
+    Fmt {
+        /// Files or directories to format (default: current directory)
+        #[arg(default_value = ".")]
+        paths: Vec<PathBuf>,
+        /// Check formatting without modifying files (exit 1 if any file would change)
+        #[arg(long)]
+        check: bool,
+        /// Write formatted output to stdout instead of modifying files
+        #[arg(long)]
+        stdout: bool,
+    },
 }
 
 fn main() {
@@ -152,6 +167,11 @@ fn main() {
             watch,
         } => server_command(workdir, host, *port, *watch),
         Commands::Mcp { workdir } => mcp_command(workdir),
+        Commands::Fmt {
+            paths,
+            check,
+            stdout,
+        } => fmt_command(paths, *check, *stdout),
     };
 
     if let Err(e) = result {
@@ -388,4 +408,87 @@ fn parse_doc_and_rules(input: &str) -> (String, Option<Vec<String>>) {
     } else {
         (input.to_string(), None)
     }
+}
+
+/// Collect all .lemma file paths from the given paths (each may be a file or directory).
+fn collect_lemma_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, std::io::Error> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for path in paths {
+        if path.is_file() {
+            if path.extension().and_then(|e| e.to_str()) == Some("lemma") {
+                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if seen.insert(canonical.clone()) {
+                    result.push(path.clone());
+                }
+            }
+        } else if path.is_dir() {
+            for entry in WalkDir::new(path).into_iter().flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("lemma") {
+                    if let Ok(canonical) = p.canonicalize() {
+                        if seen.insert(canonical) {
+                            result.push(p.to_path_buf());
+                        }
+                    } else if seen.insert(p.to_path_buf()) {
+                        result.push(p.to_path_buf());
+                    }
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn fmt_command(paths: &[PathBuf], check: bool, stdout: bool) -> Result<()> {
+    let files = collect_lemma_files(paths)?;
+    let mut any_changed = false;
+    let mut parse_errors = 0u32;
+
+    for file_path in &files {
+        let source = match fs::read_to_string(file_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error reading {}: {}", file_path.display(), e);
+                parse_errors += 1;
+                continue;
+            }
+        };
+        let attribute = file_path.to_string_lossy().to_string();
+        let formatted = match lemma::format_source(&source, &attribute) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{}", error_formatter::format_error(&e));
+                parse_errors += 1;
+                continue;
+            }
+        };
+
+        if stdout {
+            print!("{}", formatted);
+            continue;
+        }
+
+        if source == formatted {
+            continue;
+        }
+        any_changed = true;
+
+        if check {
+            eprintln!("Would reformat: {}", file_path.display());
+        } else if let Err(e) = fs::write(file_path, &formatted) {
+            eprintln!("Error writing {}: {}", file_path.display(), e);
+            parse_errors += 1;
+        } else {
+            eprintln!("Formatted: {}", file_path.display());
+        }
+    }
+
+    if parse_errors > 0 {
+        std::process::exit(1);
+    }
+    if check && any_changed {
+        std::process::exit(1);
+    }
+    Ok(())
 }

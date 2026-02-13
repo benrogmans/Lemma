@@ -242,6 +242,7 @@ impl LanguageServer for LemmaLanguageServer {
                         work_done_progress: Some(false),
                     },
                 }),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -340,6 +341,36 @@ impl LanguageServer for LemmaLanguageServer {
 
         // Signal re-validation since removing a file may affect other files' diagnostics.
         self.request_workspace_validation();
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+
+        let (text, attribute) = {
+            let workspace = self.state.workspace.read().await;
+            match workspace.get_file_text_and_attribute(&uri) {
+                Some((text, attribute)) => (text.to_string(), attribute.to_string()),
+                None => return Ok(None),
+            }
+        };
+
+        // Only format if the file parses successfully — don't mangle broken code.
+        match lemma::format_source(&text, &attribute) {
+            Ok(formatted) if formatted == text => Ok(None), // No changes needed
+            Ok(formatted) => {
+                let line_count = text.lines().count() as u32;
+                // Replace the entire document with the formatted text.
+                let edit = TextEdit {
+                    range: Range {
+                        start: Position::new(0, 0),
+                        end: Position::new(line_count, 0),
+                    },
+                    new_text: formatted,
+                };
+                Ok(Some(vec![edit]))
+            }
+            Err(_) => Ok(None), // Parse error — don't format
+        }
     }
 
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {

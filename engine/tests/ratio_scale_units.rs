@@ -219,8 +219,8 @@ fn ratio_display_with_none_unit_shows_number_only() {
     );
     let display_with = with_unit.display_value();
     assert!(
-        display_with.contains("percent"),
-        "ratio with Some(percent) should show unit, got: {}",
+        display_with.contains('%'),
+        "ratio with Some(percent) should show % symbol, got: {}",
         display_with
     );
 }

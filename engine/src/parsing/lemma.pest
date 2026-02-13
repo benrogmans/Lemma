@@ -70,7 +70,12 @@ text_literal = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
 percent_literal = {
     number_literal ~ ( // '%' must be directly followed by a non-digit or end of input
-  "%" ~ !(ASCII_DIGIT) | SPACE* ~ ^"percent")
+  "%" ~ !(ASCII_DIGIT | "%") | SPACE* ~ ^"percent")
+}
+
+permille_literal = {
+    number_literal ~ ( // '%%' must be directly followed by a non-digit or end of input
+  "%%" ~ !(ASCII_DIGIT) | SPACE* ~ ^"permille")
 }
 
 // Arrow chains
@@ -288,6 +293,7 @@ literal = {
   | time_literal
   | boolean_literal
   | text_literal
+  | permille_literal
   | percent_literal
   | duration_literal
   | number_unit_literal

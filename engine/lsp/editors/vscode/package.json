@@ -49,6 +49,12 @@
           "description": "Path to the lsp binary. If not absolute, the binary is looked up on $PATH."
         }
       }
+    },
+    "configurationDefaults": {
+      "[lemma]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "lemma.lemma-language"
+      }
     }
   },
   "scripts": {

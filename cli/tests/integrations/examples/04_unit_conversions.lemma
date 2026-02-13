@@ -9,29 +9,34 @@ This example demonstrates:
 - Duration-aware arithmetic
 """
 
+fact container_volume    = 5
+fact contract_term       = 52 weeks
+fact data_size           = 500
+fact distance            = 100
+fact package_weight      = 25
 fact processing_duration = 90 minutes
-fact review_period = 2 hours
-fact project_length = 14 days
-fact contract_term = 52 weeks
-
-fact package_weight = 25
-fact distance = 100
-fact temperature = 20
-fact data_size = 500
-fact container_volume = 5
+fact project_length      = 14 days
+fact review_period       = 2 hours
+fact temperature         = 20
 
 rule duration_hours = processing_duration in hours
+
 rule duration_seconds = processing_duration in seconds
+
 rule review_in_minutes = review_period in minutes
+
 rule project_in_hours = project_length in hours
+
 rule contract_in_days = contract_term in days
 
 rule weight_limit = 50
+
 rule is_overweight = package_weight > weight_limit?
 
 rule is_long_distance = distance > 50
 
 rule total_distance = distance + 25
+
 rule total_distance_doubled = total_distance? * 2
 
 rule is_comfortable_temperature = temperature >= 18 and temperature <= 24
@@ -43,5 +48,5 @@ rule is_quick_processing = processing_duration < 2 hours
 rule is_short_project = project_length < 30 days
 
 rule combined_duration = processing_duration + review_period
-rule long_term = combined_duration? > 3 hours
 
+rule long_term = combined_duration? > 3 hours

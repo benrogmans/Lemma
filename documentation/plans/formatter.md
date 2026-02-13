@@ -4,6 +4,11 @@ A `lemma fmt` command that produces **canonical, deterministic formatting** of `
 Given any syntactically valid Lemma file, it outputs a consistently formatted version.
 Running the formatter twice produces identical output (idempotent).
 
+## Relationship to existing code
+
+- **This plan** describes the **Lemma source code formatter**: formatting `.lemma` file contents (AST → canonical Lemma text). It adds `engine/src/formatting/`, fixes Display in `engine/src/parsing/ast.rs`, and adds the `lemma fmt` CLI subcommand.
+- **`cli/src/formatter.rs`** is the **response formatter**: it formats evaluation output for the terminal (e.g. `format_response`, `format_document_inspection`, `format_workspace_summary`, proof trees). It is **not** modified by this plan. The two are separate: one formats Lemma source code; the other formats run/show/list output.
+
 ## Approach: AST-based pretty-printing
 
 Parse source code into the AST, then emit formatted output via the existing `Display` trait impls.
@@ -138,9 +143,14 @@ rule tax = (bracket_2_limit? - bracket_1_limit?) * tax_bracket_2?
     then (taxable_income? - bracket_1_limit?) * tax_bracket_2?
 ```
 
-- `rule name = expression` on one line
-- Each `unless condition then result` on its own line, indented 2 spaces
+- `rule name = expression` on one line (or wrapped at arithmetic operators when over max_cols)
+- Each `unless condition then result` on its own line, indented 2 spaces; when the full line would exceed max_cols, the `then` clause goes on the next line with two extra spaces (4 spaces total)
 - Blank line between rule definitions
+
+### Soft line length (max_cols = 100)
+
+- **Unless clauses**: If `  unless {condition} then {result}` is longer than 100 characters, the `then` clause is placed on the next line with 4 spaces indentation (e.g. `    then 5%`).
+- **Expressions**: If a rule’s expression exceeds 100 characters, it is wrapped at **arithmetic** operators (+, -, *, /, %, ^) only; comparison and logical operators are not split. Continuation lines are indented 2 spaces. Long fact values are not broken (max_cols is soft).
 
 ### Expressions
 
@@ -391,18 +401,13 @@ Fmt {
     /// Check formatting without modifying (exit 1 if unformatted)
     #[arg(long)]
     check: bool,
-    /// Print unified diff of changes
-    #[arg(long)]
-    diff: bool,
     /// Write to stdout instead of modifying files
     #[arg(long)]
     stdout: bool,
 }
 ```
 
-Implementation: walk `.lemma` files, call `lemma::format_source()`, compare, write/check/diff.
-
-For `--diff` output, add the `similar` crate to `cli/Cargo.toml` (lightweight text diff library).
+Implementation: walk `.lemma` files, call `lemma::format_source()`, compare, write/check.
 
 ## Implementation Order
 
@@ -474,7 +479,6 @@ For each example file:
 
 ## Non-goals for v1
 
-- Configurable formatting options (indent size, alignment, line length)
+- Configurable formatting options (indent size, alignment, max_cols)
 - Partial formatting (format a selection within a file)
 - Preserving user-placed blank lines beyond canonical rules
-- Hard-wrapping long expressions at a line-length target

@@ -77,6 +77,7 @@ pub(crate) fn parse_primary(
         | Rule::text_literal
         | Rule::boolean_literal
         | Rule::percent_literal
+        | Rule::permille_literal
         | Rule::date_time_literal
         | Rule::time_literal
         | Rule::duration_literal
@@ -126,6 +127,7 @@ pub(crate) fn parse_primary(
             | Rule::text_literal
             | Rule::boolean_literal
             | Rule::percent_literal
+            | Rule::permille_literal
             | Rule::date_time_literal
             | Rule::time_literal
             | Rule::duration_literal
@@ -302,6 +304,7 @@ fn parse_expression_impl(
             | Rule::text_literal
             | Rule::boolean_literal
             | Rule::percent_literal
+            | Rule::permille_literal
             | Rule::date_time_literal
             | Rule::time_literal
             | Rule::duration_literal => {

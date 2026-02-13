@@ -21,6 +21,23 @@
             height: 400px;
         }
 
+        .editor-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .editor-actions .hint {
+            margin-top: 0;
+        }
+        .editor-actions .format-link {
+            color: #666;
+            font-size: 13px;
+            text-decoration: none;
+        }
+        .editor-actions .format-link:hover {
+            text-decoration: underline;
+        }
         .hint {
             margin-top: 8px;
             color: #666;
@@ -188,7 +205,10 @@
                 <span class="status-text">Initializing…</span>
             </div>
         </div>
-        <div class="hint">Edits auto-load. Diagnostics appear inline.</div>
+        <div class="editor-actions">
+            <span class="hint">Edits auto-load. Diagnostics appear inline.</span>
+            <a href="#" id="format-btn" class="format-link" title="Format document">Format</a>
+        </div>
     </div>
 
     <div class="section">
@@ -901,7 +921,7 @@
 
             let addResult;
             try {
-                const raw = await engine.addLemmaCode(code, 'wasm.lemma');
+                const raw = await engine.addLemmaFile(code, 'wasm.lemma');
                 addResult = JSON.parse(raw);
             } catch (parseError) {
                 setStatus('err', 'Exception while loading', parseError.message || String(parseError));
@@ -1125,6 +1145,25 @@
                         diagnosticsTimer = null;
                         refreshEditorDiagnostics();
                     }, 300);
+                });
+
+                document.getElementById('format-btn').addEventListener('click', function (e) {
+                    e.preventDefault();
+                    if (!engine || !monacoEditor) return;
+                    const code = monacoEditor.getValue();
+                    const raw = engine.formatSource(code, 'wasm.lemma');
+                    try {
+                        const result = JSON.parse(raw);
+                        if (result.success && result.formatted !== undefined) {
+                            monacoEditor.setValue(result.formatted);
+                            refreshEditorDiagnostics();
+                            scheduleLoad(true);
+                        } else if (!result.success && result.error) {
+                            setStatus('err', 'Format failed', result.error);
+                        }
+                    } catch (_) {
+                        setStatus('err', 'Format failed', raw || 'Unknown error');
+                    }
                 });
 
                 editorReady = true;

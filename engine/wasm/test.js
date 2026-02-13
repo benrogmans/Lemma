@@ -74,7 +74,7 @@ export async function test() {
     console.log('✓ Engine created successfully');
 
     // Test 2: Add simple document
-    const addResult = engine.addLemmaCode(`
+    const addResult = await engine.addLemmaFile(`
       doc test
       fact x = 10
       rule double = x * 2
@@ -103,7 +103,7 @@ export async function test() {
     console.log('✓ Documents listed successfully');
 
     // Test 5: Complex document
-    const complexResult = engine.addLemmaCode(`
+    const complexResult = await engine.addLemmaFile(`
       doc pricing
       fact quantity = 25
       fact is_vip = false
@@ -134,7 +134,7 @@ export async function test() {
     console.log('✓ Evaluation with facts successful');
 
     // Test 7: Various fact value types
-    const typesResult = engine.addLemmaCode(`
+    const typesResult = await engine.addLemmaFile(`
       doc type_test
       fact number_fact = 42
       fact bool_fact = false
@@ -184,7 +184,7 @@ export async function test() {
     console.log('✓ Type handling in facts object successful');
 
     // Test 8: Error handling - parse error
-    const parseErrorResult = engine.addLemmaCode('doc invalid\nfact x =', 'invalid.lemma');
+    const parseErrorResult = await engine.addLemmaFile('doc invalid\nfact x =', 'invalid.lemma');
     const parseErrorParsed = JSON.parse(parseErrorResult);
     if (parseErrorParsed.success) {
       throw new Error('Expected parse error but got success');
@@ -211,7 +211,7 @@ export async function test() {
     console.log('✓ Invalid JSON error handling successful');
 
     // Test 11: Veto scenario
-    const vetoResult = engine.addLemmaCode(`
+    const vetoResult = await engine.addLemmaFile(`
       doc veto_test
       fact x = 10
       rule bad_sqrt = sqrt(-1)
@@ -235,7 +235,7 @@ export async function test() {
     console.log('✓ Veto handling successful');
 
     // Test 12: Missing facts
-    const missingFactsResult = engine.addLemmaCode(`
+    const missingFactsResult = await engine.addLemmaFile(`
       doc missing_test
       fact x = [number]
       fact y = [number]
@@ -282,7 +282,7 @@ export async function test() {
     console.log('✓ Operations array present');
 
     // Test 14: Units and percentages
-    const unitsResult = engine.addLemmaCode(`
+    const unitsResult = await engine.addLemmaFile(`
       doc units_test
       fact price = 100
       fact discount = 10%
@@ -304,7 +304,7 @@ export async function test() {
     console.log('✓ Units and percentages handling successful');
 
     // Test 15: Scale unit conversion via `in`
-    const scaleConvDoc = engine.addLemmaCode(`
+    const scaleConvDoc = await engine.addLemmaFile(`
       doc scale_conv
       type money = scale
         -> unit eur 1
@@ -348,8 +348,8 @@ export async function test() {
     console.log('✓ Empty facts handling successful');
 
     // Test 17: Multiple documents
-    const doc1Result = engine.addLemmaCode('doc doc1\nfact x = 1', 'doc1.lemma');
-    const doc2Result = engine.addLemmaCode('doc doc2\nfact y = 2', 'doc2.lemma');
+    const doc1Result = await engine.addLemmaFile('doc doc1\nfact x = 1', 'doc1.lemma');
+    const doc2Result = await engine.addLemmaFile('doc doc2\nfact y = 2', 'doc2.lemma');
     if (!JSON.parse(doc1Result).success || !JSON.parse(doc2Result).success) {
       throw new Error('Failed to add multiple documents');
     }

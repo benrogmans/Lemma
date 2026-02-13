@@ -1834,7 +1834,12 @@ impl fmt::Display for LiteralValue {
                         } else {
                             display_value.to_string()
                         };
-                        return write!(f, "{} {}", s, unit_name);
+                        // Use shorthand symbols for percent (%) and permille (%%)
+                        return match unit_name.as_str() {
+                            "percent" => write!(f, "{}%", s),
+                            "permille" => write!(f, "{}%%", s),
+                            _ => write!(f, "{} {}", s, unit_name),
+                        };
                     }
                 }
                 write!(f, "{}", self.value)
@@ -1970,12 +1975,12 @@ mod tests {
         assert_eq!(LiteralValue::from_bool(true).display_value(), "true");
         assert_eq!(LiteralValue::from_bool(false).display_value(), "false");
 
-        // 0.10 ratio with "percent" unit displays as 10 percent (unit conversion applied)
+        // 0.10 ratio with "percent" unit displays as 10% (unit conversion applied)
         let ten_percent_ratio = LiteralValue::ratio(
             Decimal::from_str("0.10").unwrap(),
             Some("percent".to_string()),
         );
-        assert_eq!(ten_percent_ratio.display_value(), "10 percent");
+        assert_eq!(ten_percent_ratio.display_value(), "10%");
 
         let time = TimeValue {
             hour: 14,
