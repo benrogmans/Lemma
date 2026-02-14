@@ -14,21 +14,21 @@ path = "src/main.rs"
 [dependencies]
 lemma = { package = "lemma-engine", version = "0.7.4", path = "../engine" }
 lemma-openapi = { version = "0.7.4", path = "../openapi" }
-clap.workspace = true
-anyhow.workspace = true
-ariadne.workspace = true
+clap = { version = "4.0", features = ["derive"] }
+anyhow = "1.0"
+ariadne = "0.4"
 chrono.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 walkdir = "2.4"
 super-table = { version = "1.1.1", features = ["custom_styling"] }
 inquire = { version = "0.9", features = ["date"] }
-rust_decimal = "1.36"
+rust_decimal.workspace = true
 strip-ansi-escapes = "0.2"
 
 # Server dependencies
-axum.workspace = true
-tower = { workspace = true, features = ["util"] }
-tower-http.workspace = true
+axum = "0.8.8"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors"] }
 serde.workspace = true
 serde_json.workspace = true
 tracing = "0.1"
@@ -48,3 +48,4 @@ assert_cmd = "2.0"
 predicates = "3.0"
 tempfile = "3.8"
 proptest = "1.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking"] }

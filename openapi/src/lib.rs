@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// Generate a complete OpenAPI 3.1 specification from a Lemma engine.
 ///
 /// The specification includes:
-/// - Document endpoints (`/{doc_name}` and `/{doc_name}/{rules}`)
+/// - Document endpoints (`/{doc_name}/{rules}` where `rules` is optional)
 /// - GET operations with query parameters
 /// - POST operations with JSON request bodies
 /// - Response schemas with rule result shapes
@@ -45,62 +45,95 @@ pub fn generate_openapi(engine: &Engine) -> Value {
                 build_post_request_schema(&facts),
             );
 
-            // /{doc_name} path (all rules)
-            let all_rules_path = format!("/{}", doc_name);
+            // /{doc_name}/{rules} path (rules is optional)
+            let path = format!("/{}/{{rules}}", doc_name);
             paths.insert(
-                all_rules_path,
+                path,
                 build_document_path_item(
                     doc_name,
                     &facts,
                     &response_schema_name,
                     &post_body_schema_name,
-                    None,
+                    &rule_names,
                 ),
             );
 
-            // /{doc_name}/{rules} path (filtered rules)
-            let filtered_rules_path = format!("/{}/{{rules}}", doc_name);
-            paths.insert(
-                filtered_rules_path,
-                build_document_path_item(
-                    doc_name,
-                    &facts,
-                    &response_schema_name,
-                    &post_body_schema_name,
-                    Some(&rule_names),
-                ),
-            );
+            // Per-rule sub-endpoints: /{doc_name}/{rule_name}
+            for rule_name in &rule_names {
+                let rule_path = format!("/{}/{}", doc_name, rule_name);
+                paths.insert(
+                    rule_path,
+                    build_rule_path_item(
+                        doc_name,
+                        rule_name,
+                        &facts,
+                        &response_schema_name,
+                        &post_body_schema_name,
+                    ),
+                );
+            }
         }
     }
 
-    // Meta routes (listed after document routes so they appear below in the sidebar)
+    // Documents index (top-level, separate from Meta)
     paths.insert("/".to_string(), index_path_item(&document_names, engine));
+    // Meta routes
     paths.insert("/health".to_string(), health_path_item());
     paths.insert("/openapi.json".to_string(), openapi_json_path_item());
     // Note: /docs is deliberately excluded from the spec — it serves the
     // documentation UI itself and showing it inside that UI is circular.
 
-    // Tag ordering: document tags first, then Meta at the bottom.
-    let mut tags = Vec::new();
+    // Tags
+    let mut tags = vec![json!({
+        "name": "Documents",
+        "description": "Simple API to retrieve the list of Lemma documents"
+    })];
     for doc_name in &document_names {
         tags.push(json!({
             "name": doc_name,
-            "description": format!("Evaluate rules in the '{}' document", doc_name)
+            "x-displayName": "All rules",
+            "description": format!("Evaluate all rules in '{}', or filter specific rules by name", doc_name)
         }));
+        if !collect_rule_names_for_doc(engine, doc_name).is_empty() {
+            let rules_tag = format!("{} rules", doc_name);
+            tags.push(json!({
+                "name": rules_tag,
+                "x-displayName": "Specific rules",
+                "description": format!("Individual rule endpoints for '{}'", doc_name)
+            }));
+        }
     }
     tags.push(json!({
         "name": "Meta",
         "description": "Server metadata and introspection endpoints"
     }));
 
+    // x-tagGroups for hierarchical sidebar in Scalar.
+    let mut tag_groups = Vec::new();
+    for doc_name in &document_names {
+        let mut doc_tags = vec![json!(doc_name)];
+        if !collect_rule_names_for_doc(engine, doc_name).is_empty() {
+            doc_tags.push(json!(format!("{} rules", doc_name)));
+        }
+        tag_groups.push(json!({
+            "name": doc_name,
+            "tags": doc_tags
+        }));
+    }
+    tag_groups.push(json!({
+        "name": "General",
+        "tags": ["Documents", "Meta"]
+    }));
+
     json!({
         "openapi": "3.1.0",
         "info": {
             "title": "Lemma API",
-            "description": "Auto-generated REST API from Lemma documents.",
+            "description": "Lemma is a declarative language for expressing business logic — pricing rules, tax calculations, eligibility criteria, contracts, and policies. Learn more at [LemmaBase.com](https://lemmabase.com).",
             "version": env!("CARGO_PKG_VERSION")
         },
         "tags": tags,
+        "x-tagGroups": tag_groups,
         "paths": Value::Object(paths),
         "components": {
             "schemas": Value::Object(components_schemas)
@@ -149,6 +182,14 @@ fn collect_rule_names(plan: &ExecutionPlan) -> Vec<String> {
     names
 }
 
+/// Convenience wrapper: get rule names for a document by name.
+fn collect_rule_names_for_doc(engine: &Engine, doc_name: &str) -> Vec<String> {
+    engine
+        .get_execution_plan(doc_name)
+        .map(collect_rule_names)
+        .unwrap_or_default()
+}
+
 // ---------------------------------------------------------------------------
 // Meta route path items
 // ---------------------------------------------------------------------------
@@ -186,7 +227,7 @@ fn index_path_item(document_names: &[String], engine: &Engine) -> Value {
         "get": {
             "operationId": "listDocuments",
             "summary": "List all available documents",
-            "tags": ["Meta"],
+            "tags": ["Documents"],
             "responses": {
                 "200": {
                     "description": "List of loaded Lemma documents",
@@ -262,24 +303,11 @@ fn openapi_json_path_item() -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Document path items
+// Shared response schemas
 // ---------------------------------------------------------------------------
 
-fn build_document_path_item(
-    doc_name: &str,
-    facts: &[InputFact],
-    response_schema_name: &str,
-    post_body_schema_name: &str,
-    with_rules_param: Option<&[String]>,
-) -> Value {
-    let response_ref = json!({
-        "$ref": format!("#/components/schemas/{}", response_schema_name)
-    });
-    let body_ref = json!({
-        "$ref": format!("#/components/schemas/{}", post_body_schema_name)
-    });
-
-    let error_response = json!({
+fn error_response_schema() -> Value {
+    json!({
         "description": "Evaluation error",
         "content": {
             "application/json": {
@@ -292,67 +320,71 @@ fn build_document_path_item(
                 }
             }
         }
+    })
+}
+
+fn not_found_response_schema() -> Value {
+    json!({
+        "description": "Document not found",
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "error": { "type": "string" }
+                    },
+                    "required": ["error"]
+                }
+            }
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Document path items
+// ---------------------------------------------------------------------------
+
+fn build_document_path_item(
+    doc_name: &str,
+    facts: &[InputFact],
+    response_schema_name: &str,
+    post_body_schema_name: &str,
+    rule_names: &[String],
+) -> Value {
+    let response_ref = json!({
+        "$ref": format!("#/components/schemas/{}", response_schema_name)
+    });
+    let body_ref = json!({
+        "$ref": format!("#/components/schemas/{}", post_body_schema_name)
     });
 
     let tag = doc_name.to_string();
 
-    // GET query parameters
-    let mut get_parameters: Vec<Value> = facts.iter().map(build_query_parameter).collect();
-
-    // POST and GET both share the rules path parameter when present
-    if with_rules_param.is_some() {
-        let rules_param = json!({
-            "name": "rules",
-            "in": "path",
-            "required": true,
-            "description": "Comma-separated list of rule names to evaluate",
-            "schema": { "type": "string" },
-            "example": with_rules_param
-                .filter(|r| !r.is_empty())
-                .map(|r| r.join(","))
-                .unwrap_or_default()
-        });
-        get_parameters.insert(0, rules_param.clone());
-    }
-
-    let get_summary = if with_rules_param.is_some() {
-        format!("Evaluate selected rules in '{}'", doc_name)
+    let rules_example = if rule_names.is_empty() {
+        String::new()
     } else {
-        format!("Evaluate all rules in '{}'", doc_name)
+        rule_names.join(",")
     };
 
-    let post_summary = if with_rules_param.is_some() {
-        format!("Evaluate selected rules in '{}' (JSON body)", doc_name)
-    } else {
-        format!("Evaluate all rules in '{}' (JSON body)", doc_name)
-    };
+    let rules_param = json!({
+        "name": "rules",
+        "in": "path",
+        "required": false,
+        "description": "Comma-separated list of rule names to evaluate (omit to evaluate all rules)",
+        "schema": { "type": "string" },
+        "example": rules_example
+    });
 
-    let get_operation_id = if with_rules_param.is_some() {
-        format!("get_{}_filtered", doc_name)
-    } else {
-        format!("get_{}", doc_name)
-    };
+    // GET query parameters: rules path param first, then fact params
+    let mut get_parameters: Vec<Value> = vec![rules_param.clone()];
+    get_parameters.extend(facts.iter().map(build_query_parameter));
 
-    let post_operation_id = if with_rules_param.is_some() {
-        format!("post_{}_filtered", doc_name)
-    } else {
-        format!("post_{}", doc_name)
-    };
+    let get_summary = "Evaluate".to_string();
+    let post_summary = "Evaluate (JSON)".to_string();
+    let get_operation_id = format!("get_{}", doc_name);
+    let post_operation_id = format!("post_{}", doc_name);
 
-    let mut post_parameters: Vec<Value> = Vec::new();
-    if with_rules_param.is_some() {
-        post_parameters.push(json!({
-            "name": "rules",
-            "in": "path",
-            "required": true,
-            "description": "Comma-separated list of rule names to evaluate",
-            "schema": { "type": "string" },
-            "example": with_rules_param
-                .filter(|r| !r.is_empty())
-                .map(|r| r.join(","))
-                .unwrap_or_default()
-        }));
-    }
+    let post_parameters: Vec<Value> = vec![rules_param];
 
     let path_item = json!({
         "get": {
@@ -369,21 +401,8 @@ fn build_document_path_item(
                         }
                     }
                 },
-                "400": error_response,
-                "404": {
-                    "description": "Document not found",
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "properties": {
-                                    "error": { "type": "string" }
-                                },
-                                "required": ["error"]
-                            }
-                        }
-                    }
-                }
+                "400": error_response_schema(),
+                "404": not_found_response_schema()
             }
         },
         "post": {
@@ -408,26 +427,82 @@ fn build_document_path_item(
                         }
                     }
                 },
-                "400": error_response,
-                "404": {
-                    "description": "Document not found",
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "properties": {
-                                    "error": { "type": "string" }
-                                },
-                                "required": ["error"]
-                            }
-                        }
-                    }
-                }
+                "400": error_response_schema(),
+                "404": not_found_response_schema()
             }
         }
     });
 
     path_item
+}
+
+/// Build a path item for a single rule endpoint: `/{doc_name}/{rule_name}`.
+///
+/// Uses the same response/request schemas as the parent document but with a
+/// fixed rule rather than a path parameter.
+fn build_rule_path_item(
+    doc_name: &str,
+    rule_name: &str,
+    facts: &[InputFact],
+    response_schema_name: &str,
+    post_body_schema_name: &str,
+) -> Value {
+    let response_ref = json!({
+        "$ref": format!("#/components/schemas/{}", response_schema_name)
+    });
+    let body_ref = json!({
+        "$ref": format!("#/components/schemas/{}", post_body_schema_name)
+    });
+
+    let rules_tag = format!("{} rules", doc_name);
+
+    let get_parameters: Vec<Value> = facts.iter().map(build_query_parameter).collect();
+
+    json!({
+        "get": {
+            "operationId": format!("get_{}_{}", doc_name, rule_name),
+            "summary": format!("{}", rule_name),
+            "tags": [rules_tag],
+            "parameters": get_parameters,
+            "responses": {
+                "200": {
+                    "description": format!("Result of rule '{}'", rule_name),
+                    "content": {
+                        "application/json": {
+                            "schema": response_ref
+                        }
+                    }
+                },
+                "400": error_response_schema(),
+                "404": not_found_response_schema()
+            }
+        },
+        "post": {
+            "operationId": format!("post_{}_{}", doc_name, rule_name),
+            "summary": format!("{} (JSON)", rule_name),
+            "tags": [rules_tag],
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": body_ref
+                    }
+                }
+            },
+            "responses": {
+                "200": {
+                    "description": format!("Result of rule '{}'", rule_name),
+                    "content": {
+                        "application/json": {
+                            "schema": response_ref
+                        }
+                    }
+                },
+                "400": error_response_schema(),
+                "404": not_found_response_schema()
+            }
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -978,17 +1053,78 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_openapi_tags_order_documents_before_meta() {
+    fn test_generate_openapi_tags_order() {
         let engine =
             create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
         let spec = generate_openapi(&engine);
 
         let tags = spec["tags"].as_array().expect("tags should be array");
-        assert_eq!(tags.len(), 2);
-        // Document tags come first
-        assert_eq!(tags[0]["name"], "pricing");
-        // Meta tag comes last
-        assert_eq!(tags[1]["name"], "Meta");
+        let tag_names: Vec<&str> = tags.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        // Documents first, then doc tag, doc rules tag, Meta last
+        assert_eq!(
+            tag_names,
+            vec!["Documents", "pricing", "pricing rules", "Meta"]
+        );
+    }
+
+    #[test]
+    fn test_generate_openapi_x_tag_groups() {
+        let engine =
+            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+        let spec = generate_openapi(&engine);
+
+        let groups = spec["x-tagGroups"]
+            .as_array()
+            .expect("x-tagGroups should be array");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0]["name"], "pricing");
+        assert_eq!(groups[0]["tags"], json!(["pricing", "pricing rules"]));
+        assert_eq!(groups[1]["name"], "General");
+        assert_eq!(groups[1]["tags"], json!(["Documents", "Meta"]));
+    }
+
+    #[test]
+    fn test_index_endpoint_uses_documents_tag() {
+        let engine =
+            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+        let spec = generate_openapi(&engine);
+
+        let index_tag = &spec["paths"]["/"]["get"]["tags"][0];
+        assert_eq!(index_tag, "Documents");
+    }
+
+    #[test]
+    fn test_per_rule_endpoints() {
+        let engine =
+            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+        let spec = generate_openapi(&engine);
+
+        // Per-rule endpoint exists
+        assert!(spec["paths"]["/pricing/total"].is_object());
+        assert!(spec["paths"]["/pricing/total"]["get"].is_object());
+        assert!(spec["paths"]["/pricing/total"]["post"].is_object());
+
+        // Correct operation IDs
+        assert_eq!(
+            spec["paths"]["/pricing/total"]["get"]["operationId"],
+            "get_pricing_total"
+        );
+        assert_eq!(
+            spec["paths"]["/pricing/total"]["post"]["operationId"],
+            "post_pricing_total"
+        );
+
+        // Tagged under the document's Rules sub-group
+        assert_eq!(
+            spec["paths"]["/pricing/total"]["get"]["tags"][0],
+            "pricing rules"
+        );
+
+        // GET has fact parameters but no rules path parameter
+        let get_params = spec["paths"]["/pricing/total"]["get"]["parameters"]
+            .as_array()
+            .expect("parameters array");
+        assert!(get_params.iter().all(|p| p["name"] != "rules"));
     }
 
     #[test]
@@ -1010,12 +1146,11 @@ mod tests {
             create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
         let spec = generate_openapi(&engine);
 
-        assert!(spec["paths"]["/pricing"].is_object());
         assert!(spec["paths"]["/pricing/{rules}"].is_object());
 
         // GET and POST operations present
-        assert!(spec["paths"]["/pricing"]["get"].is_object());
-        assert!(spec["paths"]["/pricing"]["post"].is_object());
+        assert!(spec["paths"]["/pricing/{rules}"]["get"].is_object());
+        assert!(spec["paths"]["/pricing/{rules}"]["post"].is_object());
     }
 
     #[test]
@@ -1104,8 +1239,6 @@ mod tests {
 
         let spec = generate_openapi(&engine);
 
-        assert!(spec["paths"]["/pricing"].is_object());
-        assert!(spec["paths"]["/shipping"].is_object());
         assert!(spec["paths"]["/pricing/{rules}"].is_object());
         assert!(spec["paths"]["/shipping/{rules}"].is_object());
     }
@@ -1117,7 +1250,7 @@ mod tests {
         );
         let spec = generate_openapi(&engine);
 
-        let params = &spec["paths"]["/test"]["get"]["parameters"];
+        let params = &spec["paths"]["/test/{rules}"]["get"]["parameters"];
         let product_param = params
             .as_array()
             .expect("parameters should be array")
@@ -1150,7 +1283,7 @@ mod tests {
         );
         let spec = generate_openapi(&engine);
 
-        let params = &spec["paths"]["/test"]["get"]["parameters"];
+        let params = &spec["paths"]["/test/{rules}"]["get"]["parameters"];
         let is_active_param = params
             .as_array()
             .expect("parameters should be array")
@@ -1211,7 +1344,7 @@ rule result = quantity
         );
         let spec = generate_openapi(&engine);
 
-        let get_params = spec["paths"]["/test"]["get"]["parameters"]
+        let get_params = spec["paths"]["/test/{rules}"]["get"]["parameters"]
             .as_array()
             .expect("parameters array");
         let quantity_param = get_params

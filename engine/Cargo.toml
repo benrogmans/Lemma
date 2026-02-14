@@ -17,10 +17,10 @@ name = "lemma"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pest.workspace = true
-pest_derive.workspace = true
+pest = "2.7"
+pest_derive = "2.7"
 chrono.workspace = true
-regex.workspace = true
+regex = "1.0"
 serde.workspace = true
 serde_json.workspace = true
 rust_decimal.workspace = true
@@ -36,10 +36,10 @@ default = ["registry"]
 registry = ["reqwest"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen.workspace = true
+wasm-bindgen = "0.2.104"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-console_error_panic_hook.workspace = true
+console_error_panic_hook = "0.1"
 gloo-net = "0.6"
 
 [lints.rust]

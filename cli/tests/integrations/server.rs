@@ -1,4 +1,62 @@
 use assert_cmd::cargo::cargo_bin_cmd;
+use std::net::TcpStream;
+use std::time::{Duration, Instant};
+
+const SERVER_TEST_PORT: u16 = 19998;
+
+fn wait_for_port(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+#[test]
+fn test_get_document_route_returns_200() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let lemma_file = temp_dir.path().join("single.lemma");
+    std::fs::write(
+        &lemma_file,
+        r#"doc single_doc
+fact x = [number]
+rule result = x
+"#,
+    )
+    .unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let mut child = std::process::Command::new(bin)
+        .arg("server")
+        .arg("--dir")
+        .arg(temp_dir.path())
+        .arg("--port")
+        .arg(SERVER_TEST_PORT.to_string())
+        .spawn()
+        .unwrap();
+
+    let ok = wait_for_port(SERVER_TEST_PORT, Duration::from_secs(5));
+    if !ok {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("server did not start within 5s");
+    }
+
+    let url = format!("http://127.0.0.1:{}/single_doc?x=42", SERVER_TEST_PORT);
+    let resp = reqwest::blocking::get(&url).expect("GET request");
+    let status = resp.status();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        status.is_success(),
+        "GET /single_doc should return 2xx, got {}",
+        status
+    );
+}
 
 #[test]
 fn test_server_command_available() {

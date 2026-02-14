@@ -10,18 +10,18 @@ Redesign the API server so that `lemma server` automatically generates a typed R
 
 For each loaded Lemma document, the server generates two endpoints. For example, a document called `pricing` with facts `quantity` (number) and `is_member` (boolean), and rules `discount`, `total`, `vat`:
 
-- **`GET /@pricing?quantity=10&is_member=true`** — evaluate all rules, facts as query parameters
-- **`POST /@pricing`** with JSON body `{"quantity": 10, "is_member": true}` — evaluate all rules, facts as JSON
+- **`GET /pricing?quantity=10&is_member=true`** — evaluate all rules, facts as query parameters
+- **`POST /pricing`** with JSON body `{"quantity": 10, "is_member": true}` — evaluate all rules, facts as JSON
 
 Rules can optionally be filtered by appending them as a comma-separated path segment:
 
-- **`GET /@pricing/discount`** — evaluate only the `discount` rule
-- **`GET /@pricing/discount,total`** — evaluate the `discount` and `total` rules
-- **`POST /@pricing/discount,vat`** — same pattern for POST
+- **`GET /pricing/discount`** — evaluate only the `discount` rule
+- **`GET /pricing/discount,total`** — evaluate the `discount` and `total` rules
+- **`POST /pricing/discount,vat`** — same pattern for POST
 
 Both GET and POST return the same response shape: rule results with values or veto reasons.
 
-The `@` prefix reserves the top-level namespace for server meta routes (`/docs`, `/health`, `/openapi.json`, etc.) and prevents collisions with document names.
+Meta routes (`/`, `/docs`, `/health`, `/openapi.json`) are registered first so they take precedence over document names.
 
 ## Meta routes
 
@@ -42,7 +42,7 @@ The crate takes an `Engine` (or its document/plan data) and produces an OpenAPI 
 
 For each document:
 
-- **Path:** `/@{doc_name}` and `/@{doc_name}/{rules}` (comma-separated rule names)
+- **Path:** `/{doc_name}` and `/{doc_name}/{rules}` (comma-separated rule names)
 - **GET operation:** facts become query parameters, typed
 - **POST operation:** facts become a JSON request body schema
 - **Response schema:** rule names as fields, each with value or veto

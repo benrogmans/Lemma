@@ -91,10 +91,10 @@ enum Commands {
     /// for each document. Interactive OpenAPI documentation is available at /docs.
     ///
     /// Routes:
-    ///   GET  /@{doc}             — evaluate all rules (facts as query params)
-    ///   POST /@{doc}             — evaluate all rules (facts as JSON body)
-    ///   GET  /@{doc}/{rules}     — evaluate specific rules (comma-separated)
-    ///   POST /@{doc}/{rules}     — evaluate specific rules (JSON body)
+    ///   GET  /{doc}              — evaluate all rules (facts as query params)
+    ///   POST /{doc}              — evaluate all rules (facts as JSON body)
+    ///   GET  /{doc}/{rules}      — evaluate specific rules (comma-separated)
+    ///   POST /{doc}/{rules}      — evaluate specific rules (JSON body)
     ///   GET  /                   — list all documents
     ///   GET  /docs               — interactive API documentation
     ///   GET  /openapi.json       — OpenAPI 3.1 specification
@@ -315,14 +315,12 @@ fn server_command(workdir: &Path, host: &str, port: u16, watch: bool) -> Result<
         let mut engine = Engine::new();
         load_workspace_async(&mut engine, workdir).await?;
 
-        let document_count = engine.list_documents().len();
+        let document_names = engine.list_documents();
+        let document_count = document_names.len();
         println!(
-            "Starting HTTP server with {} document(s) loaded",
+            "Starting HTTP server with {} document(s) loaded...",
             document_count
         );
-        if watch {
-            println!("Watch mode enabled — .lemma file changes will be reloaded automatically");
-        }
         server::http::start_server(engine, host, port, watch, workdir.to_path_buf()).await
     })?;
     Ok(())

@@ -3,7 +3,7 @@ pub mod http {
         extract::{Path, Query, State},
         http::StatusCode,
         response::{Html, IntoResponse, Json},
-        routing::{get, post},
+        routing::get,
         Router,
     };
     use lemma::Engine;
@@ -35,8 +35,8 @@ pub mod http {
     /// Start the Lemma HTTP server.
     ///
     /// The server auto-generates typed REST endpoints for each loaded document:
-    /// - `GET /@{doc}` and `POST /@{doc}` — evaluate all rules
-    /// - `GET /@{doc}/{rules}` and `POST /@{doc}/{rules}` — evaluate filtered rules
+    /// - `GET /{doc}/{rules?}` — evaluate rules (all if rules omitted), facts as query params
+    /// - `POST /{doc}/{rules?}` — evaluate rules (all if rules omitted), facts as JSON body
     ///
     /// Meta routes:
     /// - `GET /` — list all documents
@@ -69,10 +69,12 @@ pub mod http {
             .route("/openapi.json", get(openapi_spec))
             .route("/docs", get(scalar_docs))
             .route("/scalar.js", get(scalar_js))
-            .route("/@{doc_name}", get(evaluate_document_get))
-            .route("/@{doc_name}", post(evaluate_document_post))
-            .route("/@{doc_name}/{rules}", get(evaluate_document_rules_get))
-            .route("/@{doc_name}/{rules}", post(evaluate_document_rules_post))
+            .route("/{doc_name}", get(evaluate_get).post(evaluate_post))
+            .route(
+                "/{doc_name}/{rules}",
+                get(evaluate_get_with_rules).post(evaluate_post_with_rules),
+            )
+            .fallback(fallback_404)
             .layer(CorsLayer::permissive())
             .with_state(shared_engine);
 
@@ -112,6 +114,17 @@ pub mod http {
         }))
     }
 
+    /// Fallback when no route matches — return 404 with JSON body (never empty).
+    async fn fallback_404() -> (StatusCode, Json<ErrorResponse>) {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Not found. Use GET / for document list, GET /docs for API docs."
+                    .to_string(),
+            }),
+        )
+    }
+
     async fn openapi_spec(State(engine): State<SharedEngine>) -> impl IntoResponse {
         let engine = engine.read().await;
         let spec = lemma_openapi::generate_openapi(&engine);
@@ -133,13 +146,36 @@ pub mod http {
   <script>
     Scalar.createApiReference('#app', {
       url: '/openapi.json',
+      layout: 'modern',
+      theme: 'solarized',
       agent: { disabled: true },
+      hideClientButton: true,
+      hideTestRequestButton: false,
+      showSidebar: true,
+      showDeveloperTools: 'localhost',
+      operationTitleSource: 'summary',
+      persistAuth: false,
+      telemetry: false,
+      hideModels: true,
+      documentDownloadType: 'both',
+      hideSearch: false,
+      showOperationId: false,
+      hideDarkModeToggle: false,
+      withDefaultFonts: false,
       defaultOpenAllTags: false,
       expandAllModelSections: true,
       expandAllResponses: true,
-      hideModels: true,
-      withDefaultFonts: false,
-      telemetry: false,
+      orderSchemaPropertiesBy: 'alpha',
+      orderRequiredPropertiesFirst: true,
+      customCss: `
+        a[href="https://www.scalar.com"] {
+          font-size: 0 !important;
+        }
+        a[href="https://www.scalar.com"]::after {
+          content: 'Powered by Lemma';
+          font-size: var(--scalar-mini, 10px);
+        }
+      `,
     })
   </script>
 </body>
@@ -166,8 +202,8 @@ pub mod http {
     // Document evaluation routes
     // -----------------------------------------------------------------------
 
-    /// `GET /@{doc_name}` — evaluate all rules, facts as query parameters
-    async fn evaluate_document_get(
+    /// `GET /{doc_name}` — evaluate all rules, facts as query parameters
+    async fn evaluate_get(
         State(engine): State<SharedEngine>,
         Path(doc_name): Path<String>,
         Query(params): Query<HashMap<String, String>>,
@@ -175,18 +211,23 @@ pub mod http {
         evaluate_with_query_params(&engine, &doc_name, &[], params).await
     }
 
-    /// `GET /@{doc_name}/{rules}` — evaluate filtered rules, facts as query parameters
-    async fn evaluate_document_rules_get(
+    /// `GET /{doc_name}/{rules}` — evaluate selected rules, facts as query parameters.
+    /// If the rules segment is empty after trimming, evaluates all rules.
+    async fn evaluate_get_with_rules(
         State(engine): State<SharedEngine>,
         Path((doc_name, rules)): Path<(String, String)>,
         Query(params): Query<HashMap<String, String>>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let rule_names = parse_rule_names(&rules);
+        if rule_names.is_empty() {
+            return evaluate_with_query_params(&engine, &doc_name, &[], params).await;
+        }
+        validate_rule_names(&engine, &doc_name, &rule_names).await?;
         evaluate_with_query_params(&engine, &doc_name, &rule_names, params).await
     }
 
-    /// `POST /@{doc_name}` — evaluate all rules, facts as JSON body
-    async fn evaluate_document_post(
+    /// `POST /{doc_name}` — evaluate all rules, facts as JSON body
+    async fn evaluate_post(
         State(engine): State<SharedEngine>,
         Path(doc_name): Path<String>,
         Json(body): Json<serde_json::Value>,
@@ -194,13 +235,18 @@ pub mod http {
         evaluate_with_json_body(&engine, &doc_name, &[], &body).await
     }
 
-    /// `POST /@{doc_name}/{rules}` — evaluate filtered rules, facts as JSON body
-    async fn evaluate_document_rules_post(
+    /// `POST /{doc_name}/{rules}` — evaluate selected rules, facts as JSON body.
+    /// If the rules segment is empty after trimming, evaluates all rules.
+    async fn evaluate_post_with_rules(
         State(engine): State<SharedEngine>,
         Path((doc_name, rules)): Path<(String, String)>,
         Json(body): Json<serde_json::Value>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let rule_names = parse_rule_names(&rules);
+        if rule_names.is_empty() {
+            return evaluate_with_json_body(&engine, &doc_name, &[], &body).await;
+        }
+        validate_rule_names(&engine, &doc_name, &rule_names).await?;
         evaluate_with_json_body(&engine, &doc_name, &rule_names, &body).await
     }
 
@@ -306,12 +352,45 @@ pub mod http {
     // Helpers
     // -----------------------------------------------------------------------
 
+    /// Verify that all requested rule names exist in the document. Returns 404 if any are unknown.
+    async fn validate_rule_names(
+        engine: &SharedEngine,
+        doc_name: &str,
+        rule_names: &[String],
+    ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+        let engine = engine.read().await;
+        if let Some(plan) = engine.get_execution_plan(doc_name) {
+            let known: std::collections::HashSet<&str> = plan
+                .rules
+                .iter()
+                .filter(|r| r.path.segments.is_empty())
+                .map(|r| r.name.as_str())
+                .collect();
+            let unknown: Vec<&str> = rule_names
+                .iter()
+                .filter(|name| !known.contains(name.as_str()))
+                .map(|s| s.as_str())
+                .collect();
+            if !unknown.is_empty() {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: format!("Unknown rule(s) in '{}': {}", doc_name, unknown.join(", ")),
+                    }),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Parse comma-separated rule names from a URL path segment.
+    /// Filters out empty strings and the literal `{rules}` placeholder that
+    /// Scalar sends when the path parameter is left blank.
     fn parse_rule_names(rules_segment: &str) -> Vec<String> {
         rules_segment
             .split(',')
             .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && s != "{rules}")
             .collect()
     }
 
