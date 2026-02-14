@@ -741,7 +741,7 @@ mod tests {
                 maximum: Some(rust_decimal::Decimal::from_str("10").unwrap()),
                 decimals: None,
                 precision: None,
-                help: None,
+                help: String::new(),
                 default: None,
             },
         );
@@ -794,7 +794,7 @@ mod tests {
                 maximum: None,
                 length: None,
                 options: vec!["silver".to_string(), "gold".to_string()],
-                help: None,
+                help: String::new(),
                 default: None,
             },
         );
@@ -854,7 +854,7 @@ mod tests {
                         value: rust_decimal::Decimal::from_str("1.0").unwrap(),
                     },
                 ]),
-                help: None,
+                help: String::new(),
                 default: None,
             },
         );

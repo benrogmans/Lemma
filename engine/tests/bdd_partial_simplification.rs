@@ -11,8 +11,7 @@ fn bdd_partial_simplification_on_large_expression() {
         "doc shop_partial\n\nfact discount_code = [text]\nfact member_level = [text]\n",
     );
 
-    // Add 70 extra text facts and use them in a big OR to push atom count > 64
-    // TODO: increase this to 70
+    // Add extra text facts and use them in a big OR to push atom count > 64
     let n_extra = 20;
     for i in 1..=n_extra {
         code.push_str(&format!("fact tag{} = [text]\n", i));

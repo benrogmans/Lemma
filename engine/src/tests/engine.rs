@@ -182,7 +182,7 @@ fn test_runtime_error_mapping() {
         .unwrap();
 
     let result = engine.evaluate("test", vec![], HashMap::new());
-    // Division by zero returns a Veto (not an error) in the new evaluation design
+    // Division by zero returns a Veto (not an error)
     assert!(result.is_ok(), "Evaluation should succeed");
     let response = result.unwrap();
     let division_result = response

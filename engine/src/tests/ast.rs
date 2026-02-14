@@ -3,34 +3,6 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 
 #[test]
-fn test_arithmetic_operation_name() {
-    assert_eq!(ArithmeticComputation::Add.name(), "addition");
-    assert_eq!(ArithmeticComputation::Subtract.name(), "subtraction");
-    assert_eq!(ArithmeticComputation::Multiply.name(), "multiplication");
-    assert_eq!(ArithmeticComputation::Divide.name(), "division");
-    assert_eq!(ArithmeticComputation::Modulo.name(), "modulo");
-    assert_eq!(ArithmeticComputation::Power.name(), "exponentiation");
-}
-
-#[test]
-fn test_comparison_operator_name() {
-    assert_eq!(ComparisonComputation::GreaterThan.name(), "greater than");
-    assert_eq!(ComparisonComputation::LessThan.name(), "less than");
-    assert_eq!(
-        ComparisonComputation::GreaterThanOrEqual.name(),
-        "greater than or equal"
-    );
-    assert_eq!(
-        ComparisonComputation::LessThanOrEqual.name(),
-        "less than or equal"
-    );
-    assert_eq!(ComparisonComputation::Equal.name(), "equal");
-    assert_eq!(ComparisonComputation::NotEqual.name(), "not equal");
-    assert_eq!(ComparisonComputation::Is.name(), "is");
-    assert_eq!(ComparisonComputation::IsNot.name(), "is not");
-}
-
-#[test]
 fn test_literal_value_to_primitive_type() {
     let one = Decimal::from_str("1").unwrap();
 

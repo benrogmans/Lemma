@@ -21,7 +21,9 @@ pub enum LogicalComputation {
 }
 
 // Internal-only parsing imports (used only within this module for value/type resolution).
-use crate::parsing::ast::{BooleanValue, ConversionTarget, DateTimeValue, DurationUnit, TimeValue};
+use crate::parsing::ast::{
+    BooleanValue, CommandArg, ConversionTarget, DateTimeValue, DurationUnit, TimeValue,
+};
 use crate::parsing::literals::{parse_date_string, parse_time_string};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -153,7 +155,7 @@ impl<'a> IntoIterator for &'a RatioUnits {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TypeSpecification {
     Boolean {
-        help: Option<String>,
+        help: String,
         default: Option<bool>,
     },
     Scale {
@@ -162,7 +164,7 @@ pub enum TypeSpecification {
         decimals: Option<u8>,
         precision: Option<Decimal>,
         units: ScaleUnits,
-        help: Option<String>,
+        help: String,
         default: Option<(Decimal, String)>,
     },
     Number {
@@ -170,7 +172,7 @@ pub enum TypeSpecification {
         maximum: Option<Decimal>,
         decimals: Option<u8>,
         precision: Option<Decimal>,
-        help: Option<String>,
+        help: String,
         default: Option<Decimal>,
     },
     Ratio {
@@ -178,7 +180,7 @@ pub enum TypeSpecification {
         maximum: Option<Decimal>,
         decimals: Option<u8>,
         units: RatioUnits,
-        help: Option<String>,
+        help: String,
         default: Option<Decimal>,
     },
     Text {
@@ -186,23 +188,23 @@ pub enum TypeSpecification {
         maximum: Option<usize>,
         length: Option<usize>,
         options: Vec<String>,
-        help: Option<String>,
+        help: String,
         default: Option<String>,
     },
     Date {
         minimum: Option<DateTimeValue>,
         maximum: Option<DateTimeValue>,
-        help: Option<String>,
+        help: String,
         default: Option<DateTimeValue>,
     },
     Time {
         minimum: Option<TimeValue>,
         maximum: Option<TimeValue>,
-        help: Option<String>,
+        help: String,
         default: Option<TimeValue>,
     },
     Duration {
-        help: Option<String>,
+        help: String,
         default: Option<(Decimal, DurationUnit)>,
     },
     Veto {
@@ -210,22 +212,10 @@ pub enum TypeSpecification {
     },
 }
 
-fn strip_surrounding_quotes(s: &str) -> String {
-    let bytes = s.as_bytes();
-    if bytes.len() >= 2 {
-        let first = bytes[0];
-        let last = bytes[bytes.len() - 1];
-        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
-            return s[1..bytes.len() - 1].to_string();
-        }
-    }
-    s.to_string()
-}
-
 impl TypeSpecification {
     pub fn boolean() -> Self {
         TypeSpecification::Boolean {
-            help: None,
+            help: "Values: true, false".to_string(),
             default: None,
         }
     }
@@ -236,7 +226,7 @@ impl TypeSpecification {
             decimals: None,
             precision: None,
             units: ScaleUnits::new(),
-            help: None,
+            help: "Format: value+unit (e.g. 100+unit)".to_string(),
             default: None,
         }
     }
@@ -246,7 +236,7 @@ impl TypeSpecification {
             maximum: None,
             decimals: None,
             precision: None,
-            help: None,
+            help: "Numeric value".to_string(),
             default: None,
         }
     }
@@ -265,7 +255,7 @@ impl TypeSpecification {
                     value: Decimal::from(1000),
                 },
             ]),
-            help: None,
+            help: "Format: value+unit (e.g. 21+percent)".to_string(),
             default: None,
         }
     }
@@ -275,7 +265,7 @@ impl TypeSpecification {
             maximum: None,
             length: None,
             options: vec![],
-            help: None,
+            help: "Text value".to_string(),
             default: None,
         }
     }
@@ -283,7 +273,7 @@ impl TypeSpecification {
         TypeSpecification::Date {
             minimum: None,
             maximum: None,
-            help: None,
+            help: "Format: YYYY-MM-DD (e.g. 2024-01-15)".to_string(),
             default: None,
         }
     }
@@ -291,13 +281,13 @@ impl TypeSpecification {
         TypeSpecification::Time {
             minimum: None,
             maximum: None,
-            help: None,
+            help: "Format: HH:MM:SS (e.g. 14:30:00)".to_string(),
             default: None,
         }
     }
     pub fn duration() -> Self {
         TypeSpecification::Duration {
-            help: None,
+            help: "Format: value+unit (e.g. 40+hours). Units: years, months, weeks, days, hours, minutes, seconds".to_string(),
             default: None,
         }
     }
@@ -305,17 +295,33 @@ impl TypeSpecification {
         TypeSpecification::Veto { message: None }
     }
 
-    pub fn apply_constraint(mut self, command: &str, args: &[String]) -> Result<Self, String> {
+    pub fn apply_constraint(mut self, command: &str, args: &[CommandArg]) -> Result<Self, String> {
         match &mut self {
             TypeSpecification::Boolean { help, default } => match command {
-                "help" => *help = args.first().cloned(),
-                "default" => {
-                    let d = args
+                "help" => {
+                    *help = args
                         .first()
-                        .ok_or_else(|| "default requires an argument".to_string())?
-                        .parse::<BooleanValue>()
-                        .map_err(|_| format!("invalid default value: {:?}", args.first()))?;
-                    *default = Some(d.into());
+                        .map(|a| a.value().to_string())
+                        .unwrap_or_default();
+                }
+                "default" => {
+                    let arg = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?;
+                    match arg {
+                        CommandArg::Boolean(s) | CommandArg::Label(s) => {
+                            let d = s
+                                .parse::<BooleanValue>()
+                                .map_err(|_| format!("invalid default value: {:?}", s))?;
+                            *default = Some(d.into());
+                        }
+                        other => {
+                            return Err(format!(
+                                "default for boolean type requires a boolean literal (true/false/yes/no/accept/reject), got {:?}",
+                                other.value()
+                            ));
+                        }
+                    }
                 }
                 _ => {
                     return Err(format!(
@@ -337,12 +343,18 @@ impl TypeSpecification {
                     let d = args
                         .first()
                         .ok_or_else(|| "decimals requires an argument".to_string())?
+                        .value()
                         .parse::<u8>()
-                        .map_err(|_| format!("invalid decimals value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid decimals value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *decimals = Some(d);
                 }
                 "unit" if args.len() >= 2 => {
-                    let unit_name = args[0].clone();
+                    let unit_name = args[0].value().to_string();
                     if units.iter().any(|u| u.name == unit_name) {
                         return Err(format!(
                             "Unit '{}' is already defined in this scale type.",
@@ -350,8 +362,9 @@ impl TypeSpecification {
                         ));
                     }
                     let value = args[1]
+                        .value()
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid unit value: {}", args[1]))?;
+                        .map_err(|_| format!("invalid unit value: {}", args[1].value()))?;
                     units.0.push(ScaleUnit {
                         name: unit_name,
                         value,
@@ -361,27 +374,50 @@ impl TypeSpecification {
                     let m = args
                         .first()
                         .ok_or_else(|| "minimum requires an argument".to_string())?
+                        .value()
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid minimum value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid minimum value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *minimum = Some(m);
                 }
                 "maximum" => {
                     let m = args
                         .first()
                         .ok_or_else(|| "maximum requires an argument".to_string())?
+                        .value()
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid maximum value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid maximum value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *maximum = Some(m);
                 }
                 "precision" => {
                     let p = args
                         .first()
                         .ok_or_else(|| "precision requires an argument".to_string())?
+                        .value()
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid precision value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid precision value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *precision = Some(p);
                 }
-                "help" => *help = args.first().cloned(),
+                "help" => {
+                    *help = args
+                        .first()
+                        .map(|a| a.value().to_string())
+                        .unwrap_or_default();
+                }
                 "default" => {
                     if args.len() < 2 {
                         return Err(
@@ -389,12 +425,22 @@ impl TypeSpecification {
                                 .to_string(),
                         );
                     }
-                    let value = args[0]
-                        .parse::<Decimal>()
-                        .map_err(|_| format!("invalid default value: {:?}", args[0]))?;
-                    let unit_name = args[1].clone();
-                    units.get(unit_name.as_str())?;
-                    *default = Some((value, unit_name));
+                    match &args[0] {
+                        CommandArg::Number(s) => {
+                            let value = s
+                                .parse::<Decimal>()
+                                .map_err(|_| format!("invalid default value: {:?}", s))?;
+                            let unit_name = args[1].value().to_string();
+                            units.get(unit_name.as_str())?;
+                            *default = Some((value, unit_name));
+                        }
+                        other => {
+                            return Err(format!(
+                                "default for scale type requires a number literal as value, got {:?}",
+                                other.value()
+                            ));
+                        }
+                    }
                 }
                 _ => {
                     return Err(format!(
@@ -415,8 +461,14 @@ impl TypeSpecification {
                     let d = args
                         .first()
                         .ok_or_else(|| "decimals requires an argument".to_string())?
+                        .value()
                         .parse::<u8>()
-                        .map_err(|_| format!("invalid decimals value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid decimals value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *decimals = Some(d);
                 }
                 "unit" => {
@@ -428,34 +480,68 @@ impl TypeSpecification {
                     let m = args
                         .first()
                         .ok_or_else(|| "minimum requires an argument".to_string())?
+                        .value()
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid minimum value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid minimum value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *minimum = Some(m);
                 }
                 "maximum" => {
                     let m = args
                         .first()
                         .ok_or_else(|| "maximum requires an argument".to_string())?
+                        .value()
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid maximum value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid maximum value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *maximum = Some(m);
                 }
                 "precision" => {
                     let p = args
                         .first()
                         .ok_or_else(|| "precision requires an argument".to_string())?
+                        .value()
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid precision value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid precision value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *precision = Some(p);
                 }
-                "help" => *help = args.first().cloned(),
-                "default" => {
-                    let d = args
+                "help" => {
+                    *help = args
                         .first()
-                        .ok_or_else(|| "default requires an argument".to_string())?
-                        .parse::<Decimal>()
-                        .map_err(|_| format!("invalid default value: {:?}", args.first()))?;
-                    *default = Some(d);
+                        .map(|a| a.value().to_string())
+                        .unwrap_or_default();
+                }
+                "default" => {
+                    let arg = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?;
+                    match arg {
+                        CommandArg::Number(s) => {
+                            let d = s
+                                .parse::<Decimal>()
+                                .map_err(|_| format!("invalid default value: {:?}", s))?;
+                            *default = Some(d);
+                        }
+                        other => {
+                            return Err(format!(
+                                "default for number type requires a number literal, got {:?}",
+                                other.value()
+                            ));
+                        }
+                    }
                 }
                 _ => {
                     return Err(format!(
@@ -476,12 +562,18 @@ impl TypeSpecification {
                     let d = args
                         .first()
                         .ok_or_else(|| "decimals requires an argument".to_string())?
+                        .value()
                         .parse::<u8>()
-                        .map_err(|_| format!("invalid decimals value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid decimals value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *decimals = Some(d);
                 }
                 "unit" if args.len() >= 2 => {
-                    let unit_name = args[0].clone();
+                    let unit_name = args[0].value().to_string();
                     if units.iter().any(|u| u.name == unit_name) {
                         return Err(format!(
                             "Unit '{}' is already defined in this ratio type.",
@@ -489,8 +581,9 @@ impl TypeSpecification {
                         ));
                     }
                     let value = args[1]
+                        .value()
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid unit value: {}", args[1]))?;
+                        .map_err(|_| format!("invalid unit value: {}", args[1].value()))?;
                     units.0.push(RatioUnit {
                         name: unit_name,
                         value,
@@ -500,26 +593,54 @@ impl TypeSpecification {
                     let m = args
                         .first()
                         .ok_or_else(|| "minimum requires an argument".to_string())?
+                        .value()
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid minimum value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid minimum value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *minimum = Some(m);
                 }
                 "maximum" => {
                     let m = args
                         .first()
                         .ok_or_else(|| "maximum requires an argument".to_string())?
+                        .value()
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid maximum value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid maximum value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *maximum = Some(m);
                 }
-                "help" => *help = args.first().cloned(),
-                "default" => {
-                    let d = args
+                "help" => {
+                    *help = args
                         .first()
-                        .ok_or_else(|| "default requires an argument".to_string())?
-                        .parse::<Decimal>()
-                        .map_err(|_| format!("invalid default value: {:?}", args.first()))?;
-                    *default = Some(d);
+                        .map(|a| a.value().to_string())
+                        .unwrap_or_default();
+                }
+                "default" => {
+                    let arg = args
+                        .first()
+                        .ok_or_else(|| "default requires an argument".to_string())?;
+                    match arg {
+                        CommandArg::Number(s) => {
+                            let d = s
+                                .parse::<Decimal>()
+                                .map_err(|_| format!("invalid default value: {:?}", s))?;
+                            *default = Some(d);
+                        }
+                        other => {
+                            return Err(format!(
+                                "default for ratio type requires a number literal, got {:?}",
+                                other.value()
+                            ));
+                        }
+                    }
                 }
                 _ => {
                     return Err(format!(
@@ -537,41 +658,74 @@ impl TypeSpecification {
                 default,
             } => match command {
                 "option" if args.len() == 1 => {
-                    options.push(strip_surrounding_quotes(&args[0]));
+                    options.push(args[0].value().to_string());
                 }
                 "options" => {
-                    *options = args.iter().map(|s| strip_surrounding_quotes(s)).collect();
+                    *options = args.iter().map(|a| a.value().to_string()).collect();
                 }
                 "minimum" => {
                     let m = args
                         .first()
                         .ok_or_else(|| "minimum requires an argument".to_string())?
+                        .value()
                         .parse::<usize>()
-                        .map_err(|_| format!("invalid minimum value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid minimum value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *minimum = Some(m);
                 }
                 "maximum" => {
                     let m = args
                         .first()
                         .ok_or_else(|| "maximum requires an argument".to_string())?
+                        .value()
                         .parse::<usize>()
-                        .map_err(|_| format!("invalid maximum value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid maximum value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *maximum = Some(m);
                 }
                 "length" => {
                     let l = args
                         .first()
                         .ok_or_else(|| "length requires an argument".to_string())?
+                        .value()
                         .parse::<usize>()
-                        .map_err(|_| format!("invalid length value: {:?}", args.first()))?;
+                        .map_err(|_| {
+                            format!(
+                                "invalid length value: {:?}",
+                                args.first().map(|a| a.value())
+                            )
+                        })?;
                     *length = Some(l);
                 }
-                "help" => *help = args.first().cloned(),
+                "help" => {
+                    *help = args
+                        .first()
+                        .map(|a| a.value().to_string())
+                        .unwrap_or_default();
+                }
                 "default" => {
                     let arg = args
                         .first()
                         .ok_or_else(|| "default requires an argument".to_string())?;
-                    *default = Some(strip_surrounding_quotes(arg));
+                    match arg {
+                        CommandArg::Text(s) => {
+                            *default = Some(s.clone());
+                        }
+                        other => {
+                            return Err(format!(
+                                "default for text type requires a text literal (quoted string), got {:?}",
+                                other.value()
+                            ));
+                        }
+                    }
                 }
                 _ => {
                     return Err(format!(
@@ -590,20 +744,25 @@ impl TypeSpecification {
                     let arg = args
                         .first()
                         .ok_or_else(|| "minimum requires an argument".to_string())?;
-                    *minimum = Some(parse_date_string(arg)?);
+                    *minimum = Some(parse_date_string(arg.value())?);
                 }
                 "maximum" => {
                     let arg = args
                         .first()
                         .ok_or_else(|| "maximum requires an argument".to_string())?;
-                    *maximum = Some(parse_date_string(arg)?);
+                    *maximum = Some(parse_date_string(arg.value())?);
                 }
-                "help" => *help = args.first().cloned(),
+                "help" => {
+                    *help = args
+                        .first()
+                        .map(|a| a.value().to_string())
+                        .unwrap_or_default();
+                }
                 "default" => {
                     let arg = args
                         .first()
                         .ok_or_else(|| "default requires an argument".to_string())?;
-                    *default = Some(parse_date_string(arg)?);
+                    *default = Some(parse_date_string(arg.value())?);
                 }
                 _ => {
                     return Err(format!(
@@ -622,20 +781,25 @@ impl TypeSpecification {
                     let arg = args
                         .first()
                         .ok_or_else(|| "minimum requires an argument".to_string())?;
-                    *minimum = Some(parse_time_string(arg)?);
+                    *minimum = Some(parse_time_string(arg.value())?);
                 }
                 "maximum" => {
                     let arg = args
                         .first()
                         .ok_or_else(|| "maximum requires an argument".to_string())?;
-                    *maximum = Some(parse_time_string(arg)?);
+                    *maximum = Some(parse_time_string(arg.value())?);
                 }
-                "help" => *help = args.first().cloned(),
+                "help" => {
+                    *help = args
+                        .first()
+                        .map(|a| a.value().to_string())
+                        .unwrap_or_default();
+                }
                 "default" => {
                     let arg = args
                         .first()
                         .ok_or_else(|| "default requires an argument".to_string())?;
-                    *default = Some(parse_time_string(arg)?);
+                    *default = Some(parse_time_string(arg.value())?);
                 }
                 _ => {
                     return Err(format!(
@@ -645,14 +809,21 @@ impl TypeSpecification {
                 }
             },
             TypeSpecification::Duration { help, default } => match command {
-                "help" => *help = args.first().cloned(),
+                "help" => {
+                    *help = args
+                        .first()
+                        .map(|a| a.value().to_string())
+                        .unwrap_or_default();
+                }
                 "default" if args.len() >= 2 => {
                     let value = args[0]
+                        .value()
                         .parse::<Decimal>()
-                        .map_err(|_| format!("invalid duration value: {}", args[0]))?;
+                        .map_err(|_| format!("invalid duration value: {}", args[0].value()))?;
                     let unit = args[1]
+                        .value()
                         .parse::<DurationUnit>()
-                        .map_err(|_| format!("invalid duration unit: {}", args[1]))?;
+                        .map_err(|_| format!("invalid duration unit: {}", args[1].value()))?;
                     *default = Some((value, unit));
                 }
                 _ => {
@@ -1151,15 +1322,6 @@ impl TypeExtends {
             TypeExtends::Custom { parent, .. } => Some(parent.as_str()),
         }
     }
-
-    /// Returns the family (root of the extension chain) if this type extends a custom type.
-    #[must_use]
-    pub fn family_name(&self) -> Option<&str> {
-        match self {
-            TypeExtends::Primitive => None,
-            TypeExtends::Custom { family, .. } => Some(family.as_str()),
-        }
-    }
 }
 
 /// Resolved type after planning
@@ -1367,7 +1529,7 @@ impl LemmaType {
     pub fn example_value(&self) -> &'static str {
         match &self.specifications {
             TypeSpecification::Text { .. } => "\"hello world\"",
-            TypeSpecification::Scale { .. } => "3.14",
+            TypeSpecification::Scale { .. } => "12.50 eur",
             TypeSpecification::Number { .. } => "3.14",
             TypeSpecification::Boolean { .. } => "true",
             TypeSpecification::Date { .. } => "2023-12-25T14:30:00Z",
@@ -1479,7 +1641,7 @@ impl LiteralValue {
                     name: unit_name.clone(),
                     value: Decimal::from(1),
                 }]),
-                help: None,
+                help: "Format: value+unit (e.g. 100+unit)".to_string(),
                 default: None,
             },
             extends: TypeExtends::Primitive,

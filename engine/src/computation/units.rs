@@ -92,8 +92,8 @@ fn convert_duration(
     seconds_to_duration(seconds, to)
 }
 
-/// Convert a duration value to seconds (base unit)
-/// TODO: Do not allow conversions from months or years as they are not deterministic
+/// Convert a duration value to seconds (base unit).
+/// Note: months and years use approximate values (30 and 365 days respectively).
 pub fn duration_to_seconds(value: Decimal, unit: &SemanticDurationUnit) -> Decimal {
     match unit {
         SemanticDurationUnit::Microsecond => value / Decimal::from(1_000_000),
@@ -108,8 +108,8 @@ pub fn duration_to_seconds(value: Decimal, unit: &SemanticDurationUnit) -> Decim
     }
 }
 
-/// Convert seconds to a duration value in the target unit
-/// TODO: Do not allow conversions to months or years as they are not deterministic
+/// Convert seconds to a duration value in the target unit.
+/// Note: months and years use approximate values (30 and 365 days respectively).
 pub fn seconds_to_duration(seconds: Decimal, unit: &SemanticDurationUnit) -> Decimal {
     match unit {
         SemanticDurationUnit::Microsecond => seconds * Decimal::from(1_000_000),

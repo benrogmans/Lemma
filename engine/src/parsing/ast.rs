@@ -1,6 +1,18 @@
 //! AST types
 //!
 //! Infrastructure (Span, DepthTracker) and document/fact/rule/expression/value types from parsing.
+//!
+//! # `AsLemmaSource<T>` wrapper
+//!
+//! For types that need to emit valid, round-trippable Lemma source (e.g. constraint
+//! args like `help`, `default`, `option`), wrap a reference in [`AsLemmaSource`] and
+//! use its `Display` implementation. The regular `Display` impls on AST types are for
+//! human-readable output (error messages, debug); `AsLemmaSource` emits **valid Lemma syntax**.
+//!
+//! ```ignore
+//! use lemma::parsing::ast::{AsLemmaSource, FactValue};
+//! let s = format!("{}", AsLemmaSource(&fact_value));
+//! ```
 
 /// Span representing a location in source code
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -210,7 +222,6 @@ pub struct RuleReference {
     pub rule: String,
 }
 
-/// PathSegment (MOVED TO planning/semantics.rs - resolved path segment after planning)
 impl RuleReference {
     /// Create from a full path (last element becomes rule)
     pub fn from_path(mut full_path: Vec<String>) -> Self {
@@ -219,12 +230,6 @@ impl RuleReference {
             segments: full_path,
             rule,
         }
-    }
-
-    /// Returns true if this is a local rule reference (no path segments)
-    #[must_use]
-    pub fn is_local(&self) -> bool {
-        self.segments.is_empty()
     }
 
     /// Get all path segments including the rule name
@@ -249,19 +254,6 @@ pub enum ArithmeticComputation {
 }
 
 impl ArithmeticComputation {
-    /// Returns a human-readable name for the computation
-    #[must_use]
-    pub fn name(&self) -> &'static str {
-        match self {
-            ArithmeticComputation::Add => "addition",
-            ArithmeticComputation::Subtract => "subtraction",
-            ArithmeticComputation::Multiply => "multiplication",
-            ArithmeticComputation::Divide => "division",
-            ArithmeticComputation::Modulo => "modulo",
-            ArithmeticComputation::Power => "exponentiation",
-        }
-    }
-
     /// Returns the operator symbol
     #[must_use]
     pub fn symbol(&self) -> &'static str {
@@ -291,21 +283,6 @@ pub enum ComparisonComputation {
 }
 
 impl ComparisonComputation {
-    /// Returns a human-readable name for the computation
-    #[must_use]
-    pub fn name(&self) -> &'static str {
-        match self {
-            ComparisonComputation::GreaterThan => "greater than",
-            ComparisonComputation::LessThan => "less than",
-            ComparisonComputation::GreaterThanOrEqual => "greater than or equal",
-            ComparisonComputation::LessThanOrEqual => "less than or equal",
-            ComparisonComputation::Equal => "equal",
-            ComparisonComputation::NotEqual => "not equal",
-            ComparisonComputation::Is => "is",
-            ComparisonComputation::IsNot => "is not",
-        }
-    }
-
     /// Returns the operator symbol
     #[must_use]
     pub fn symbol(&self) -> &'static str {
@@ -435,6 +412,52 @@ impl DocRef {
     }
 }
 
+/// A parsed constraint command argument, preserving the literal kind from the
+/// grammar rule `command_arg = { number_literal | boolean_literal | text_literal | label }`.
+///
+/// The parser sets the variant based on which grammar alternative matched.
+/// This information is used by:
+/// - **Planning** to validate that argument literal kinds match the expected type
+///   (e.g. reject a `Text` literal where a `Number` is required).
+/// - **Formatting** to emit correct Lemma syntax (quote `Text`, emit others as-is).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum CommandArg {
+    /// Matched `number_literal` (e.g. `10`, `3.14`)
+    Number(String),
+    /// Matched `boolean_literal` (e.g. `true`, `false`, `yes`, `no`, `accept`, `reject`)
+    Boolean(String),
+    /// Matched `text_literal` (e.g. `"hello"`) — stores the content between quotes,
+    /// without surrounding quote characters.
+    Text(String),
+    /// Matched `label` (an identifier: `eur`, `kilogram`, `hours`)
+    Label(String),
+}
+
+impl CommandArg {
+    /// Returns the inner string value regardless of which literal kind was parsed.
+    ///
+    /// Use this when you need the raw string content for further processing
+    /// (e.g. `.parse::<Decimal>()`) but do not need to distinguish the literal kind.
+    pub fn value(&self) -> &str {
+        match self {
+            CommandArg::Number(s)
+            | CommandArg::Boolean(s)
+            | CommandArg::Text(s)
+            | CommandArg::Label(s) => s,
+        }
+    }
+}
+
+impl fmt::Display for CommandArg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value())
+    }
+}
+
+/// A single constraint command: name and its typed arguments.
+pub type Constraint = (String, Vec<CommandArg>);
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 /// Parse-time fact value (before type resolution)
@@ -446,7 +469,7 @@ pub enum FactValue {
     /// A type declaration (inline type annotation on a fact)
     TypeDeclaration {
         base: String,
-        constraints: Option<Vec<(String, Vec<String>)>>,
+        constraints: Option<Vec<Constraint>>,
         from: Option<DocRef>,
     },
 }
@@ -619,11 +642,12 @@ impl fmt::Display for FactValue {
                     let constraint_str = constraints_vec
                         .iter()
                         .map(|(cmd, args)| {
-                            let args_str = args.join(" ");
-                            if args_str.is_empty() {
+                            let args_str: Vec<&str> = args.iter().map(|a| a.value()).collect();
+                            let joined = args_str.join(" ");
+                            if joined.is_empty() {
                                 cmd.clone()
                             } else {
-                                format!("{} {}", cmd, args_str)
+                                format!("{} {}", cmd, joined)
                             }
                         })
                         .collect::<Vec<_>>()
@@ -637,7 +661,6 @@ impl fmt::Display for FactValue {
     }
 }
 
-/// LiteralValue (MOVED TO planning/semantics.rs - resolved type with value)
 /// A time value
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, serde::Deserialize,
@@ -719,11 +742,6 @@ impl fmt::Display for DurationUnit {
 
 impl FactReference {
     #[must_use]
-    pub fn new(segments: Vec<String>, fact: String) -> Self {
-        Self { segments, fact }
-    }
-
-    #[must_use]
     pub fn local(fact: String) -> Self {
         Self {
             segments: Vec::new(),
@@ -767,12 +785,6 @@ impl LemmaFact {
             value,
             source_location,
         }
-    }
-
-    /// Returns true if this fact is local (not a cross-document reference)
-    #[must_use]
-    pub fn is_local(&self) -> bool {
-        self.reference.is_local()
     }
 }
 
@@ -905,7 +917,11 @@ impl fmt::Display for LemmaRule {
     }
 }
 
-fn expression_precedence(kind: &ExpressionKind) -> u8 {
+/// Precedence level for an expression kind.
+///
+/// Higher values bind tighter. Used by `Expression::Display` and the formatter
+/// to insert parentheses only where needed.
+pub fn expression_precedence(kind: &ExpressionKind) -> u8 {
     match kind {
         ExpressionKind::LogicalOr(..) => 1,
         ExpressionKind::LogicalAnd(..) => 2,
@@ -982,34 +998,16 @@ impl fmt::Display for Expression {
                 write_expression_child(f, right, my_prec)
             }
             ExpressionKind::MathematicalComputation(op, operand) => {
-                let op_name = match op {
-                    MathematicalComputation::Sqrt => "sqrt",
-                    MathematicalComputation::Sin => "sin",
-                    MathematicalComputation::Cos => "cos",
-                    MathematicalComputation::Tan => "tan",
-                    MathematicalComputation::Asin => "asin",
-                    MathematicalComputation::Acos => "acos",
-                    MathematicalComputation::Atan => "atan",
-                    MathematicalComputation::Log => "log",
-                    MathematicalComputation::Exp => "exp",
-                    MathematicalComputation::Abs => "abs",
-                    MathematicalComputation::Floor => "floor",
-                    MathematicalComputation::Ceil => "ceil",
-                    MathematicalComputation::Round => "round",
-                };
                 let my_prec = expression_precedence(&self.kind);
-                write!(f, "{} ", op_name)?;
+                write!(f, "{} ", op)?;
                 write_expression_child(f, operand, my_prec)
             }
             ExpressionKind::Veto(veto) => match &veto.message {
-                Some(msg) => {
-                    let escaped = msg.replace('\\', "\\\\").replace('"', "\\\"");
-                    write!(f, "veto \"{}\"", escaped)
-                }
+                Some(msg) => write!(f, "veto {}", quote_lemma_text(msg)),
                 None => write!(f, "veto"),
             },
             ExpressionKind::UnresolvedUnitLiteral(number, unit_name) => {
-                write!(f, "{} {}", number, unit_name)
+                write!(f, "{} {}", format_decimal_source(number), unit_name)
             }
         }
     }
@@ -1128,19 +1126,19 @@ pub enum TypeDef {
         source_location: Source,
         name: String,
         parent: String,
-        constraints: Option<Vec<(String, Vec<String>)>>,
+        constraints: Option<Vec<Constraint>>,
     },
     Import {
         source_location: Source,
         name: String,
         source_type: String,
         from: DocRef,
-        constraints: Option<Vec<(String, Vec<String>)>>,
+        constraints: Option<Vec<Constraint>>,
     },
     Inline {
         source_location: Source,
         parent: String,
-        constraints: Option<Vec<(String, Vec<String>)>>,
+        constraints: Option<Vec<Constraint>>,
         fact_ref: FactReference,
         from: Option<DocRef>,
     },
@@ -1176,7 +1174,7 @@ impl fmt::Display for TypeDef {
                     for (cmd, args) in constraints {
                         write!(f, "\n  -> {}", cmd)?;
                         for arg in args {
-                            write!(f, " {}", arg)?;
+                            write!(f, " {}", arg.value())?;
                         }
                     }
                 }
@@ -1193,7 +1191,7 @@ impl fmt::Display for TypeDef {
                     for (cmd, args) in constraints {
                         write!(f, " -> {}", cmd)?;
                         for arg in args {
-                            write!(f, " {}", arg)?;
+                            write!(f, " {}", arg.value())?;
                         }
                     }
                 }
@@ -1204,72 +1202,207 @@ impl fmt::Display for TypeDef {
     }
 }
 
-// LemmaType (MOVED TO planning/semantics.rs - resolved type after planning)
-// LiteralValue (MOVED TO planning/semantics.rs - resolved value after planning)
-// FactPath, RulePath, PathSegment (MOVED TO planning/semantics.rs - resolved paths after planning)
-// primitive_* functions (MOVED TO planning/semantics.rs - resolved type constructors)
-// impl LemmaType methods (MOVED TO planning/semantics.rs)
-// impl fmt::Display for LiteralValue (MOVED TO planning/semantics.rs)
-// impl fmt::Display for LemmaType (MOVED TO planning/semantics.rs)
+// =============================================================================
+// AsLemmaSource — wrapper for valid, round-trippable Lemma source output
+// =============================================================================
+
+/// Wrapper that selects the "emit valid Lemma source" `Display` implementation.
+///
+/// The regular `Display` on AST types is for human-readable output. Wrap a
+/// reference in `AsLemmaSource` when you need syntactically valid Lemma that
+/// can be parsed back (round-trip).
+///
+/// # Example
+/// ```ignore
+/// let s = format!("{}", AsLemmaSource(&fact_value));
+/// ```
+pub struct AsLemmaSource<'a, T: ?Sized>(pub &'a T);
+
+/// Escape a string and wrap it in double quotes for Lemma source output.
+/// Handles `\` and `"` escaping.
+pub fn quote_lemma_text(s: &str) -> String {
+    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{}\"", escaped)
+}
+
+/// Format a Decimal for Lemma source: normalize, remove trailing zeros,
+/// and strip the fractional part when it is zero (e.g. `100.00` → `"100"`).
+fn format_decimal_source(n: &Decimal) -> String {
+    let norm = n.normalize();
+    if norm.fract().is_zero() {
+        norm.trunc().to_string()
+    } else {
+        norm.to_string()
+    }
+}
+
+// -- Display for AsLemmaSource<CommandArg> ------------------------------------
+
+impl<'a> fmt::Display for AsLemmaSource<'a, CommandArg> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            CommandArg::Text(s) => write!(f, "{}", quote_lemma_text(s)),
+            CommandArg::Number(s) | CommandArg::Boolean(s) | CommandArg::Label(s) => {
+                write!(f, "{}", s)
+            }
+        }
+    }
+}
+
+/// Format a single constraint command and its args as valid Lemma source.
+///
+/// Each `CommandArg` already knows its literal kind (from parsing), so formatting
+/// is simply delegated to `AsLemmaSource<CommandArg>` — no lookup table needed.
+fn format_constraint_as_source(cmd: &str, args: &[CommandArg]) -> String {
+    if args.is_empty() {
+        cmd.to_string()
+    } else {
+        let args_str: Vec<String> = args
+            .iter()
+            .map(|a| format!("{}", AsLemmaSource(a)))
+            .collect();
+        format!("{} {}", cmd, args_str.join(" "))
+    }
+}
+
+/// Format a constraint list as valid Lemma source.
+/// Returns the `cmd arg -> cmd arg` portion joined by `separator`.
+fn format_constraints_as_source(
+    constraints: &[(String, Vec<CommandArg>)],
+    separator: &str,
+) -> String {
+    constraints
+        .iter()
+        .map(|(cmd, args)| format_constraint_as_source(cmd, args))
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
+// -- Display for AsLemmaSource<FactValue> ------------------------------------
+
+impl<'a> fmt::Display for AsLemmaSource<'a, FactValue> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            FactValue::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
+            FactValue::DocumentReference(doc_ref) => {
+                if doc_ref.is_registry {
+                    write!(f, "doc @{}", doc_ref.name)
+                } else {
+                    write!(f, "doc {}", doc_ref.name)
+                }
+            }
+            FactValue::TypeDeclaration {
+                base,
+                constraints,
+                from,
+            } => {
+                let base_str = if let Some(from_doc) = from {
+                    format!("{} from {}", base, from_doc)
+                } else {
+                    base.clone()
+                };
+                if let Some(ref constraints_vec) = constraints {
+                    let constraint_str = format_constraints_as_source(constraints_vec, " -> ");
+                    write!(f, "[{} -> {}]", base_str, constraint_str)
+                } else {
+                    write!(f, "[{}]", base_str)
+                }
+            }
+        }
+    }
+}
+
+// -- Display for AsLemmaSource<Value> ----------------------------------------
+
+impl<'a> fmt::Display for AsLemmaSource<'a, Value> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Value::Number(n) => write!(f, "{}", format_decimal_source(n)),
+            Value::Text(s) => write!(f, "{}", quote_lemma_text(s)),
+            Value::Date(dt) => {
+                let is_date_only =
+                    dt.hour == 0 && dt.minute == 0 && dt.second == 0 && dt.timezone.is_none();
+                if is_date_only {
+                    write!(f, "{:04}-{:02}-{:02}", dt.year, dt.month, dt.day)
+                } else {
+                    write!(
+                        f,
+                        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+                        dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second
+                    )?;
+                    if let Some(tz) = &dt.timezone {
+                        write!(f, "{}", tz)?;
+                    }
+                    Ok(())
+                }
+            }
+            Value::Time(t) => {
+                write!(f, "{:02}:{:02}:{:02}", t.hour, t.minute, t.second)?;
+                if let Some(tz) = &t.timezone {
+                    write!(f, "{}", tz)?;
+                }
+                Ok(())
+            }
+            Value::Boolean(b) => write!(f, "{}", b),
+            Value::Scale(n, u) => write!(f, "{} {}", format_decimal_source(n), u),
+            Value::Duration(n, u) => write!(f, "{} {}", format_decimal_source(n), u),
+            Value::Ratio(n, unit) => match unit.as_deref() {
+                Some("percent") => {
+                    let display_value = *n * Decimal::from(100);
+                    write!(f, "{}%", format_decimal_source(&display_value))
+                }
+                Some("permille") => {
+                    let display_value = *n * Decimal::from(1000);
+                    write!(f, "{}%%", format_decimal_source(&display_value))
+                }
+                Some(unit_name) => write!(f, "{} {}", format_decimal_source(n), unit_name),
+                None => write!(f, "{}", format_decimal_source(n)),
+            },
+        }
+    }
+}
+
+// -- Display for AsLemmaSource<TypeDef> --------------------------------------
+
+impl<'a> fmt::Display for AsLemmaSource<'a, TypeDef> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            TypeDef::Regular {
+                name,
+                parent,
+                constraints,
+                ..
+            } => {
+                write!(f, "type {} = {}", name, parent)?;
+                if let Some(constraints) = constraints {
+                    for (cmd, args) in constraints {
+                        write!(f, "\n  -> {}", format_constraint_as_source(cmd, args))?;
+                    }
+                }
+                Ok(())
+            }
+            TypeDef::Import {
+                name,
+                from,
+                constraints,
+                ..
+            } => {
+                write!(f, "type {} from {}", name, from)?;
+                if let Some(constraints) = constraints {
+                    for (cmd, args) in constraints {
+                        write!(f, " -> {}", format_constraint_as_source(cmd, args))?;
+                    }
+                }
+                Ok(())
+            }
+            TypeDef::Inline { .. } => Ok(()),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_arithmetic_operation_name() {
-        assert_eq!(ArithmeticComputation::Add.name(), "addition");
-        assert_eq!(ArithmeticComputation::Subtract.name(), "subtraction");
-        assert_eq!(ArithmeticComputation::Multiply.name(), "multiplication");
-        assert_eq!(ArithmeticComputation::Divide.name(), "division");
-        assert_eq!(ArithmeticComputation::Modulo.name(), "modulo");
-        assert_eq!(ArithmeticComputation::Power.name(), "exponentiation");
-    }
-
-    #[test]
-    fn test_comparison_operator_name() {
-        assert_eq!(ComparisonComputation::GreaterThan.name(), "greater than");
-        assert_eq!(ComparisonComputation::LessThan.name(), "less than");
-        assert_eq!(
-            ComparisonComputation::GreaterThanOrEqual.name(),
-            "greater than or equal"
-        );
-        assert_eq!(
-            ComparisonComputation::LessThanOrEqual.name(),
-            "less than or equal"
-        );
-        assert_eq!(ComparisonComputation::Equal.name(), "equal");
-        assert_eq!(ComparisonComputation::NotEqual.name(), "not equal");
-        assert_eq!(ComparisonComputation::Is.name(), "is");
-        assert_eq!(ComparisonComputation::IsNot.name(), "is not");
-    }
-
-    // test_literal_value_to_primitive_type (MOVED TO planning/semantics.rs tests)
-
-    #[test]
-    fn test_arithmetic_operation_display() {
-        assert_eq!(format!("{}", ArithmeticComputation::Add), "+");
-        assert_eq!(format!("{}", ArithmeticComputation::Subtract), "-");
-        assert_eq!(format!("{}", ArithmeticComputation::Multiply), "*");
-        assert_eq!(format!("{}", ArithmeticComputation::Divide), "/");
-        assert_eq!(format!("{}", ArithmeticComputation::Modulo), "%");
-        assert_eq!(format!("{}", ArithmeticComputation::Power), "^");
-    }
-
-    #[test]
-    fn test_comparison_operator_display() {
-        assert_eq!(format!("{}", ComparisonComputation::GreaterThan), ">");
-        assert_eq!(format!("{}", ComparisonComputation::LessThan), "<");
-        assert_eq!(
-            format!("{}", ComparisonComputation::GreaterThanOrEqual),
-            ">="
-        );
-        assert_eq!(format!("{}", ComparisonComputation::LessThanOrEqual), "<=");
-        assert_eq!(format!("{}", ComparisonComputation::Equal), "==");
-        assert_eq!(format!("{}", ComparisonComputation::NotEqual), "!=");
-        assert_eq!(format!("{}", ComparisonComputation::Is), "is");
-        assert_eq!(format!("{}", ComparisonComputation::IsNot), "is not");
-    }
 
     #[test]
     fn test_duration_unit_display() {
@@ -1309,14 +1442,6 @@ mod tests {
         );
         assert_eq!(format!("{}", permille), "5%%");
     }
-
-    // test_doc_type_display (MOVED TO planning/semantics.rs tests)
-    // test_type_constructor (MOVED TO planning/semantics.rs tests)
-    // test_type_display (MOVED TO planning/semantics.rs tests)
-    // test_type_equality (MOVED TO planning/semantics.rs tests)
-    // test_type_serialization (MOVED TO planning/semantics.rs tests)
-    // test_literal_value_display_value (MOVED TO planning/semantics.rs tests)
-    // test_literal_value_time_type (MOVED TO planning/semantics.rs tests)
 
     #[test]
     fn test_datetime_value_display() {
@@ -1395,4 +1520,261 @@ mod tests {
     // test_expression_get_source_text_with_location (uses Value instead of LiteralValue now)
     // test_expression_get_source_text_no_location (uses Value instead of LiteralValue now)
     // test_expression_get_source_text_source_not_found (uses Value instead of LiteralValue now)
+
+    // =====================================================================
+    // AsLemmaSource — constraint formatting tests
+    // =====================================================================
+
+    #[test]
+    fn as_lemma_source_text_default_is_quoted() {
+        let fv = FactValue::TypeDeclaration {
+            base: "text".to_string(),
+            constraints: Some(vec![(
+                "default".to_string(),
+                vec![CommandArg::Text("single".to_string())],
+            )]),
+            from: None,
+        };
+        assert_eq!(
+            format!("{}", AsLemmaSource(&fv)),
+            "[text -> default \"single\"]"
+        );
+    }
+
+    #[test]
+    fn as_lemma_source_number_default_not_quoted() {
+        let fv = FactValue::TypeDeclaration {
+            base: "number".to_string(),
+            constraints: Some(vec![(
+                "default".to_string(),
+                vec![CommandArg::Number("10".to_string())],
+            )]),
+            from: None,
+        };
+        assert_eq!(format!("{}", AsLemmaSource(&fv)), "[number -> default 10]");
+    }
+
+    #[test]
+    fn as_lemma_source_help_always_quoted() {
+        let fv = FactValue::TypeDeclaration {
+            base: "number".to_string(),
+            constraints: Some(vec![(
+                "help".to_string(),
+                vec![CommandArg::Text("Enter a quantity".to_string())],
+            )]),
+            from: None,
+        };
+        assert_eq!(
+            format!("{}", AsLemmaSource(&fv)),
+            "[number -> help \"Enter a quantity\"]"
+        );
+    }
+
+    #[test]
+    fn as_lemma_source_text_option_quoted() {
+        let fv = FactValue::TypeDeclaration {
+            base: "text".to_string(),
+            constraints: Some(vec![
+                (
+                    "option".to_string(),
+                    vec![CommandArg::Text("active".to_string())],
+                ),
+                (
+                    "option".to_string(),
+                    vec![CommandArg::Text("inactive".to_string())],
+                ),
+            ]),
+            from: None,
+        };
+        assert_eq!(
+            format!("{}", AsLemmaSource(&fv)),
+            "[text -> option \"active\" -> option \"inactive\"]"
+        );
+    }
+
+    #[test]
+    fn as_lemma_source_scale_unit_not_quoted() {
+        let fv = FactValue::TypeDeclaration {
+            base: "scale".to_string(),
+            constraints: Some(vec![
+                (
+                    "unit".to_string(),
+                    vec![
+                        CommandArg::Label("eur".to_string()),
+                        CommandArg::Number("1.00".to_string()),
+                    ],
+                ),
+                (
+                    "unit".to_string(),
+                    vec![
+                        CommandArg::Label("usd".to_string()),
+                        CommandArg::Number("1.10".to_string()),
+                    ],
+                ),
+            ]),
+            from: None,
+        };
+        assert_eq!(
+            format!("{}", AsLemmaSource(&fv)),
+            "[scale -> unit eur 1.00 -> unit usd 1.10]"
+        );
+    }
+
+    #[test]
+    fn as_lemma_source_scale_minimum_with_unit() {
+        let fv = FactValue::TypeDeclaration {
+            base: "scale".to_string(),
+            constraints: Some(vec![(
+                "minimum".to_string(),
+                vec![
+                    CommandArg::Number("0".to_string()),
+                    CommandArg::Label("eur".to_string()),
+                ],
+            )]),
+            from: None,
+        };
+        assert_eq!(
+            format!("{}", AsLemmaSource(&fv)),
+            "[scale -> minimum 0 eur]"
+        );
+    }
+
+    #[test]
+    fn as_lemma_source_boolean_default() {
+        let fv = FactValue::TypeDeclaration {
+            base: "boolean".to_string(),
+            constraints: Some(vec![(
+                "default".to_string(),
+                vec![CommandArg::Boolean("true".to_string())],
+            )]),
+            from: None,
+        };
+        assert_eq!(
+            format!("{}", AsLemmaSource(&fv)),
+            "[boolean -> default true]"
+        );
+    }
+
+    #[test]
+    fn as_lemma_source_duration_default() {
+        let fv = FactValue::TypeDeclaration {
+            base: "duration".to_string(),
+            constraints: Some(vec![(
+                "default".to_string(),
+                vec![
+                    CommandArg::Number("40".to_string()),
+                    CommandArg::Label("hours".to_string()),
+                ],
+            )]),
+            from: None,
+        };
+        assert_eq!(
+            format!("{}", AsLemmaSource(&fv)),
+            "[duration -> default 40 hours]"
+        );
+    }
+
+    #[test]
+    fn as_lemma_source_named_type_default_quoted() {
+        // Named types (user-defined): the parser produces CommandArg::Text for
+        // quoted default values like `default "single"`.
+        let fv = FactValue::TypeDeclaration {
+            base: "filing_status_type".to_string(),
+            constraints: Some(vec![(
+                "default".to_string(),
+                vec![CommandArg::Text("single".to_string())],
+            )]),
+            from: None,
+        };
+        assert_eq!(
+            format!("{}", AsLemmaSource(&fv)),
+            "[filing_status_type -> default \"single\"]"
+        );
+    }
+
+    #[test]
+    fn as_lemma_source_help_escapes_quotes() {
+        let fv = FactValue::TypeDeclaration {
+            base: "text".to_string(),
+            constraints: Some(vec![(
+                "help".to_string(),
+                vec![CommandArg::Text("say \"hello\"".to_string())],
+            )]),
+            from: None,
+        };
+        assert_eq!(
+            format!("{}", AsLemmaSource(&fv)),
+            "[text -> help \"say \\\"hello\\\"\"]"
+        );
+    }
+
+    #[test]
+    fn as_lemma_source_typedef_regular_options_quoted() {
+        let td = TypeDef::Regular {
+            source_location: Source::new(
+                "test",
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "test",
+            ),
+            name: "status".to_string(),
+            parent: "text".to_string(),
+            constraints: Some(vec![
+                (
+                    "option".to_string(),
+                    vec![CommandArg::Text("active".to_string())],
+                ),
+                (
+                    "option".to_string(),
+                    vec![CommandArg::Text("inactive".to_string())],
+                ),
+            ]),
+        };
+        let output = format!("{}", AsLemmaSource(&td));
+        assert!(output.contains("option \"active\""), "got: {}", output);
+        assert!(output.contains("option \"inactive\""), "got: {}", output);
+    }
+
+    #[test]
+    fn as_lemma_source_typedef_scale_units_not_quoted() {
+        let td = TypeDef::Regular {
+            source_location: Source::new(
+                "test",
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+                "test",
+            ),
+            name: "money".to_string(),
+            parent: "scale".to_string(),
+            constraints: Some(vec![
+                (
+                    "unit".to_string(),
+                    vec![
+                        CommandArg::Label("eur".to_string()),
+                        CommandArg::Number("1.00".to_string()),
+                    ],
+                ),
+                (
+                    "decimals".to_string(),
+                    vec![CommandArg::Number("2".to_string())],
+                ),
+                (
+                    "minimum".to_string(),
+                    vec![CommandArg::Number("0".to_string())],
+                ),
+            ]),
+        };
+        let output = format!("{}", AsLemmaSource(&td));
+        assert!(output.contains("unit eur 1.00"), "got: {}", output);
+        assert!(output.contains("decimals 2"), "got: {}", output);
+        assert!(output.contains("minimum 0"), "got: {}", output);
+    }
 }

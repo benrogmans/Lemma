@@ -3,8 +3,6 @@ use crate::LemmaError;
 use std::collections::HashMap;
 
 /// Convert Protobuf values to string values for use with ExecutionPlan::with_values().
-///
-/// This is a stub implementation.
 pub fn from_protobuf(
     _protobuf: &[u8],
     _plan: &ExecutionPlan,

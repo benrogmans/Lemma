@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// Generate a complete OpenAPI 3.1 specification from a Lemma engine.
 ///
 /// The specification includes:
-/// - Document endpoints (`/@{doc_name}` and `/@{doc_name}/{rules}`)
+/// - Document endpoints (`/{doc_name}` and `/{doc_name}/{rules}`)
 /// - GET operations with query parameters
 /// - POST operations with JSON request bodies
 /// - Response schemas with rule result shapes
@@ -45,8 +45,8 @@ pub fn generate_openapi(engine: &Engine) -> Value {
                 build_post_request_schema(&facts),
             );
 
-            // /@{doc_name} path (all rules)
-            let all_rules_path = format!("/@{}", doc_name);
+            // /{doc_name} path (all rules)
+            let all_rules_path = format!("/{}", doc_name);
             paths.insert(
                 all_rules_path,
                 build_document_path_item(
@@ -58,8 +58,8 @@ pub fn generate_openapi(engine: &Engine) -> Value {
                 ),
             );
 
-            // /@{doc_name}/{rules} path (filtered rules)
-            let filtered_rules_path = format!("/@{}/{{rules}}", doc_name);
+            // /{doc_name}/{rules} path (filtered rules)
+            let filtered_rules_path = format!("/{}/{{rules}}", doc_name);
             paths.insert(
                 filtered_rules_path,
                 build_document_path_item(
@@ -431,33 +431,123 @@ fn build_document_path_item(
 }
 
 // ---------------------------------------------------------------------------
+// Help and default from Lemma types
+// ---------------------------------------------------------------------------
+
+/// Extract the type's help text for use as description. Always has a value for non-Veto types.
+fn type_help(lemma_type: &LemmaType) -> String {
+    match &lemma_type.specifications {
+        TypeSpecification::Boolean { help, .. } => help.clone(),
+        TypeSpecification::Scale { help, .. } => help.clone(),
+        TypeSpecification::Number { help, .. } => help.clone(),
+        TypeSpecification::Ratio { help, .. } => help.clone(),
+        TypeSpecification::Text { help, .. } => help.clone(),
+        TypeSpecification::Date { help, .. } => help.clone(),
+        TypeSpecification::Time { help, .. } => help.clone(),
+        TypeSpecification::Duration { help, .. } => help.clone(),
+        TypeSpecification::Veto { .. } => String::new(),
+    }
+}
+
+/// Default value as string (for GET query params).
+fn type_default_as_string(lemma_type: &LemmaType) -> Option<String> {
+    match &lemma_type.specifications {
+        TypeSpecification::Boolean { default, .. } => default.map(|b| b.to_string()),
+        TypeSpecification::Scale { default, .. } => {
+            default.as_ref().map(|(d, u)| format!("{} {}", d, u))
+        }
+        TypeSpecification::Number { default, .. } => default.as_ref().map(|d| d.to_string()),
+        TypeSpecification::Ratio { default, .. } => default.as_ref().map(|d| d.to_string()),
+        TypeSpecification::Text { default, .. } => default.clone(),
+        TypeSpecification::Date { default, .. } => default.as_ref().map(|dt| format!("{}", dt)),
+        TypeSpecification::Time { default, .. } => default.as_ref().map(|t| format!("{}", t)),
+        TypeSpecification::Duration { default, .. } => {
+            default.as_ref().map(|(v, u)| format!("{}+{}", v, u))
+        }
+        TypeSpecification::Veto { .. } => None,
+    }
+}
+
+/// Default value as JSON (for POST body schema).
+fn type_default_as_json(lemma_type: &LemmaType) -> Option<Value> {
+    match &lemma_type.specifications {
+        TypeSpecification::Boolean { default, .. } => default.map(Value::Bool),
+        TypeSpecification::Scale { default, .. } => default.as_ref().map(
+            |(d, u)| json!({ "value": d.to_string().parse::<f64>().unwrap_or(0.0), "unit": u }),
+        ),
+        TypeSpecification::Number { default, .. } => default
+            .as_ref()
+            .and_then(|d| d.to_string().parse::<f64>().ok())
+            .map(Value::from),
+        TypeSpecification::Ratio { default, .. } => default
+            .as_ref()
+            .and_then(|d| d.to_string().parse::<f64>().ok())
+            .map(|n| json!({ "value": n })),
+        TypeSpecification::Text { default, .. } => default.clone().map(Value::String),
+        TypeSpecification::Date { default, .. } => {
+            default.as_ref().map(|dt| Value::String(format!("{}", dt)))
+        }
+        TypeSpecification::Time { default, .. } => {
+            default.as_ref().map(|t| Value::String(format!("{}", t)))
+        }
+        TypeSpecification::Duration { default, .. } => default.as_ref().map(|(v, u)| {
+            json!({
+                "value": v.to_string().parse::<f64>().unwrap_or(0.0),
+                "unit": format!("{}", u)
+            })
+        }),
+        TypeSpecification::Veto { .. } => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Query parameter generation (GET — all string typed)
 // ---------------------------------------------------------------------------
 
 fn build_query_parameter(fact: &InputFact) -> Value {
-    let description = build_get_parameter_description(&fact.lemma_type);
+    let type_description = build_get_parameter_description(&fact.lemma_type);
+    let help = type_help(&fact.lemma_type);
+    let description = if help.is_empty() {
+        type_description
+    } else {
+        format!("{}. {}", help, type_description)
+    };
+    let default_str = type_default_as_string(&fact.lemma_type);
+    let mut schema = build_get_parameter_schema(&fact.lemma_type);
+    if let Some(ref d) = default_str {
+        schema["default"] = Value::String(d.clone());
+    }
+    let example = default_str.or_else(|| build_get_example(&fact.lemma_type));
     let mut param = json!({
         "name": fact.name,
         "in": "query",
         "required": !fact.has_default,
         "description": description,
-        "schema": { "type": "string" }
+        "schema": schema
     });
-
-    // For text types with options, add enum to the schema
-    if let TypeSpecification::Text { ref options, .. } = fact.lemma_type.specifications {
-        if !options.is_empty() {
-            param["schema"]["enum"] =
-                Value::Array(options.iter().map(|o| Value::String(o.clone())).collect());
-        }
+    if let Some(ex) = example {
+        param["example"] = Value::String(ex);
     }
-
-    // Add example values
-    if let Some(example) = build_get_example(&fact.lemma_type) {
-        param["example"] = Value::String(example);
-    }
-
     param
+}
+
+/// Schema for a GET query parameter. Query params are always strings on the wire;
+/// we use enum where applicable so UIs (e.g. Scalar) show dropdowns and the right semantic type.
+fn build_get_parameter_schema(lemma_type: &LemmaType) -> Value {
+    let mut schema = json!({ "type": "string" });
+    match &lemma_type.specifications {
+        TypeSpecification::Text { options, .. } => {
+            if !options.is_empty() {
+                schema["enum"] =
+                    Value::Array(options.iter().map(|o| Value::String(o.clone())).collect());
+            }
+        }
+        TypeSpecification::Boolean { .. } => {
+            schema["enum"] = json!(["true", "false"]);
+        }
+        _ => {}
+    }
+    schema
 }
 
 fn build_get_parameter_description(lemma_type: &LemmaType) -> String {
@@ -598,6 +688,18 @@ fn build_post_request_schema(facts: &[InputFact]) -> Value {
 }
 
 fn build_post_property_schema(lemma_type: &LemmaType) -> Value {
+    let mut schema = build_post_property_schema_inner(lemma_type);
+    let help = type_help(lemma_type);
+    if !help.is_empty() {
+        schema["description"] = Value::String(help);
+    }
+    if let Some(default) = type_default_as_json(lemma_type) {
+        schema["default"] = default;
+    }
+    schema
+}
+
+fn build_post_property_schema_inner(lemma_type: &LemmaType) -> Value {
     match &lemma_type.specifications {
         TypeSpecification::Number {
             minimum, maximum, ..
@@ -690,7 +792,7 @@ fn build_post_property_schema(lemma_type: &LemmaType) -> Value {
             schema
         }
         TypeSpecification::Boolean { .. } => {
-            json!({ "type": "boolean" })
+            json!({ "type": "boolean", "example": true })
         }
         TypeSpecification::Date { .. } => {
             json!({ "type": "string", "format": "date" })
@@ -908,12 +1010,12 @@ mod tests {
             create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
         let spec = generate_openapi(&engine);
 
-        assert!(spec["paths"]["/@pricing"].is_object());
-        assert!(spec["paths"]["/@pricing/{rules}"].is_object());
+        assert!(spec["paths"]["/pricing"].is_object());
+        assert!(spec["paths"]["/pricing/{rules}"].is_object());
 
         // GET and POST operations present
-        assert!(spec["paths"]["/@pricing"]["get"].is_object());
-        assert!(spec["paths"]["/@pricing"]["post"].is_object());
+        assert!(spec["paths"]["/pricing"]["get"].is_object());
+        assert!(spec["paths"]["/pricing"]["post"].is_object());
     }
 
     #[test]
@@ -1002,10 +1104,10 @@ mod tests {
 
         let spec = generate_openapi(&engine);
 
-        assert!(spec["paths"]["/@pricing"].is_object());
-        assert!(spec["paths"]["/@shipping"].is_object());
-        assert!(spec["paths"]["/@pricing/{rules}"].is_object());
-        assert!(spec["paths"]["/@shipping/{rules}"].is_object());
+        assert!(spec["paths"]["/pricing"].is_object());
+        assert!(spec["paths"]["/shipping"].is_object());
+        assert!(spec["paths"]["/pricing/{rules}"].is_object());
+        assert!(spec["paths"]["/shipping/{rules}"].is_object());
     }
 
     #[test]
@@ -1015,7 +1117,7 @@ mod tests {
         );
         let spec = generate_openapi(&engine);
 
-        let params = &spec["paths"]["/@test"]["get"]["parameters"];
+        let params = &spec["paths"]["/test"]["get"]["parameters"];
         let product_param = params
             .as_array()
             .expect("parameters should be array")
@@ -1039,6 +1141,24 @@ mod tests {
 
         let schema = &spec["components"]["schemas"]["test_request"];
         assert_eq!(schema["properties"]["is_active"]["type"], "boolean");
+    }
+
+    #[test]
+    fn test_get_parameter_boolean_has_enum() {
+        let engine = create_engine_with_code(
+            "doc test\nfact is_active = [boolean]\nrule result = is_active",
+        );
+        let spec = generate_openapi(&engine);
+
+        let params = &spec["paths"]["/test"]["get"]["parameters"];
+        let is_active_param = params
+            .as_array()
+            .expect("parameters should be array")
+            .iter()
+            .find(|p| p["name"] == "is_active")
+            .expect("should have is_active parameter");
+        assert_eq!(is_active_param["schema"]["type"], "string");
+        assert_eq!(is_active_param["schema"]["enum"], json!(["true", "false"]));
     }
 
     #[test]
@@ -1078,5 +1198,67 @@ mod tests {
         assert!(required.contains(&Value::String("name".to_string())));
         // "quantity" should NOT be required (has default value of 10)
         assert!(!required.contains(&Value::String("quantity".to_string())));
+    }
+
+    #[test]
+    fn test_help_and_default_in_openapi() {
+        let engine = create_engine_with_code(
+            r#"doc test
+fact quantity = [number -> help "Number of items to order" -> default 10]
+fact active = [boolean -> help "Whether the feature is enabled" -> default true]
+rule result = quantity
+"#,
+        );
+        let spec = generate_openapi(&engine);
+
+        let get_params = spec["paths"]["/test"]["get"]["parameters"]
+            .as_array()
+            .expect("parameters array");
+        let quantity_param = get_params
+            .iter()
+            .find(|p| p["name"] == "quantity")
+            .expect("quantity param");
+        assert!(quantity_param["description"]
+            .as_str()
+            .unwrap()
+            .contains("Number of items to order"));
+        assert_eq!(quantity_param["schema"]["default"], "10");
+        assert_eq!(quantity_param["example"], "10");
+
+        let active_param = get_params
+            .iter()
+            .find(|p| p["name"] == "active")
+            .expect("active param");
+        assert!(active_param["description"]
+            .as_str()
+            .unwrap()
+            .contains("Whether the feature is enabled"));
+        assert_eq!(active_param["schema"]["default"], "true");
+
+        let req_schema = &spec["components"]["schemas"]["test_request"];
+        assert_eq!(
+            req_schema["properties"]["quantity"]["description"]
+                .as_str()
+                .unwrap(),
+            "Number of items to order"
+        );
+        assert_eq!(
+            req_schema["properties"]["quantity"]["default"]
+                .as_f64()
+                .unwrap(),
+            10.0
+        );
+        assert_eq!(
+            req_schema["properties"]["active"]["description"]
+                .as_str()
+                .unwrap(),
+            "Whether the feature is enabled"
+        );
+        assert_eq!(
+            req_schema["properties"]["active"]["default"]
+                .as_bool()
+                .unwrap(),
+            true
+        );
     }
 }

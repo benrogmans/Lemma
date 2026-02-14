@@ -1,7 +1,7 @@
 use super::ast::Span;
 use super::Rule;
 use crate::error::LemmaError;
-use crate::parsing::ast::TypeDef;
+use crate::parsing::ast::{CommandArg, TypeDef};
 use pest::iterators::Pair;
 use std::sync::Arc;
 
@@ -128,7 +128,7 @@ pub(crate) fn parse_type_import(
 
 type TypeArrowChainResult = (
     String,
-    Option<Vec<(String, Vec<String>)>>,
+    Option<Vec<(String, Vec<CommandArg>)>>,
     Option<super::ast::DocRef>,
 );
 
@@ -281,11 +281,45 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
     Ok((parent_name, constraints, from_doc))
 }
 
+/// Returns a typed `CommandArg` preserving which grammar alternative matched.
+///
+/// - `text_literal` → `CommandArg::Text` (content between quotes, no surrounding quotes)
+/// - `number_literal` → `CommandArg::Number` (raw token text)
+/// - `boolean_literal` → `CommandArg::Boolean` (raw token text)
+/// - `label` → `CommandArg::Label` (raw token text)
+///
+/// Note: `label` is a silent rule in the Pest grammar (`_{ ... }`), so when
+/// `command_arg` matches via `label`, `.into_inner()` yields no children.
+/// We capture the raw text first to handle that case.
+fn command_arg_value(pair: Pair<Rule>) -> CommandArg {
+    let raw = pair.as_str().to_string();
+    let mut inner = pair.into_inner();
+    let Some(child) = inner.next() else {
+        // Matched via `label` (silent rule) — use the raw token text.
+        return CommandArg::Label(raw);
+    };
+    match child.as_rule() {
+        Rule::text_literal => {
+            let s = child.as_str();
+            let content = if s.len() >= 2 {
+                s[1..s.len() - 1].to_string()
+            } else {
+                s.to_string()
+            };
+            CommandArg::Text(content)
+        }
+        Rule::number_literal => CommandArg::Number(child.as_str().to_string()),
+        Rule::boolean_literal => CommandArg::Boolean(child.as_str().to_string()),
+        // Any other rule is treated as a label-like token.
+        _ => CommandArg::Label(child.as_str().to_string()),
+    }
+}
+
 fn parse_command(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
-) -> Result<(String, Vec<String>), LemmaError> {
+) -> Result<(String, Vec<CommandArg>), LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
     let pair_str = pair.as_str();
     let mut command_name = None;
@@ -297,7 +331,8 @@ fn parse_command(
                 command_name = Some(inner_pair.as_str().to_string());
             }
             Rule::command_arg => {
-                command_args.push(inner_pair.as_str().to_string());
+                let arg_value = command_arg_value(inner_pair);
+                command_args.push(arg_value);
             }
             _ => {}
         }
@@ -321,6 +356,7 @@ fn parse_command(
 
 #[cfg(test)]
 mod tests {
+    use crate::parsing::ast::{CommandArg, FactValue};
     use crate::{parse, ResourceLimits};
 
     #[test]
@@ -350,11 +386,156 @@ type dice = number -> minimum 0 -> maximum 6"#;
                 let constraints = constraints.as_ref().unwrap();
                 assert_eq!(constraints.len(), 2);
                 assert_eq!(constraints[0].0, "minimum");
-                assert_eq!(constraints[0].1, vec!["0"]);
+                assert_eq!(constraints[0].1, vec![CommandArg::Number("0".to_string())]);
                 assert_eq!(constraints[1].0, "maximum");
-                assert_eq!(constraints[1].1, vec!["6"]);
+                assert_eq!(constraints[1].1, vec![CommandArg::Number("6".to_string())]);
             }
             other => panic!("Expected Regular type definition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parser_produces_command_arg_number_for_number_literals() {
+        let code = "doc test\nfact x = [number -> minimum 5 -> maximum 100 -> default 42]";
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let fact = &docs[0].facts[0];
+        match &fact.value {
+            FactValue::TypeDeclaration { constraints, .. } => {
+                let constraints = constraints.as_ref().unwrap();
+                assert_eq!(constraints[0].0, "minimum");
+                assert_eq!(constraints[0].1, vec![CommandArg::Number("5".to_string())]);
+                assert_eq!(constraints[1].0, "maximum");
+                assert_eq!(
+                    constraints[1].1,
+                    vec![CommandArg::Number("100".to_string())]
+                );
+                assert_eq!(constraints[2].0, "default");
+                assert_eq!(constraints[2].1, vec![CommandArg::Number("42".to_string())]);
+            }
+            other => panic!("Expected TypeDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parser_produces_command_arg_text_for_text_literals() {
+        let code = r#"doc test
+fact x = [text -> help "Enter your name" -> default "Alice"]"#;
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let fact = &docs[0].facts[0];
+        match &fact.value {
+            FactValue::TypeDeclaration { constraints, .. } => {
+                let constraints = constraints.as_ref().unwrap();
+                assert_eq!(constraints[0].0, "help");
+                assert_eq!(
+                    constraints[0].1,
+                    vec![CommandArg::Text("Enter your name".to_string())]
+                );
+                assert_eq!(constraints[1].0, "default");
+                assert_eq!(
+                    constraints[1].1,
+                    vec![CommandArg::Text("Alice".to_string())]
+                );
+            }
+            other => panic!("Expected TypeDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parser_produces_command_arg_boolean_for_boolean_literals() {
+        let code = "doc test\nfact x = [boolean -> default true]";
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let fact = &docs[0].facts[0];
+        match &fact.value {
+            FactValue::TypeDeclaration { constraints, .. } => {
+                let constraints = constraints.as_ref().unwrap();
+                assert_eq!(constraints[0].0, "default");
+                assert_eq!(
+                    constraints[0].1,
+                    vec![CommandArg::Boolean("true".to_string())]
+                );
+            }
+            other => panic!("Expected TypeDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parser_produces_command_arg_label_for_unit_names() {
+        let code = "doc test\ntype money = scale -> unit eur 1.00 -> unit usd 1.10";
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let type_def = &docs[0].types[0];
+        match type_def {
+            crate::TypeDef::Regular { constraints, .. } => {
+                let constraints = constraints.as_ref().unwrap();
+                assert_eq!(constraints[0].0, "unit");
+                assert_eq!(
+                    constraints[0].1,
+                    vec![
+                        CommandArg::Label("eur".to_string()),
+                        CommandArg::Number("1.00".to_string()),
+                    ]
+                );
+                assert_eq!(constraints[1].0, "unit");
+                assert_eq!(
+                    constraints[1].1,
+                    vec![
+                        CommandArg::Label("usd".to_string()),
+                        CommandArg::Number("1.10".to_string()),
+                    ]
+                );
+            }
+            other => panic!("Expected Regular type definition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parser_produces_command_arg_text_for_option_values() {
+        let code = r#"doc test
+type status = text -> option "active" -> option "inactive""#;
+        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let type_def = &docs[0].types[0];
+        match type_def {
+            crate::TypeDef::Regular { constraints, .. } => {
+                let constraints = constraints.as_ref().unwrap();
+                assert_eq!(constraints[0].0, "option");
+                assert_eq!(
+                    constraints[0].1,
+                    vec![CommandArg::Text("active".to_string())]
+                );
+                assert_eq!(constraints[1].0, "option");
+                assert_eq!(
+                    constraints[1].1,
+                    vec![CommandArg::Text("inactive".to_string())]
+                );
+            }
+            other => panic!("Expected Regular type definition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parser_distinguishes_text_literal_from_number_literal() {
+        // "10" is a text_literal; 10 is a number_literal.
+        // The parser must produce different CommandArg variants.
+        let code_text = r#"doc test
+fact x = [number -> default "10"]"#;
+        let docs_text = parse(code_text, "test.lemma", &ResourceLimits::default()).unwrap();
+        let fact_text = &docs_text[0].facts[0];
+        match &fact_text.value {
+            FactValue::TypeDeclaration { constraints, .. } => {
+                let constraints = constraints.as_ref().unwrap();
+                assert_eq!(constraints[0].1, vec![CommandArg::Text("10".to_string())]);
+            }
+            other => panic!("Expected TypeDeclaration, got {:?}", other),
+        }
+
+        let code_number = "doc test\nfact x = [number -> default 10]";
+        let docs_number = parse(code_number, "test.lemma", &ResourceLimits::default()).unwrap();
+        let fact_number = &docs_number[0].facts[0];
+        match &fact_number.value {
+            FactValue::TypeDeclaration { constraints, .. } => {
+                let constraints = constraints.as_ref().unwrap();
+                assert_eq!(constraints[0].1, vec![CommandArg::Number("10".to_string())]);
+            }
+            other => panic!("Expected TypeDeclaration, got {:?}", other),
         }
     }
 }

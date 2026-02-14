@@ -17,7 +17,7 @@ struct TextConstraints {
     minimum: Option<usize>,
     maximum: Option<usize>,
     length: Option<usize>,
-    help: Option<String>,
+    help: String,
 }
 
 #[derive(Clone, Debug)]
@@ -25,7 +25,7 @@ struct NumericConstraints {
     minimum: Option<Decimal>,
     maximum: Option<Decimal>,
     decimals: Option<u8>,
-    help: Option<String>,
+    help: String,
 }
 
 pub fn run_interactive(
@@ -251,10 +251,8 @@ fn prompt_value_for_type(
         } => {
             if !options.is_empty() {
                 let prompt_message = format!("{} [{}]", fact_name, type_str);
-                let mut prompt = Select::new(&prompt_message, options.clone());
-                if let Some(help) = help.as_ref() {
-                    prompt = prompt.with_help_message(help);
-                }
+                let mut prompt =
+                    Select::new(&prompt_message, options.clone()).with_help_message(help.as_str());
                 if let Some(default) = default_value {
                     if let Some(idx) = options.iter().position(|o| o == default) {
                         prompt = prompt.with_starting_cursor(idx);
@@ -323,18 +321,18 @@ fn prompt_value_for_type(
             units,
             *minimum,
             *maximum,
-            help.as_deref(),
+            help.as_str(),
         ),
         TypeSpecification::Date { .. } => prompt_date_fact(fact_name, default_value),
         TypeSpecification::Time { help, .. } => prompt_simple_text(
             fact_name,
             &type_str,
             default_value,
-            help.as_deref(),
+            help.as_str(),
             "12:34:56",
         ),
         TypeSpecification::Duration { help, .. } => {
-            prompt_duration_fact(fact_name, &type_str, default_value, help.as_deref())
+            prompt_duration_fact(fact_name, &type_str, default_value, help.as_str())
         }
         TypeSpecification::Veto { .. } => {
             anyhow::bail!("Fact '{}' has veto type which is not promptable", fact_name)
@@ -431,7 +429,11 @@ fn prompt_text_fact_with_constraints(
     };
 
     let mut prompt = Text::new(&prompt_message).with_validator(validator);
-    let help_message = help.unwrap_or_else(|| format!("Example: {}", example));
+    let help_message = if help.is_empty() {
+        format!("Example: {}", example)
+    } else {
+        help.clone()
+    };
     prompt = prompt.with_help_message(&help_message);
 
     if let Some(default) = default_value {
@@ -447,7 +449,7 @@ fn prompt_simple_text(
     fact_name: &str,
     type_str: &str,
     default_value: Option<&str>,
-    help: Option<&str>,
+    help: &str,
     example: &str,
 ) -> Result<String> {
     let prompt_message = format!("{} [{}]", fact_name, type_str);
@@ -459,9 +461,11 @@ fn prompt_simple_text(
         }
     };
     let mut prompt = Text::new(&prompt_message).with_validator(validator);
-    let help_message = help
-        .map(|h| h.to_string())
-        .unwrap_or_else(|| format!("Example: {}", example));
+    let help_message = if help.is_empty() {
+        format!("Example: {}", example)
+    } else {
+        help.to_string()
+    };
     prompt = prompt.with_help_message(&help_message);
     if let Some(default) = default_value {
         prompt = prompt.with_default(default);
@@ -516,7 +520,7 @@ fn prompt_ratio_fact(
     units: &lemma::RatioUnits,
     minimum: Option<Decimal>,
     maximum: Option<Decimal>,
-    help: Option<&str>,
+    help: &str,
 ) -> Result<String> {
     // Ratio types typically support percent/permille; offer a unit selector.
     let prompt_message = format!("{} [{}]", fact_name, type_str);
@@ -537,7 +541,7 @@ fn prompt_ratio_fact(
             minimum,
             maximum,
             decimals: None,
-            help: help.map(|h| h.to_string()),
+            help: help.to_string(),
         },
         "0.10",
     )?;
@@ -554,18 +558,18 @@ fn prompt_duration_fact(
     fact_name: &str,
     type_str: &str,
     default_value: Option<&str>,
-    help: Option<&str>,
+    help: &str,
 ) -> Result<String> {
     // If there is a default, let the user accept it.
     if let Some(default) = default_value {
         let prompt_message = format!("{} [{}]", fact_name, type_str);
-        let mut prompt = Text::new(&prompt_message);
-        if let Some(help) = help {
-            prompt = prompt.with_help_message(help);
+        let help_message = if help.is_empty() {
+            "Example: 5 days".to_string()
         } else {
-            prompt = prompt.with_help_message("Example: 5 days");
-        }
-        return prompt
+            help.to_string()
+        };
+        return Text::new(&prompt_message)
+            .with_help_message(&help_message)
             .with_default(default)
             .prompt()
             .context(format!("Failed to get duration for {}", fact_name));
@@ -593,7 +597,7 @@ fn prompt_duration_fact(
             minimum: None,
             maximum: None,
             decimals: None,
-            help: help.map(|h| h.to_string()),
+            help: help.to_string(),
         },
         "5",
     )?;
@@ -653,7 +657,11 @@ fn prompt_decimal_input(
     };
 
     let mut prompt = Text::new(prompt_message).with_validator(validator);
-    let help_message = help.unwrap_or_else(|| format!("Example: {}", example));
+    let help_message = if help.is_empty() {
+        format!("Example: {}", example)
+    } else {
+        help.clone()
+    };
     prompt = prompt.with_help_message(&help_message);
 
     if let Some(default) = default_value {

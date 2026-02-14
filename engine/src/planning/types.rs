@@ -7,7 +7,7 @@
 //! - Applying constraints to create final type specifications
 
 use crate::error::LemmaError;
-use crate::parsing::ast::{FactReference, TypeDef};
+use crate::parsing::ast::{CommandArg, FactReference, TypeDef};
 use crate::planning::semantics::{self, LemmaType, TypeExtends, TypeSpecification};
 
 use std::collections::{HashMap, HashSet};
@@ -511,7 +511,7 @@ impl TypeRegistry {
     fn apply_constraints(
         &self,
         mut specs: TypeSpecification,
-        constraints: &[(String, Vec<String>)],
+        constraints: &[(String, Vec<CommandArg>)],
         source: &crate::Source,
     ) -> Result<TypeSpecification, Vec<LemmaError>> {
         let mut errors = Vec::new();
@@ -812,8 +812,14 @@ mod tests {
             ),
             parent: "number".to_string(),
             constraints: Some(vec![
-                ("minimum".to_string(), vec!["0".to_string()]),
-                ("maximum".to_string(), vec!["150".to_string()]),
+                (
+                    "minimum".to_string(),
+                    vec![CommandArg::Number("0".to_string())],
+                ),
+                (
+                    "maximum".to_string(),
+                    vec![CommandArg::Number("150".to_string())],
+                ),
             ]),
             fact_ref: fact_ref.clone(),
             from: None,

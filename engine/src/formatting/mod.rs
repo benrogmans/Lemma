@@ -1,16 +1,16 @@
 //! Lemma source code formatting.
 //!
 //! Formats parsed documents into canonical Lemma source text.
-//! Produces valid, parseable Lemma — does NOT use `Display` impls (those are for
-//! human-readable output in evaluation/errors, not for round-trippable source).
+//! Value and constraint formatting is delegated to [`AsLemmaSource`] (in `parsing::ast`),
+//! which emits valid, round-trippable Lemma syntax. The regular `Display` impls on AST
+//! types are for human-readable output (error messages, evaluation); they are **not** used
+//! here. This module handles layout: alignment, line wrapping, and section ordering.
 
 use crate::parsing::ast::{
-    ArithmeticComputation, BooleanValue, ComparisonComputation, ConversionTarget, DocRef,
-    Expression, ExpressionKind, FactReference, FactValue, LemmaDoc, LemmaFact, LemmaRule,
-    MathematicalComputation, RuleReference, TypeDef, Value,
+    expression_precedence, AsLemmaSource, Expression, ExpressionKind, FactValue, LemmaDoc,
+    LemmaFact, LemmaRule, TypeDef,
 };
 use crate::{parse, LemmaError, ResourceLimits};
-use rust_decimal::Decimal;
 
 /// Soft line length limit. Longer lines may be wrapped (unless clauses, expressions).
 /// Facts and other constructs are not broken if they exceed this.
@@ -75,7 +75,7 @@ fn format_document(doc: &LemmaDoc, max_cols: usize) -> String {
             if index > 0 {
                 out.push('\n');
             }
-            out.push_str(&format_type_def(type_def));
+            out.push_str(&format!("{}", AsLemmaSource(*type_def)));
             out.push('\n');
         }
     }
@@ -98,52 +98,8 @@ fn format_document(doc: &LemmaDoc, max_cols: usize) -> String {
 }
 
 // =============================================================================
-// Type definitions
+// Type definitions — delegated to AsLemmaSource<TypeDef>
 // =============================================================================
-
-fn format_type_def(td: &TypeDef) -> String {
-    match td {
-        TypeDef::Regular {
-            name,
-            parent,
-            constraints,
-            ..
-        } => {
-            let mut out = format!("type {} = {}", name, parent);
-            if let Some(constraints) = constraints {
-                for (cmd, args) in constraints {
-                    out.push_str("\n  -> ");
-                    out.push_str(cmd);
-                    for arg in args {
-                        out.push(' ');
-                        out.push_str(arg);
-                    }
-                }
-            }
-            out
-        }
-        TypeDef::Import {
-            name,
-            from,
-            constraints,
-            ..
-        } => {
-            let mut out = format!("type {} from {}", name, format_doc_ref(from));
-            if let Some(constraints) = constraints {
-                for (cmd, args) in constraints {
-                    out.push_str(" -> ");
-                    out.push_str(cmd);
-                    for arg in args {
-                        out.push(' ');
-                        out.push_str(arg);
-                    }
-                }
-            }
-            out
-        }
-        TypeDef::Inline { .. } => String::new(),
-    }
-}
 
 // =============================================================================
 // Facts
@@ -153,20 +109,20 @@ fn format_type_def(td: &TypeDef) -> String {
 /// for column-aligned `=` signs within a group.
 /// When `align_width` is 0 or less than the reference length, no padding is added.
 fn format_fact(fact: &LemmaFact, align_width: usize) -> String {
-    let ref_str = format_fact_reference(&fact.reference);
+    let ref_str = format!("{}", fact.reference);
     let padded = if align_width > ref_str.len() {
         format!("{:width$}", ref_str, width = align_width)
     } else {
         ref_str
     };
-    format!("fact {} = {}", padded, format_fact_value(&fact.value))
+    format!("fact {} = {}", padded, AsLemmaSource(&fact.value))
 }
 
 /// Compute the maximum fact reference width across a slice of facts.
 fn max_ref_width(facts: &[&LemmaFact]) -> usize {
     facts
         .iter()
-        .map(|f| format_fact_reference(&f.reference).len())
+        .map(|f| format!("{}", f.reference).len())
         .max()
         .unwrap_or(0)
 }
@@ -242,61 +198,6 @@ fn format_sorted_facts(facts: &[LemmaFact], out: &mut String) {
     }
 }
 
-fn format_fact_reference(r: &FactReference) -> String {
-    let mut out = String::new();
-    for segment in &r.segments {
-        out.push_str(segment);
-        out.push('.');
-    }
-    out.push_str(&r.fact);
-    out
-}
-
-fn format_fact_value(fv: &FactValue) -> String {
-    match fv {
-        FactValue::Literal(v) => format_value(v),
-        FactValue::DocumentReference(doc_ref) => {
-            format!("doc {}", format_doc_ref(doc_ref))
-        }
-        FactValue::TypeDeclaration {
-            base,
-            constraints,
-            from,
-        } => {
-            let base_str = if let Some(from_doc) = from {
-                format!("{} from {}", base, format_doc_ref(from_doc))
-            } else {
-                base.clone()
-            };
-            if let Some(ref constraints_vec) = constraints {
-                let constraint_str = constraints_vec
-                    .iter()
-                    .map(|(cmd, args)| {
-                        let args_str = args.join(" ");
-                        if args_str.is_empty() {
-                            cmd.clone()
-                        } else {
-                            format!("{} {}", cmd, args_str)
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" -> ");
-                format!("[{} -> {}]", base_str, constraint_str)
-            } else {
-                format!("[{}]", base_str)
-            }
-        }
-    }
-}
-
-fn format_doc_ref(dr: &DocRef) -> String {
-    if dr.is_registry {
-        format!("@{}", dr.name)
-    } else {
-        dr.name.clone()
-    }
-}
-
 // =============================================================================
 // Rules
 // =============================================================================
@@ -333,156 +234,26 @@ fn format_rule(rule: &LemmaRule, max_cols: usize) -> String {
 }
 
 // =============================================================================
-// Values — produce valid Lemma source (NOT Display)
-// =============================================================================
-
-fn format_value(v: &Value) -> String {
-    match v {
-        Value::Number(n) => format_decimal(n),
-        Value::Text(s) => {
-            // Text literals must be quoted in Lemma source.
-            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-            format!("\"{}\"", escaped)
-        }
-        Value::Date(dt) => {
-            let is_date_only =
-                dt.hour == 0 && dt.minute == 0 && dt.second == 0 && dt.timezone.is_none();
-            if is_date_only {
-                format!("{:04}-{:02}-{:02}", dt.year, dt.month, dt.day)
-            } else {
-                let mut s = format!(
-                    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second
-                );
-                if let Some(tz) = &dt.timezone {
-                    if tz.offset_hours == 0 && tz.offset_minutes == 0 {
-                        s.push('Z');
-                    } else {
-                        let sign = if tz.offset_hours >= 0 { "+" } else { "-" };
-                        let hours = tz.offset_hours.abs();
-                        s.push_str(&format!("{}{:02}:{:02}", sign, hours, tz.offset_minutes));
-                    }
-                }
-                s
-            }
-        }
-        Value::Time(t) => {
-            let mut s = format!("{:02}:{:02}:{:02}", t.hour, t.minute, t.second);
-            if let Some(tz) = &t.timezone {
-                if tz.offset_hours == 0 && tz.offset_minutes == 0 {
-                    s.push('Z');
-                } else {
-                    let sign = if tz.offset_hours >= 0 { "+" } else { "-" };
-                    let hours = tz.offset_hours.abs();
-                    s.push_str(&format!("{}{:02}:{:02}", sign, hours, tz.offset_minutes));
-                }
-            }
-            s
-        }
-        Value::Boolean(b) => format_boolean(b),
-        Value::Scale(n, u) => format!("{} {}", format_decimal(n), u),
-        Value::Duration(n, u) => format!("{} {}", format_decimal(n), format_duration_unit(u)),
-        Value::Ratio(n, unit) => format_ratio(n, unit.as_deref()),
-    }
-}
-
-fn format_boolean(b: &BooleanValue) -> String {
-    match b {
-        BooleanValue::True => "true",
-        BooleanValue::False => "false",
-        BooleanValue::Yes => "yes",
-        BooleanValue::No => "no",
-        BooleanValue::Accept => "accept",
-        BooleanValue::Reject => "reject",
-    }
-    .to_string()
-}
-
-fn format_duration_unit(u: &crate::parsing::ast::DurationUnit) -> &'static str {
-    use crate::parsing::ast::DurationUnit;
-    match u {
-        DurationUnit::Year => "years",
-        DurationUnit::Month => "months",
-        DurationUnit::Week => "weeks",
-        DurationUnit::Day => "days",
-        DurationUnit::Hour => "hours",
-        DurationUnit::Minute => "minutes",
-        DurationUnit::Second => "seconds",
-        DurationUnit::Millisecond => "milliseconds",
-        DurationUnit::Microsecond => "microseconds",
-    }
-}
-
-/// Format a ratio value as valid Lemma source.
-/// Percent uses `N%`; permille uses `N%%`; other units use `N unit`;
-/// bare ratios (no unit) are just the number.
-fn format_ratio(n: &Decimal, unit: Option<&str>) -> String {
-    match unit {
-        Some("percent") => {
-            let display_value = *n * Decimal::from(100);
-            format!("{}%", format_decimal(&display_value))
-        }
-        Some("permille") => {
-            let display_value = *n * Decimal::from(1000);
-            format!("{}%%", format_decimal(&display_value))
-        }
-        Some(unit_name) => {
-            format!("{} {}", format_decimal(n), unit_name)
-        }
-        None => format_decimal(n),
-    }
-}
-
-/// Format a Decimal, removing trailing zeros and unnecessary fractional parts.
-fn format_decimal(n: &Decimal) -> String {
-    let norm = n.normalize();
-    if norm.fract().is_zero() {
-        norm.trunc().to_string()
-    } else {
-        norm.to_string()
-    }
-}
-
-// =============================================================================
 // Expressions — produce valid Lemma source with precedence-based parens
 // =============================================================================
 
-/// Precedence levels (must match parsing/ast.rs).
-fn expression_precedence(kind: &ExpressionKind) -> u8 {
-    match kind {
-        ExpressionKind::LogicalOr(..) => 1,
-        ExpressionKind::LogicalAnd(..) => 2,
-        ExpressionKind::LogicalNegation(..) => 3,
-        ExpressionKind::Comparison(..) => 4,
-        ExpressionKind::UnitConversion(..) => 4,
-        ExpressionKind::Arithmetic(_, op, _) => match op {
-            ArithmeticComputation::Add | ArithmeticComputation::Subtract => 5,
-            ArithmeticComputation::Multiply
-            | ArithmeticComputation::Divide
-            | ArithmeticComputation::Modulo => 6,
-            ArithmeticComputation::Power => 7,
-        },
-        ExpressionKind::MathematicalComputation(..) => 8,
-        ExpressionKind::Literal(..)
-        | ExpressionKind::FactReference(..)
-        | ExpressionKind::RuleReference(..)
-        | ExpressionKind::UnresolvedUnitLiteral(..)
-        | ExpressionKind::Veto(..) => 10,
-    }
-}
-
 /// Format an expression as valid Lemma source (flat, no wrapping).
+///
+/// Uses `AsLemmaSource<Value>` for literals and the AST types' `Display` impls
+/// for operators, rule references, etc. (those `Display` impls already emit
+/// valid Lemma syntax for these simple tokens).
 fn format_expr(expr: &Expression, parent_prec: u8) -> String {
     let my_prec = expression_precedence(&expr.kind);
 
     let needs_parens = parent_prec < 10 && my_prec < parent_prec;
 
     let inner = match &expr.kind {
-        ExpressionKind::Literal(lit) => format_value(lit),
-        ExpressionKind::FactReference(r) => format_fact_reference(r),
-        ExpressionKind::RuleReference(rr) => format_rule_reference(rr),
-        ExpressionKind::UnresolvedUnitLiteral(number, unit_name) => {
-            format!("{} {}", format_decimal(number), unit_name)
+        ExpressionKind::Literal(lit) => format!("{}", AsLemmaSource(lit)),
+        ExpressionKind::FactReference(r) => format!("{}", r),
+        ExpressionKind::RuleReference(rr) => format!("{}", rr),
+        ExpressionKind::UnresolvedUnitLiteral(..) => {
+            // Expression::Display already normalizes the decimal.
+            format!("{}", expr)
         }
         ExpressionKind::Arithmetic(left, op, right) => {
             let left_str = format_expr(left, my_prec);
@@ -492,11 +263,11 @@ fn format_expr(expr: &Expression, parent_prec: u8) -> String {
         ExpressionKind::Comparison(left, op, right) => {
             let left_str = format_expr(left, my_prec);
             let right_str = format_expr(right, my_prec);
-            format!("{} {} {}", left_str, format_comparison_op(op), right_str)
+            format!("{} {} {}", left_str, op.symbol(), right_str)
         }
         ExpressionKind::UnitConversion(value, target) => {
             let value_str = format_expr(value, my_prec);
-            format!("{} in {}", value_str, format_conversion_target(target))
+            format!("{} in {}", value_str, target)
         }
         ExpressionKind::LogicalNegation(inner_expr, _) => {
             let inner_str = format_expr(inner_expr, my_prec);
@@ -513,15 +284,11 @@ fn format_expr(expr: &Expression, parent_prec: u8) -> String {
             format!("{} or {}", left_str, right_str)
         }
         ExpressionKind::MathematicalComputation(op, operand) => {
-            let op_name = format_math_op(op);
             let operand_str = format_expr(operand, my_prec);
-            format!("{} {}", op_name, operand_str)
+            format!("{} {}", op, operand_str)
         }
         ExpressionKind::Veto(veto) => match &veto.message {
-            Some(msg) => {
-                let escaped = msg.replace('\\', "\\\\").replace('"', "\\\"");
-                format!("veto \"{}\"", escaped)
-            }
+            Some(msg) => format!("veto {}", crate::parsing::ast::quote_lemma_text(msg)),
             None => "veto".to_string(),
         },
     };
@@ -530,52 +297,6 @@ fn format_expr(expr: &Expression, parent_prec: u8) -> String {
         format!("({})", inner)
     } else {
         inner
-    }
-}
-
-fn format_rule_reference(rr: &RuleReference) -> String {
-    if rr.segments.is_empty() {
-        format!("{}?", rr.rule)
-    } else {
-        format!("{}.{}?", rr.segments.join("."), rr.rule)
-    }
-}
-
-fn format_comparison_op(op: &ComparisonComputation) -> &'static str {
-    match op {
-        ComparisonComputation::GreaterThan => ">",
-        ComparisonComputation::LessThan => "<",
-        ComparisonComputation::GreaterThanOrEqual => ">=",
-        ComparisonComputation::LessThanOrEqual => "<=",
-        ComparisonComputation::Equal => "==",
-        ComparisonComputation::NotEqual => "!=",
-        ComparisonComputation::Is => "is",
-        ComparisonComputation::IsNot => "is not",
-    }
-}
-
-fn format_conversion_target(ct: &ConversionTarget) -> String {
-    match ct {
-        ConversionTarget::Duration(unit) => format_duration_unit(unit).to_string(),
-        ConversionTarget::Unit(unit) => unit.clone(),
-    }
-}
-
-fn format_math_op(op: &MathematicalComputation) -> &'static str {
-    match op {
-        MathematicalComputation::Sqrt => "sqrt",
-        MathematicalComputation::Sin => "sin",
-        MathematicalComputation::Cos => "cos",
-        MathematicalComputation::Tan => "tan",
-        MathematicalComputation::Asin => "asin",
-        MathematicalComputation::Acos => "acos",
-        MathematicalComputation::Atan => "atan",
-        MathematicalComputation::Log => "log",
-        MathematicalComputation::Exp => "exp",
-        MathematicalComputation::Abs => "abs",
-        MathematicalComputation::Floor => "floor",
-        MathematicalComputation::Ceil => "ceil",
-        MathematicalComputation::Round => "round",
     }
 }
 
@@ -649,58 +370,60 @@ fn format_expr_wrapped(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parsing::ast::{DateTimeValue, DurationUnit, TimeValue, TimezoneValue};
+    use crate::parsing::ast::{
+        AsLemmaSource, BooleanValue, DateTimeValue, DurationUnit, TimeValue, TimezoneValue, Value,
+    };
     use rust_decimal::prelude::FromStr;
+    use rust_decimal::Decimal;
+
+    /// Helper: format a Value as canonical Lemma source via AsLemmaSource.
+    fn fmt_value(v: &Value) -> String {
+        format!("{}", AsLemmaSource(v))
+    }
 
     #[test]
     fn test_format_value_text_is_quoted() {
         let v = Value::Text("light".to_string());
-        assert_eq!(format_value(&v), "\"light\"");
+        assert_eq!(fmt_value(&v), "\"light\"");
     }
 
     #[test]
     fn test_format_value_text_escapes_quotes() {
         let v = Value::Text("say \"hello\"".to_string());
-        assert_eq!(format_value(&v), "\"say \\\"hello\\\"\"");
+        assert_eq!(fmt_value(&v), "\"say \\\"hello\\\"\"");
     }
 
     #[test]
     fn test_format_value_number() {
         let v = Value::Number(Decimal::from_str("42.50").unwrap());
-        assert_eq!(format_value(&v), "42.5");
+        assert_eq!(fmt_value(&v), "42.5");
     }
 
     #[test]
     fn test_format_value_number_integer() {
         let v = Value::Number(Decimal::from_str("100.00").unwrap());
-        assert_eq!(format_value(&v), "100");
+        assert_eq!(fmt_value(&v), "100");
     }
 
     #[test]
     fn test_format_value_boolean() {
-        assert_eq!(format_value(&Value::Boolean(BooleanValue::True)), "true");
-        assert_eq!(format_value(&Value::Boolean(BooleanValue::Yes)), "yes");
-        assert_eq!(format_value(&Value::Boolean(BooleanValue::No)), "no");
-        assert_eq!(
-            format_value(&Value::Boolean(BooleanValue::Accept)),
-            "accept"
-        );
-        assert_eq!(
-            format_value(&Value::Boolean(BooleanValue::Reject)),
-            "reject"
-        );
+        assert_eq!(fmt_value(&Value::Boolean(BooleanValue::True)), "true");
+        assert_eq!(fmt_value(&Value::Boolean(BooleanValue::Yes)), "yes");
+        assert_eq!(fmt_value(&Value::Boolean(BooleanValue::No)), "no");
+        assert_eq!(fmt_value(&Value::Boolean(BooleanValue::Accept)), "accept");
+        assert_eq!(fmt_value(&Value::Boolean(BooleanValue::Reject)), "reject");
     }
 
     #[test]
     fn test_format_value_scale() {
         let v = Value::Scale(Decimal::from_str("99.50").unwrap(), "eur".to_string());
-        assert_eq!(format_value(&v), "99.5 eur");
+        assert_eq!(fmt_value(&v), "99.5 eur");
     }
 
     #[test]
     fn test_format_value_duration() {
         let v = Value::Duration(Decimal::from(40), DurationUnit::Hour);
-        assert_eq!(format_value(&v), "40 hours");
+        assert_eq!(fmt_value(&v), "40 hours");
     }
 
     #[test]
@@ -709,7 +432,7 @@ mod tests {
             Decimal::from_str("0.10").unwrap(),
             Some("percent".to_string()),
         );
-        assert_eq!(format_value(&v), "10%");
+        assert_eq!(fmt_value(&v), "10%");
     }
 
     #[test]
@@ -718,13 +441,13 @@ mod tests {
             Decimal::from_str("0.005").unwrap(),
             Some("permille".to_string()),
         );
-        assert_eq!(format_value(&v), "5%%");
+        assert_eq!(fmt_value(&v), "5%%");
     }
 
     #[test]
     fn test_format_value_ratio_bare() {
         let v = Value::Ratio(Decimal::from_str("0.25").unwrap(), None);
-        assert_eq!(format_value(&v), "0.25");
+        assert_eq!(fmt_value(&v), "0.25");
     }
 
     #[test]
@@ -738,7 +461,7 @@ mod tests {
             second: 0,
             timezone: None,
         });
-        assert_eq!(format_value(&v), "2024-01-15");
+        assert_eq!(fmt_value(&v), "2024-01-15");
     }
 
     #[test]
@@ -755,7 +478,7 @@ mod tests {
                 offset_minutes: 0,
             }),
         });
-        assert_eq!(format_value(&v), "2024-01-15T14:30:00Z");
+        assert_eq!(fmt_value(&v), "2024-01-15T14:30:00Z");
     }
 
     #[test]
@@ -766,7 +489,7 @@ mod tests {
             second: 45,
             timezone: None,
         });
-        assert_eq!(format_value(&v), "14:30:45");
+        assert_eq!(fmt_value(&v), "14:30:45");
     }
 
     #[test]
@@ -885,6 +608,85 @@ rule clothing_layer = "light"
             formatted.contains("\"warm\""),
             "text in unless must be quoted, got: {}",
             formatted
+        );
+    }
+
+    // NOTE: Default value type validation (e.g. rejecting "10 $$" as a number
+    // default) is tested at the planning level in engine.rs, not here. The
+    // formatter only parses — it does not validate types. Planning catches
+    // invalid defaults for both primitives and named types.
+
+    #[test]
+    fn test_format_text_option_round_trips() {
+        let source = r#"doc test
+
+type status = text
+  -> option "active"
+  -> option "inactive"
+
+fact s = [status]
+
+rule out = s
+"#;
+        let formatted = format_source(source, "test.lemma").unwrap();
+        assert!(
+            formatted.contains("option \"active\""),
+            "text option must be quoted, got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("option \"inactive\""),
+            "text option must be quoted, got: {}",
+            formatted
+        );
+        // Round-trip
+        let reparsed = format_source(&formatted, "test.lemma");
+        assert!(reparsed.is_ok(), "formatted output should re-parse");
+    }
+
+    #[test]
+    fn test_format_help_round_trips() {
+        let source = r#"doc test
+fact quantity = [number -> help "Number of items to order"]
+rule total = quantity
+"#;
+        let formatted = format_source(source, "test.lemma").unwrap();
+        assert!(
+            formatted.contains("help \"Number of items to order\""),
+            "help must be quoted, got: {}",
+            formatted
+        );
+        // Round-trip
+        let reparsed = format_source(&formatted, "test.lemma");
+        assert!(reparsed.is_ok(), "formatted output should re-parse");
+    }
+
+    #[test]
+    fn test_format_scale_type_def_round_trips() {
+        let source = r#"doc test
+
+type money = scale
+  -> unit eur 1.00
+  -> unit usd 1.10
+  -> decimals 2
+  -> minimum 0
+
+fact price = [money]
+
+rule total = price
+"#;
+        let formatted = format_source(source, "test.lemma").unwrap();
+        assert!(
+            formatted.contains("unit eur 1.00"),
+            "scale unit should not be quoted, got: {}",
+            formatted
+        );
+        // Round-trip
+        let reparsed = format_source(&formatted, "test.lemma");
+        assert!(
+            reparsed.is_ok(),
+            "formatted output should re-parse, got: {:?}",
+            reparsed
         );
     }
 }

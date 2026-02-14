@@ -629,7 +629,7 @@ mod tests {
         .unwrap();
 
         let result = engine.evaluate("test", vec![], HashMap::new());
-        // Division by zero returns a Veto (not an error) in the new evaluation design
+        // Division by zero returns a Veto (not an error)
         assert!(result.is_ok(), "Evaluation should succeed");
         let response = result.unwrap();
         let division_result = response
@@ -1008,5 +1008,104 @@ rule total = helper.value + price"#,
             "Expected MultipleErrors, got: {}",
             error_message
         );
+    }
+
+    // ── Default value type validation ────────────────────────────────
+    // Planning must reject default values that don't match the type.
+    // These tests cover both primitives and named types (which the parser
+    // can't validate because it doesn't resolve type names).
+
+    #[test]
+    fn planning_rejects_invalid_number_default() {
+        let mut engine = Engine::new();
+        let result = add_lemma_code_blocking(
+            &mut engine,
+            "doc t\nfact x = [number -> default \"10 $$\"]\nrule r = x",
+            "t.lemma",
+        );
+        assert!(
+            result.is_err(),
+            "must reject non-numeric default on number type"
+        );
+    }
+
+    #[test]
+    fn planning_rejects_text_literal_as_number_default() {
+        // The parser produces CommandArg::Text("10") for `default "10"`.
+        // Planning now checks the CommandArg variant: a Text literal is
+        // rejected where a Number literal is required, even though the
+        // string content "10" could be parsed as a valid Decimal.
+        let mut engine = Engine::new();
+        let result = add_lemma_code_blocking(
+            &mut engine,
+            "doc t\nfact x = [number -> default \"10\"]\nrule r = x",
+            "t.lemma",
+        );
+        assert!(
+            result.is_err(),
+            "must reject text literal \"10\" as default for number type"
+        );
+    }
+
+    #[test]
+    fn planning_rejects_invalid_boolean_default() {
+        let mut engine = Engine::new();
+        let result = add_lemma_code_blocking(
+            &mut engine,
+            "doc t\nfact x = [boolean -> default \"maybe\"]\nrule r = x",
+            "t.lemma",
+        );
+        assert!(
+            result.is_err(),
+            "must reject non-boolean default on boolean type"
+        );
+    }
+
+    #[test]
+    fn planning_rejects_invalid_named_type_default() {
+        // Named type: the parser can't validate this, only planning can.
+        let mut engine = Engine::new();
+        let result = add_lemma_code_blocking(
+            &mut engine,
+            "doc t\ntype custom = number -> minimum 0\nfact x = [custom -> default \"abc\"]\nrule r = x",
+            "t.lemma",
+        );
+        assert!(
+            result.is_err(),
+            "must reject non-numeric default on named number type"
+        );
+    }
+
+    #[test]
+    fn planning_accepts_valid_number_default() {
+        let mut engine = Engine::new();
+        let result = add_lemma_code_blocking(
+            &mut engine,
+            "doc t\nfact x = [number -> default 10]\nrule r = x",
+            "t.lemma",
+        );
+        assert!(result.is_ok(), "must accept valid number default");
+    }
+
+    #[test]
+    fn planning_accepts_valid_boolean_default() {
+        let mut engine = Engine::new();
+        let result = add_lemma_code_blocking(
+            &mut engine,
+            "doc t\nfact x = [boolean -> default true]\nrule r = x",
+            "t.lemma",
+        );
+        assert!(result.is_ok(), "must accept valid boolean default");
+    }
+
+    #[test]
+    fn planning_accepts_valid_text_default() {
+        let mut engine = Engine::new();
+        let result = add_lemma_code_blocking(
+            &mut engine,
+            "doc t\nfact x = [text -> default \"hello\"]\nrule r = x",
+            "t.lemma",
+        );
+        assert!(result.is_ok(), "must accept valid text default");
     }
 }

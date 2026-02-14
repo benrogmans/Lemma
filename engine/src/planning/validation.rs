@@ -948,7 +948,7 @@ pub fn validate_document_interfaces(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parsing::ast::{FactReference, FactValue, LemmaFact, Value};
+    use crate::parsing::ast::{CommandArg, FactReference, FactValue, LemmaFact, Value};
     use crate::planning::semantics::TypeSpecification;
     use rust_decimal::Decimal;
 
@@ -999,10 +999,10 @@ mod tests {
     fn validate_number_minimum_greater_than_maximum() {
         let mut specs = TypeSpecification::number();
         specs = specs
-            .apply_constraint("minimum", &["100".to_string()])
+            .apply_constraint("minimum", &[CommandArg::Number("100".to_string())])
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &["50".to_string()])
+            .apply_constraint("maximum", &[CommandArg::Number("50".to_string())])
             .unwrap();
 
         let src = test_source("test");
@@ -1017,10 +1017,10 @@ mod tests {
     fn validate_number_valid_range() {
         let mut specs = TypeSpecification::number();
         specs = specs
-            .apply_constraint("minimum", &["0".to_string()])
+            .apply_constraint("minimum", &[CommandArg::Number("0".to_string())])
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &["100".to_string()])
+            .apply_constraint("maximum", &[CommandArg::Number("100".to_string())])
             .unwrap();
 
         let src = test_source("test");
@@ -1035,7 +1035,7 @@ mod tests {
             maximum: None,
             decimals: None,
             precision: None,
-            help: None,
+            help: String::new(),
             default: Some(Decimal::from(5)),
         };
 
@@ -1054,7 +1054,7 @@ mod tests {
             maximum: Some(Decimal::from(100)),
             decimals: None,
             precision: None,
-            help: None,
+            help: String::new(),
             default: Some(Decimal::from(150)),
         };
 
@@ -1073,7 +1073,7 @@ mod tests {
             maximum: Some(Decimal::from(100)),
             decimals: None,
             precision: None,
-            help: None,
+            help: String::new(),
             default: Some(Decimal::from(50)),
         };
 
@@ -1086,10 +1086,10 @@ mod tests {
     fn validate_text_minimum_greater_than_maximum() {
         let mut specs = TypeSpecification::text();
         specs = specs
-            .apply_constraint("minimum", &["100".to_string()])
+            .apply_constraint("minimum", &[CommandArg::Number("100".to_string())])
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &["50".to_string()])
+            .apply_constraint("maximum", &[CommandArg::Number("50".to_string())])
             .unwrap();
 
         let src = test_source("test");
@@ -1104,10 +1104,10 @@ mod tests {
     fn validate_text_length_inconsistent_with_minimum() {
         let mut specs = TypeSpecification::text();
         specs = specs
-            .apply_constraint("minimum", &["10".to_string()])
+            .apply_constraint("minimum", &[CommandArg::Number("10".to_string())])
             .unwrap();
         specs = specs
-            .apply_constraint("length", &["5".to_string()])
+            .apply_constraint("length", &[CommandArg::Number("5".to_string())])
             .unwrap();
 
         let src = test_source("test");
@@ -1125,7 +1125,7 @@ mod tests {
             maximum: None,
             length: None,
             options: vec!["red".to_string(), "blue".to_string()],
-            help: None,
+            help: String::new(),
             default: Some("green".to_string()),
         };
 
@@ -1144,7 +1144,7 @@ mod tests {
             maximum: None,
             length: None,
             options: vec!["red".to_string(), "blue".to_string()],
-            help: None,
+            help: String::new(),
             default: Some("red".to_string()),
         };
 
@@ -1160,7 +1160,7 @@ mod tests {
             maximum: Some(Decimal::from(1)),
             decimals: None,
             units: crate::planning::semantics::RatioUnits::new(),
-            help: None,
+            help: String::new(),
             default: None,
         };
 
@@ -1176,10 +1176,10 @@ mod tests {
     fn validate_date_minimum_after_maximum() {
         let mut specs = TypeSpecification::date();
         specs = specs
-            .apply_constraint("minimum", &["2024-12-31".to_string()])
+            .apply_constraint("minimum", &[CommandArg::Label("2024-12-31".to_string())])
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &["2024-01-01".to_string()])
+            .apply_constraint("maximum", &[CommandArg::Label("2024-01-01".to_string())])
             .unwrap();
 
         let src = test_source("test");
@@ -1195,10 +1195,10 @@ mod tests {
     fn validate_date_valid_range() {
         let mut specs = TypeSpecification::date();
         specs = specs
-            .apply_constraint("minimum", &["2024-01-01".to_string()])
+            .apply_constraint("minimum", &[CommandArg::Label("2024-01-01".to_string())])
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &["2024-12-31".to_string()])
+            .apply_constraint("maximum", &[CommandArg::Label("2024-12-31".to_string())])
             .unwrap();
 
         let src = test_source("test");
@@ -1210,10 +1210,10 @@ mod tests {
     fn validate_time_minimum_after_maximum() {
         let mut specs = TypeSpecification::time();
         specs = specs
-            .apply_constraint("minimum", &["23:00:00".to_string()])
+            .apply_constraint("minimum", &[CommandArg::Label("23:00:00".to_string())])
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &["10:00:00".to_string()])
+            .apply_constraint("maximum", &[CommandArg::Label("10:00:00".to_string())])
             .unwrap();
 
         let src = test_source("test");
@@ -1247,8 +1247,14 @@ mod tests {
             name: "invalid_money".to_string(),
             parent: "number".to_string(),
             constraints: Some(vec![
-                ("minimum".to_string(), vec!["100".to_string()]),
-                ("maximum".to_string(), vec!["50".to_string()]),
+                (
+                    "minimum".to_string(),
+                    vec![CommandArg::Number("100".to_string())],
+                ),
+                (
+                    "maximum".to_string(),
+                    vec![CommandArg::Number("50".to_string())],
+                ),
             ]),
         };
 

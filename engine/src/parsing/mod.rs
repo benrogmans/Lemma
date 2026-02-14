@@ -413,7 +413,6 @@ rule is_adult = age >= 21"#;
 
     #[test]
     fn parse_duration_literals_in_rules() {
-        // After removing hardcoded units, only duration units remain as built-in
         let test_cases = vec![
             ("2 years", "years"),
             ("6 months", "months"),
@@ -442,7 +441,6 @@ rule is_adult = age >= 21"#;
 
     #[test]
     fn parse_comparisons_with_duration_unit_conversions() {
-        // After removing hardcoded units, only duration conversions remain as built-in
         let test_cases = vec![
             (
                 "(duration in hours) > 2",

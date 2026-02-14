@@ -462,14 +462,14 @@ fn test_10_compensation_policy() {
         .values()
         .any(|r| r.rule.name == "total_package"));
 
-    // Test senior_engineer document - now works after fixing cross-document rule reference bugs!
+    // Test senior_engineer document
     let response = engine
         .evaluate("compensation/senior_engineer", vec![], HashMap::new())
         .unwrap();
     assert_eq!(response.doc_name, "compensation/senior_engineer");
     assert!(!response.results.is_empty());
 
-    // Test principal_engineer document - now works after fixing cross-document rule reference bugs!
+    // Test principal_engineer document
     let response = engine
         .evaluate("compensation/principal_engineer", vec![], HashMap::new())
         .unwrap();

@@ -177,8 +177,7 @@ mod internal_tests {
     use crate::{parse, LemmaError, ResourceLimits};
     use std::collections::HashMap;
 
-    /// Test helper: plan a single document and return the old-style Result.
-    /// Wraps the new `plan()` signature for tests that plan a single doc.
+    /// Test helper: plan a single document and return its execution plan.
     fn plan_single(
         main_doc: &LemmaDoc,
         all_docs: &[LemmaDoc],
@@ -560,9 +559,7 @@ rule total = helper.value + price"#;
             combined
         );
 
-        // Must ALSO report the document reference error — this is the bug we fixed:
-        // previously only the type error was reported and the doc reference error
-        // was swallowed by the early return.
+        // Must also report the document reference error (not just the type error)
         assert!(
             combined.contains("nonexistent_doc"),
             "Should report doc reference error for 'nonexistent_doc'. Got:\n{}",
