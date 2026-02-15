@@ -250,6 +250,9 @@ fn prompt_value_for_type(
             ..
         } => {
             if !options.is_empty() {
+                if options.len() == 1 {
+                    return Ok(options[0].clone());
+                }
                 let prompt_message = format!("{} [{}]", fact_name, type_str);
                 let mut prompt =
                     Select::new(&prompt_message, options.clone()).with_help_message(help.as_str());
@@ -499,14 +502,22 @@ fn prompt_scale_fact(
     }
 
     let unit_names: Vec<String> = units.iter().map(|u| u.name.clone()).collect();
-    let unit = Select::new(&format!("Select unit for {}", fact_name), unit_names)
-        .prompt()
-        .context(format!("Failed to get unit for {}", fact_name))?;
+    let unit = if unit_names.len() == 1 {
+        unit_names[0].clone()
+    } else {
+        Select::new(&format!("Select unit for {}", fact_name), unit_names)
+            .prompt()
+            .context(format!("Failed to get unit for {}", fact_name))?
+    };
 
+    let value_constraints = NumericConstraints {
+        help: format!("Enter numeric value (unit: {})", unit),
+        ..constraints.clone()
+    };
     let value = prompt_decimal_input(
         &format!("Enter value for {} ({})", fact_name, unit),
         None,
-        constraints,
+        &value_constraints,
         "7.65",
     )?;
 
@@ -524,15 +535,22 @@ fn prompt_ratio_fact(
 ) -> Result<String> {
     // Ratio types typically support percent/permille; offer a unit selector.
     let prompt_message = format!("{} [{}]", fact_name, type_str);
-    let mut unit_choices: Vec<String> = vec!["(none)".to_string()];
-    unit_choices.extend(units.iter().map(|u| u.name.clone()));
-
-    let selected_unit = Select::new(
-        &format!("Select ratio unit for {}", fact_name),
-        unit_choices,
-    )
-    .prompt()
-    .context(format!("Failed to get ratio unit for {}", fact_name))?;
+    let selected_unit = if units.len() == 1 {
+        units
+            .iter()
+            .next()
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| "(none)".to_string())
+    } else {
+        let mut unit_choices: Vec<String> = vec!["(none)".to_string()];
+        unit_choices.extend(units.iter().map(|u| u.name.clone()));
+        Select::new(
+            &format!("Select ratio unit for {}", fact_name),
+            unit_choices,
+        )
+        .prompt()
+        .context(format!("Failed to get ratio unit for {}", fact_name))?
+    };
 
     let value = prompt_decimal_input(
         &prompt_message,

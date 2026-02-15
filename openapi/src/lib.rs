@@ -15,7 +15,10 @@ use std::collections::HashMap;
 /// - POST operations with JSON request bodies
 /// - Response schemas with rule result shapes
 /// - Meta routes (`/`, `/health`, `/openapi.json`, `/docs`)
-pub fn generate_openapi(engine: &Engine) -> Value {
+///
+/// When `proofs_enabled` is true, the spec adds the `x-proofs` header parameter
+/// to evaluation endpoints and documents the optional `proof` object in responses.
+pub fn generate_openapi(engine: &Engine, proofs_enabled: bool) -> Value {
     let mut paths = Map::new();
     let mut components_schemas = Map::new();
 
@@ -35,7 +38,7 @@ pub fn generate_openapi(engine: &Engine) -> Value {
             let response_schema_name = format!("{}_response", doc_name);
             components_schemas.insert(
                 response_schema_name.clone(),
-                build_response_schema(plan, &rule_names),
+                build_response_schema(plan, &rule_names, proofs_enabled),
             );
 
             // POST body schema
@@ -55,6 +58,7 @@ pub fn generate_openapi(engine: &Engine) -> Value {
                     &response_schema_name,
                     &post_body_schema_name,
                     &rule_names,
+                    proofs_enabled,
                 ),
             );
 
@@ -69,6 +73,7 @@ pub fn generate_openapi(engine: &Engine) -> Value {
                         &facts,
                         &response_schema_name,
                         &post_body_schema_name,
+                        proofs_enabled,
                     ),
                 );
             }
@@ -344,12 +349,23 @@ fn not_found_response_schema() -> Value {
 // Document path items
 // ---------------------------------------------------------------------------
 
+fn x_proofs_header_parameter() -> Value {
+    json!({
+        "name": "x-proofs",
+        "in": "header",
+        "required": false,
+        "description": "Set to request proof objects in the response (server must be started with --proofs)",
+        "schema": { "type": "string", "default": "true" }
+    })
+}
+
 fn build_document_path_item(
     doc_name: &str,
     facts: &[InputFact],
     response_schema_name: &str,
     post_body_schema_name: &str,
     rule_names: &[String],
+    proofs_enabled: bool,
 ) -> Value {
     let response_ref = json!({
         "$ref": format!("#/components/schemas/{}", response_schema_name)
@@ -378,13 +394,19 @@ fn build_document_path_item(
     // GET query parameters: rules path param first, then fact params
     let mut get_parameters: Vec<Value> = vec![rules_param.clone()];
     get_parameters.extend(facts.iter().map(build_query_parameter));
+    if proofs_enabled {
+        get_parameters.push(x_proofs_header_parameter());
+    }
 
     let get_summary = "Evaluate".to_string();
     let post_summary = "Evaluate (JSON)".to_string();
     let get_operation_id = format!("get_{}", doc_name);
     let post_operation_id = format!("post_{}", doc_name);
 
-    let post_parameters: Vec<Value> = vec![rules_param];
+    let mut post_parameters: Vec<Value> = vec![rules_param];
+    if proofs_enabled {
+        post_parameters.push(x_proofs_header_parameter());
+    }
 
     let path_item = json!({
         "get": {
@@ -446,6 +468,7 @@ fn build_rule_path_item(
     facts: &[InputFact],
     response_schema_name: &str,
     post_body_schema_name: &str,
+    proofs_enabled: bool,
 ) -> Value {
     let response_ref = json!({
         "$ref": format!("#/components/schemas/{}", response_schema_name)
@@ -456,7 +479,15 @@ fn build_rule_path_item(
 
     let rules_tag = format!("{} rules", doc_name);
 
-    let get_parameters: Vec<Value> = facts.iter().map(build_query_parameter).collect();
+    let mut get_parameters: Vec<Value> = facts.iter().map(build_query_parameter).collect();
+    if proofs_enabled {
+        get_parameters.push(x_proofs_header_parameter());
+    }
+
+    let mut post_parameters: Vec<Value> = vec![];
+    if proofs_enabled {
+        post_parameters.push(x_proofs_header_parameter());
+    }
 
     json!({
         "get": {
@@ -481,6 +512,7 @@ fn build_rule_path_item(
             "operationId": format!("post_{}_{}", doc_name, rule_name),
             "summary": format!("{} (JSON)", rule_name),
             "tags": [rules_tag],
+            "parameters": post_parameters,
             "requestBody": {
                 "required": true,
                 "content": {
@@ -901,36 +933,58 @@ fn build_post_property_schema_inner(lemma_type: &LemmaType) -> Value {
 // Response schema generation
 // ---------------------------------------------------------------------------
 
-fn build_response_schema(plan: &ExecutionPlan, rule_names: &[String]) -> Value {
+fn build_response_schema(
+    plan: &ExecutionPlan,
+    rule_names: &[String],
+    proofs_enabled: bool,
+) -> Value {
     let mut properties = Map::new();
+
+    let proof_prop = proofs_enabled.then(|| {
+        json!({
+            "type": "object",
+            "description": "Proof tree (included when x-proofs header is sent and server started with --proofs)"
+        })
+    });
 
     for rule_name in rule_names {
         if let Some(rule) = plan.rules.iter().find(|r| &r.name == rule_name) {
             let result_type_name = type_base_name(&rule.rule_type);
+            let mut value_props = Map::new();
+            value_props.insert(
+                "value".to_string(),
+                json!({
+                    "type": "string",
+                    "description": format!("Computed value (type: {})", result_type_name)
+                }),
+            );
+            if let Some(ref p) = proof_prop {
+                value_props.insert("proof".to_string(), p.clone());
+            }
+            let mut veto_props = Map::new();
+            veto_props.insert(
+                "veto_reason".to_string(),
+                json!({
+                    "type": "string",
+                    "description": "Reason the rule was vetoed (no value produced)"
+                }),
+            );
+            if let Some(ref p) = proof_prop {
+                veto_props.insert("proof".to_string(), p.clone());
+            }
+            let value_branch = json!({
+                "type": "object",
+                "properties": Value::Object(value_props),
+                "required": ["value"]
+            });
+            let veto_branch = json!({
+                "type": "object",
+                "properties": Value::Object(veto_props)
+            });
             properties.insert(
                 rule_name.clone(),
                 json!({
-                    "oneOf": [
-                        {
-                            "type": "object",
-                            "properties": {
-                                "value": {
-                                    "type": "string",
-                                    "description": format!("Computed value (type: {})", result_type_name)
-                                }
-                            },
-                            "required": ["value"]
-                        },
-                        {
-                            "type": "object",
-                            "properties": {
-                                "veto_reason": {
-                                    "type": "string",
-                                    "description": "Reason the rule was vetoed (no value produced)"
-                                }
-                            }
-                        }
-                    ]
+                    "oneOf": [ value_branch, veto_branch ]
                 }),
             );
         }
@@ -1043,7 +1097,7 @@ mod tests {
     fn test_generate_openapi_has_required_fields() {
         let engine =
             create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         assert_eq!(spec["openapi"], "3.1.0");
         assert!(spec["info"]["title"].is_string());
@@ -1056,7 +1110,7 @@ mod tests {
     fn test_generate_openapi_tags_order() {
         let engine =
             create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         let tags = spec["tags"].as_array().expect("tags should be array");
         let tag_names: Vec<&str> = tags.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -1071,7 +1125,7 @@ mod tests {
     fn test_generate_openapi_x_tag_groups() {
         let engine =
             create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         let groups = spec["x-tagGroups"]
             .as_array()
@@ -1087,7 +1141,7 @@ mod tests {
     fn test_index_endpoint_uses_documents_tag() {
         let engine =
             create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         let index_tag = &spec["paths"]["/"]["get"]["tags"][0];
         assert_eq!(index_tag, "Documents");
@@ -1097,7 +1151,7 @@ mod tests {
     fn test_per_rule_endpoints() {
         let engine =
             create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         // Per-rule endpoint exists
         assert!(spec["paths"]["/pricing/total"].is_object());
@@ -1131,7 +1185,7 @@ mod tests {
     fn test_generate_openapi_meta_routes() {
         let engine =
             create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         assert!(spec["paths"]["/"].is_object());
         assert!(spec["paths"]["/health"].is_object());
@@ -1144,7 +1198,7 @@ mod tests {
     fn test_generate_openapi_document_routes() {
         let engine =
             create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         assert!(spec["paths"]["/pricing/{rules}"].is_object());
 
@@ -1157,10 +1211,35 @@ mod tests {
     fn test_generate_openapi_schemas() {
         let engine =
             create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         assert!(spec["components"]["schemas"]["pricing_response"].is_object());
         assert!(spec["components"]["schemas"]["pricing_request"].is_object());
+    }
+
+    #[test]
+    fn test_generate_openapi_proofs_enabled_adds_x_proofs_and_proof_schema() {
+        let engine =
+            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+        let spec = generate_openapi(&engine, true);
+
+        let get_params = &spec["paths"]["/pricing/{rules}"]["get"]["parameters"];
+        let has_x_proofs = get_params
+            .as_array()
+            .map(|a| a.iter().any(|p| p["name"] == "x-proofs"))
+            .unwrap_or(false);
+        assert!(
+            has_x_proofs,
+            "GET should have x-proofs header when proofs enabled"
+        );
+
+        let response_schema = &spec["components"]["schemas"]["pricing_response"];
+        let total_props = &response_schema["properties"]["total"]["oneOf"];
+        let first_branch = &total_props[0]["properties"];
+        assert!(
+            first_branch["proof"].is_object(),
+            "response schema should include optional proof when proofs enabled"
+        );
     }
 
     #[test]
@@ -1237,7 +1316,7 @@ mod tests {
             .block_on(engine.add_lemma_files(files))
             .expect("failed to parse");
 
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         assert!(spec["paths"]["/pricing/{rules}"].is_object());
         assert!(spec["paths"]["/shipping/{rules}"].is_object());
@@ -1248,7 +1327,7 @@ mod tests {
         let engine = create_engine_with_code(
             "doc test\nfact product = [text -> option \"A\" -> option \"B\"]\nrule result = product",
         );
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         let params = &spec["paths"]["/test/{rules}"]["get"]["parameters"];
         let product_param = params
@@ -1270,7 +1349,7 @@ mod tests {
         let engine = create_engine_with_code(
             "doc test\nfact is_active = [boolean]\nrule result = is_active",
         );
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
         assert_eq!(schema["properties"]["is_active"]["type"], "boolean");
@@ -1281,7 +1360,7 @@ mod tests {
         let engine = create_engine_with_code(
             "doc test\nfact is_active = [boolean]\nrule result = is_active",
         );
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         let params = &spec["paths"]["/test/{rules}"]["get"]["parameters"];
         let is_active_param = params
@@ -1298,7 +1377,7 @@ mod tests {
     fn test_post_schema_number_uses_native_type() {
         let engine =
             create_engine_with_code("doc test\nfact quantity = [number]\nrule result = quantity");
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
         assert_eq!(schema["properties"]["quantity"]["type"], "number");
@@ -1308,7 +1387,7 @@ mod tests {
     fn test_post_schema_date_uses_string_format() {
         let engine =
             create_engine_with_code("doc test\nfact deadline = [date]\nrule result = deadline");
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
         assert_eq!(schema["properties"]["deadline"]["type"], "string");
@@ -1320,7 +1399,7 @@ mod tests {
         let engine = create_engine_with_code(
             "doc test\nfact quantity = 10\nfact name = [text]\nrule result = quantity",
         );
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
         let required = schema["required"]
@@ -1342,7 +1421,7 @@ fact active = [boolean -> help "Whether the feature is enabled" -> default true]
 rule result = quantity
 "#,
         );
-        let spec = generate_openapi(&engine);
+        let spec = generate_openapi(&engine, false);
 
         let get_params = spec["paths"]["/test/{rules}"]["get"]["parameters"]
             .as_array()

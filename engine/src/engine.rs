@@ -195,13 +195,12 @@ impl Engine {
     /// - If `rule_names` is empty, returns facts for **all local** rules in the document.
     /// - Otherwise, returns facts for the specified rules (by name).
     ///
-    /// Returns a map from FactPath to resolved LemmaType.
-    /// This is the authoritative API for determining what inputs a rule needs.
+    /// Returns facts (with types) required to evaluate the document's rules, in document definition order.
     pub fn get_facts(
         &self,
         doc_name: &str,
         rule_names: &[String],
-    ) -> LemmaResult<HashMap<FactPath, LemmaType>> {
+    ) -> LemmaResult<Vec<(FactPath, LemmaType)>> {
         let plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
                 format!("Document '{}' not found", doc_name),
@@ -223,7 +222,6 @@ impl Engine {
         let mut fact_paths = HashSet::new();
 
         if rule_names.is_empty() {
-            // Default behavior: facts for all local rules.
             for rule in plan.rules.iter().filter(|r| r.path.segments.is_empty()) {
                 fact_paths.extend(rule.needs_facts.iter().cloned());
             }
@@ -250,11 +248,31 @@ impl Engine {
             }
         }
 
-        // Build result map with types from plan.facts (value facts only)
-        let mut result = HashMap::new();
-        for fact_path in fact_paths {
-            if let Some(lemma_type) = plan.facts.get(&fact_path).and_then(|d| d.schema_type()) {
-                result.insert(fact_path, lemma_type.clone());
+        let doc_order: Vec<FactPath> = self
+            .documents
+            .get(doc_name)
+            .map(|doc| {
+                doc.facts
+                    .iter()
+                    .filter(|f| f.reference.segments.is_empty())
+                    .map(|f| FactPath::local(f.reference.fact.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut result = Vec::new();
+        for path in doc_order {
+            if fact_paths.contains(&path) {
+                if let Some(lemma_type) = plan.facts.get(&path).and_then(|d| d.schema_type()) {
+                    result.push((path, lemma_type.clone()));
+                }
+            }
+        }
+        for path in fact_paths {
+            if !result.iter().any(|(p, _)| p == &path) {
+                if let Some(lemma_type) = plan.facts.get(&path).and_then(|d| d.schema_type()) {
+                    result.push((path, lemma_type.clone()));
+                }
             }
         }
 

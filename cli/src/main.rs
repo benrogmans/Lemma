@@ -8,6 +8,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use formatter::Formatter;
 use lemma::Engine;
+use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -22,6 +24,13 @@ use walkdir::WalkDir;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Clone, Copy, Default, clap::ValueEnum)]
+enum OutputFormat {
+    #[default]
+    Table,
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -58,9 +67,17 @@ enum Commands {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
-        /// Output raw values only (for piping to other tools)
-        #[arg(short = 'r', long)]
-        raw: bool,
+        /// Output format: table (human-readable) or json (machine-readable)
+        #[arg(
+            short = 'o',
+            long = "output",
+            value_name = "FORMAT",
+            default_value = "table"
+        )]
+        output: OutputFormat,
+        /// Include facts and proof trees (table) or proof objects (json)
+        #[arg(long)]
+        explain: bool,
         /// Enable interactive mode for document/rule/fact selection
         #[arg(short = 'i', long)]
         interactive: bool,
@@ -112,6 +129,9 @@ enum Commands {
         /// Watch workspace for .lemma file changes and reload automatically
         #[arg(short, long)]
         watch: bool,
+        /// Enable proof generation; clients send header x-proofs to receive proof objects in responses
+        #[arg(long)]
+        proofs: bool,
     },
     /// Start MCP server for AI assistant integration (stdio)
     ///
@@ -149,6 +169,8 @@ fn main() {
             doc_name,
             facts,
             target,
+            output,
+            explain,
             interactive,
             ..
         } => run_command(
@@ -156,6 +178,8 @@ fn main() {
             doc_name.as_ref(),
             facts,
             target.as_ref(),
+            *output,
+            *explain,
             *interactive,
         ),
         Commands::Show { workdir, doc_name } => show_command(workdir, doc_name),
@@ -165,7 +189,8 @@ fn main() {
             host,
             port,
             watch,
-        } => server_command(workdir, host, *port, *watch),
+            proofs,
+        } => server_command(workdir, host, *port, *watch, *proofs),
         Commands::Mcp { workdir } => mcp_command(workdir),
         Commands::Fmt {
             paths,
@@ -190,6 +215,8 @@ fn run_command(
     doc_name: Option<&String>,
     facts: &[String],
     target: Option<&String>,
+    output: OutputFormat,
+    explain: bool,
     interactive: bool,
 ) -> Result<()> {
     let mut engine = Engine::new();
@@ -248,13 +275,76 @@ fn run_command(
     // Normal evaluation mode
     let response = engine.evaluate(&doc, rules, final_facts)?;
     let formatter = Formatter;
-    print!("{}", formatter.format_response(&response));
+
+    match output {
+        OutputFormat::Table => print!("{}", formatter.format_response(&response, explain)),
+        OutputFormat::Json => {
+            let json = format_response_json(&response, explain);
+            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        }
+    }
 
     Ok(())
 }
 
+#[derive(Serialize)]
+struct RunOutputJson {
+    doc_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    facts: Option<Vec<lemma::Facts>>,
+    results: HashMap<String, RuleResultJson>,
+}
+
+#[derive(Serialize)]
+struct RuleResultJson {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    veto_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proof: Option<serde_json::Value>,
+}
+
+fn format_response_json(response: &lemma::Response, explain: bool) -> RunOutputJson {
+    let results: HashMap<String, RuleResultJson> = response
+        .results
+        .iter()
+        .map(|(name, rule_result)| {
+            let (value, veto_reason) = match &rule_result.result {
+                lemma::OperationResult::Value(v) => (Some(v.to_string()), None),
+                lemma::OperationResult::Veto(msg) => (None, msg.clone()),
+            };
+            let proof = if explain {
+                rule_result
+                    .proof
+                    .as_ref()
+                    .and_then(|p| serde_json::to_value(p).ok())
+            } else {
+                None
+            };
+            (
+                name.clone(),
+                RuleResultJson {
+                    value,
+                    veto_reason,
+                    proof,
+                },
+            )
+        })
+        .collect();
+    RunOutputJson {
+        doc_name: response.doc_name.clone(),
+        facts: if explain {
+            Some(response.facts.clone())
+        } else {
+            None
+        },
+        results,
+    }
+}
+
 /// Parse fact value strings in "key=value" format into a HashMap
-fn parse_fact_strings(facts: &[String]) -> std::collections::HashMap<String, String> {
+fn parse_fact_strings(facts: &[String]) -> HashMap<String, String> {
     facts
         .iter()
         .filter_map(|s| {
@@ -308,7 +398,7 @@ fn list_command(root: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn server_command(workdir: &Path, host: &str, port: u16, watch: bool) -> Result<()> {
+fn server_command(workdir: &Path, host: &str, port: u16, watch: bool, proofs: bool) -> Result<()> {
     use tokio::runtime::Runtime;
     let rt = Runtime::new()?;
     rt.block_on(async {
@@ -321,7 +411,7 @@ fn server_command(workdir: &Path, host: &str, port: u16, watch: bool) -> Result<
             "Starting HTTP server with {} document(s) loaded...",
             document_count
         );
-        server::http::start_server(engine, host, port, watch, workdir.to_path_buf()).await
+        server::http::start_server(engine, host, port, watch, proofs, workdir.to_path_buf()).await
     })?;
     Ok(())
 }

@@ -1,5 +1,4 @@
-#[cfg(feature = "mcp")]
-pub mod server {
+mod imp {
     use anyhow::Result;
     use lemma::Engine;
     use serde::{Deserialize, Serialize};
@@ -164,13 +163,17 @@ pub mod server {
                     },
                     {
                         "name": "evaluate",
-                        "description": "Evaluate all rules in a document with optional fact values. Returns computed values for all rules.",
+                        "description": "Evaluate a single rule in a document with optional fact values. Dependencies are computed automatically.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "document": {
                                     "type": "string",
-                                    "description": "Name of the document to evaluate (from 'doc <name>' declaration)"
+                                    "description": "Name of the document (from 'doc <name>' declaration)"
+                                },
+                                "rule": {
+                                    "type": "string",
+                                    "description": "Name of the rule to evaluate (as declared in the document)"
                                 },
                                 "facts": {
                                     "type": "array",
@@ -179,21 +182,7 @@ pub mod server {
                                     "default": []
                                 }
                             },
-                            "required": ["document"]
-                        }
-                    },
-                    {
-                        "name": "inspect",
-                        "description": "Inspect a document's structure to see its facts and rules.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "document": {
-                                    "type": "string",
-                                    "description": "Name of the document to inspect"
-                                }
-                            },
-                            "required": ["document"]
+                            "required": ["document", "rule"]
                         }
                     },
                     {
@@ -228,7 +217,6 @@ pub mod server {
             match tool_name {
                 "add_document" => self.tool_add_document(arguments),
                 "evaluate" => self.tool_evaluate(arguments),
-                "inspect" => self.tool_inspect(arguments),
                 "list_documents" => self.tool_list_documents(),
                 _ => Err(McpError::invalid_params(format!(
                     "Unknown tool: {}",
@@ -281,6 +269,35 @@ pub mod server {
             }))
         }
 
+        /// Verify that all requested rule names exist in the document.
+        fn validate_rule_names(
+            &self,
+            doc_name: &str,
+            rule_names: &[String],
+        ) -> Result<(), McpError> {
+            let plan = self.engine.get_execution_plan(doc_name).ok_or_else(|| {
+                McpError::invalid_params(format!("Document '{doc_name}' not found"))
+            })?;
+            let known: std::collections::HashSet<&str> = plan
+                .rules
+                .iter()
+                .filter(|r| r.path.segments.is_empty())
+                .map(|r| r.name.as_str())
+                .collect();
+            let unknown: Vec<&str> = rule_names
+                .iter()
+                .filter(|name| !known.contains(name.as_str()))
+                .map(|s| s.as_str())
+                .collect();
+            if !unknown.is_empty() {
+                return Err(McpError::invalid_params(format!(
+                    "Unknown rule(s) in '{doc_name}': {}",
+                    unknown.join(", ")
+                )));
+            }
+            Ok(())
+        }
+
         fn tool_evaluate(
             &mut self,
             args: &serde_json::Value,
@@ -302,6 +319,20 @@ pub mod server {
                 )));
             }
 
+            let rule_name = args["rule"]
+                .as_str()
+                .ok_or_else(|| McpError::invalid_params("Missing 'rule' field".to_string()))?
+                .trim()
+                .to_string();
+
+            if rule_name.is_empty() {
+                return Err(McpError::invalid_params(
+                    "Rule name cannot be empty.".to_string(),
+                ));
+            }
+
+            self.validate_rule_names(document, std::slice::from_ref(&rule_name))?;
+
             let facts: Vec<&str> = args["facts"]
                 .as_array()
                 .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
@@ -317,7 +348,7 @@ pub mod server {
 
             let response = self
                 .engine
-                .evaluate(document, vec![], fact_values)
+                .evaluate(document, vec![rule_name], fact_values)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
@@ -353,56 +384,6 @@ pub mod server {
                 document,
                 response.results.len()
             );
-
-            Ok(serde_json::json!({
-                "content": [{
-                    "type": "text",
-                    "text": output
-                }]
-            }))
-        }
-
-        fn tool_inspect(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
-            let document = args["document"]
-                .as_str()
-                .ok_or_else(|| McpError::invalid_params("Missing 'document' field".to_string()))?;
-
-            if document.trim().is_empty() {
-                return Err(McpError::invalid_params(
-                    "Document name cannot be empty".to_string(),
-                ));
-            }
-
-            let doc = self.engine.get_document(document).ok_or_else(|| {
-                McpError::invalid_params(format!("Document '{document}' not found"))
-            })?;
-
-            let facts = &doc.facts;
-            let rules = &doc.rules;
-
-            let mut output = String::default();
-            output.push_str(&format!("# Document: {document}\n\n"));
-
-            output.push_str(&format!("## Facts ({})\n\n", facts.len()));
-            if facts.is_empty() {
-                output.push_str("(none)\n");
-            } else {
-                for fact in facts {
-                    let fact_name = fact.reference.to_string();
-                    output.push_str(&format!("- **{fact_name}**: {}\n", fact.value));
-                }
-            }
-
-            output.push_str(&format!("\n## Rules ({})\n\n", rules.len()));
-            if rules.is_empty() {
-                output.push_str("(none)\n");
-            } else {
-                for rule in rules {
-                    output.push_str(&format!("- **{}**\n", rule.name));
-                }
-            }
-
-            debug!("Inspected document: {}", document);
 
             Ok(serde_json::json!({
                 "content": [{
@@ -487,12 +468,4 @@ pub mod server {
     }
 }
 
-#[cfg(not(feature = "mcp"))]
-pub mod server {
-    use anyhow::Result;
-    use lemma::Engine;
-
-    pub fn start_server(_engine: Engine) -> Result<()> {
-        anyhow::bail!("MCP feature not enabled. Recompile with --features mcp")
-    }
-}
+pub use imp::start_server;

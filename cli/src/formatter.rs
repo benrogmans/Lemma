@@ -31,15 +31,54 @@ impl Default for Formatter {
 }
 
 impl Formatter {
-    pub fn format_response(&self, response: &Response) -> String {
-        let mut output = String::new();
+    /// Format evaluation response. When `explain` is false: one line for a single rule, or one table
+    /// for multiple rules. When true: facts tree and full proof trees per rule.
+    pub fn format_response(&self, response: &Response, explain: bool) -> String {
+        if response.results.is_empty() {
+            return String::new();
+        }
 
+        if explain {
+            return self.format_response_explain(response);
+        }
+
+        if response.results.len() == 1 {
+            let result = response.results.values().next().unwrap();
+            let (unit, value) = self.split_result(&result.result);
+            let line = if unit.is_empty() {
+                value
+            } else {
+                format!("{} {}", value, unit)
+            };
+            return format!("{}\n", line);
+        }
+
+        let mut table = Table::new();
+        table.load_preset(presets::UTF8_FULL);
+        table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
+        table.set_style(super_table::TableComponent::HorizontalLines, '─');
+        for result in response.results.values() {
+            let (unit, value) = self.split_result(&result.result);
+            let value_cell = if unit.is_empty() {
+                value
+            } else {
+                format!("{} {}", value, unit)
+            };
+            table.add_row(vec![
+                Cell::new(&result.rule.name).set_alignment(CellAlignment::Left),
+                Cell::new(&value_cell).set_alignment(CellAlignment::Left),
+            ]);
+        }
+        format!("{}\n", table)
+    }
+
+    fn format_response_explain(&self, response: &Response) -> String {
+        let mut output = String::new();
         if !response.facts.is_empty() {
             output.push_str("Facts\n");
             output.push_str(&self.format_facts_tree(&response.facts, &response.doc_name));
             output.push('\n');
         }
-
         if !response.results.is_empty() {
             output.push_str("Rules\n");
             for result in response.results.values() {
@@ -47,7 +86,6 @@ impl Formatter {
                 output.push('\n');
             }
         }
-
         output
     }
 
@@ -205,28 +243,38 @@ impl Formatter {
             table.set_style(super_table::TableComponent::HorizontalLines, '─');
 
             table.add_row(vec![
-                Cell::new(doc_name.to_string()).set_alignment(CellAlignment::Left)
+                Cell::new(doc_name.to_string()).set_alignment(CellAlignment::Left),
+                Cell::new("").set_alignment(CellAlignment::Left),
+                Cell::new("").set_alignment(CellAlignment::Left),
             ]);
 
-            let (left_content, right_content) = if let Some(doc_ref) = &group.document_reference {
-                let mut left_lines = vec![group.referencing_fact_name.clone()];
-                let mut right_lines = vec![format!("doc {}", doc_ref)];
+            let (name_content, type_content, value_content) =
+                if let Some(doc_ref) = &group.document_reference {
+                    let mut name_lines = vec![group.referencing_fact_name.clone()];
+                    let mut type_lines = vec!["doc".to_string()];
+                    let mut value_lines = vec![format!("{}", doc_ref)];
 
-                let (nested_left, nested_right) =
-                    self.build_facts_content_for_referenced_doc(group);
-                if !nested_left.is_empty() {
-                    left_lines.push(nested_left);
-                    right_lines.push(nested_right);
-                }
+                    let (nested_name, nested_type, nested_value) =
+                        self.build_facts_content_for_referenced_doc(group);
+                    if !nested_name.is_empty() {
+                        name_lines.push(nested_name);
+                        type_lines.push(nested_type);
+                        value_lines.push(nested_value);
+                    }
 
-                (left_lines.join("\n"), right_lines.join("\n"))
-            } else {
-                self.build_facts_content(group, "")
-            };
+                    (
+                        name_lines.join("\n"),
+                        type_lines.join("\n"),
+                        value_lines.join("\n"),
+                    )
+                } else {
+                    self.build_facts_content(group, "")
+                };
 
             table.add_row(vec![
-                Cell::new(left_content).set_alignment(CellAlignment::Left),
-                Cell::new(right_content).set_alignment(CellAlignment::Right),
+                Cell::new(name_content).set_alignment(CellAlignment::Left),
+                Cell::new(type_content).set_alignment(CellAlignment::Left),
+                Cell::new(value_content).set_alignment(CellAlignment::Left),
             ]);
 
             output.push_str(&table.to_string());
@@ -236,79 +284,86 @@ impl Formatter {
         output
     }
 
-    fn build_facts_content_for_referenced_doc(&self, group: &lemma::Facts) -> (String, String) {
-        let mut left_lines = Vec::new();
-        let mut right_lines = Vec::new();
+    fn build_facts_content_for_referenced_doc(
+        &self,
+        group: &lemma::Facts,
+    ) -> (String, String, String) {
+        let mut name_lines = Vec::new();
+        let mut type_lines = Vec::new();
+        let mut value_lines = Vec::new();
 
-        let len = group.facts.len();
-        for (idx, fact) in group.facts.iter().enumerate() {
-            let connector = if idx == len - 1 { "└─" } else { "├─" };
+        for fact in &group.facts {
             let value_str = match &fact.value {
                 FactValue::Literal(lit) => self.format_literal(lit),
                 FactValue::DocumentReference(doc_name) => format!("doc {}", doc_name),
                 FactValue::TypeDeclaration { .. } => String::new(),
             };
-
-            left_lines.push(format!("{} {}", connector, fact.path));
-            right_lines.push(value_str);
+            name_lines.push(fact.path.to_string());
+            type_lines.push(Self::fact_type_str(&fact.value));
+            value_lines.push(value_str);
         }
 
-        (left_lines.join("\n"), right_lines.join("\n"))
+        (
+            name_lines.join("\n"),
+            type_lines.join("\n"),
+            value_lines.join("\n"),
+        )
     }
 
-    fn build_facts_content(&self, group: &lemma::Facts, prefix: &str) -> (String, String) {
-        let mut left_lines = Vec::new();
-        let mut right_lines = Vec::new();
+    fn build_facts_content(&self, group: &lemma::Facts, prefix: &str) -> (String, String, String) {
+        let mut name_lines = Vec::new();
+        let mut type_lines = Vec::new();
+        let mut value_lines = Vec::new();
 
-        let is_top_level = prefix.is_empty();
-        let next_prefix = if is_top_level {
+        let next_prefix = if prefix.is_empty() {
             String::new()
         } else {
-            format!("{}│  ", prefix)
+            format!("{}  ", prefix)
         };
 
-        let total_items = group.referenced_docs.len() + group.facts.len();
-
-        for (idx, child_group) in group.referenced_docs.iter().enumerate() {
-            let is_last = idx == total_items - 1;
-            let connector = if is_last { "└─ " } else { "├─ " };
-
+        for child_group in &group.referenced_docs {
             let doc_name_str = child_group
                 .document_reference
                 .as_ref()
                 .map(|d| format!("doc {}", d))
                 .unwrap_or_default();
 
-            left_lines.push(format!(
-                "{}{}{}",
-                next_prefix, connector, child_group.referencing_fact_name
-            ));
-            right_lines.push(doc_name_str);
+            name_lines.push(child_group.referencing_fact_name.clone());
+            type_lines.push("doc".to_string());
+            value_lines.push(doc_name_str);
 
-            let child_prefix = format!("{}{}", next_prefix, if is_last { "   " } else { "│  " });
-            let (child_left, child_right) = self.build_facts_content(child_group, &child_prefix);
-            if !child_left.is_empty() {
-                left_lines.push(child_left);
-                right_lines.push(child_right);
+            let (child_name, child_type, child_value) = self.build_facts_content(child_group, "  ");
+            if !child_name.is_empty() {
+                name_lines.push(child_name);
+                type_lines.push(child_type);
+                value_lines.push(child_value);
             }
         }
 
-        let facts_start = group.referenced_docs.len();
-        for (idx, fact) in group.facts.iter().enumerate() {
-            let is_last = facts_start + idx == total_items - 1;
-            let connector = if is_last { "└─ " } else { "├─ " };
-
+        for fact in &group.facts {
             let value_str = match &fact.value {
                 FactValue::Literal(lit) => self.format_literal(lit),
                 FactValue::DocumentReference(doc_name) => format!("doc {}", doc_name),
                 FactValue::TypeDeclaration { .. } => String::new(),
             };
-
-            left_lines.push(format!("{}{}{}", next_prefix, connector, fact.path));
-            right_lines.push(value_str);
+            name_lines.push(format!("{}{}", next_prefix, fact.path));
+            type_lines.push(Self::fact_type_str(&fact.value));
+            value_lines.push(value_str);
         }
 
-        (left_lines.join("\n"), right_lines.join("\n"))
+        (
+            name_lines.join("\n"),
+            type_lines.join("\n"),
+            value_lines.join("\n"),
+        )
+    }
+
+    fn fact_type_str(value: &FactValue) -> String {
+        match value {
+            FactValue::Literal(lit) => lit.lemma_type.name(),
+            FactValue::TypeDeclaration { resolved_type } => resolved_type.name(),
+            FactValue::DocumentReference(doc_name) => format!("doc {}", doc_name),
+        }
     }
 
     fn format_literal(&self, lit: &LiteralValue) -> String {
@@ -617,6 +672,8 @@ impl Formatter {
                     }
                 }
                 BranchItem::NonMatched(branch) => {
+                    let condition_result =
+                        Self::extract_condition_result(&branch.condition).unwrap_or_default();
                     ctx.rows.push(Row {
                         left: format!(
                             "{}{}",
@@ -627,10 +684,47 @@ impl Formatter {
                             ))
                         ),
                         unit: String::new(),
-                        value: String::new(),
+                        value: condition_result,
                     });
+                    let condition_indent = format!("{}  ", ctx.indent);
+                    self.render_condition_operands_only(
+                        &branch.condition,
+                        &condition_indent,
+                        ctx.rows,
+                        ctx.expanded,
+                    );
                 }
             }
+        }
+    }
+
+    /// Renders only the operands of a condition node (Computation or Condition), skipping the
+    /// redundant expression lines. Used for non-matched branch conditions so we show
+    /// condition text once with the result, then just the rule-reference operands and their expansion.
+    fn render_condition_operands_only(
+        &self,
+        node: &ProofNode,
+        indent: &str,
+        rows: &mut Vec<Row>,
+        expanded: &mut HashSet<String>,
+    ) {
+        let operands: &[ProofNode] = match node {
+            ProofNode::Computation { operands, .. } => operands.as_ref(),
+            ProofNode::Condition { operands, .. } => operands.as_ref(),
+            _ => return,
+        };
+        let rule_children: Vec<&ProofNode> = operands
+            .iter()
+            .filter(|op| matches!(op, ProofNode::RuleReference { .. }))
+            .collect();
+        let len = rule_children.len();
+        for (i, child) in rule_children.iter().enumerate() {
+            let connector = if i == len - 1 {
+                Connector::Last
+            } else {
+                Connector::Branch
+            };
+            self.render_node_with_connector(child, indent, connector, rows, expanded);
         }
     }
 
@@ -755,6 +849,18 @@ impl Formatter {
             ValueKind::Date(d) => (String::new(), d.to_string()),
             ValueKind::Time(t) => (String::new(), t.to_string()),
             ValueKind::Duration(value, unit) => (unit.to_string(), format_decimal(value, None)),
+        }
+    }
+
+    /// Returns the condition result as "true"/"false" for the value column, if the node is a boolean condition.
+    fn extract_condition_result(node: &ProofNode) -> Option<String> {
+        match node {
+            ProofNode::Computation { result, .. } => match &result.value {
+                ValueKind::Boolean(b) => Some(b.to_string()),
+                _ => None,
+            },
+            ProofNode::Condition { result, .. } => Some(result.to_string()),
+            _ => None,
         }
     }
 

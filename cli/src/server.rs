@@ -1,7 +1,7 @@
 pub mod http {
     use axum::{
         extract::{Path, Query, State},
-        http::StatusCode,
+        http::{HeaderMap, StatusCode},
         response::{Html, IntoResponse, Json},
         routing::get,
         Router,
@@ -19,12 +19,20 @@ pub mod http {
 
     type SharedEngine = Arc<RwLock<Engine>>;
 
+    #[derive(Clone)]
+    struct AppState {
+        engine: SharedEngine,
+        proofs_enabled: bool,
+    }
+
     #[derive(Debug, Serialize)]
-    struct RuleResultJson {
+    struct RuleResultWithProofJson {
         #[serde(skip_serializing_if = "Option::is_none")]
         value: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         veto_reason: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        proof: Option<serde_json::Value>,
     }
 
     #[derive(Debug, Serialize)]
@@ -48,6 +56,7 @@ pub mod http {
         host: &str,
         port: u16,
         watch: bool,
+        proofs: bool,
         workdir: PathBuf,
     ) -> anyhow::Result<()> {
         tracing_subscriber::fmt()
@@ -63,6 +72,11 @@ pub mod http {
             start_file_watcher(shared_engine.clone(), workdir)?;
         }
 
+        let state = AppState {
+            engine: shared_engine,
+            proofs_enabled: proofs,
+        };
+
         let app = Router::new()
             .route("/", get(list_documents))
             .route("/health", get(health_check))
@@ -76,7 +90,7 @@ pub mod http {
             )
             .fallback(fallback_404)
             .layer(CorsLayer::permissive())
-            .with_state(shared_engine);
+            .with_state(state);
 
         let addr: SocketAddr = format!("{host}:{port}").parse()?;
         info!("Lemma server listening on http://{}", addr);
@@ -92,8 +106,8 @@ pub mod http {
     // Meta routes
     // -----------------------------------------------------------------------
 
-    async fn list_documents(State(engine): State<SharedEngine>) -> impl IntoResponse {
-        let engine = engine.read().await;
+    async fn list_documents(State(state): State<AppState>) -> impl IntoResponse {
+        let engine = state.engine.read().await;
         let mut document_names = engine.list_documents();
         document_names.sort();
 
@@ -125,9 +139,9 @@ pub mod http {
         )
     }
 
-    async fn openapi_spec(State(engine): State<SharedEngine>) -> impl IntoResponse {
-        let engine = engine.read().await;
-        let spec = lemma_openapi::generate_openapi(&engine);
+    async fn openapi_spec(State(state): State<AppState>) -> impl IntoResponse {
+        let engine = state.engine.read().await;
+        let spec = lemma_openapi::generate_openapi(&engine, state.proofs_enabled);
         Json(spec)
     }
 
@@ -202,52 +216,107 @@ pub mod http {
     // Document evaluation routes
     // -----------------------------------------------------------------------
 
+    fn want_proofs(state: &AppState, headers: &HeaderMap) -> bool {
+        state.proofs_enabled
+            && headers
+                .get("x-proofs")
+                .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
+                .map(|s: &str| !s.trim().is_empty())
+                .unwrap_or(false)
+    }
+
     /// `GET /{doc_name}` — evaluate all rules, facts as query parameters
     async fn evaluate_get(
-        State(engine): State<SharedEngine>,
+        State(state): State<AppState>,
         Path(doc_name): Path<String>,
         Query(params): Query<HashMap<String, String>>,
+        headers: HeaderMap,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        evaluate_with_query_params(&engine, &doc_name, &[], params).await
+        evaluate_with_query_params(
+            &state.engine,
+            &doc_name,
+            &[],
+            params,
+            want_proofs(&state, &headers),
+        )
+        .await
     }
 
     /// `GET /{doc_name}/{rules}` — evaluate selected rules, facts as query parameters.
     /// If the rules segment is empty after trimming, evaluates all rules.
     async fn evaluate_get_with_rules(
-        State(engine): State<SharedEngine>,
+        State(state): State<AppState>,
         Path((doc_name, rules)): Path<(String, String)>,
         Query(params): Query<HashMap<String, String>>,
+        headers: HeaderMap,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let rule_names = parse_rule_names(&rules);
         if rule_names.is_empty() {
-            return evaluate_with_query_params(&engine, &doc_name, &[], params).await;
+            return evaluate_with_query_params(
+                &state.engine,
+                &doc_name,
+                &[],
+                params,
+                want_proofs(&state, &headers),
+            )
+            .await;
         }
-        validate_rule_names(&engine, &doc_name, &rule_names).await?;
-        evaluate_with_query_params(&engine, &doc_name, &rule_names, params).await
+        validate_rule_names(&state.engine, &doc_name, &rule_names).await?;
+        evaluate_with_query_params(
+            &state.engine,
+            &doc_name,
+            &rule_names,
+            params,
+            want_proofs(&state, &headers),
+        )
+        .await
     }
 
     /// `POST /{doc_name}` — evaluate all rules, facts as JSON body
     async fn evaluate_post(
-        State(engine): State<SharedEngine>,
+        State(state): State<AppState>,
         Path(doc_name): Path<String>,
+        headers: HeaderMap,
         Json(body): Json<serde_json::Value>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        evaluate_with_json_body(&engine, &doc_name, &[], &body).await
+        evaluate_with_json_body(
+            &state.engine,
+            &doc_name,
+            &[],
+            &body,
+            want_proofs(&state, &headers),
+        )
+        .await
     }
 
     /// `POST /{doc_name}/{rules}` — evaluate selected rules, facts as JSON body.
     /// If the rules segment is empty after trimming, evaluates all rules.
     async fn evaluate_post_with_rules(
-        State(engine): State<SharedEngine>,
+        State(state): State<AppState>,
         Path((doc_name, rules)): Path<(String, String)>,
+        headers: HeaderMap,
         Json(body): Json<serde_json::Value>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let rule_names = parse_rule_names(&rules);
         if rule_names.is_empty() {
-            return evaluate_with_json_body(&engine, &doc_name, &[], &body).await;
+            return evaluate_with_json_body(
+                &state.engine,
+                &doc_name,
+                &[],
+                &body,
+                want_proofs(&state, &headers),
+            )
+            .await;
         }
-        validate_rule_names(&engine, &doc_name, &rule_names).await?;
-        evaluate_with_json_body(&engine, &doc_name, &rule_names, &body).await
+        validate_rule_names(&state.engine, &doc_name, &rule_names).await?;
+        evaluate_with_json_body(
+            &state.engine,
+            &doc_name,
+            &rule_names,
+            &body,
+            want_proofs(&state, &headers),
+        )
+        .await
     }
 
     // -----------------------------------------------------------------------
@@ -259,6 +328,7 @@ pub mod http {
         doc_name: &str,
         rule_names: &[String],
         params: HashMap<String, String>,
+        include_proofs: bool,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let engine = engine.read().await;
 
@@ -283,8 +353,12 @@ pub mod http {
                 )
             })?;
 
-        let results = convert_response(&response);
-        info!("Evaluated '{}' with {} results", doc_name, results.len());
+        let results = convert_response_to_json(&response, include_proofs);
+        info!(
+            "Evaluated '{}' with {} results",
+            doc_name,
+            response.results.len()
+        );
 
         Ok(Json(results))
     }
@@ -294,6 +368,7 @@ pub mod http {
         doc_name: &str,
         rule_names: &[String],
         body: &serde_json::Value,
+        include_proofs: bool,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let engine = engine.read().await;
 
@@ -320,11 +395,11 @@ pub mod http {
                 )
             })?;
 
-        let results = convert_response(&response);
+        let results = convert_response_to_json(&response, include_proofs);
         info!(
             "Evaluated '{}' (POST) with {} results",
             doc_name,
-            results.len()
+            response.results.len()
         );
 
         Ok(Json(results))
@@ -334,7 +409,10 @@ pub mod http {
     // Response conversion
     // -----------------------------------------------------------------------
 
-    fn convert_response(response: &lemma::Response) -> HashMap<String, RuleResultJson> {
+    fn convert_response_to_json(
+        response: &lemma::Response,
+        include_proofs: bool,
+    ) -> HashMap<String, RuleResultWithProofJson> {
         response
             .results
             .iter()
@@ -343,7 +421,22 @@ pub mod http {
                     lemma::OperationResult::Value(v) => (Some(v.to_string()), None),
                     lemma::OperationResult::Veto(msg) => (None, msg.clone()),
                 };
-                (name.clone(), RuleResultJson { value, veto_reason })
+                let proof = if include_proofs {
+                    rule_result
+                        .proof
+                        .as_ref()
+                        .and_then(|p| serde_json::to_value(p).ok())
+                } else {
+                    None
+                };
+                (
+                    name.clone(),
+                    RuleResultWithProofJson {
+                        value,
+                        veto_reason,
+                        proof,
+                    },
+                )
             })
             .collect()
     }

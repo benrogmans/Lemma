@@ -33,16 +33,17 @@ rule total = calc.total?
     // Local-rule interface: cashier.total depends on pricing.total (via calc.total?),
     // so cashier's necessary facts must include nested facts like calc.price.
     let necessary_all = engine.get_facts("cashier", &[]).unwrap();
-    let has_calc_price = necessary_all.keys().any(|k| k.to_string() == "calc.price");
+    let has_calc_price = necessary_all
+        .iter()
+        .any(|(k, _)| k.to_string() == "calc.price");
     assert!(
         has_calc_price,
         "Expected necessary facts to include calc.price, got: {:?}",
         necessary_all
-            .keys()
-            .map(|k| k.to_string())
+            .iter()
+            .map(|(k, _)| k.to_string())
             .collect::<Vec<_>>()
     );
-    // Verify the type is included
     let price_type = necessary_all
         .iter()
         .find(|(k, _)| k.to_string() == "calc.price")
@@ -56,14 +57,14 @@ rule total = calc.total?
 
     let necessary_total = engine.get_facts("cashier", &["total".to_string()]).unwrap();
     let has_calc_price = necessary_total
-        .keys()
-        .any(|k| k.to_string() == "calc.price");
+        .iter()
+        .any(|(k, _)| k.to_string() == "calc.price");
     assert!(
         has_calc_price,
         "Expected necessary facts for cashier.total to include calc.price, got: {:?}",
         necessary_total
-            .keys()
-            .map(|k| k.to_string())
+            .iter()
+            .map(|(k, _)| k.to_string())
             .collect::<Vec<_>>()
     );
 }

@@ -59,7 +59,6 @@ rule doubled = base * 2
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("doubled"))
         .stdout(predicate::str::contains("14"));
 }
 
@@ -103,7 +102,6 @@ rule discount = 0
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("discount"))
         .stdout(predicate::str::contains("10"));
 }
 
@@ -192,7 +190,6 @@ rule with_tax = price * 1.21
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("with_tax"))
         .stdout(predicate::str::contains("121"));
 }
 

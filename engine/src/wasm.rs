@@ -113,10 +113,7 @@ impl WasmEngine {
             Err(e) => return to_json_error_string(&e.to_string()),
         };
 
-        let mut fact_entries: Vec<_> = necessary_facts.into_iter().collect();
-        fact_entries.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
-
-        let facts: Vec<_> = fact_entries
+        let facts: Vec<_> = necessary_facts
             .into_iter()
             .map(|(path, schema_type)| {
                 let schema_type_json =
