@@ -18,27 +18,13 @@ pub use domain::{extract_domains_from_constraint, Bound, Domain};
 pub use target::{Target, TargetOp};
 pub use world::World;
 
-use crate::planning::semantics::{Expression, FactPath, LiteralValue, Source, Span, ValueKind};
+use crate::planning::semantics::{Expression, FactPath, LiteralValue, ValueKind};
 use crate::planning::ExecutionPlan;
 use crate::{LemmaError, LemmaResult, OperationResult};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::collections::{HashMap, HashSet};
 
 use world::{WorldEnumerator, WorldSolution};
-
-/// Creates a synthetic source for generated expressions during inversion
-pub fn synthetic_source() -> Source {
-    Source {
-        attribute: "<inversion>".to_string(),
-        span: Span {
-            start: 0,
-            end: 0,
-            line: 1,
-            col: 0,
-        },
-        doc_name: "<synthetic>".to_string(),
-    }
-}
 
 // ============================================================================
 // Solution and Response types
@@ -155,17 +141,7 @@ pub fn invert(
     let executable_rule = plan.get_rule(rule_name).ok_or_else(|| {
         LemmaError::engine(
             format!("Rule not found: {}.{}", plan.doc_name, rule_name),
-            Source::new(
-                "<inversion>",
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                plan.doc_name.clone(),
-            ),
-            std::sync::Arc::from(""),
+            None,
             None::<String>,
         )
     })?;

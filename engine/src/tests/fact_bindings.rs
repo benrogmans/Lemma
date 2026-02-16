@@ -44,12 +44,15 @@ fact contract.base.rate = 100"#;
 
     assert_eq!(
         result[0].facts[1].reference,
-        crate::parsing::ast::FactReference::from_path(vec!["contract".to_string(), "start_date".to_string()])
+        crate::parsing::ast::FactReference::from_path(vec![
+            "contract".to_string(),
+            "start_date".to_string()
+        ])
     );
     match &result[0].facts[1].value {
         FactValue::Literal(lit) => {
             assert!(
-                matches!(&lit.value, crate::Value::Date(_)),
+                matches!(lit, crate::Value::Date(_)),
                 "Expected Date literal"
             );
         }
@@ -58,7 +61,10 @@ fact contract.base.rate = 100"#;
 
     assert_eq!(
         result[0].facts[2].reference,
-        crate::parsing::ast::FactReference::from_path(vec!["contract".to_string(), "end_date".to_string()])
+        crate::parsing::ast::FactReference::from_path(vec![
+            "contract".to_string(),
+            "end_date".to_string()
+        ])
     );
     assert!(
         matches!(&result[0].facts[2].value, FactValue::TypeDeclaration { .. }),
@@ -73,7 +79,7 @@ fact contract.base.rate = 100"#;
         ])
     );
     if let FactValue::Literal(lit) = &result[0].facts[3].value {
-        if let crate::Value::Text(s) = &lit.value {
+        if let crate::Value::Text(s) = lit {
             assert_eq!(s, "contractor");
         } else {
             panic!("Expected Text literal");
@@ -84,7 +90,10 @@ fact contract.base.rate = 100"#;
 
     assert_eq!(
         result[0].facts[4].reference,
-        crate::parsing::ast::FactReference::from_path(vec!["contract".to_string(), "base".to_string()])
+        crate::parsing::ast::FactReference::from_path(vec![
+            "contract".to_string(),
+            "base".to_string()
+        ])
     );
     if let FactValue::DocumentReference(doc_ref) = &result[0].facts[4].value {
         assert_eq!(doc_ref.name, "base_contract");
@@ -102,8 +111,8 @@ fact contract.base.rate = 100"#;
         ])
     );
     if let FactValue::Literal(lit) = &result[0].facts[5].value {
-        if let crate::Value::Number(n) = &lit.value {
-            assert_eq!(*n, rust_decimal::Decimal::new(100, 0));
+        if let crate::Value::Number(n) = lit {
+            assert_eq!(n, &rust_decimal::Decimal::new(100, 0));
         } else {
             panic!("Expected Number literal");
         }

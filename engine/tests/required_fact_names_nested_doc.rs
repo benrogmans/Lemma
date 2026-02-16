@@ -30,58 +30,34 @@ rule total = calc.total?
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
-    // Local-rule interface: cashier.total depends on pricing.total (via calc.total?),
-    // so cashier's necessary facts must include nested facts like calc.price.
-    let necessary_all = engine.get_facts("cashier", &[]).unwrap();
-    let has_calc_price = necessary_all
-        .iter()
-        .any(|(k, _)| k.to_string() == "calc.price");
+    let plan = engine.get_execution_plan("cashier").unwrap();
+
+    // Schema for all rules: cashier.total depends on pricing.total (via calc.total?),
+    // so cashier's schema must include nested facts like calc.price.
+    let schema_all = plan.schema();
     assert!(
-        has_calc_price,
-        "Expected necessary facts to include calc.price, got: {:?}",
-        necessary_all
-            .iter()
-            .map(|(k, _)| k.to_string())
-            .collect::<Vec<_>>()
+        schema_all.facts.contains_key("calc.price"),
+        "Expected schema facts to include calc.price, got: {:?}",
+        schema_all.facts.keys().collect::<Vec<_>>()
     );
-    let price_type = necessary_all
-        .iter()
-        .find(|(k, _)| k.to_string() == "calc.price")
-        .map(|(_, v)| v)
-        .unwrap();
+    let (price_type, _) = schema_all.facts.get("calc.price").unwrap();
     assert_eq!(
         price_type.name(),
         "money",
         "Expected calc.price to have type 'money'"
     );
 
-    let necessary_total = engine.get_facts("cashier", &["total".to_string()]).unwrap();
-    let has_calc_price = necessary_total
-        .iter()
-        .any(|(k, _)| k.to_string() == "calc.price");
+    // Schema for specific rule: same result for cashier.total
+    let schema_total = plan.schema_for_rules(&["total".to_string()]).unwrap();
     assert!(
-        has_calc_price,
-        "Expected necessary facts for cashier.total to include calc.price, got: {:?}",
-        necessary_total
-            .iter()
-            .map(|(k, _)| k.to_string())
-            .collect::<Vec<_>>()
+        schema_total.facts.contains_key("calc.price"),
+        "Expected schema_for_rules facts for cashier.total to include calc.price, got: {:?}",
+        schema_total.facts.keys().collect::<Vec<_>>()
     );
 }
 
 #[test]
-fn get_facts_errors_on_unknown_document() {
-    let engine = Engine::new();
-    let result = engine.get_facts("nonexistent", &[]);
-    assert!(result.is_err(), "Expected error for unknown document");
-    assert!(
-        result.unwrap_err().to_string().contains("not found"),
-        "Error should mention document not found"
-    );
-}
-
-#[test]
-fn get_facts_errors_on_unknown_rule() {
+fn schema_errors_on_unknown_rule() {
     let mut engine = Engine::new();
     add_lemma_code_blocking(
         &mut engine,
@@ -90,7 +66,8 @@ fn get_facts_errors_on_unknown_rule() {
     )
     .unwrap();
 
-    let result = engine.get_facts("test", &["nonexistent".to_string()]);
+    let plan = engine.get_execution_plan("test").unwrap();
+    let result = plan.schema_for_rules(&["nonexistent".to_string()]);
     assert!(result.is_err(), "Expected error for unknown rule");
     assert!(
         result.unwrap_err().to_string().contains("not found"),

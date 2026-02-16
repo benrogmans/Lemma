@@ -44,8 +44,11 @@ Contractor Document
 Shows a different employment model using document references.
 """
 
+type money = scale
+  -> unit eur 1.00
+
 fact hours_worked = 120 hours
-fact hourly_rate  = [number -> minimum 0 -> default 85]
+fact hourly_rate  = [money -> minimum 0 -> default 85 eur]
 
 fact person              = doc base_employee
 fact person.is_full_time = false

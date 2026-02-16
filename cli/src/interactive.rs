@@ -93,7 +93,10 @@ fn select_document(engine: &Engine) -> Result<String> {
 }
 
 fn select_rules(engine: &Engine, doc_name: &str) -> Result<Option<Vec<String>>> {
-    let rule_names = engine.get_document_rule_names(doc_name);
+    let plan = engine
+        .get_execution_plan(doc_name)
+        .context(format!("Document '{}' not found", doc_name))?;
+    let rule_names: Vec<String> = plan.schema().rules.keys().cloned().collect();
 
     if rule_names.is_empty() {
         return Ok(None);
@@ -180,14 +183,22 @@ fn prompt_facts(
     rule_names: &Option<Vec<String>>,
     provided_facts: &HashMap<String, String>,
 ) -> Result<HashMap<String, String>> {
-    let selected_rules: Vec<String> = rule_names.clone().unwrap_or_default();
-    let necessary_facts = engine
-        .get_facts(doc_name, &selected_rules)
-        .context("Failed to get facts")?;
+    let plan = engine
+        .get_execution_plan(doc_name)
+        .context(format!("Document '{}' not found", doc_name))?;
 
-    let promptable_facts: Vec<_> = necessary_facts
+    let selected_rules: Vec<String> = rule_names.clone().unwrap_or_default();
+    let schema = if selected_rules.is_empty() {
+        plan.schema()
+    } else {
+        plan.schema_for_rules(&selected_rules)
+            .context("Failed to get schema for rules")?
+    };
+
+    let promptable_facts: Vec<_> = schema
+        .facts
         .into_iter()
-        .filter(|(path, _)| !provided_facts.contains_key(&path.to_string()))
+        .filter(|(name, _)| !provided_facts.contains_key(name))
         .collect();
 
     if promptable_facts.is_empty() {
@@ -198,9 +209,11 @@ fn prompt_facts(
 
     println!("\nEnter values for facts (press Enter to accept defaults):");
 
-    for (fact_path, lemma_type) in promptable_facts {
-        let fact_name = fact_path.to_string();
-        let default_value = default_value_from_type(&lemma_type);
+    for (fact_name, (lemma_type, value_opt)) in promptable_facts {
+        let default_value = value_opt
+            .as_ref()
+            .map(|v| v.display_value().to_string())
+            .or_else(|| default_value_from_type(&lemma_type));
 
         let input_value = prompt_value_for_type(&fact_name, &lemma_type, default_value.as_deref())?;
         facts.insert(fact_name, input_value);
@@ -224,6 +237,9 @@ fn default_value_from_type(lemma_type: &LemmaType) -> Option<String> {
             default.as_ref().map(|(v, u)| format!("{} {}", v, u))
         }
         TypeSpecification::Veto { .. } => None,
+        TypeSpecification::Error => unreachable!(
+            "BUG: default_value_from_type called with Error sentinel type; this type must never reach interactive mode"
+        ),
     }
 }
 
@@ -340,6 +356,9 @@ fn prompt_value_for_type(
         TypeSpecification::Veto { .. } => {
             anyhow::bail!("Fact '{}' has veto type which is not promptable", fact_name)
         }
+        TypeSpecification::Error => unreachable!(
+            "BUG: prompt_value_for_type called with Error sentinel type; this type must never reach interactive mode"
+        ),
     }
 }
 

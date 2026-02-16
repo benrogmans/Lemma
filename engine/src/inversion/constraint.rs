@@ -150,8 +150,7 @@ impl Constraint {
                 WorkItem::Process(expr_idx) => {
                     let current_expr = &expr_pool[expr_idx];
                     let expr_kind = current_expr.kind.clone();
-                    let s = &current_expr.source_location;
-                    let expr_source = (s.span.clone(), s.attribute.clone(), s.doc_name.clone());
+                    let expr_source = current_expr.source_location.clone();
 
                     match expr_kind {
                         ExpressionKind::Literal(lit) => match &lit.value {
@@ -165,12 +164,7 @@ impl Constraint {
                             _ => {
                                 return Err(LemmaError::engine(
                                     "Constraint expression must be boolean",
-                                    crate::Source::new(
-                                        expr_source.1.clone(),
-                                        expr_source.0.clone(),
-                                        expr_source.2.clone(),
-                                    ),
-                                    Arc::from(""),
+                                    expr_source.clone(),
                                     None::<String>,
                                 ));
                             }
@@ -214,20 +208,12 @@ impl Constraint {
                             work_stack.push(WorkItem::Process(inner_idx));
                         }
                         other => {
-                            let s = &current_expr.source_location;
-                            let expr_source =
-                                (s.span.clone(), s.attribute.clone(), s.doc_name.clone());
                             return Err(LemmaError::engine(
                                 format!(
                                     "Cannot convert expression kind to constraint: {:?}",
                                     std::mem::discriminant(&other)
                                 ),
-                                crate::Source::new(
-                                    expr_source.1.clone(),
-                                    expr_source.0.clone(),
-                                    expr_source.2.clone(),
-                                ),
-                                Arc::from(""),
+                                current_expr.source_location.clone(),
                                 None::<String>,
                             ));
                         }
@@ -278,7 +264,7 @@ impl Constraint {
             message: impl Into<String>,
             suggestion: Option<String>,
         ) -> LemmaError {
-            LemmaError::inversion(message, &left.source_location, suggestion)
+            LemmaError::inversion(message, left.source_location.clone(), suggestion)
         }
 
         // Case 1: fact op literal (e.g., age > 18)
@@ -541,7 +527,7 @@ fn constant_fold_expression(expr: &Expression) -> Option<Expression> {
             let folded_inner = constant_fold_expression(inner)?;
             if let ExpressionKind::Literal(lit) = &folded_inner.kind {
                 match crate::computation::convert_unit(lit.as_ref(), target) {
-                    OperationResult::Value(v) => Some(Expression::new(
+                    OperationResult::Value(v) => Some(Expression::with_source(
                         ExpressionKind::Literal(Box::new(v.as_ref().clone())),
                         expr.source_location.clone(),
                     )),
@@ -558,7 +544,7 @@ fn constant_fold_expression(expr: &Expression) -> Option<Expression> {
             match (&left_folded.kind, &right_folded.kind) {
                 (ExpressionKind::Literal(l), ExpressionKind::Literal(r)) => {
                     match crate::computation::arithmetic_operation(l.as_ref(), op, r.as_ref()) {
-                        OperationResult::Value(v) => Some(Expression::new(
+                        OperationResult::Value(v) => Some(Expression::with_source(
                             ExpressionKind::Literal(Box::new(v.as_ref().clone())),
                             expr.source_location.clone(),
                         )),

@@ -48,6 +48,9 @@
 //! Lemma has a rich type system including units (mass, length, time, money)
 //! with automatic conversions.
 
+#[cfg(test)]
+mod tests;
+
 pub mod computation;
 pub mod engine;
 pub mod error;
@@ -83,7 +86,7 @@ pub use planning::semantics::{
     FactPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit, ScaleUnits,
     SemanticDurationUnit, TypeSpecification, ValueKind,
 };
-pub use planning::{DocumentSchema, ExecutionPlan, FactSchema, RuleSchema};
+pub use planning::{DocumentSchema, ExecutionPlan};
 #[cfg(feature = "registry")]
 pub use registry::LemmaBase;
 pub use registry::{

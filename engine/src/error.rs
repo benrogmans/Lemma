@@ -2,15 +2,12 @@ use crate::parsing::source::Source;
 use crate::planning::semantics::{FactPath, RulePath};
 use crate::registry::RegistryErrorKind;
 use std::fmt;
-use std::sync::Arc;
 
-/// Detailed error information with source location.
-/// Source is passed through; use `source_location` for all location fields.
+/// Detailed error information with optional source location.
 #[derive(Debug, Clone)]
 pub struct ErrorDetails {
     pub message: String,
-    pub source_location: Source,
-    pub source_text: Arc<str>,
+    pub source: Option<Source>,
     pub suggestion: Option<String>,
 }
 
@@ -70,14 +67,12 @@ impl LemmaError {
     /// Create a parse error with source information
     pub fn parse(
         message: impl Into<String>,
-        source: Source,
-        source_text: Arc<str>,
+        source: Option<Source>,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
         Self::Parse(Box::new(ErrorDetails {
             message: message.into(),
-            source_location: source,
-            source_text,
+            source,
             suggestion: suggestion.map(Into::into),
         }))
     }
@@ -85,24 +80,21 @@ impl LemmaError {
     /// Create a parse error with suggestion
     pub fn parse_with_suggestion(
         message: impl Into<String>,
-        source: Source,
-        source_text: Arc<str>,
+        source: Option<Source>,
         suggestion: impl Into<String>,
     ) -> Self {
-        Self::parse(message, source, source_text, Some(suggestion))
+        Self::parse(message, source, Some(suggestion))
     }
 
     /// Create a semantic error with source information
     pub fn semantic(
         message: impl Into<String>,
-        source: Source,
-        source_text: Arc<str>,
+        source: Option<Source>,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
         Self::Semantic(Box::new(ErrorDetails {
             message: message.into(),
-            source_location: source,
-            source_text,
+            source,
             suggestion: suggestion.map(Into::into),
         }))
     }
@@ -110,23 +102,21 @@ impl LemmaError {
     /// Create a semantic error with suggestion
     pub fn semantic_with_suggestion(
         message: impl Into<String>,
-        source: Source,
-        source_text: Arc<str>,
+        source: Option<Source>,
         suggestion: impl Into<String>,
     ) -> Self {
-        Self::semantic(message, source, source_text, Some(suggestion))
+        Self::semantic(message, source, Some(suggestion))
     }
 
     /// Create an inversion error with source information
     pub fn inversion(
         message: impl Into<String>,
-        source: &Source,
+        source: Option<Source>,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
         Self::Inversion(Box::new(ErrorDetails {
             message: message.into(),
-            source_location: source.clone(),
-            source_text: Arc::from(""),
+            source,
             suggestion: suggestion.map(Into::into),
         }))
     }
@@ -134,7 +124,7 @@ impl LemmaError {
     /// Create an inversion error with suggestion
     pub fn inversion_with_suggestion(
         message: impl Into<String>,
-        source: &Source,
+        source: Option<Source>,
         suggestion: impl Into<String>,
     ) -> Self {
         Self::inversion(message, source, Some(suggestion))
@@ -143,14 +133,12 @@ impl LemmaError {
     /// Create an engine error with source information
     pub fn engine(
         message: impl Into<String>,
-        source: Source,
-        source_text: Arc<str>,
+        source: Option<Source>,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
         Self::Engine(Box::new(ErrorDetails {
             message: message.into(),
-            source_location: source,
-            source_text,
+            source,
             suggestion: suggestion.map(Into::into),
         }))
     }
@@ -158,8 +146,7 @@ impl LemmaError {
     /// Create a registry error with source information and structured error kind.
     pub fn registry(
         message: impl Into<String>,
-        source: Source,
-        source_text: Arc<str>,
+        source: Option<Source>,
         identifier: impl Into<String>,
         kind: RegistryErrorKind,
         suggestion: Option<impl Into<String>>,
@@ -167,8 +154,7 @@ impl LemmaError {
         Self::Registry {
             details: Box::new(ErrorDetails {
                 message: message.into(),
-                source_location: source,
-                source_text,
+                source,
                 suggestion: suggestion.map(Into::into),
             }),
             identifier: identifier.into(),
@@ -179,14 +165,12 @@ impl LemmaError {
     /// Create a missing fact error with source information
     pub fn missing_fact(
         fact_path: FactPath,
-        source: Source,
-        source_text: Arc<str>,
+        source: Option<Source>,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
         Self::MissingFact(Box::new(ErrorDetails {
             message: format!("Missing fact: {}", fact_path),
-            source_location: source,
-            source_text,
+            source,
             suggestion: suggestion.map(Into::into),
         }))
     }
@@ -194,14 +178,12 @@ impl LemmaError {
     /// Create a missing rule error with source information
     pub fn missing_rule(
         rule_path: RulePath,
-        source: Source,
-        source_text: Arc<str>,
+        source: Option<Source>,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
         Self::Engine(Box::new(ErrorDetails {
             message: format!("Missing rule: {}", rule_path),
-            source_location: source,
-            source_text,
+            source,
             suggestion: suggestion.map(Into::into),
         }))
     }
@@ -209,20 +191,30 @@ impl LemmaError {
     /// Create a circular dependency error with source information
     pub fn circular_dependency(
         message: impl Into<String>,
-        source: Source,
-        source_text: Arc<str>,
+        source: Option<Source>,
         cycle: Vec<Source>,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
         Self::CircularDependency {
             details: Box::new(ErrorDetails {
                 message: message.into(),
-                source_location: source,
-                source_text,
+                source,
                 suggestion: suggestion.map(Into::into),
             }),
             cycle,
         }
+    }
+}
+
+fn write_source_location(f: &mut fmt::Formatter<'_>, source: &Option<Source>) -> fmt::Result {
+    if let Some(src) = source {
+        write!(
+            f,
+            " at {}:{}:{}",
+            src.attribute, src.span.line, src.span.col
+        )
+    } else {
+        Ok(())
     }
 }
 
@@ -234,65 +226,35 @@ impl fmt::Display for LemmaError {
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    details.source_location.attribute,
-                    details.source_location.span.line,
-                    details.source_location.span.col
-                )
+                write_source_location(f, &details.source)
             }
             LemmaError::Semantic(details) => {
                 write!(f, "Semantic error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    details.source_location.attribute,
-                    details.source_location.span.line,
-                    details.source_location.span.col
-                )
+                write_source_location(f, &details.source)
             }
             LemmaError::Inversion(details) => {
                 write!(f, "Inversion error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    details.source_location.attribute,
-                    details.source_location.span.line,
-                    details.source_location.span.col
-                )
+                write_source_location(f, &details.source)
             }
             LemmaError::Runtime(details) => {
                 write!(f, "Runtime error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    details.source_location.attribute,
-                    details.source_location.span.line,
-                    details.source_location.span.col
-                )
+                write_source_location(f, &details.source)
             }
             LemmaError::Engine(details) => {
                 write!(f, "Engine error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    details.source_location.attribute,
-                    details.source_location.span.line,
-                    details.source_location.span.col
-                )
+                write_source_location(f, &details.source)
             }
             LemmaError::Registry {
                 details,
@@ -307,39 +269,21 @@ impl fmt::Display for LemmaError {
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    details.source_location.attribute,
-                    details.source_location.span.line,
-                    details.source_location.span.col
-                )
+                write_source_location(f, &details.source)
             }
             LemmaError::MissingFact(details) => {
                 write!(f, "Missing fact: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    details.source_location.attribute,
-                    details.source_location.span.line,
-                    details.source_location.span.col
-                )
+                write_source_location(f, &details.source)
             }
             LemmaError::CircularDependency { details, .. } => {
                 write!(f, "Circular dependency: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write!(
-                    f,
-                    " at {}:{}:{}",
-                    details.source_location.attribute,
-                    details.source_location.span.line,
-                    details.source_location.span.col
-                )
+                write_source_location(f, &details.source)
             }
             LemmaError::ResourceLimitExceeded {
                 limit_name,
@@ -370,23 +314,7 @@ impl std::error::Error for LemmaError {}
 
 impl From<std::fmt::Error> for LemmaError {
     fn from(err: std::fmt::Error) -> Self {
-        use crate::parsing::ast::Span;
-        let source = Source::new(
-            "<format-error>",
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            "<format-error>",
-        );
-        LemmaError::engine(
-            format!("Format error: {err}"),
-            source,
-            Arc::from(""),
-            None::<String>,
-        )
+        LemmaError::engine(format!("Format error: {err}"), None, None::<String>)
     }
 }
 
@@ -415,26 +343,16 @@ impl LemmaError {
             | LemmaError::Inversion(details)
             | LemmaError::Runtime(details)
             | LemmaError::Engine(details)
-            | LemmaError::MissingFact(details) => Some(&details.source_location),
-            LemmaError::Registry { details, .. } => Some(&details.source_location),
-            LemmaError::CircularDependency { details, .. } => Some(&details.source_location),
+            | LemmaError::MissingFact(details) => details.source.as_ref(),
+            LemmaError::Registry { details, .. } => details.source.as_ref(),
+            LemmaError::CircularDependency { details, .. } => details.source.as_ref(),
             LemmaError::ResourceLimitExceeded { .. } | LemmaError::MultipleErrors(_) => None,
         }
     }
 
     /// Get the source text if available
     pub fn source_text(&self) -> Option<&str> {
-        match self {
-            LemmaError::Parse(details)
-            | LemmaError::Semantic(details)
-            | LemmaError::Inversion(details)
-            | LemmaError::Runtime(details)
-            | LemmaError::Engine(details)
-            | LemmaError::MissingFact(details) => Some(&details.source_text),
-            LemmaError::Registry { details, .. } => Some(&details.source_text),
-            LemmaError::CircularDependency { details, .. } => Some(&details.source_text),
-            LemmaError::ResourceLimitExceeded { .. } | LemmaError::MultipleErrors(_) => None,
-        }
+        self.location().map(|s| &*s.source_text)
     }
 
     /// Get the suggestion if available
@@ -460,11 +378,8 @@ mod tests {
     use crate::parsing::ast::Span;
     use std::sync::Arc;
 
-    fn create_test_error(
-        variant: fn(String, Source, Arc<str>, Option<String>) -> LemmaError,
-    ) -> LemmaError {
-        let source_text = "fact amount = 100";
-        let source = Source::new(
+    fn test_source() -> Source {
+        Source::new(
             "test.lemma",
             Span {
                 start: 14,
@@ -473,38 +388,39 @@ mod tests {
                 col: 15,
             },
             "test_doc",
-        );
-        variant(
-            "Invalid currency".to_string(),
-            source,
-            Arc::from(source_text),
-            None,
+            Arc::from("fact amount = 100"),
         )
     }
 
     #[test]
     fn test_error_creation_and_display() {
-        let parse_error = create_test_error(LemmaError::parse);
+        let parse_error =
+            LemmaError::parse("Invalid currency", Some(test_source()), None::<String>);
         let parse_error_display = format!("{parse_error}");
         assert!(parse_error_display.contains("Parse error: Invalid currency"));
         assert!(parse_error_display.contains("test.lemma:1:15"));
 
-        let semantic_error = create_test_error(LemmaError::semantic);
+        let semantic_error =
+            LemmaError::semantic("Invalid currency", Some(test_source()), None::<String>);
         let semantic_error_display = format!("{semantic_error}");
         assert!(semantic_error_display.contains("Semantic error: Invalid currency"));
         assert!(semantic_error_display.contains("test.lemma:1:15"));
 
-        let source_text = "fact amont = 100";
-        let span = Span {
-            start: 5,
-            end: 10,
-            line: 1,
-            col: 6,
-        };
+        let suggestion_source = Source::new(
+            "suggestion.lemma",
+            Span {
+                start: 5,
+                end: 10,
+                line: 1,
+                col: 6,
+            },
+            "suggestion_doc",
+            Arc::from("fact amont = 100"),
+        );
+
         let parse_error_with_suggestion = LemmaError::parse_with_suggestion(
             "Typo in fact name",
-            Source::new("suggestion.lemma", span.clone(), "suggestion_doc"),
-            Arc::from(source_text),
+            Some(suggestion_source.clone()),
             "Did you mean 'amount'?",
         );
         let parse_error_with_suggestion_display = format!("{parse_error_with_suggestion}");
@@ -513,47 +429,19 @@ mod tests {
 
         let semantic_error_with_suggestion = LemmaError::semantic_with_suggestion(
             "Incompatible types",
-            Source::new("suggestion.lemma", span.clone(), "suggestion_doc"),
-            Arc::from(source_text),
+            Some(suggestion_source),
             "Try converting one of the types.",
         );
         let semantic_error_with_suggestion_display = format!("{semantic_error_with_suggestion}");
         assert!(semantic_error_with_suggestion_display.contains("Incompatible types"));
         assert!(semantic_error_with_suggestion_display.contains("Try converting one of the types."));
 
-        let engine_error = LemmaError::engine(
-            "Something went wrong",
-            Source::new(
-                "<test>",
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<test>",
-            ),
-            Arc::from(""),
-            None::<String>,
-        );
+        let engine_error = LemmaError::engine("Something went wrong", None, None::<String>);
         assert!(format!("{engine_error}").contains("Engine error: Something went wrong"));
+        assert!(!format!("{engine_error}").contains(" at "));
 
-        let circular_dependency_error = LemmaError::circular_dependency(
-            "a -> b -> a",
-            Source::new(
-                "<test>",
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "<test>",
-            ),
-            Arc::from(""),
-            vec![],
-            None::<String>,
-        );
+        let circular_dependency_error =
+            LemmaError::circular_dependency("a -> b -> a", None, vec![], None::<String>);
         assert!(format!("{circular_dependency_error}").contains("Circular dependency: a -> b -> a"));
 
         let multiple_errors =

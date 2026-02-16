@@ -3,7 +3,7 @@
 //! Validates document structure and type declarations
 //! to catch errors early with clear messages.
 
-use crate::parsing::ast::{DateTimeValue, FactValue, LemmaDoc, TimeValue};
+use crate::parsing::ast::{DateTimeValue, LemmaDoc, TimeValue};
 use crate::planning::semantics::{
     Expression, ExpressionKind, FactPath, LemmaType, RulePath, SemanticConversionTarget,
     TypeSpecification,
@@ -14,46 +14,6 @@ use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-/// Validate basic type declaration structure in a document
-///
-/// This performs lightweight structural validation (e.g., checking that TypeDeclaration
-/// base is not empty). Type registration, resolution, and specification validation
-/// are handled during graph building where types are actually needed.
-pub fn validate_types(
-    document: &LemmaDoc,
-    sources: &HashMap<String, String>,
-) -> Result<(), Vec<LemmaError>> {
-    let mut errors = Vec::new();
-
-    // Validate type declarations in facts (inline type definitions)
-    for fact in &document.facts {
-        if let FactValue::TypeDeclaration {
-            base,
-            constraints: _,
-            from: _,
-        } = &fact.value
-        {
-            // Basic validation - check that base is not empty
-            if base.is_empty() {
-                let src = &fact.source_location;
-                errors.push(LemmaError::engine(
-                    "TypeDeclaration base cannot be empty",
-                    src.clone(),
-                    super::source_text_for(sources, src),
-                    None::<String>,
-                ));
-            }
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
-}
 
 /// Validate that TypeSpecification constraints are internally consistent
 ///
@@ -68,7 +28,6 @@ pub fn validate_type_specifications(
     specs: &TypeSpecification,
     type_name: &str,
     source: &Source,
-    source_text: Arc<str>,
 ) -> Vec<LemmaError> {
     let mut errors = Vec::new();
 
@@ -90,8 +49,7 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -105,8 +63,7 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -120,8 +77,7 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -142,8 +98,7 @@ pub fn validate_type_specifications(
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -154,8 +109,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} {} is less than minimum {}",
                                 type_name, def_value, def_unit, min
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -167,8 +121,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} {} is greater than maximum {}",
                                 type_name, def_value, def_unit, max
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -182,8 +135,7 @@ pub fn validate_type_specifications(
                         "Type '{}' is a scale type but has no units. Scale types must define at least one unit (e.g. -> unit eur 1).",
                         type_name
                     ),
-                    source.clone(),
-                    source_text.clone(),
+                    Some(source.clone()),
                     None::<String>,
                 ));
             }
@@ -199,8 +151,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -213,8 +164,7 @@ pub fn validate_type_specifications(
                     {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     } else {
@@ -225,8 +175,7 @@ pub fn validate_type_specifications(
                     if unit.value <= Decimal::ZERO {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -249,8 +198,7 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -264,8 +212,7 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -279,8 +226,7 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -295,8 +241,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -308,8 +253,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -334,8 +278,7 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -349,8 +292,7 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -365,8 +307,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -378,8 +319,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -399,8 +339,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -413,8 +352,7 @@ pub fn validate_type_specifications(
                     {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     } else {
@@ -425,8 +363,7 @@ pub fn validate_type_specifications(
                     if unit.value <= Decimal::ZERO {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -447,8 +384,7 @@ pub fn validate_type_specifications(
                 if min > max {
                     errors.push(LemmaError::engine(
                         format!("Type '{}' has invalid range: minimum length {} is greater than maximum length {}", type_name, min, max),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -460,8 +396,7 @@ pub fn validate_type_specifications(
                     if *len < *min {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has inconsistent length constraint: length {} is less than minimum {}", type_name, len, min),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -470,8 +405,7 @@ pub fn validate_type_specifications(
                     if *len > *max {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' has inconsistent length constraint: length {} is greater than maximum {}", type_name, len, max),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -489,8 +423,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value length {} is less than minimum {}",
                                 type_name, def_len, min
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -502,8 +435,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default value length {} is greater than maximum {}",
                                 type_name, def_len, max
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -512,8 +444,7 @@ pub fn validate_type_specifications(
                     if def_len != *len {
                         errors.push(LemmaError::engine(
                             format!("Type '{}' default value length {} does not match required length {}", type_name, def_len, len),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -524,8 +455,7 @@ pub fn validate_type_specifications(
                             "Type '{}' default value '{}' is not in allowed options: {:?}",
                             type_name, def, options
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -546,8 +476,7 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid date range: minimum {} is after maximum {}",
                             type_name, min, max
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -562,8 +491,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default date {} is before minimum {}",
                                 type_name, def, min
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -575,8 +503,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default date {} is after maximum {}",
                                 type_name, def, max
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -598,8 +525,7 @@ pub fn validate_type_specifications(
                             "Type '{}' has invalid time range: minimum {} is after maximum {}",
                             type_name, min, max
                         ),
-                        source.clone(),
-                        source_text.clone(),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -614,8 +540,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default time {} is before minimum {}",
                                 type_name, def, min
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -627,8 +552,7 @@ pub fn validate_type_specifications(
                                 "Type '{}' default time {} is after maximum {}",
                                 type_name, def, max
                             ),
-                            source.clone(),
-                            source_text.clone(),
+                            Some(source.clone()),
                             None::<String>,
                         ));
                     }
@@ -643,6 +567,9 @@ pub fn validate_type_specifications(
             // Veto is not a user-declarable type, so validation should not be called on it
             // But if it is, there's nothing to validate
         }
+        TypeSpecification::Error => unreachable!(
+            "BUG: validate_type_specification_constraints called with Error sentinel type; this type exists only during type inference"
+        ),
     }
 
     errors
@@ -748,7 +675,7 @@ fn collect_expected_constraints_for_rule_ref(
     expr: &Expression,
     rule_path: &RulePath,
     expected: ExpectedRuleTypeConstraint,
-) -> Vec<(Source, ExpectedRuleTypeConstraint)> {
+) -> Vec<(Option<Source>, ExpectedRuleTypeConstraint)> {
     let mut out = Vec::new();
     match &expr.kind {
         ExpressionKind::RulePath(rp) => {
@@ -834,19 +761,12 @@ fn expected_constraint_name(c: ExpectedRuleTypeConstraint) -> &'static str {
     }
 }
 
-fn push_document_interface_error(
-    errors: &mut Vec<LemmaError>,
+fn document_interface_error(
     source: &Source,
     message: impl Into<String>,
-    sources: &HashMap<String, String>,
-) {
-    let source_text = sources.get(&source.attribute).cloned().unwrap_or_default();
-    errors.push(LemmaError::engine(
-        message.into(),
-        source.clone(),
-        Arc::from(source_text),
-        None::<String>,
-    ));
+    _sources: &HashMap<String, String>,
+) -> LemmaError {
+    LemmaError::engine(message.into(), Some(source.clone()), None::<String>)
 }
 
 /// Validate that every doc-ref fact path's referenced document has the required rules
@@ -858,8 +778,9 @@ pub fn validate_document_interfaces(
     rule_entries: &IndexMap<RulePath, RuleEntryForBindingCheck>,
     all_docs: &[LemmaDoc],
     sources: &HashMap<String, String>,
-    errors: &mut Vec<LemmaError>,
-) {
+) -> Result<(), Vec<LemmaError>> {
+    let mut errors = Vec::new();
+
     for (fact_path, doc_name, fact_source) in doc_ref_facts {
         let mut full_path: Vec<String> =
             fact_path.segments.iter().map(|s| s.fact.clone()).collect();
@@ -877,15 +798,14 @@ pub fn validate_document_interfaces(
 
         for required_rule in required_rules {
             if !doc_rule_names.contains(required_rule.as_str()) {
-                push_document_interface_error(
-                    errors,
+                errors.push(document_interface_error(
                     fact_source,
                     format!(
                         "Document '{}' referenced by '{}' is missing required rule '{}'",
                         doc_name, fact_path, required_rule
                     ),
                     sources,
-                );
+                ));
                 continue;
             }
 
@@ -908,8 +828,6 @@ pub fn validate_document_interfaces(
                     );
                     for (_source, constraint) in constraints {
                         if !rule_type_satisfies_constraint(ref_rule_type, constraint) {
-                            // fact_source already points to the binding site when a
-                            // binding changed the doc ref (set during graph building).
                             let report_source = fact_source;
 
                             let binding_path_str = fact_path
@@ -924,8 +842,7 @@ pub fn validate_document_interfaces(
                                 format!("{}.{}", binding_path_str, fact_path.fact)
                             };
 
-                            push_document_interface_error(
-                                errors,
+                            errors.push(document_interface_error(
                                 report_source,
                                 format!(
                                     "Fact binding '{}' sets document reference to '{}', but that document's rule '{}' has result type {}; the referencing expression expects a {} value",
@@ -936,21 +853,28 @@ pub fn validate_document_interfaces(
                                     expected_constraint_name(constraint),
                                 ),
                                 sources,
-                            );
+                            ));
                         }
                     }
                 }
             }
         }
     }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parsing::ast::{CommandArg, FactReference, FactValue, LemmaFact, Value};
+    use crate::parsing::ast::CommandArg;
     use crate::planning::semantics::TypeSpecification;
     use rust_decimal::Decimal;
+    use std::sync::Arc;
 
     fn test_source(doc_name: &str) -> Source {
         Source::new(
@@ -962,37 +886,8 @@ mod tests {
                 col: 0,
             },
             doc_name,
+            Arc::from("doc test\nfact x = 1"),
         )
-    }
-
-    fn make_doc(name: &str) -> LemmaDoc {
-        LemmaDoc::new(name.to_string())
-    }
-
-    fn make_fact(name: &str) -> LemmaFact {
-        LemmaFact::new(
-            FactReference::local(name.to_string()),
-            FactValue::Literal(Value::Number(Decimal::from(1))),
-            Source::new(
-                "<test>",
-                crate::parsing::ast::Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "test",
-            ),
-        )
-    }
-
-    #[test]
-    fn validate_basic_document() {
-        let mut doc = make_doc("test");
-        doc.facts.push(make_fact("age"));
-
-        let result = validate_types(&doc, &HashMap::new());
-        assert!(result.is_ok());
     }
 
     #[test]
@@ -1006,7 +901,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1024,7 +919,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
 
@@ -1040,7 +935,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1059,7 +954,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1078,7 +973,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
 
@@ -1093,7 +988,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1111,7 +1006,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1130,7 +1025,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1149,7 +1044,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
 
@@ -1165,7 +1060,7 @@ mod tests {
         };
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1183,7 +1078,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].to_string().contains("minimum")
@@ -1202,7 +1097,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
 
@@ -1217,7 +1112,7 @@ mod tests {
             .unwrap();
 
         let src = test_source("test");
-        let errors = validate_type_specifications(&specs, "test", &src, Arc::from(""));
+        let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].to_string().contains("minimum")
@@ -1243,6 +1138,7 @@ mod tests {
                     col: 0,
                 },
                 "test",
+                Arc::from("doc test\nfact x = 1"),
             ),
             name: "invalid_money".to_string(),
             parent: "number".to_string(),
@@ -1275,12 +1171,8 @@ mod tests {
             .get("invalid_money")
             .expect("Should have invalid_money type");
         let src = test_source("test");
-        let errors = validate_type_specifications(
-            &lemma_type.specifications,
-            "invalid_money",
-            &src,
-            Arc::from(""),
-        );
+        let errors =
+            validate_type_specifications(&lemma_type.specifications, "invalid_money", &src);
         assert!(!errors.is_empty());
         assert!(errors.iter().any(|e| e
             .to_string()

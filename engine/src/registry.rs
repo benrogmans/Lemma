@@ -16,7 +16,6 @@ use crate::parsing::ast::{FactValue, LemmaDoc, TypeDef};
 use crate::parsing::source::Source;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Trait and types
@@ -401,14 +400,9 @@ pub async fn resolve_registry_references(
                         ),
                         RegistryErrorKind::Other => None,
                     };
-                    let source_text = sources
-                        .get(&reference.source.attribute)
-                        .expect("BUG: source text must be present for every document attribute; missing for registry error reporting");
-                    let source_text = Arc::from(source_text.as_str());
                     round_errors.push(LemmaError::registry(
                         registry_error.message,
-                        reference.source.clone(),
-                        source_text,
+                        Some(reference.source.clone()),
                         reference.identifier.clone(),
                         registry_error.kind,
                         suggestion,
@@ -914,7 +908,7 @@ type money = scale
     #[cfg(feature = "registry")]
     mod lemmabase_tests {
         use super::super::*;
-        use std::sync::Mutex;
+        use std::sync::{Arc, Mutex};
 
         // -------------------------------------------------------------------
         // MockHttpFetcher — drives LemmaBase without touching the network

@@ -20,7 +20,10 @@ fn get_proof_node_required(
     expr: &Expression,
     operand_name: &str,
 ) -> ProofNode {
-    let loc = &expr.source_location;
+    let loc = expr
+        .source_location
+        .as_ref()
+        .expect("BUG: expression missing source in evaluation");
     context.get_proof_node(expr).cloned().unwrap_or_else(|| {
         unreachable!(
             "BUG: {} was evaluated but has no proof node ({}:{}:{} in {})",
@@ -37,7 +40,10 @@ fn get_operand_result(
     expr: &Expression,
     operand_name: &str,
 ) -> OperationResult {
-    let loc = &expr.source_location;
+    let loc = expr
+        .source_location
+        .as_ref()
+        .expect("BUG: expression missing source in evaluation");
     results.get(expr).cloned().unwrap_or_else(|| {
         unreachable!(
             "BUG: {} operand was marked ready but result is missing ({}:{}:{} in {})",
@@ -52,16 +58,15 @@ fn get_operand_result(
 fn unwrap_value_after_veto_check<'a>(
     result: &'a OperationResult,
     operand_name: &str,
-    source_location: &crate::planning::semantics::Source,
+    source_location: &Option<crate::planning::semantics::Source>,
 ) -> &'a LiteralValue {
     result.value().unwrap_or_else(|| {
+        let loc = source_location
+            .as_ref()
+            .expect("BUG: expression missing source in evaluation");
         unreachable!(
             "BUG: {} passed Veto check but has no value ({}:{}:{} in {})",
-            operand_name,
-            source_location.attribute,
-            source_location.span.line,
-            source_location.span.col,
-            source_location.doc_name
+            operand_name, loc.attribute, loc.span.line, loc.span.col, loc.doc_name
         )
     })
 }
@@ -123,7 +128,7 @@ pub fn evaluate_rule(
                         condition: Some(Box::new(condition_proof)),
                         result: Box::new(ProofNode::Veto {
                             message: msg.clone(),
-                            source_location: Some(branch.result.source_location.clone()),
+                            source_location: branch.result.source_location.clone(),
                         }),
                         clause_index: Some(unless_clause_index),
                         source_location: Some(branch.source.clone()),
@@ -360,7 +365,10 @@ fn evaluate_expression(
         }
 
         if !progress {
-            let loc = &expr.source_location;
+            let loc = expr
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in evaluation");
             unreachable!(
                 "BUG: circular dependency or missing dependency in expression tree ({}:{}:{} in {})",
                 loc.attribute, loc.span.start, loc.span.end, loc.doc_name
@@ -378,7 +386,10 @@ fn evaluate_expression(
         }
     }
 
-    let loc = &expr.source_location;
+    let loc = expr
+        .source_location
+        .as_ref()
+        .expect("BUG: expression missing source in evaluation");
     results.get(expr).cloned().unwrap_or_else(|| {
         unreachable!(
             "BUG: expression was processed but has no result ({}:{}:{} in {})",
@@ -401,7 +412,7 @@ fn evaluate_single_expression(
             let proof_node = ProofNode::Value {
                 value: value.clone(),
                 source: ValueSource::Literal,
-                source_location: Some(current.source_location.clone()),
+                source_location: current.source_location.clone(),
             };
             context.set_proof_node(current, proof_node);
             OperationResult::Value(Box::new(value))
@@ -424,7 +435,7 @@ fn evaluate_single_expression(
                         source: ValueSource::Fact {
                             fact_ref: fact_path_clone,
                         },
-                        source_location: Some(current.source_location.clone()),
+                        source_location: current.source_location.clone(),
                     };
                     context.set_proof_node(current, proof_node);
                     OperationResult::Value(Box::new(v))
@@ -432,7 +443,7 @@ fn evaluate_single_expression(
                 None => {
                     let proof_node = ProofNode::Veto {
                         message: Some(format!("Missing fact: {}", fact_path)),
-                        source_location: Some(current.source_location.clone()),
+                        source_location: current.source_location.clone(),
                     };
                     context.set_proof_node(current, proof_node);
                     OperationResult::Veto(Some(format!("Missing fact: {}", fact_path)))
@@ -445,7 +456,10 @@ fn evaluate_single_expression(
             // result is not in the map, planning guaranteed no cycles and topological sort
             // ensured the dependency was evaluated first. Missing result is a bug.
             let rule_path_clone = rule_path.clone();
-            let loc = &current.source_location;
+            let loc = current
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in evaluation");
             let r = context.rule_results.get(rule_path).cloned().unwrap_or_else(|| {
                 unreachable!(
                     "BUG: Rule '{}' not found in results during topological-order evaluation ({}:{}:{} in {})",
@@ -467,14 +481,14 @@ fn evaluate_single_expression(
                         OperationResult::Veto(_) => LiteralValue::from_bool(false),
                     },
                     source: ValueSource::Computed,
-                    source_location: Some(current.source_location.clone()),
+                    source_location: current.source_location.clone(),
                 },
             };
 
             let proof_node = ProofNode::RuleReference {
                 rule_path: rule_path_clone,
                 result: r.clone(),
-                source_location: Some(current.source_location.clone()),
+                source_location: current.source_location.clone(),
                 expansion: Box::new(expansion),
             };
             context.set_proof_node(current, proof_node);
@@ -532,7 +546,7 @@ fn evaluate_single_expression(
                     original_expression: original_expr,
                     expression: substituted_expr,
                     result: val.as_ref().clone(),
-                    source_location: Some(current.source_location.clone()),
+                    source_location: current.source_location.clone(),
                     operands: vec![left_proof, right_proof],
                 };
                 context.set_proof_node(current, proof_node);
@@ -593,7 +607,7 @@ fn evaluate_single_expression(
                     original_expression: original_expr,
                     expression: substituted_expr,
                     result: val.as_ref().clone(),
-                    source_location: Some(current.source_location.clone()),
+                    source_location: current.source_location.clone(),
                     operands: vec![left_proof, right_proof],
                 };
                 context.set_proof_node(current, proof_node);
@@ -718,7 +732,7 @@ fn evaluate_single_expression(
         ExpressionKind::Veto(veto_expr) => {
             let proof_node = ProofNode::Veto {
                 message: veto_expr.message.clone(),
-                source_location: Some(current.source_location.clone()),
+                source_location: current.source_location.clone(),
             };
             context.set_proof_node(current, proof_node);
             OperationResult::Veto(veto_expr.message.clone())

@@ -4,7 +4,9 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
-use tokio::sync::{Notify, RwLock};
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::sync::Notify;
+use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -17,6 +19,7 @@ use crate::workspace::WorkspaceModel;
 /// Shared mutable state accessed by both the LSP handlers and the debounce background task.
 struct SharedState {
     workspace: RwLock<WorkspaceModel>,
+    #[cfg(not(target_arch = "wasm32"))]
     debounce_notify: Notify,
     /// The workspace root URI, set during `initialize`.
     root_uri: RwLock<Option<Url>>,
@@ -39,6 +42,7 @@ impl LemmaLanguageServer {
             client,
             state: Arc::new(SharedState {
                 workspace: RwLock::new(WorkspaceModel::new()),
+                #[cfg(not(target_arch = "wasm32"))]
                 debounce_notify: Notify::new(),
                 root_uri: RwLock::new(None),
             }),
@@ -77,8 +81,32 @@ impl LemmaLanguageServer {
     }
 
     /// Signal the debounce task that a workspace re-validation is needed.
+    #[cfg(not(target_arch = "wasm32"))]
     fn request_workspace_validation(&self) {
         self.state.debounce_notify.notify_one();
+    }
+
+    /// Run full workspace validation inline and publish all diagnostics.
+    ///
+    /// On WASM there is no background debounce task (it requires `Send` futures),
+    /// so we validate synchronously inside `did_open`/`did_change` instead.
+    /// This is fine for the playground: a single file, no registry, fast validation.
+    #[cfg(target_arch = "wasm32")]
+    async fn publish_full_diagnostics(&self) {
+        let file_diagnostics = {
+            let workspace = self.state.workspace.read().await;
+            workspace.validate_workspace()
+        };
+        for file_diag in file_diagnostics {
+            let lsp_diagnostics = diagnostics::errors_to_diagnostics(
+                &file_diag.errors,
+                &file_diag.text,
+                &file_diag.attribute,
+            );
+            self.client
+                .publish_diagnostics(file_diag.url, lsp_diagnostics, None)
+                .await;
+        }
     }
 
     /// Discover all `.lemma` files under a directory and add them to the workspace.
@@ -306,8 +334,11 @@ impl LanguageServer for LemmaLanguageServer {
         // Fast path: publish parse errors immediately.
         self.publish_parse_diagnostics(&uri).await;
 
-        // Signal the debounce task for full workspace validation.
+        // Full validation: debounce task on native, inline on WASM.
+        #[cfg(not(target_arch = "wasm32"))]
         self.request_workspace_validation();
+        #[cfg(target_arch = "wasm32")]
+        self.publish_full_diagnostics().await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -324,8 +355,11 @@ impl LanguageServer for LemmaLanguageServer {
             self.publish_parse_diagnostics(&uri).await;
         }
 
-        // Signal the debounce task for full workspace validation.
+        // Full validation: debounce task on native, inline on WASM.
+        #[cfg(not(target_arch = "wasm32"))]
         self.request_workspace_validation();
+        #[cfg(target_arch = "wasm32")]
+        self.publish_full_diagnostics().await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -340,7 +374,10 @@ impl LanguageServer for LemmaLanguageServer {
         self.client.publish_diagnostics(uri, Vec::new(), None).await;
 
         // Signal re-validation since removing a file may affect other files' diagnostics.
+        #[cfg(not(target_arch = "wasm32"))]
         self.request_workspace_validation();
+        #[cfg(target_arch = "wasm32")]
+        self.publish_full_diagnostics().await;
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
@@ -467,11 +504,11 @@ mod tests {
                 col: 1,
             },
             "example",
+            Arc::from(content),
         );
         let registry_error = LemmaError::registry(
             "Document not found: @nonexistent/foo",
-            source,
-            Arc::from("doc nonexistent/foo"),
+            Some(source),
             "nonexistent/foo",
             lemma::RegistryErrorKind::NotFound,
             Some("Check that the identifier exists on the registry."),
@@ -519,6 +556,7 @@ type money from @lemma/std/finance"#;
                 col: 1,
             },
             "registry_demo",
+            Arc::from(text.as_str()),
         );
         let type_ref_source = Source::new(
             attribute.clone(),
@@ -529,19 +567,18 @@ type money from @lemma/std/finance"#;
                 col: 1,
             },
             "registry_demo",
+            Arc::from(text.as_str()),
         );
         let doc_error = LemmaError::registry(
             "Document not found: @org/example/helper",
-            doc_ref_source,
-            Arc::from("doc org/example/helper"),
+            Some(doc_ref_source),
             "org/example/helper",
             lemma::RegistryErrorKind::NotFound,
             None::<String>,
         );
         let type_error = LemmaError::registry(
             "Document not found: @lemma/std/finance",
-            type_ref_source,
-            Arc::from("type money from @lemma/std/finance"),
+            Some(type_ref_source),
             "lemma/std/finance",
             lemma::RegistryErrorKind::NotFound,
             None::<String>,

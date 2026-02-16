@@ -108,10 +108,8 @@ fn test_incompatible_types_error() {
     // Verify the error message mentions incompatible types
     let error_msg = format!("{}", result.unwrap_err());
     assert!(
-        error_msg.to_lowercase().contains("numeric")
-            || error_msg.to_lowercase().contains("incompatible")
-            || error_msg.to_lowercase().contains("arithmetic"),
-        "Error message should mention type incompatibility. Got: {}",
+        error_msg.contains("Cannot apply"),
+        "Error message should mention invalid operation. Got: {}",
         error_msg
     );
 }

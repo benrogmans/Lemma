@@ -206,7 +206,7 @@
             </div>
         </div>
         <div class="editor-actions">
-            <span class="hint">Edits auto-load. Diagnostics appear inline.</span>
+            <span class="hint">Edits auto-load.</span>
             <a href="#" id="format-btn" class="format-link" title="Format document">Format</a>
         </div>
     </div>
@@ -217,8 +217,9 @@
     </div>
 
     <script type="module">
-        import init, { WasmEngine } from '../pkg/lsp.js';
+        import init, { WasmEngine, serve, ServerConfig } from '../pkg/lemma.js';
         import { registerLemmaLanguage } from './monaco.js';
+        import { LspClient } from './lsp-client.js';
 
         // ---------------------------------------------------------------
         // State
@@ -229,30 +230,9 @@
         let monacoInstance = null;
         let editorReady = false;
         let loadTimer = null;
-        let diagnosticsTimer = null;
-
-        function refreshEditorDiagnostics() {
-            if (!engine || !monacoEditor || !monacoInstance) return;
-            const model = monacoEditor.getModel();
-            if (!model) return;
-            const code = monacoEditor.getValue();
-            try {
-                const raw = engine.getDiagnostics(code, 'wasm.lemma');
-                const data = JSON.parse(raw);
-                const list = Array.isArray(data) ? data : (data && Array.isArray(data.diagnostics) ? data.diagnostics : []);
-                const markers = list.map(function (d) {
-                    return {
-                        severity: 8,
-                        message: d.message || 'Error',
-                        startLineNumber: d.startLine || 1,
-                        startColumn: d.startColumn || 1,
-                        endLineNumber: d.endLine || 1,
-                        endColumn: d.endColumn || 1
-                    };
-                });
-                monacoInstance.editor.setModelMarkers(model, 'lemma', markers);
-            } catch (_) {}
-        }
+        let lspClient = null;
+        let lspVersion = 0;
+        const DOC_URI = 'file:///playground/wasm.lemma';
 
         const state = {
             docs: [],
@@ -260,6 +240,30 @@
             factValues: {},
             evalResults: {},
         };
+
+        function factValuesStorageKey(docName) {
+            return 'lemma_playground:doc:' + docName;
+        }
+
+        function persistFactValues(docName) {
+            try {
+                localStorage.setItem(factValuesStorageKey(docName), JSON.stringify(state.factValues[docName] || {}));
+            } catch (_) {}
+        }
+
+        function loadFactValuesFromStorage(docName) {
+            if (state.factValues[docName] && Object.keys(state.factValues[docName]).length > 0) return;
+            try {
+                const raw = localStorage.getItem(factValuesStorageKey(docName));
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (parsed && typeof parsed === 'object') {
+                        state.factValues[docName] = parsed;
+                    }
+                }
+            } catch (_) {}
+            if (!state.factValues[docName]) state.factValues[docName] = {};
+        }
 
         // ---------------------------------------------------------------
         // Status panel
@@ -292,6 +296,22 @@
             const kind = specKind(schemaType);
             if (kind === null) return null;
             return schemaType.specifications[kind] || null;
+        }
+
+        function storedFromLiteralValue(lit, kind) {
+            if (!lit || typeof lit !== 'object' || !lit.value) return undefined;
+            const v = lit.value;
+            const display = typeof lit.display_value === 'string' ? lit.display_value : '';
+            if (kind === 'Boolean') return v.boolean === true;
+            if (kind === 'Number') return v.number != null ? String(v.number) : display;
+            if (kind === 'Text') return typeof v.text === 'string' ? v.text : display;
+            if (kind === 'Scale' && Array.isArray(v.scale)) return { amount: String(v.scale[0] ?? ''), unit: String(v.scale[1] ?? '') };
+            if (kind === 'Ratio') {
+                if (Array.isArray(v.ratio)) return { amount: String(v.ratio[0] ?? ''), unit: (v.ratio[1] != null ? String(v.ratio[1]) : 'ratio') };
+                return { amount: display, unit: 'ratio' };
+            }
+            if (kind === 'Date' || kind === 'Time' || kind === 'Duration') return display;
+            return display;
         }
 
         // ---------------------------------------------------------------
@@ -356,7 +376,6 @@
                     continue;
                 }
 
-                // Text, Date, Time, Duration: pass as string
                 const stringValue = entry.toString().trim();
                 if (stringValue !== '') {
                     result[name] = stringValue;
@@ -381,7 +400,6 @@
             row.dataset.factName = name;
             row.dataset.typeKind = kind || 'unknown';
 
-            // Label
             const label = document.createElement('div');
             label.className = 'label';
             label.textContent = name;
@@ -393,15 +411,21 @@
             }
             row.appendChild(label);
 
-            // Input group
             const inputGroup = document.createElement('div');
             inputGroup.className = 'input-group';
 
-            // Initialize state entry if missing
             if (!state.factValues[docName]) {
                 state.factValues[docName] = {};
             }
-            const currentValue = state.factValues[docName][name];
+            let currentValue = state.factValues[docName][name];
+            if (currentValue === undefined && fact.defaultValue) {
+                const fromDoc = storedFromLiteralValue(fact.defaultValue, kind);
+                if (fromDoc !== undefined) {
+                    state.factValues[docName][name] = fromDoc;
+                    currentValue = fromDoc;
+                    persistFactValues(docName);
+                }
+            }
 
             if (kind === 'Boolean') {
                 const checkbox = document.createElement('input');
@@ -414,6 +438,7 @@
                 }
                 checkbox.addEventListener('change', function () {
                     state.factValues[docName][name] = this.checked;
+                    persistFactValues(docName);
                 });
                 inputGroup.appendChild(checkbox);
 
@@ -440,6 +465,7 @@
                     }
                     select.addEventListener('change', function () {
                         state.factValues[docName][name] = this.value;
+                        persistFactValues(docName);
                     });
                     inputGroup.appendChild(select);
                 } else {
@@ -454,6 +480,7 @@
                     }
                     input.addEventListener('input', function () {
                         state.factValues[docName][name] = this.value;
+                        persistFactValues(docName);
                     });
                     inputGroup.appendChild(input);
                 }
@@ -466,11 +493,14 @@
                 if (currentValue !== undefined && currentValue !== null) {
                     input.value = currentValue.toString();
                 } else if (currentValue === undefined && spec && spec.default !== null && spec.default !== undefined) {
-                    input.value = spec.default.toString();
-                    state.factValues[docName][name] = spec.default.toString();
+                    const def = spec.default;
+                    const defStr = typeof def === 'number' ? String(def) : String(def);
+                    input.value = defStr;
+                    state.factValues[docName][name] = defStr;
                 }
                 input.addEventListener('input', function () {
                     state.factValues[docName][name] = this.value;
+                    persistFactValues(docName);
                 });
                 inputGroup.appendChild(input);
 
@@ -495,6 +525,7 @@
                         state.factValues[docName][name] = { amount: '', unit: '' };
                     }
                     state.factValues[docName][name].amount = this.value;
+                    persistFactValues(docName);
                 });
                 inputGroup.appendChild(amountInput);
 
@@ -515,6 +546,7 @@
                     }
                     unitSelect.addEventListener('change', function () {
                         state.factValues[docName][name].unit = this.value;
+                        persistFactValues(docName);
                     });
                     inputGroup.appendChild(unitSelect);
                 }
@@ -540,6 +572,7 @@
                         state.factValues[docName][name] = { amount: '', unit: 'ratio' };
                     }
                     state.factValues[docName][name].amount = this.value;
+                    persistFactValues(docName);
                 });
                 inputGroup.appendChild(amountInput);
 
@@ -559,6 +592,7 @@
                 }
                 unitSelect.addEventListener('change', function () {
                     state.factValues[docName][name].unit = this.value;
+                    persistFactValues(docName);
                 });
                 inputGroup.appendChild(unitSelect);
 
@@ -571,6 +605,7 @@
                 }
                 input.addEventListener('input', function () {
                     state.factValues[docName][name] = this.value;
+                    persistFactValues(docName);
                 });
                 inputGroup.appendChild(input);
 
@@ -583,6 +618,7 @@
                 }
                 input.addEventListener('input', function () {
                     state.factValues[docName][name] = this.value;
+                    persistFactValues(docName);
                 });
                 inputGroup.appendChild(input);
 
@@ -595,6 +631,7 @@
                 }
                 input.addEventListener('input', function () {
                     state.factValues[docName][name] = this.value;
+                    persistFactValues(docName);
                 });
                 inputGroup.appendChild(input);
 
@@ -607,13 +644,13 @@
                 }
                 input.addEventListener('input', function () {
                     state.factValues[docName][name] = this.value;
+                    persistFactValues(docName);
                 });
                 inputGroup.appendChild(input);
             }
 
             row.appendChild(inputGroup);
 
-            // Help text
             const helpText = (spec && typeof spec.help === 'string' && spec.help.trim() !== '') ? spec.help.trim() : null;
             if (helpText !== null) {
                 const helpElement = document.createElement('div');
@@ -706,6 +743,7 @@
         // ---------------------------------------------------------------
 
         function buildDocCard(docName) {
+            loadFactValuesFromStorage(docName);
             const schema = state.schemas[docName];
             const facts = (schema && Array.isArray(schema.facts)) ? schema.facts : [];
 
@@ -823,6 +861,10 @@
             const container = document.getElementById('docs');
             const newDocs = state.docs;
 
+            for (const docName of newDocs) {
+                loadFactValuesFromStorage(docName);
+            }
+
             // Build set of current card doc names
             const existingCards = container.querySelectorAll('.doc-card[data-doc-name]');
             const existingDocNames = new Set();
@@ -839,22 +881,30 @@
                     container.removeChild(card);
                     delete state.factValues[docName];
                     delete state.evalResults[docName];
+                    try {
+                        localStorage.removeItem(factValuesStorageKey(docName));
+                    } catch (_) {}
                 }
             }
 
             // Add or update cards for current docs
             for (const docName of newDocs) {
                 const existingCard = container.querySelector('.doc-card[data-doc-name="' + CSS.escape(docName) + '"]');
+                const newSchema = state.schemas[docName];
 
                 if (existingCard) {
                     // Doc exists: diff its facts
-                    const oldSchema = state.schemas[docName];
-                    const newSchema = fetchSchema(docName);
                     if (newSchema) {
-                        const oldFacts = (oldSchema && Array.isArray(oldSchema.facts)) ? oldSchema.facts : [];
+                        const oldFacts = [];
+                        const oldCard = existingCard.querySelector('.facts-grid');
+                        if (oldCard) {
+                            const rows = oldCard.querySelectorAll('.fact-row[data-fact-name]');
+                            for (const row of rows) {
+                                oldFacts.push({ name: row.dataset.factName, schemaType: null });
+                            }
+                        }
                         const newFacts = Array.isArray(newSchema.facts) ? newSchema.facts : [];
                         patchFactInputs(docName, existingCard, oldFacts, newFacts);
-                        state.schemas[docName] = newSchema;
                     }
 
                     // Clear stale results
@@ -863,14 +913,10 @@
                         resultsContainer.textContent = '';
                     }
                     delete state.evalResults[docName];
-                } else {
-                    // New doc: fetch schema and build card
-                    const newSchema = fetchSchema(docName);
-                    if (newSchema) {
-                        state.schemas[docName] = newSchema;
-                        const card = buildDocCard(docName);
-                        container.appendChild(card);
-                    }
+                } else if (newSchema) {
+                    // New doc: build card from pre-stored schema
+                    const card = buildDocCard(docName);
+                    container.appendChild(card);
                 }
             }
 
@@ -904,12 +950,28 @@
             if (!engine) return null;
             let response;
             try {
-                response = JSON.parse(engine.getRequiredFacts(docName, '[]'));
+                response = JSON.parse(engine.getSchema(docName, '[]'));
             } catch (parseError) {
                 return null;
             }
-            if (!response || !response.success || !response.doc) return null;
-            return response.doc;
+            if (!response || !response.success || !response.schema) return null;
+            return normalizeSchema(response.schema);
+        }
+
+        function normalizeSchema(schema) {
+            const facts = [];
+            if (schema.facts && typeof schema.facts === 'object') {
+                for (const [name, tuple] of Object.entries(schema.facts)) {
+                    const [lemmaType, defaultValue] = Array.isArray(tuple) ? tuple : [tuple, null];
+                    facts.push({
+                        name: name,
+                        required: true,
+                        schemaType: lemmaType,
+                        defaultValue: defaultValue
+                    });
+                }
+            }
+            return { doc: schema.doc, facts: facts, rules: schema.rules };
         }
 
         async function loadCode() {
@@ -929,14 +991,11 @@
             }
 
             if (!addResult || !addResult.success) {
-                setStatus('err', 'Error while loading', addResult && addResult.error ? addResult.error : 'Unknown error');
-                // Clear docs on compile error
+                // Clear docs on compile error; LSP handles status bar diagnostics.
                 state.docs = [];
                 patchDocCards();
                 return;
             }
-
-            setStatus('ok', 'Loaded', 'Documents compiled successfully.');
 
             // Fetch new doc list
             let listResult;
@@ -953,7 +1012,8 @@
                 return;
             }
 
-            const newDocs = Array.isArray(listResult.documents) ? listResult.documents.slice().sort() : [];
+            const schemas = Array.isArray(listResult.documents) ? listResult.documents : [];
+            const newDocs = schemas.map(function (s) { return s.doc; }).sort();
 
             // Clean up state for removed docs
             for (const oldDocName of state.docs) {
@@ -964,9 +1024,13 @@
                 }
             }
 
+            // Store normalized schemas from listDocuments response
+            for (const rawSchema of schemas) {
+                state.schemas[rawSchema.doc] = normalizeSchema(rawSchema);
+            }
+
             state.docs = newDocs;
             patchDocCards();
-            refreshEditorDiagnostics();
         }
 
         function scheduleLoad(immediate) {
@@ -999,7 +1063,7 @@
 
             let evalResult;
             try {
-                evalResult = JSON.parse(engine.evaluate(docName, factsJson));
+                evalResult = JSON.parse(engine.evaluate(docName, '[]', factsJson));
             } catch (parseError) {
                 state.evalResults[docName] = { success: false, error: parseError.message || String(parseError) };
                 renderResultsForDoc(docName);
@@ -1042,6 +1106,7 @@
 
         function clearInputs(docName) {
             state.factValues[docName] = {};
+            persistFactValues(docName);
             delete state.evalResults[docName];
 
             // Re-render the fact inputs from schema with empty state
@@ -1104,6 +1169,7 @@
             if (editorReady) return;
             clearEditorLoading();
             try {
+                await wasmReady;
                 registerLemmaLanguage(monaco);
 
                 const editorEl = document.getElementById('editor');
@@ -1117,16 +1183,16 @@
                         '  -> unit eur 1',
                         '  -> unit usd 1.19',
                         '',
-                        'fact quantity = 10',
+                        'fact price     = [money]',
+                        'fact quantity  = [number -> minimum 0]',
                         'fact is_member = false',
-                        'fact price = [money]',
                         '',
                         'rule discount = 0%',
                         '  unless quantity >= 10 then 10%',
                         '  unless quantity >= 50 then 20%',
                         '  unless is_member then 15%',
                         '',
-                        'rule total = price - discount?',
+                        'rule total = price * quantity - discount?',
                         '  unless price > 100 usd then veto "This price is too high."',
                         '',
                     ].join('\n'),
@@ -1140,11 +1206,10 @@
                 monacoInstance = monaco;
                 monacoEditor.onDidChangeModelContent(function () {
                     scheduleLoad(false);
-                    if (diagnosticsTimer) clearTimeout(diagnosticsTimer);
-                    diagnosticsTimer = setTimeout(function () {
-                        diagnosticsTimer = null;
-                        refreshEditorDiagnostics();
-                    }, 300);
+                    if (lspClient) {
+                        lspVersion++;
+                        lspClient.didChange(DOC_URI, lspVersion, monacoEditor.getValue());
+                    }
                 });
 
                 document.getElementById('format-btn').addEventListener('click', function (e) {
@@ -1156,7 +1221,6 @@
                         const result = JSON.parse(raw);
                         if (result.success && result.formatted !== undefined) {
                             monacoEditor.setValue(result.formatted);
-                            refreshEditorDiagnostics();
                             scheduleLoad(true);
                         } else if (!result.success && result.error) {
                             setStatus('err', 'Format failed', result.error);
@@ -1167,8 +1231,34 @@
                 });
 
                 editorReady = true;
+
+                // Start the LSP for real-time diagnostics.
+                try {
+                    lspClient = new LspClient(monaco);
+                    await lspClient.start(serve, ServerConfig);
+                    await lspClient.initialize();
+
+                    lspClient.onDiagnostics(function (uri, diagnostics) {
+                        if (!monacoEditor) return;
+                        const model = monacoEditor.getModel();
+                        if (!model) return;
+                        lspClient.setMonacoMarkers(model, diagnostics);
+
+                        const errorCount = diagnostics.length;
+                        if (errorCount === 0) {
+                            setStatus('ok', 'Ready');
+                        } else {
+                            setStatus('err', errorCount + (errorCount === 1 ? ' error' : ' errors'));
+                        }
+                    });
+
+                    lspVersion = 1;
+                    lspClient.didOpen(DOC_URI, 'lemma', lspVersion, monacoEditor.getValue());
+                } catch (lspErr) {
+                    console.error('LSP init failed:', lspErr);
+                }
+
                 setStatus('ok', 'Ready');
-                refreshEditorDiagnostics();
                 scheduleLoad(true);
             } catch (err) {
                 showError('Editor failed', err);

@@ -248,10 +248,8 @@ fn test_validation_error_type_mismatch_text_in_arithmetic() {
         Err(LemmaError::Engine(details)) => {
             let msg = &details.message;
             assert!(
-                msg.to_lowercase().contains("type")
-                    || msg.to_lowercase().contains("arithmetic")
-                    || msg.to_lowercase().contains("numeric"),
-                "Error should mention type issue, got: {}",
+                msg.contains("Cannot apply"),
+                "Error should mention invalid operation, got: {}",
                 msg
             );
         }
@@ -279,10 +277,8 @@ fn test_validation_error_boolean_in_arithmetic() {
         Err(LemmaError::Engine(details)) => {
             let msg = &details.message;
             assert!(
-                msg.to_lowercase().contains("arithmetic")
-                    || msg.to_lowercase().contains("type")
-                    || msg.to_lowercase().contains("numeric"),
-                "Error should mention arithmetic or type issue, got: {}",
+                msg.contains("Cannot apply"),
+                "Error should mention invalid operation, got: {}",
                 msg
             );
         }
@@ -613,5 +609,66 @@ fn test_duplicate_detected_from_runtime_source() {
         }
         Err(e) => panic!("Expected Engine error, got: {e:?}"),
         Ok(_) => panic!("Expected error"),
+    }
+}
+
+// ============================================================================
+// MULTI-ERROR COLLECTION - Graph building errors + type checking errors
+// ============================================================================
+
+/// Regression test: the engine must report errors from BOTH graph building
+/// (e.g. bare rule reference without `?`) and type checking (e.g. branch type
+/// mismatch) in a single pass.  Previously, graph building errors caused an
+/// early return that prevented type checking from running at all.
+#[test]
+fn test_multiple_error_phases_reported_together() {
+    let mut engine = Engine::new();
+
+    let result = add_lemma_code_blocking(
+        &mut engine,
+        r#"
+        doc pricing
+
+        type money = scale
+          -> unit eur 1
+          -> unit usd 1.19
+
+        fact price     = [money]
+        fact quantity  = [number -> minimum 0]
+        fact is_member = false
+
+        rule discount = 0%
+          unless quantity >= 10 then 10%
+          unless quantity >= 50 then 20%
+          unless is_member then 15
+
+        rule total = price * quantity - discount
+          unless price > 100 usd then veto "This price is too high."
+    "#,
+        "pricing.lemma",
+    );
+
+    match result {
+        Err(LemmaError::MultipleErrors(errors)) => {
+            let messages: Vec<String> = errors.iter().map(|e| format!("{e}")).collect();
+            let has_rule_ref_error = messages
+                .iter()
+                .any(|m| m.contains("discount") && m.contains("rule") && m.contains("?"));
+            let has_type_mismatch = messages
+                .iter()
+                .any(|m| m.contains("Type mismatch") || m.contains("type mismatch"));
+            assert!(
+                has_rule_ref_error,
+                "Should report missing `?` on rule reference. Got: {messages:?}"
+            );
+            assert!(
+                has_type_mismatch,
+                "Should report type mismatch (15 is number, not ratio). Got: {messages:?}"
+            );
+        }
+        Err(e) => {
+            panic!("Expected MultipleErrors with both rule-ref and type errors, got single: {e}")
+        }
+        Ok(_) => panic!("Expected errors"),
     }
 }

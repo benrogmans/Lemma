@@ -179,16 +179,6 @@ impl Graph {
         }
     }
 
-    fn source_text_for(&self, source: &Source) -> Arc<str> {
-        let source_text = self.sources.get(&source.attribute).unwrap_or_else(|| {
-            unreachable!(
-                "BUG: missing sources entry for attribute '{}' (doc '{}')",
-                source.attribute, source.doc_name
-            )
-        });
-        Arc::from(source_text.as_str())
-    }
-
     fn topological_sort(&self) -> Result<Vec<RulePath>, Vec<LemmaError>> {
         let mut in_degree: HashMap<RulePath, usize> = HashMap::new();
         let mut dependents: HashMap<RulePath, Vec<RulePath>> = HashMap::new();
@@ -262,8 +252,7 @@ impl Graph {
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-                first_source.clone(),
-                self.source_text_for(first_source),
+                Some(first_source.clone()),
                 cycle,
                 None::<String>,
             )]);
@@ -363,7 +352,6 @@ impl Graph {
                             &lemma_type.specifications,
                             type_name,
                             &source,
-                            super::source_text_for(sources, &source),
                         );
                         errors.append(&mut spec_errors);
                     }
@@ -415,9 +403,7 @@ impl Graph {
 
         builder.build_document(main_doc, Vec::new(), HashMap::new(), &mut type_registry)?;
 
-        if !builder.errors.is_empty() {
-            return Err(builder.errors);
-        }
+        let graph_errors = builder.errors;
 
         let mut graph = Graph {
             facts: builder.facts,
@@ -427,32 +413,58 @@ impl Graph {
             resolved_types: builder.resolved_types,
         };
 
-        // Validate and compute execution order
-        graph.validate(all_docs)?;
+        // Always run validation, even when graph building produced errors.
+        // This lets us collect type errors alongside structural errors so the
+        // user sees *all* problems in a single pass (e.g. missing `?` on a
+        // rule reference AND a type mismatch in a different rule).
+        let validation_errors = match graph.validate(all_docs) {
+            Ok(()) => Vec::new(),
+            Err(errors) => errors,
+        };
 
-        Ok(graph)
+        let mut all_errors = graph_errors;
+        all_errors.extend(validation_errors);
+
+        if all_errors.is_empty() {
+            Ok(graph)
+        } else {
+            Err(all_errors)
+        }
     }
 
     fn validate(&mut self, all_docs: &[LemmaDoc]) -> Result<(), Vec<LemmaError>> {
         let mut errors = Vec::new();
 
-        validate_all_rule_references_exist(self, &mut errors);
-        validate_fact_and_rule_name_collisions(self, &mut errors);
+        // Structural checks (no type info needed)
+        if let Err(structural_errors) = check_all_rule_references_exist(self) {
+            errors.extend(structural_errors);
+        }
+        if let Err(collision_errors) = check_fact_and_rule_name_collisions(self) {
+            errors.extend(collision_errors);
+        }
 
         let execution_order = match self.topological_sort() {
             Ok(order) => order,
             Err(circular_errors) => {
                 errors.extend(circular_errors);
-                Vec::new()
+                return Err(errors);
             }
         };
 
-        if errors.is_empty() {
-            compute_all_rule_types(self, &execution_order, &mut errors);
+        // Continue to type inference and type checking even when structural
+        // checks found errors.  This lets us report structural errors (e.g.
+        // missing rule reference) alongside type errors (e.g. branch type
+        // mismatch) in a single pass.
+
+        // Phase 1: Infer types (pure, no errors)
+        let inferred_types = infer_rule_types(self, &execution_order);
+
+        // Phase 2: Check types (pure, returns Result)
+        if let Err(type_errors) = check_rule_types(self, &execution_order, &inferred_types) {
+            errors.extend(type_errors);
         }
-        // Always run document interface validation when we have rule types (even if other
-        // type errors exist): required rule names and result type compatibility,
-        // reporting at the binding site when a binding changed the doc ref.
+
+        // Document interface validation uses inferred types (not yet applied to graph)
         let referenced_rules = compute_referenced_rules_by_path(self);
         let doc_ref_facts: Vec<(FactPath, String, Source)> = self
             .facts()
@@ -466,52 +478,44 @@ impl Graph {
             .rules()
             .iter()
             .map(|(path, node)| {
+                let rule_type = inferred_types
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_else(|| node.rule_type.clone());
                 (
                     path.clone(),
                     RuleEntryForBindingCheck {
-                        rule_type: node.rule_type.clone(),
+                        rule_type,
                         depends_on_rules: node.depends_on_rules.clone(),
                         branches: node.branches.clone(),
                     },
                 )
             })
             .collect();
-        validate_document_interfaces(
+        if let Err(interface_errors) = validate_document_interfaces(
             &referenced_rules,
             &doc_ref_facts,
             &rule_entries,
             all_docs,
             self.sources(),
-            &mut errors,
-        );
+        ) {
+            errors.extend(interface_errors);
+        }
 
         if !errors.is_empty() {
             return Err(errors);
         }
 
+        // Phase 3: Apply (only on full success)
+        apply_inferred_types(self, inferred_types);
         self.execution_order = execution_order;
         Ok(())
     }
 }
 
 impl<'a> GraphBuilder<'a> {
-    fn source_text_for(&self, source: &Source) -> Arc<str> {
-        let source_text = self.sources.get(&source.attribute).unwrap_or_else(|| {
-            unreachable!(
-                "BUG: missing sources entry for attribute '{}' (doc '{}')",
-                source.attribute, source.doc_name
-            )
-        });
-        Arc::from(source_text.as_str())
-    }
-
     fn engine_error(&self, message: impl Into<String>, source: &Source) -> LemmaError {
-        LemmaError::engine(
-            message.into(),
-            source.clone(),
-            self.source_text_for(source),
-            None::<String>,
-        )
+        LemmaError::engine(message.into(), Some(source.clone()), None::<String>)
     }
 
     /// Resolve a TypeDeclaration ParsedFactValue into a LemmaType
@@ -520,7 +524,7 @@ impl<'a> GraphBuilder<'a> {
         type_decl: &ParsedFactValue,
         decl_source: &Source,
         context_doc: &str,
-    ) -> Result<LemmaType, LemmaError> {
+    ) -> Result<LemmaType, Vec<LemmaError>> {
         let ParsedFactValue::TypeDeclaration {
             base,
             constraints,
@@ -531,6 +535,12 @@ impl<'a> GraphBuilder<'a> {
                 "BUG: resolve_type_declaration called with non-TypeDeclaration ParsedFactValue"
             );
         };
+
+        if base.is_empty() {
+            return Err(vec![
+                self.engine_error("TypeDeclaration base cannot be empty", decl_source)
+            ]);
+        }
 
         // Get resolved types for the source document.
         // If 'from' is specified, resolve from that document; otherwise use context_doc.
@@ -547,20 +557,20 @@ impl<'a> GraphBuilder<'a> {
         } else {
             // Custom type - look up in resolved types
             let document_types = self.resolved_types.get(source_doc).ok_or_else(|| {
-                self.engine_error(
+                vec![self.engine_error(
                     format!("Resolved types not found for document '{}'", source_doc),
                     decl_source,
-                )
+                )]
             })?;
 
             let base_type = document_types
                 .named_types
                 .get(base)
                 .ok_or_else(|| {
-                    self.engine_error(
+                    vec![self.engine_error(
                         format!("Unknown type: '{}'. Type must be defined before use.", base),
                         decl_source,
-                    )
+                    )]
                 })?
                 .clone();
             let family = base_type
@@ -575,16 +585,23 @@ impl<'a> GraphBuilder<'a> {
         };
 
         // Apply inline constraints if any
+        let mut errors = Vec::new();
         let mut specs = base_lemma_type.specifications;
         if let Some(ref constraints_vec) = constraints {
             for (command, args) in constraints_vec {
-                specs = specs.apply_constraint(command, args).map_err(|e| {
-                    self.engine_error(
+                match specs.clone().apply_constraint(command, args) {
+                    Ok(updated) => specs = updated,
+                    Err(e) => errors.push(self.engine_error(
                         format!("Invalid command '{}' for type '{}': {}", command, base, e),
                         decl_source,
-                    )
-                })?;
+                    )),
+                }
             }
+            errors.extend(validate_type_specifications(&specs, base, decl_source));
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
         }
 
         Ok(LemmaType::new(base.clone(), specs, extends))
@@ -809,8 +826,8 @@ impl<'a> GraphBuilder<'a> {
                 current_doc.name.as_str(),
             ) {
                 Ok(t) => Some(t),
-                Err(e) => {
-                    self.errors.push(e);
+                Err(errs) => {
+                    self.errors.extend(errs);
                     return;
                 }
             }
@@ -1052,6 +1069,13 @@ impl<'a> GraphBuilder<'a> {
                     from,
                 } = &fact.value
                 {
+                    if base.is_empty() {
+                        self.errors.push(self.engine_error(
+                            "TypeDeclaration base cannot be empty",
+                            &fact.source_location,
+                        ));
+                        continue;
+                    }
                     let is_inline_type_definition = from.is_some() || inline_constraints.is_some();
                     if is_inline_type_definition {
                         let source_location = fact.source_location.clone();
@@ -1092,12 +1116,10 @@ impl<'a> GraphBuilder<'a> {
                                 )
                             });
                         let source = &fact.source_location;
-                        let source_text = self.source_text_for(source);
                         let mut spec_errors = validate_type_specifications(
                             &lemma_type.specifications,
                             &type_name,
                             source,
-                            source_text,
                         );
                         self.errors.append(&mut spec_errors);
                     }
@@ -1344,9 +1366,13 @@ impl<'a> GraphBuilder<'a> {
         depends_on_rules: &mut HashSet<RulePath>,
         effective_doc_refs: &HashMap<String, String>,
     ) -> Option<Expression> {
+        let expr_src = expr
+            .source_location
+            .as_ref()
+            .expect("BUG: AST expression missing source location");
         match &expr.kind {
             ast::ExpressionKind::FactReference(r) => {
-                let expr_source = &expr.source_location;
+                let expr_source = expr_src;
                 let segments = self.resolve_path_segments(
                     &r.segments,
                     expr_source,
@@ -1384,7 +1410,7 @@ impl<'a> GraphBuilder<'a> {
                 })
             }
             ast::ExpressionKind::UnresolvedUnitLiteral(_number, unit_name) => {
-                let expr_source = expr.source_location.clone();
+                let expr_source = expr_src;
 
                 let Some(document_types) = self.resolved_types.get(&current_doc.name) else {
                     self.errors.push(self.engine_error(
@@ -1392,7 +1418,7 @@ impl<'a> GraphBuilder<'a> {
                             "Cannot resolve unit '{}': types were not resolved for document '{}'",
                             unit_name, current_doc.name
                         ),
-                        &expr_source,
+                        expr_source,
                     ));
                     return None;
                 };
@@ -1405,27 +1431,24 @@ impl<'a> GraphBuilder<'a> {
                                 "Unknown unit '{}' in document '{}'",
                                 unit_name, current_doc.name
                             ),
-                            &expr_source,
+                            expr_source,
                         ));
                         return None;
                     }
                 };
 
-                let source_text = self
-                    .sources
-                    .get(&expr.source_location.attribute)
-                    .unwrap_or_else(|| {
-                        unreachable!(
-                            "BUG: missing sources entry for attribute '{}' (doc '{}')",
-                            expr.source_location.attribute, current_doc.name
-                        )
-                    });
-                let literal_str = match expr.source_location.extract_text(source_text) {
+                let source_text = self.sources.get(&expr_src.attribute).unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: missing sources entry for attribute '{}' (doc '{}')",
+                        expr_src.attribute, current_doc.name
+                    )
+                });
+                let literal_str = match expr_src.extract_text(source_text) {
                     Some(s) => s,
                     None => {
                         self.errors.push(self.engine_error(
                             "Could not extract source text for literal".to_string(),
-                            &expr_source,
+                            expr_source,
                         ));
                         return None;
                     }
@@ -1434,7 +1457,7 @@ impl<'a> GraphBuilder<'a> {
                 let value = match parse_number_unit(&literal_str, &lemma_type.specifications) {
                     Ok(v) => v,
                     Err(e) => {
-                        self.errors.push(self.engine_error(e, &expr_source));
+                        self.errors.push(self.engine_error(e, expr_source));
                         return None;
                     }
                 };
@@ -1452,7 +1475,7 @@ impl<'a> GraphBuilder<'a> {
                 })
             }
             ast::ExpressionKind::RuleReference(rule_ref) => {
-                let expr_source = &expr.source_location;
+                let expr_source = expr_src;
                 let segments = self.resolve_path_segments(
                     &rule_ref.segments,
                     expr_source,
@@ -1564,7 +1587,6 @@ impl<'a> GraphBuilder<'a> {
                         self.errors.push(LemmaError::semantic(
                             full_msg,
                             expr.source_location.clone(),
-                            self.source_text_for(&expr.source_location),
                             None::<String>,
                         ));
                         return None;
@@ -1621,8 +1643,7 @@ impl<'a> GraphBuilder<'a> {
                 let semantic_value = match value_to_semantic(value) {
                     Ok(v) => v,
                     Err(e) => {
-                        self.errors
-                            .push(self.engine_error(e, &expr.source_location));
+                        self.errors.push(self.engine_error(e, expr_src));
                         return None;
                     }
                 };
@@ -1660,11 +1681,1005 @@ impl<'a> GraphBuilder<'a> {
     }
 }
 
-fn compute_all_rule_types(
-    graph: &mut Graph,
+fn compute_arithmetic_result_type(left_type: LemmaType, right_type: LemmaType) -> LemmaType {
+    compute_arithmetic_result_type_recursive(left_type, right_type, false)
+}
+
+fn compute_arithmetic_result_type_recursive(
+    left_type: LemmaType,
+    right_type: LemmaType,
+    swapped: bool,
+) -> LemmaType {
+    match (&left_type.specifications, &right_type.specifications) {
+        (TypeSpecification::Error, _) => LemmaType::error_type(),
+
+        (TypeSpecification::Date { .. }, TypeSpecification::Date { .. }) => {
+            primitive_duration().clone()
+        }
+        (TypeSpecification::Date { .. }, TypeSpecification::Time { .. }) => {
+            primitive_duration().clone()
+        }
+        (TypeSpecification::Time { .. }, TypeSpecification::Time { .. }) => {
+            primitive_duration().clone()
+        }
+
+        _ if left_type == right_type => left_type,
+
+        (TypeSpecification::Date { .. }, TypeSpecification::Duration { .. }) => left_type,
+        (TypeSpecification::Time { .. }, TypeSpecification::Duration { .. }) => left_type,
+
+        (TypeSpecification::Scale { .. }, TypeSpecification::Ratio { .. }) => left_type,
+        (TypeSpecification::Scale { .. }, TypeSpecification::Number { .. }) => left_type,
+        (TypeSpecification::Scale { .. }, TypeSpecification::Duration { .. }) => {
+            primitive_number().clone()
+        }
+        (TypeSpecification::Scale { .. }, TypeSpecification::Scale { .. }) => left_type,
+
+        (TypeSpecification::Duration { .. }, TypeSpecification::Number { .. }) => left_type,
+        (TypeSpecification::Duration { .. }, TypeSpecification::Ratio { .. }) => left_type,
+        (TypeSpecification::Duration { .. }, TypeSpecification::Duration { .. }) => {
+            primitive_duration().clone()
+        }
+
+        (TypeSpecification::Number { .. }, TypeSpecification::Ratio { .. }) => {
+            primitive_number().clone()
+        }
+        (TypeSpecification::Number { .. }, TypeSpecification::Number { .. }) => {
+            primitive_number().clone()
+        }
+
+        (TypeSpecification::Ratio { .. }, TypeSpecification::Ratio { .. }) => left_type,
+
+        _ => {
+            if swapped {
+                LemmaType::error_type()
+            } else {
+                compute_arithmetic_result_type_recursive(right_type, left_type, true)
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Phase 1: Pure type inference (no validation, no error collection)
+// =============================================================================
+
+/// Infer the type of an expression without performing any validation.
+/// Returns `LemmaType::error_type()` when a type cannot be determined (e.g. unknown fact).
+/// This function is pure: it takes `&Graph` and returns a `LemmaType` with no side effects.
+fn infer_expression_type(
+    expression: &Expression,
+    graph: &Graph,
+    computed_rule_types: &HashMap<RulePath, LemmaType>,
+) -> LemmaType {
+    match &expression.kind {
+        ExpressionKind::Literal(literal_value) => literal_value.as_ref().get_type().clone(),
+
+        ExpressionKind::FactPath(fact_path) => infer_fact_type(fact_path, graph),
+
+        ExpressionKind::RulePath(rule_path) => computed_rule_types
+            .get(rule_path)
+            .cloned()
+            .unwrap_or_else(LemmaType::error_type),
+
+        ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
+            let left_type = infer_expression_type(left, graph, computed_rule_types);
+            let right_type = infer_expression_type(right, graph, computed_rule_types);
+            if left_type.is_error() || right_type.is_error() {
+                return LemmaType::error_type();
+            }
+            primitive_boolean().clone()
+        }
+
+        ExpressionKind::LogicalNegation(operand, _) => {
+            let operand_type = infer_expression_type(operand, graph, computed_rule_types);
+            if operand_type.is_error() {
+                return LemmaType::error_type();
+            }
+            primitive_boolean().clone()
+        }
+
+        ExpressionKind::Comparison(left, _op, right) => {
+            let left_type = infer_expression_type(left, graph, computed_rule_types);
+            let right_type = infer_expression_type(right, graph, computed_rule_types);
+            if left_type.is_error() || right_type.is_error() {
+                return LemmaType::error_type();
+            }
+            primitive_boolean().clone()
+        }
+
+        ExpressionKind::Arithmetic(left, _operator, right) => {
+            let left_type = infer_expression_type(left, graph, computed_rule_types);
+            let right_type = infer_expression_type(right, graph, computed_rule_types);
+            compute_arithmetic_result_type(left_type, right_type)
+        }
+
+        ExpressionKind::UnitConversion(source_expression, target) => {
+            let expr_source = expression
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in infer_expression_type");
+            let source_type = infer_expression_type(source_expression, graph, computed_rule_types);
+            if source_type.is_error() {
+                return LemmaType::error_type();
+            }
+            match target {
+                SemanticConversionTarget::Duration(_) => primitive_duration().clone(),
+                SemanticConversionTarget::ScaleUnit(unit_name) => {
+                    if source_type.is_number() {
+                        let doc_name = &expr_source.doc_name;
+                        graph
+                            .resolved_types
+                            .get(doc_name)
+                            .and_then(|dt| dt.unit_index.get(unit_name).cloned())
+                            .unwrap_or_else(LemmaType::error_type)
+                    } else {
+                        source_type
+                    }
+                }
+                SemanticConversionTarget::RatioUnit(unit_name) => {
+                    if source_type.is_number() {
+                        let doc_name = &expr_source.doc_name;
+                        graph
+                            .resolved_types
+                            .get(doc_name)
+                            .and_then(|dt| dt.unit_index.get(unit_name).cloned())
+                            .unwrap_or_else(LemmaType::error_type)
+                    } else {
+                        source_type
+                    }
+                }
+            }
+        }
+
+        ExpressionKind::MathematicalComputation(_, operand) => {
+            let operand_type = infer_expression_type(operand, graph, computed_rule_types);
+            if operand_type.is_error() {
+                return LemmaType::error_type();
+            }
+            primitive_number().clone()
+        }
+
+        ExpressionKind::Veto(_) => LemmaType::veto_type(),
+    }
+}
+
+/// Infer the type of a fact reference without producing errors.
+/// Returns `LemmaType::error_type()` when the fact cannot be found or is a document reference.
+fn infer_fact_type(fact_path: &FactPath, graph: &Graph) -> LemmaType {
+    let entry = match graph.facts().get(fact_path) {
+        Some(e) => e,
+        None => return LemmaType::error_type(),
+    };
+    match entry {
+        FactData::Value { value, .. } => value.lemma_type.clone(),
+        FactData::TypeDeclaration { resolved_type, .. } => resolved_type.clone(),
+        FactData::DocumentRef { .. } => LemmaType::error_type(),
+    }
+}
+
+// =============================================================================
+// Phase 2: Pure type checking (validation only, no mutation, returns Result)
+// =============================================================================
+
+/// Construct a LemmaError::engine with source context.
+fn engine_error_at(_graph: &Graph, source: &Source, message: impl Into<String>) -> LemmaError {
+    LemmaError::engine(message.into(), Some(source.clone()), None::<String>)
+}
+
+/// Construct a LemmaError::semantic with source context.
+fn semantic_error_at(_graph: &Graph, source: &Source, message: impl Into<String>) -> LemmaError {
+    LemmaError::semantic(message.into(), Some(source.clone()), None::<String>)
+}
+
+/// Check that both operands of a logical operation (and/or) are boolean.
+fn check_logical_operands(
+    left_type: &LemmaType,
+    right_type: &LemmaType,
+    graph: &Graph,
+    source: &Source,
+) -> Result<(), Vec<LemmaError>> {
+    let mut errors = Vec::new();
+    if !left_type.is_boolean() {
+        errors.push(engine_error_at(
+            graph,
+            source,
+            format!(
+                "Logical operation requires boolean operands, got {:?} for left operand",
+                left_type
+            ),
+        ));
+    }
+    if !right_type.is_boolean() {
+        errors.push(engine_error_at(
+            graph,
+            source,
+            format!(
+                "Logical operation requires boolean operands, got {:?} for right operand",
+                right_type
+            ),
+        ));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Check that the operand of a logical negation is boolean.
+fn check_logical_operand(
+    operand_type: &LemmaType,
+    graph: &Graph,
+    source: &Source,
+) -> Result<(), Vec<LemmaError>> {
+    if !operand_type.is_boolean() {
+        Err(vec![engine_error_at(
+            graph,
+            source,
+            format!(
+                "Logical negation requires boolean operand, got {:?}",
+                operand_type
+            ),
+        )])
+    } else {
+        Ok(())
+    }
+}
+
+/// Check that a comparison operation has compatible operand types.
+fn check_comparison_types(
+    left_type: &LemmaType,
+    op: &crate::ComparisonComputation,
+    right_type: &LemmaType,
+    graph: &Graph,
+    source: &Source,
+) -> Result<(), Vec<LemmaError>> {
+    let is_equality_only = matches!(
+        op,
+        crate::ComparisonComputation::Equal
+            | crate::ComparisonComputation::NotEqual
+            | crate::ComparisonComputation::Is
+            | crate::ComparisonComputation::IsNot
+    );
+
+    if left_type.is_boolean() && right_type.is_boolean() {
+        if !is_equality_only {
+            return Err(vec![engine_error_at(
+                graph,
+                source,
+                format!("Can only use == and != with booleans (got {})", op),
+            )]);
+        }
+        return Ok(());
+    }
+
+    if left_type.is_text() && right_type.is_text() {
+        if !is_equality_only {
+            return Err(vec![engine_error_at(
+                graph,
+                source,
+                format!("Can only use == and != with text (got {})", op),
+            )]);
+        }
+        return Ok(());
+    }
+
+    if left_type.is_number() && right_type.is_number() {
+        return Ok(());
+    }
+
+    if left_type.is_ratio() && right_type.is_ratio() {
+        return Ok(());
+    }
+
+    if left_type.is_date() && right_type.is_date() {
+        return Ok(());
+    }
+
+    if left_type.is_time() && right_type.is_time() {
+        return Ok(());
+    }
+
+    if left_type.is_scale() && right_type.is_scale() {
+        if !left_type.same_scale_family(right_type) {
+            return Err(vec![engine_error_at(
+                graph,
+                source,
+                format!(
+                    "Cannot compare different scale types: {} and {}",
+                    left_type.name(),
+                    right_type.name()
+                ),
+            )]);
+        }
+        return Ok(());
+    }
+
+    if left_type.is_duration() && right_type.is_duration() {
+        return Ok(());
+    }
+    if left_type.is_duration() && right_type.is_number() {
+        return Ok(());
+    }
+    if left_type.is_number() && right_type.is_duration() {
+        return Ok(());
+    }
+
+    Err(vec![engine_error_at(
+        graph,
+        source,
+        format!("Cannot compare {:?} with {:?}", left_type, right_type),
+    )])
+}
+
+/// Check that an arithmetic operation has compatible operand types and operator constraints.
+/// This function folds in the operator constraint checking (previously `validate_arithmetic_operator_constraints`).
+fn check_arithmetic_types(
+    left_type: &LemmaType,
+    right_type: &LemmaType,
+    operator: &ArithmeticComputation,
+    graph: &Graph,
+    source: &Source,
+) -> Result<(), Vec<LemmaError>> {
+    // Date/Time: only Add and Subtract with Duration (or Date/Time - Date/Time)
+    if left_type.is_date() || left_type.is_time() || right_type.is_date() || right_type.is_time() {
+        let both_temporal = (left_type.is_date() || left_type.is_time())
+            && (right_type.is_date() || right_type.is_time());
+        let one_is_duration = left_type.is_duration() || right_type.is_duration();
+        let valid = matches!(
+            operator,
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract
+        ) && (both_temporal || one_is_duration);
+        if !valid {
+            return Err(vec![engine_error_at(
+                graph,
+                source,
+                format!(
+                    "Cannot apply '{}' to {} and {}.",
+                    operator,
+                    left_type.name(),
+                    right_type.name()
+                ),
+            )]);
+        }
+        return Ok(());
+    }
+
+    // Different scale families: reject all operators
+    if left_type.is_scale() && right_type.is_scale() && !left_type.same_scale_family(right_type) {
+        return Err(vec![engine_error_at(
+            graph,
+            source,
+            format!(
+                "Cannot {} different scale types: {} and {}. Operations between different scale types produce ambiguous result units.",
+                match operator {
+                    ArithmeticComputation::Add => "add",
+                    ArithmeticComputation::Subtract => "subtract",
+                    ArithmeticComputation::Multiply => "multiply",
+                    ArithmeticComputation::Divide => "divide",
+                    ArithmeticComputation::Modulo => "modulo",
+                    ArithmeticComputation::Power => "power",
+                },
+                left_type.name(),
+                right_type.name()
+            ),
+        )]);
+    }
+
+    // Only Scale, Number, Ratio, and Duration can participate in arithmetic
+    let left_valid = left_type.is_scale()
+        || left_type.is_number()
+        || left_type.is_duration()
+        || left_type.is_ratio();
+    let right_valid = right_type.is_scale()
+        || right_type.is_number()
+        || right_type.is_duration()
+        || right_type.is_ratio();
+
+    if !left_valid || !right_valid {
+        return Err(vec![engine_error_at(
+            graph,
+            source,
+            format!(
+                "Cannot apply '{}' to {} and {}.",
+                operator,
+                left_type.name(),
+                right_type.name()
+            ),
+        )]);
+    }
+
+    // Operator-specific constraints (same base type is always allowed)
+    if left_type.has_same_base_type(right_type) {
+        return Ok(());
+    }
+
+    let pair = |a: fn(&LemmaType) -> bool, b: fn(&LemmaType) -> bool| {
+        (a(left_type) && b(right_type)) || (b(left_type) && a(right_type))
+    };
+
+    let allowed = match operator {
+        ArithmeticComputation::Multiply => {
+            pair(LemmaType::is_scale, LemmaType::is_number)
+                || pair(LemmaType::is_scale, LemmaType::is_ratio)
+                || pair(LemmaType::is_scale, LemmaType::is_duration)
+                || pair(LemmaType::is_duration, LemmaType::is_number)
+                || pair(LemmaType::is_duration, LemmaType::is_ratio)
+                || pair(LemmaType::is_number, LemmaType::is_ratio)
+        }
+        ArithmeticComputation::Divide => {
+            pair(LemmaType::is_scale, LemmaType::is_number)
+                || pair(LemmaType::is_scale, LemmaType::is_ratio)
+                || pair(LemmaType::is_scale, LemmaType::is_duration)
+                || (left_type.is_duration() && right_type.is_number())
+                || (left_type.is_duration() && right_type.is_ratio())
+                || pair(LemmaType::is_number, LemmaType::is_ratio)
+        }
+        ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+            pair(LemmaType::is_scale, LemmaType::is_number)
+                || pair(LemmaType::is_scale, LemmaType::is_ratio)
+                || pair(LemmaType::is_duration, LemmaType::is_number)
+                || pair(LemmaType::is_duration, LemmaType::is_ratio)
+                || pair(LemmaType::is_number, LemmaType::is_ratio)
+        }
+        ArithmeticComputation::Power => {
+            (left_type.is_number()
+                || left_type.is_scale()
+                || left_type.is_ratio()
+                || left_type.is_duration())
+                && (right_type.is_number() || right_type.is_ratio())
+        }
+        ArithmeticComputation::Modulo => right_type.is_number() || right_type.is_ratio(),
+    };
+
+    if !allowed {
+        return Err(vec![engine_error_at(
+            graph,
+            source,
+            format!(
+                "Cannot apply '{}' to {} and {}.",
+                operator,
+                left_type.name(),
+                right_type.name(),
+            ),
+        )]);
+    }
+
+    Ok(())
+}
+
+/// Check that a unit conversion has a compatible source type.
+fn check_unit_conversion_types(
+    source_type: &LemmaType,
+    target: &SemanticConversionTarget,
+    graph: &Graph,
+    source: &Source,
+) -> Result<(), Vec<LemmaError>> {
+    match target {
+        SemanticConversionTarget::ScaleUnit(unit_name)
+        | SemanticConversionTarget::RatioUnit(unit_name) => {
+            let unit_check: Option<(bool, Vec<&str>)> = match (&source_type.specifications, target)
+            {
+                (
+                    TypeSpecification::Scale { units, .. },
+                    SemanticConversionTarget::ScaleUnit(_),
+                ) => {
+                    let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
+                    let found = units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name));
+                    Some((found, valid))
+                }
+                (
+                    TypeSpecification::Ratio { units, .. },
+                    SemanticConversionTarget::RatioUnit(_),
+                ) => {
+                    let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
+                    let found = units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name));
+                    Some((found, valid))
+                }
+                _ => None,
+            };
+
+            match unit_check {
+                Some((true, _)) => Ok(()),
+                Some((false, valid)) => Err(vec![engine_error_at(
+                    graph,
+                    source,
+                    format!(
+                        "Unknown unit '{}' for type {}. Valid units: {}",
+                        unit_name,
+                        source_type.name(),
+                        valid.join(", ")
+                    ),
+                )]),
+                None if source_type.is_number() => {
+                    if graph
+                        .resolved_types
+                        .get(&source.doc_name)
+                        .and_then(|dt| dt.unit_index.get(unit_name))
+                        .is_none()
+                    {
+                        Err(vec![engine_error_at(
+                            graph,
+                            source,
+                            format!(
+                                "Unknown unit '{}' in document '{}'.",
+                                unit_name, source.doc_name
+                            ),
+                        )])
+                    } else {
+                        Ok(())
+                    }
+                }
+                None => Err(vec![engine_error_at(
+                    graph,
+                    source,
+                    format!(
+                        "Cannot convert {} to unit '{}'.",
+                        source_type.name(),
+                        unit_name
+                    ),
+                )]),
+            }
+        }
+        SemanticConversionTarget::Duration(_) => {
+            if !source_type.is_duration() && !source_type.is_numeric() {
+                Err(vec![engine_error_at(
+                    graph,
+                    source,
+                    format!("Cannot convert {} to duration.", source_type.name()),
+                )])
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Check that the operand of a mathematical function (sqrt, sin, etc.) is numeric.
+fn check_mathematical_operand(
+    operand_type: &LemmaType,
+    graph: &Graph,
+    source: &Source,
+) -> Result<(), Vec<LemmaError>> {
+    if !operand_type.is_scale() && !operand_type.is_number() {
+        Err(vec![engine_error_at(
+            graph,
+            source,
+            format!(
+                "Mathematical function requires numeric operand (scale or number), got {:?}",
+                operand_type
+            ),
+        )])
+    } else {
+        Ok(())
+    }
+}
+
+/// Check that all rule references in the graph point to existing rules.
+fn check_all_rule_references_exist(graph: &Graph) -> Result<(), Vec<LemmaError>> {
+    let mut errors = Vec::new();
+    let existing_rules: HashSet<&RulePath> = graph.rules().keys().collect();
+    for (rule_path, rule_node) in graph.rules() {
+        for dependency in &rule_node.depends_on_rules {
+            if !existing_rules.contains(dependency) {
+                errors.push(engine_error_at(
+                    graph,
+                    &rule_node.source,
+                    format!(
+                        "Rule '{}' references non-existent rule '{}'",
+                        rule_path.rule, dependency.rule
+                    ),
+                ));
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Check that no fact and rule share the same name in the same document.
+fn check_fact_and_rule_name_collisions(graph: &Graph) -> Result<(), Vec<LemmaError>> {
+    let mut errors = Vec::new();
+    for rule_path in graph.rules().keys() {
+        let fact_path = FactPath::new(rule_path.segments.clone(), rule_path.rule.clone());
+        if graph.facts().contains_key(&fact_path) {
+            let rule_node = graph.rules().get(rule_path).unwrap_or_else(|| {
+                unreachable!(
+                    "BUG: rule '{}' missing from graph while validating name collisions",
+                    rule_path.rule
+                )
+            });
+            errors.push(engine_error_at(
+                graph,
+                &rule_node.source,
+                format!(
+                    "Name collision: '{}' is defined as both a fact and a rule",
+                    fact_path
+                ),
+            ));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Check that a fact reference is valid (exists and is not a bare document reference).
+/// Also reports when a rule reference is missing the `?` suffix.
+fn check_fact_reference(
+    fact_path: &FactPath,
+    graph: &Graph,
+    fact_source: &Source,
+) -> Result<(), Vec<LemmaError>> {
+    let entry = match graph.facts().get(fact_path) {
+        Some(e) => e,
+        None => {
+            let maybe_rule_path = RulePath {
+                segments: fact_path.segments.clone(),
+                rule: fact_path.fact.clone(),
+            };
+
+            if graph.rules().contains_key(&maybe_rule_path) {
+                return Err(vec![semantic_error_at(
+                    graph,
+                    fact_source,
+                    format!(
+                        "Rule reference '{}' must use '?' (did you mean '{}?')",
+                        fact_path, fact_path
+                    ),
+                )]);
+            } else {
+                return Err(vec![semantic_error_at(
+                    graph,
+                    fact_source,
+                    format!("Unknown fact reference '{}'", fact_path),
+                )]);
+            }
+        }
+    };
+    match entry {
+        FactData::Value { .. } | FactData::TypeDeclaration { .. } => Ok(()),
+        FactData::DocumentRef { .. } => Err(vec![engine_error_at(
+            graph,
+            entry.source(),
+            format!(
+                "Cannot compute type for document reference fact '{}'",
+                fact_path
+            ),
+        )]),
+    }
+}
+
+/// Check a single expression for type errors, given precomputed inferred types.
+/// Recursively checks sub-expressions. Skips validation when either operand is `Error`
+/// (the root cause is reported by `check_fact_reference` or similar).
+fn check_expression(
+    expression: &Expression,
+    graph: &Graph,
+    inferred_types: &HashMap<RulePath, LemmaType>,
+) -> Result<(), Vec<LemmaError>> {
+    let mut errors = Vec::new();
+
+    let collect = |result: Result<(), Vec<LemmaError>>, errors: &mut Vec<LemmaError>| {
+        if let Err(errs) = result {
+            errors.extend(errs);
+        }
+    };
+
+    match &expression.kind {
+        ExpressionKind::Literal(_) => {}
+
+        ExpressionKind::FactPath(fact_path) => {
+            let fact_source = expression
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in check_expression");
+            collect(
+                check_fact_reference(fact_path, graph, fact_source),
+                &mut errors,
+            );
+        }
+
+        ExpressionKind::RulePath(_) => {}
+
+        ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
+            collect(check_expression(left, graph, inferred_types), &mut errors);
+            collect(check_expression(right, graph, inferred_types), &mut errors);
+
+            let left_type = infer_expression_type(left, graph, inferred_types);
+            let right_type = infer_expression_type(right, graph, inferred_types);
+            if !left_type.is_error() && !right_type.is_error() {
+                let expr_source = expression
+                    .source_location
+                    .as_ref()
+                    .expect("BUG: expression missing source in check_expression");
+                collect(
+                    check_logical_operands(&left_type, &right_type, graph, expr_source),
+                    &mut errors,
+                );
+            }
+        }
+
+        ExpressionKind::LogicalNegation(operand, _) => {
+            collect(
+                check_expression(operand, graph, inferred_types),
+                &mut errors,
+            );
+
+            let operand_type = infer_expression_type(operand, graph, inferred_types);
+            if !operand_type.is_error() {
+                let expr_source = expression
+                    .source_location
+                    .as_ref()
+                    .expect("BUG: expression missing source in check_expression");
+                collect(
+                    check_logical_operand(&operand_type, graph, expr_source),
+                    &mut errors,
+                );
+            }
+        }
+
+        ExpressionKind::Comparison(left, op, right) => {
+            collect(check_expression(left, graph, inferred_types), &mut errors);
+            collect(check_expression(right, graph, inferred_types), &mut errors);
+
+            let left_type = infer_expression_type(left, graph, inferred_types);
+            let right_type = infer_expression_type(right, graph, inferred_types);
+            if !left_type.is_error() && !right_type.is_error() {
+                let expr_source = expression
+                    .source_location
+                    .as_ref()
+                    .expect("BUG: expression missing source in check_expression");
+                collect(
+                    check_comparison_types(&left_type, op, &right_type, graph, expr_source),
+                    &mut errors,
+                );
+            }
+        }
+
+        ExpressionKind::Arithmetic(left, operator, right) => {
+            collect(check_expression(left, graph, inferred_types), &mut errors);
+            collect(check_expression(right, graph, inferred_types), &mut errors);
+
+            let left_type = infer_expression_type(left, graph, inferred_types);
+            let right_type = infer_expression_type(right, graph, inferred_types);
+            if !left_type.is_error() && !right_type.is_error() {
+                let expr_source = expression
+                    .source_location
+                    .as_ref()
+                    .expect("BUG: expression missing source in check_expression");
+                collect(
+                    check_arithmetic_types(&left_type, &right_type, operator, graph, expr_source),
+                    &mut errors,
+                );
+            }
+        }
+
+        ExpressionKind::UnitConversion(source_expression, target) => {
+            collect(
+                check_expression(source_expression, graph, inferred_types),
+                &mut errors,
+            );
+
+            let source_type = infer_expression_type(source_expression, graph, inferred_types);
+            if !source_type.is_error() {
+                let expr_source = expression
+                    .source_location
+                    .as_ref()
+                    .expect("BUG: expression missing source in check_expression");
+                collect(
+                    check_unit_conversion_types(&source_type, target, graph, expr_source),
+                    &mut errors,
+                );
+
+                // Check that unit can be resolved when source is a plain number
+                if source_type.is_number() {
+                    match target {
+                        SemanticConversionTarget::ScaleUnit(unit_name)
+                        | SemanticConversionTarget::RatioUnit(unit_name) => {
+                            if graph
+                                .resolved_types
+                                .get(&expr_source.doc_name)
+                                .and_then(|dt| dt.unit_index.get(unit_name))
+                                .is_none()
+                            {
+                                errors.push(engine_error_at(
+                                    graph,
+                                    expr_source,
+                                    format!(
+                                        "Cannot resolve unit '{}' for document '{}' (types may not have been resolved)",
+                                        unit_name,
+                                        expr_source.doc_name
+                                    ),
+                                ));
+                            }
+                        }
+                        SemanticConversionTarget::Duration(_) => {}
+                    }
+                }
+            }
+        }
+
+        ExpressionKind::MathematicalComputation(_, operand) => {
+            collect(
+                check_expression(operand, graph, inferred_types),
+                &mut errors,
+            );
+
+            let operand_type = infer_expression_type(operand, graph, inferred_types);
+            if !operand_type.is_error() {
+                let expr_source = expression
+                    .source_location
+                    .as_ref()
+                    .expect("BUG: expression missing source in check_expression");
+                collect(
+                    check_mathematical_operand(&operand_type, graph, expr_source),
+                    &mut errors,
+                );
+            }
+        }
+
+        ExpressionKind::Veto(_) => {}
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Check all rule types in topological order, given precomputed inferred types.
+/// Validates:
+/// - Branch type consistency (all non-Veto branches must return the same primitive type)
+/// - Condition types (unless clause conditions must be boolean)
+/// - All sub-expressions via `check_expression`
+fn check_rule_types(
+    graph: &Graph,
     execution_order: &[RulePath],
-    errors: &mut Vec<LemmaError>,
-) {
+    inferred_types: &HashMap<RulePath, LemmaType>,
+) -> Result<(), Vec<LemmaError>> {
+    let mut errors = Vec::new();
+
+    let collect = |result: Result<(), Vec<LemmaError>>, errors: &mut Vec<LemmaError>| {
+        if let Err(errs) = result {
+            errors.extend(errs);
+        }
+    };
+
+    for rule_path in execution_order {
+        let branches = {
+            let rule_node = match graph.rules().get(rule_path) {
+                Some(node) => node,
+                None => continue,
+            };
+            rule_node.branches.clone()
+        };
+
+        if branches.is_empty() {
+            continue;
+        }
+
+        let (_, default_result) = &branches[0];
+        collect(
+            check_expression(default_result, graph, inferred_types),
+            &mut errors,
+        );
+        let default_type = infer_expression_type(default_result, graph, inferred_types);
+
+        let mut non_veto_type: Option<LemmaType> = None;
+        if !default_type.is_veto() && !default_type.is_error() {
+            non_veto_type = Some(default_type.clone());
+        }
+
+        for (branch_index, (condition, result)) in branches.iter().enumerate().skip(1) {
+            if let Some(condition_expression) = condition {
+                collect(
+                    check_expression(condition_expression, graph, inferred_types),
+                    &mut errors,
+                );
+                let condition_type =
+                    infer_expression_type(condition_expression, graph, inferred_types);
+                if !condition_type.is_boolean() && !condition_type.is_error() {
+                    let condition_source = condition_expression
+                        .source_location
+                        .as_ref()
+                        .expect("BUG: condition expression missing source in check_rule_types");
+                    errors.push(engine_error_at(
+                        graph,
+                        condition_source,
+                        format!(
+                            "Unless clause condition in rule '{}' must be boolean, got {:?}",
+                            rule_path.rule, condition_type
+                        ),
+                    ));
+                }
+            }
+
+            collect(check_expression(result, graph, inferred_types), &mut errors);
+            let result_type = infer_expression_type(result, graph, inferred_types);
+
+            if !result_type.is_veto() && !result_type.is_error() {
+                if non_veto_type.is_none() {
+                    non_veto_type = Some(result_type.clone());
+                } else if let Some(ref existing_type) = non_veto_type {
+                    if !existing_type.has_same_base_type(&result_type) {
+                        let Some(rule_node) = graph.rules().get(rule_path) else {
+                            unreachable!(
+                                "BUG: rule type validation referenced missing rule '{}'",
+                                rule_path.rule
+                            );
+                        };
+                        let rule_source = &rule_node.source;
+                        let default_expr = &branches[0].1;
+
+                        let mut location_parts = vec![format!(
+                            "{}:{}:{}",
+                            rule_source.attribute, rule_source.span.line, rule_source.span.col
+                        )];
+
+                        if let Some(loc) = &default_expr.source_location {
+                            location_parts.push(format!(
+                                "default branch at {}:{}:{}",
+                                loc.attribute, loc.span.line, loc.span.col
+                            ));
+                        }
+                        if let Some(loc) = &result.source_location {
+                            location_parts.push(format!(
+                                "unless clause {} at {}:{}:{}",
+                                branch_index, loc.attribute, loc.span.line, loc.span.col
+                            ));
+                        }
+
+                        errors.push(LemmaError::semantic(
+                            format!("Type mismatch in rule '{}' in document '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same primitive type.",
+                            rule_path.rule,
+                            rule_source.doc_name,
+                            location_parts.join(", "),
+                            existing_type.name(),
+                            branch_index,
+                            result_type.name()),
+                            Some(rule_source.clone()),
+                            None::<String>,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+// =============================================================================
+// Phase 3: Apply inferred types to the graph (the only mutation point)
+// =============================================================================
+
+/// Write inferred types into the graph's rule nodes.
+/// This is the only function that mutates the graph during the validation pipeline.
+/// It must only be called after all checks pass (no errors).
+fn apply_inferred_types(graph: &mut Graph, inferred_types: HashMap<RulePath, LemmaType>) {
+    for (rule_path, rule_type) in inferred_types {
+        if let Some(rule_node) = graph.rules_mut().get_mut(&rule_path) {
+            rule_node.rule_type = rule_type;
+        }
+    }
+}
+
+/// Infer the types of all rules in topological order without performing any validation.
+/// Returns a map from rule path to its inferred type.
+/// This function is pure: it takes `&Graph` and returns data with no side effects.
+fn infer_rule_types(graph: &Graph, execution_order: &[RulePath]) -> HashMap<RulePath, LemmaType> {
     let mut computed_types: HashMap<RulePath, LemmaType> = HashMap::new();
 
     for rule_path in execution_order {
@@ -1681,1093 +2696,30 @@ fn compute_all_rule_types(
         }
 
         let (_, default_result) = &branches[0];
-        let default_type = compute_expression_type(default_result, graph, &computed_types, errors);
+        let default_type = infer_expression_type(default_result, graph, &computed_types);
 
-        // Collect all non-Veto types from branches
-        // Veto is a runtime exception, not a type that should affect the rule's type
-        // If a branch returns Veto, it's handled at runtime, but the rule type is the non-Veto type
         let mut non_veto_type: Option<LemmaType> = None;
-        if !default_type.is_veto() {
+        if !default_type.is_veto() && !default_type.is_error() {
             non_veto_type = Some(default_type.clone());
         }
 
-        for (branch_index, (condition, result)) in branches.iter().enumerate().skip(1) {
+        for (_branch_index, (condition, result)) in branches.iter().enumerate().skip(1) {
             if let Some(condition_expression) = condition {
-                let condition_type =
-                    compute_expression_type(condition_expression, graph, &computed_types, errors);
-                if !condition_type.is_boolean() {
-                    let condition_source = &condition_expression.source_location;
-                    errors.push(LemmaError::engine(
-                        format!(
-                            "Unless clause condition in rule '{}' must be boolean, got {:?}",
-                            rule_path.rule, condition_type
-                        ),
-                        condition_source.clone(),
-                        graph.source_text_for(condition_source),
-                        None::<String>,
-                    ));
-                }
+                let _condition_type =
+                    infer_expression_type(condition_expression, graph, &computed_types);
             }
 
-            let result_type = compute_expression_type(result, graph, &computed_types, errors);
-            if !result_type.is_veto() {
-                // If we haven't seen a non-Veto type yet, store it
-                // All non-Veto branches must have the same primitive type (enforced by validate_branch_type_consistency)
-                if non_veto_type.is_none() {
-                    non_veto_type = Some(result_type.clone());
-                } else if let Some(ref existing_type) = non_veto_type {
-                    // Check that this branch has the same primitive type as the first non-veto type
-                    if !existing_type.has_same_base_type(&result_type) {
-                        let Some(rule_node) = graph.rules().get(rule_path) else {
-                            unreachable!(
-                                "BUG: rule type validation referenced missing rule '{}'",
-                                rule_path.rule
-                            );
-                        };
-                        let rule_source = &rule_node.source;
-                        let default_expr = &branches[0].1;
-
-                        let mut location_parts = vec![format!(
-                            "{}:{}:{}",
-                            rule_source.attribute, rule_source.span.line, rule_source.span.col
-                        )];
-
-                        let loc = &default_expr.source_location;
-                        location_parts.push(format!(
-                            "default branch at {}:{}:{}",
-                            loc.attribute, loc.span.line, loc.span.col
-                        ));
-                        let loc = &result.source_location;
-                        location_parts.push(format!(
-                            "unless clause {} at {}:{}:{}",
-                            branch_index, loc.attribute, loc.span.line, loc.span.col
-                        ));
-
-                        errors.push(LemmaError::semantic(
-                            format!("Type mismatch in rule '{}' in document '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same primitive type.",
-                            rule_path.rule,
-                            rule_source.doc_name,
-                            location_parts.join(", "),
-                            existing_type.name(),
-                            branch_index,
-                            result_type.name()),
-                            rule_source.clone(),
-                            graph.source_text_for(rule_source),
-                            None::<String>,
-                        ));
-                    }
-                }
-            }
-
-            if !default_type.has_same_base_type(&result_type)
-                && !default_type.is_veto()
-                && !result_type.is_veto()
-            {
-                let Some(rule_node) = graph.rules().get(rule_path) else {
-                    unreachable!(
-                        "BUG: rule type validation referenced missing rule '{}'",
-                        rule_path.rule
-                    );
-                };
-                let rule_source = &rule_node.source;
-                let default_expr = &branches[0].1;
-
-                let mut location_parts = vec![format!(
-                    "{}:{}:{}",
-                    rule_source.attribute, rule_source.span.line, rule_source.span.col
-                )];
-
-                let loc = &default_expr.source_location;
-                location_parts.push(format!(
-                    "default branch at {}:{}:{}",
-                    loc.attribute, loc.span.line, loc.span.col
-                ));
-                let loc = &result.source_location;
-                location_parts.push(format!(
-                    "unless clause {} at {}:{}:{}",
-                    branch_index, loc.attribute, loc.span.line, loc.span.col
-                ));
-
-                errors.push(LemmaError::semantic(
-                    format!("Type mismatch in rule '{}' in document '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same primitive type.",
-                    rule_path.rule,
-                    rule_source.doc_name,
-                    location_parts.join(", "),
-                    default_type.name(),
-                    branch_index,
-                    result_type.name()),
-                    rule_source.clone(),
-                    graph.source_text_for(rule_source),
-                    None::<String>,
-                ));
+            let result_type = infer_expression_type(result, graph, &computed_types);
+            if !result_type.is_veto() && !result_type.is_error() && non_veto_type.is_none() {
+                non_veto_type = Some(result_type.clone());
             }
         }
 
-        // Every rule MUST have a type (Lemma is strictly typed)
-        // If all branches return Veto, the rule type is Veto
-        // Otherwise, use the first non-Veto type (typically the default branch)
-        // All non-Veto branches must have the same type (enforced by validate_branch_type_consistency)
         let rule_type = non_veto_type.unwrap_or_else(LemmaType::veto_type);
         computed_types.insert(rule_path.clone(), rule_type);
     }
 
-    for (rule_path, rule_type) in computed_types {
-        if let Some(rule_node) = graph.rules_mut().get_mut(&rule_path) {
-            rule_node.rule_type = rule_type;
-        }
-    }
-}
-
-fn compute_expression_type(
-    expression: &Expression,
-    graph: &Graph,
-    computed_rule_types: &HashMap<RulePath, LemmaType>,
-    errors: &mut Vec<LemmaError>,
-) -> LemmaType {
-    match &expression.kind {
-        ExpressionKind::Literal(literal_value) => literal_value.as_ref().get_type().clone(),
-        ExpressionKind::FactPath(fact_path) => {
-            let expr_source = &expression.source_location;
-            compute_fact_type(fact_path, graph, expr_source, errors)
-        }
-        ExpressionKind::RulePath(rule_path) => computed_rule_types
-            .get(rule_path)
-            .cloned()
-            .unwrap_or_else(|| {
-                unreachable!(
-                    "BUG: Rule '{}' referenced before its type was computed (topological ordering)",
-                    rule_path.rule
-                )
-            }),
-        ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
-            let expr_source = &expression.source_location;
-            let left_type = compute_expression_type(left, graph, computed_rule_types, errors);
-            let right_type = compute_expression_type(right, graph, computed_rule_types, errors);
-            validate_logical_operands(&left_type, &right_type, graph, expr_source, errors);
-            primitive_boolean().clone()
-        }
-        ExpressionKind::LogicalNegation(operand, _) => {
-            let expr_source = &expression.source_location;
-            let operand_type = compute_expression_type(operand, graph, computed_rule_types, errors);
-            validate_logical_operand(&operand_type, graph, expr_source, errors);
-            primitive_boolean().clone()
-        }
-        ExpressionKind::Comparison(left, op, right) => {
-            let expr_source = &expression.source_location;
-            let left_type = compute_expression_type(left, graph, computed_rule_types, errors);
-            let right_type = compute_expression_type(right, graph, computed_rule_types, errors);
-            validate_comparison_types(&left_type, op, &right_type, graph, expr_source, errors);
-            primitive_boolean().clone()
-        }
-        ExpressionKind::Arithmetic(left, operator, right) => {
-            let expr_source = &expression.source_location;
-            let left_type = compute_expression_type(left, graph, computed_rule_types, errors);
-            let right_type = compute_expression_type(right, graph, computed_rule_types, errors);
-            validate_arithmetic_types(
-                &left_type,
-                &right_type,
-                operator,
-                graph,
-                expr_source,
-                errors,
-            );
-            compute_arithmetic_result_type(left_type, right_type, operator)
-        }
-        ExpressionKind::UnitConversion(source_expression, target) => {
-            let expr_source = &expression.source_location;
-            let source_type =
-                compute_expression_type(source_expression, graph, computed_rule_types, errors);
-            validate_unit_conversion_types(&source_type, target, graph, expr_source, errors);
-            match target {
-                SemanticConversionTarget::Duration(_) => primitive_duration().clone(),
-                SemanticConversionTarget::ScaleUnit(unit_name) => {
-                    if source_type.is_number() {
-                        let doc_name = &expr_source.doc_name;
-                        match graph
-                            .resolved_types
-                            .get(doc_name)
-                            .and_then(|dt| dt.unit_index.get(unit_name).cloned())
-                        {
-                            Some(lemma_type) => lemma_type,
-                            None => {
-                                push_engine_error_at(
-                                    errors,
-                                    graph,
-                                    expr_source,
-                                    format!(
-                                        "Cannot resolve unit '{}' for document '{}' (types may not have been resolved)",
-                                        unit_name,
-                                        doc_name
-                                    ),
-                                );
-                                primitive_number().clone()
-                            }
-                        }
-                    } else {
-                        source_type
-                    }
-                }
-                SemanticConversionTarget::RatioUnit(unit_name) => {
-                    if source_type.is_number() {
-                        let doc_name = &expr_source.doc_name;
-                        match graph
-                            .resolved_types
-                            .get(doc_name)
-                            .and_then(|dt| dt.unit_index.get(unit_name).cloned())
-                        {
-                            Some(lemma_type) => lemma_type,
-                            None => {
-                                push_engine_error_at(
-                                    errors,
-                                    graph,
-                                    expr_source,
-                                    format!(
-                                        "Cannot resolve unit '{}' for document '{}' (types may not have been resolved)",
-                                        unit_name,
-                                        doc_name
-                                    ),
-                                );
-                                primitive_number().clone()
-                            }
-                        }
-                    } else {
-                        source_type
-                    }
-                }
-            }
-        }
-        ExpressionKind::MathematicalComputation(_, operand) => {
-            let expr_source = &expression.source_location;
-            let operand_type = compute_expression_type(operand, graph, computed_rule_types, errors);
-            validate_mathematical_operand(&operand_type, graph, expr_source, errors);
-            primitive_number().clone()
-        }
-        ExpressionKind::Veto(_) => LemmaType::veto_type(),
-    }
-}
-
-fn push_engine_error_at(
-    errors: &mut Vec<LemmaError>,
-    graph: &Graph,
-    source: &Source,
-    message: impl Into<String>,
-) {
-    errors.push(LemmaError::engine(
-        message.into(),
-        source.clone(),
-        graph.source_text_for(source),
-        None::<String>,
-    ));
-}
-
-fn validate_logical_operands(
-    left_type: &LemmaType,
-    right_type: &LemmaType,
-    graph: &Graph,
-    source: &Source,
-    errors: &mut Vec<LemmaError>,
-) {
-    if !left_type.is_boolean() {
-        push_engine_error_at(
-            errors,
-            graph,
-            source,
-            format!(
-                "Logical operation requires boolean operands, got {:?} for left operand",
-                left_type
-            ),
-        );
-    }
-    if !right_type.is_boolean() {
-        push_engine_error_at(
-            errors,
-            graph,
-            source,
-            format!(
-                "Logical operation requires boolean operands, got {:?} for right operand",
-                right_type
-            ),
-        );
-    }
-}
-
-fn validate_logical_operand(
-    operand_type: &LemmaType,
-    graph: &Graph,
-    source: &Source,
-    errors: &mut Vec<LemmaError>,
-) {
-    if !operand_type.is_boolean() {
-        push_engine_error_at(
-            errors,
-            graph,
-            source,
-            format!(
-                "Logical negation requires boolean operand, got {:?}",
-                operand_type
-            ),
-        );
-    }
-}
-
-fn validate_comparison_types(
-    left_type: &LemmaType,
-    op: &crate::ComparisonComputation,
-    right_type: &LemmaType,
-    graph: &Graph,
-    source: &Source,
-    errors: &mut Vec<LemmaError>,
-) {
-    let is_equality_only = matches!(
-        op,
-        crate::ComparisonComputation::Equal
-            | crate::ComparisonComputation::NotEqual
-            | crate::ComparisonComputation::Is
-            | crate::ComparisonComputation::IsNot
-    );
-
-    // Boolean comparisons: only equality operators.
-    if left_type.is_boolean() && right_type.is_boolean() {
-        if !is_equality_only {
-            push_engine_error_at(
-                errors,
-                graph,
-                source,
-                format!("Can only use == and != with booleans (got {})", op),
-            );
-        }
-        return;
-    }
-
-    // Text comparisons: only equality operators.
-    if left_type.is_text() && right_type.is_text() {
-        if !is_equality_only {
-            push_engine_error_at(
-                errors,
-                graph,
-                source,
-                format!("Can only use == and != with text (got {})", op),
-            );
-        }
-        return;
-    }
-
-    // Numbers compare with numbers only.
-    if left_type.is_number() && right_type.is_number() {
-        return;
-    }
-
-    // Ratios compare with ratios only.
-    if left_type.is_ratio() && right_type.is_ratio() {
-        return;
-    }
-
-    // Dates compare with dates only.
-    if left_type.is_date() && right_type.is_date() {
-        return;
-    }
-
-    // Times compare with times only.
-    if left_type.is_time() && right_type.is_time() {
-        return;
-    }
-
-    // Scales compare with scales of the same scale family only.
-    if left_type.is_scale() && right_type.is_scale() {
-        if !left_type.same_scale_family(right_type) {
-            push_engine_error_at(
-                errors,
-                graph,
-                source,
-                format!(
-                    "Cannot compare different scale types: {} and {}",
-                    left_type.name(),
-                    right_type.name()
-                ),
-            );
-        }
-        return;
-    }
-
-    // Duration compares with duration and (for now) plain numbers.
-    if left_type.is_duration() && right_type.is_duration() {
-        return;
-    }
-    if left_type.is_duration() && right_type.is_number() {
-        return;
-    }
-    if left_type.is_number() && right_type.is_duration() {
-        return;
-    }
-
-    push_engine_error_at(
-        errors,
-        graph,
-        source,
-        format!("Cannot compare {:?} with {:?}", left_type, right_type,),
-    );
-}
-
-fn validate_arithmetic_types(
-    left_type: &LemmaType,
-    right_type: &LemmaType,
-    operator: &ArithmeticComputation,
-    graph: &Graph,
-    source: &Source,
-    errors: &mut Vec<LemmaError>,
-) {
-    // Check for temporal arithmetic (Date/Time)
-    if left_type.is_date() || left_type.is_time() || right_type.is_date() || right_type.is_time() {
-        // Validate temporal arithmetic is supported
-        // compute_temporal_arithmetic_result_type will return a fallback if unsupported
-        // but we check here to provide a better error message
-        let result = compute_temporal_arithmetic_result_type(left_type, right_type, operator);
-        // If result is duration but operator is not Subtract/Add, it's invalid
-        if result.is_duration()
-            && !matches!(
-                operator,
-                ArithmeticComputation::Subtract | ArithmeticComputation::Add
-            )
-        {
-            push_engine_error_at(
-                errors,
-                graph,
-                source,
-                format!(
-                    "Invalid date/time arithmetic: {:?} {:?} {:?}",
-                    left_type, operator, right_type
-                ),
-            );
-        }
-        return;
-    }
-
-    // CRITICAL: If both operands are from different Scale families, reject ALL arithmetic operations
-    if left_type.is_scale() && right_type.is_scale() && !left_type.same_scale_family(right_type) {
-        push_engine_error_at(
-            errors,
-            graph,
-            source,
-            format!("Cannot {} different scale types: {} and {}. Operations between different scale types produce ambiguous result units.",
-                match operator {
-                    ArithmeticComputation::Add => "add",
-                    ArithmeticComputation::Subtract => "subtract",
-                    ArithmeticComputation::Multiply => "multiply",
-                    ArithmeticComputation::Divide => "divide",
-                    ArithmeticComputation::Modulo => "modulo",
-                    ArithmeticComputation::Power => "power",
-                },
-                left_type.name(),
-                right_type.name()
-            ),
-        );
-        return;
-    }
-
-    // Check for valid arithmetic type combinations
-    // Scale, Number, Ratio, and Duration can participate in arithmetic
-    // but with specific constraints handled in validate_arithmetic_operator_constraints
-    let left_valid = left_type.is_scale()
-        || left_type.is_number()
-        || left_type.is_duration()
-        || left_type.is_ratio();
-    let right_valid = right_type.is_scale()
-        || right_type.is_number()
-        || right_type.is_duration()
-        || right_type.is_ratio();
-
-    if !left_valid {
-        push_engine_error_at(
-            errors,
-            graph,
-            source,
-            format!(
-                "Arithmetic operation requires numeric operands, got {:?} for left operand",
-                left_type
-            ),
-        );
-        return;
-    }
-    if !right_valid {
-        push_engine_error_at(
-            errors,
-            graph,
-            source,
-            format!(
-                "Arithmetic operation requires numeric operands, got {:?} for right operand",
-                right_type
-            ),
-        );
-        return;
-    }
-
-    validate_arithmetic_operator_constraints(
-        left_type, right_type, operator, graph, source, errors,
-    );
-}
-
-fn validate_arithmetic_operator_constraints(
-    left_type: &LemmaType,
-    right_type: &LemmaType,
-    operator: &ArithmeticComputation,
-    graph: &Graph,
-    source: &Source,
-    errors: &mut Vec<LemmaError>,
-) {
-    match operator {
-        ArithmeticComputation::Modulo => {
-            if left_type.is_duration() || right_type.is_duration() {
-                push_engine_error_at(
-                    errors,
-                    graph,
-                    source,
-                    format!(
-                        "Modulo operation not supported for duration types: {:?} % {:?}",
-                        left_type, right_type
-                    ),
-                );
-            } else if !right_type.is_number() {
-                // Modulo: dividend % divisor
-                // Dividend can be Scale or Number (custom or primitive)
-                // Divisor must be Number (dimensionless, not Scale)
-                // Allow: Scale % Number → result is Scale
-                // Allow: Number % Number → result is Number
-                // Error: Scale % Scale (divisor must be dimensionless)
-                // Error: Number % Scale (divisor must be dimensionless)
-                push_engine_error_at(
-                    errors,
-                    graph,
-                    source,
-                    format!(
-                        "Modulo divisor must be a dimensionless number (not a scale type), got {}",
-                        right_type.name()
-                    ),
-                );
-            }
-            // If right is Number, allow it (left can be Scale or Number)
-        }
-        ArithmeticComputation::Multiply | ArithmeticComputation::Divide => {
-            // Multiply/Divide: Different Scale types are already rejected in validate_arithmetic_types
-            // At this point, if both are Scale, they must be the same Scale type
-
-            // - Same primitive type: allowed (Number * Number, Scale * Scale, Ratio * Ratio, etc.)
-            // - Scale * Number, Number * Scale: allowed
-            // - Scale * Ratio, Ratio * Scale: allowed
-            // - Number * Ratio, Ratio * Number: allowed
-            // - Duration * Number: allowed (Multiply only)
-            // - Number * Duration: allowed (Multiply only)
-            // - Duration / Number: allowed (Divide only)
-            // - Number / Duration: NOT allowed
-
-            if !left_type.has_same_base_type(right_type) {
-                // Check if Scale * Number or Number * Scale (allowed)
-                let is_scale_number = (left_type.is_scale() && right_type.is_number())
-                    || (left_type.is_number() && right_type.is_scale());
-
-                // Check if Scale * Ratio or Ratio * Scale (allowed)
-                let is_scale_ratio = (left_type.is_scale() && right_type.is_ratio())
-                    || (left_type.is_ratio() && right_type.is_scale());
-
-                // Check if Number * Ratio or Ratio * Number (allowed)
-                let is_number_ratio = (left_type.is_number() && right_type.is_ratio())
-                    || (left_type.is_ratio() && right_type.is_number());
-
-                // Check Duration combinations
-                let is_duration_number = (left_type.is_duration() && right_type.is_number())
-                    || (left_type.is_number() && right_type.is_duration());
-
-                if is_duration_number {
-                    // Duration * Number or Number * Duration: only Multiply is allowed
-                    // Duration / Number: only Divide is allowed (when Duration is left)
-                    // Number / Duration: NOT allowed
-                    if matches!(operator, ArithmeticComputation::Divide)
-                        && left_type.is_number()
-                        && right_type.is_duration()
-                    {
-                        push_engine_error_at(
-                            errors,
-                            graph,
-                            source,
-                            "Cannot divide number by duration. Duration can only be multiplied by number or divided by number.".to_string(),
-                        );
-                    }
-                    // Otherwise, Duration * Number or Number * Duration (Multiply) or Duration / Number (Divide) are allowed
-                } else if !is_scale_number && !is_scale_ratio && !is_number_ratio {
-                    // Not the special case - types are incompatible
-                    push_engine_error_at(
-                        errors,
-                        graph,
-                        source,
-                        format!(
-                            "Cannot apply '{}' to values with different types: {} and {}. '*'/'/' require the same primitive type, scale * number (or number * scale), scale * ratio (or ratio * scale), number * ratio (or ratio * number), or duration * number (or number * duration) for multiply, or duration / number for divide.",
-                            operator,
-                            left_type.name(),
-                            right_type.name()
-                        ),
-                    );
-                }
-            } else {
-                // Types have the same primitive type - always allowed (even with different constraints)
-            }
-        }
-        ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-            // Different Scale types are already rejected in validate_arithmetic_types
-            // At this point, if both are Scale, they must be the same Scale type
-
-            // - Same primitive type: allowed (Number + Number, Scale + Scale, etc.) - even with different constraints
-            // - Scale + Number: allowed (result is Scale)
-            // - Number + Scale: allowed (result is Scale)
-            // - Number + Ratio: allowed (result is Number with ratio semantics)
-            // - Scale + Ratio: allowed (result is Scale with ratio semantics)
-            if !left_type.has_same_base_type(right_type) {
-                // Check if Scale + Number or Number + Scale (allowed)
-                let is_scale_number = (left_type.is_scale() && right_type.is_number())
-                    || (left_type.is_number() && right_type.is_scale());
-
-                // Check if Scale op Ratio or Ratio op Scale (allowed)
-                let is_scale_ratio = (left_type.is_scale() && right_type.is_ratio())
-                    || (left_type.is_ratio() && right_type.is_scale());
-
-                // Check if Number op Ratio or Ratio op Number (allowed with ratio semantics)
-                let is_number_ratio = (left_type.is_number() && right_type.is_ratio())
-                    || (left_type.is_ratio() && right_type.is_number());
-
-                if !is_scale_number && !is_scale_ratio && !is_number_ratio {
-                    // Not the special case - types are incompatible
-                    push_engine_error_at(
-                        errors,
-                        graph,
-                        source,
-                        format!(
-                            "Cannot apply '{}' to values with different types: {} and {}. '+'/'-' require the same primitive type, scale + number (or number + scale), scale + ratio (or ratio + scale), or number + ratio (or ratio + number).",
-                            operator,
-                            left_type.name(),
-                            right_type.name()
-                        ),
-                    );
-                }
-            } else {
-                // Types have the same primitive type - always allowed (even with different constraints)
-            }
-        }
-        ArithmeticComputation::Power => {
-            // Power: base ^ exponent
-            // Base can be Scale or Number (custom or primitive)
-            // Exponent must be Number or Ratio (dimensionless, not Scale)
-            // Allow: Scale ^ Number → result is Scale
-            // Allow: Number ^ Number → result is Number
-            // Error: Scale ^ Scale (exponent must be dimensionless)
-            // Error: Number ^ Scale (exponent must be dimensionless)
-            if !right_type.is_number() && !right_type.is_ratio() {
-                push_engine_error_at(
-                    errors,
-                    graph,
-                    source,
-                    format!(
-                        "Power exponent must be a dimensionless number (not a scale type), got {}",
-                        right_type.name()
-                    ),
-                );
-            }
-            // If right is Number or Ratio, allow it (left can be Scale or Number)
-        }
-    }
-}
-
-fn validate_unit_conversion_types(
-    source_type: &LemmaType,
-    target: &SemanticConversionTarget,
-    graph: &Graph,
-    source: &Source,
-    errors: &mut Vec<LemmaError>,
-) {
-    match target {
-        SemanticConversionTarget::ScaleUnit(unit_name) => {
-            if source_type.is_scale() {
-                let units = match &source_type.specifications {
-                    TypeSpecification::Scale { units, .. } => units,
-                    _ => unreachable!("BUG: is_scale() but not TypeSpecification::Scale"),
-                };
-
-                if !units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name)) {
-                    let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
-                    push_engine_error_at(
-                        errors,
-                        graph,
-                        source,
-                        format!(
-                            "Unknown unit '{}' for scale type {}. Valid units: {}",
-                            unit_name,
-                            source_type.name(),
-                            valid.join(", ")
-                        ),
-                    );
-                }
-            } else if source_type.is_number() {
-                let doc_name = &source.doc_name;
-                if graph
-                    .resolved_types
-                    .get(doc_name)
-                    .and_then(|dt| dt.unit_index.get(unit_name))
-                    .is_none()
-                {
-                    push_engine_error_at(
-                        errors,
-                        graph,
-                        source,
-                        format!(
-                            "Unknown unit '{}' in document '{}'. Number can only be converted to a unit defined by a scale or ratio type in this document.",
-                            unit_name,
-                            doc_name
-                        ),
-                    );
-                }
-            } else {
-                push_engine_error_at(
-                    errors,
-                    graph,
-                    source,
-                    format!(
-                        "Cannot convert {} to scale unit '{}': source must be a number or scale type",
-                        source_type.name(),
-                        unit_name
-                    ),
-                );
-            }
-        }
-        SemanticConversionTarget::RatioUnit(unit_name) => {
-            if source_type.is_ratio() {
-                let units = match &source_type.specifications {
-                    TypeSpecification::Ratio { units, .. } => units,
-                    _ => unreachable!("BUG: is_ratio() but not TypeSpecification::Ratio"),
-                };
-                if !units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name)) {
-                    let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
-                    push_engine_error_at(
-                        errors,
-                        graph,
-                        source,
-                        format!(
-                            "Unknown unit '{}' for ratio type {}. Valid units: {}",
-                            unit_name,
-                            source_type.name(),
-                            valid.join(", ")
-                        ),
-                    );
-                }
-            } else if source_type.is_number() {
-                let doc_name = &source.doc_name;
-                if graph
-                    .resolved_types
-                    .get(doc_name)
-                    .and_then(|dt| dt.unit_index.get(unit_name))
-                    .is_none()
-                {
-                    push_engine_error_at(
-                        errors,
-                        graph,
-                        source,
-                        format!(
-                            "Unknown unit '{}' in document '{}'. Number can only be converted to a unit defined by a scale or ratio type in this document.",
-                            unit_name,
-                            doc_name
-                        ),
-                    );
-                }
-            } else {
-                push_engine_error_at(
-                    errors,
-                    graph,
-                    source,
-                    format!(
-                        "Cannot convert {} to ratio unit '{}': source must be a number or ratio type",
-                        source_type.name(),
-                        unit_name
-                    ),
-                );
-            }
-        }
-        SemanticConversionTarget::Duration(_duration_unit) => {
-            // Allow duration->duration (e.g. hours in minutes) or number/scale->duration
-            if !source_type.is_duration() && !source_type.is_numeric() {
-                push_engine_error_at(
-                    errors,
-                    graph,
-                    source,
-                    format!(
-                        "Cannot convert {} to duration: source must be a duration, number, or scale type",
-                        source_type.name()
-                    ),
-                );
-            }
-        }
-    }
-}
-fn validate_mathematical_operand(
-    operand_type: &LemmaType,
-    graph: &Graph,
-    source: &Source,
-    errors: &mut Vec<LemmaError>,
-) {
-    // Mathematical functions work on Scale and Number (not Ratio or Duration)
-    // Both Scale and Number are numeric types suitable for mathematical operations
-    if !operand_type.is_scale() && !operand_type.is_number() {
-        push_engine_error_at(
-            errors,
-            graph,
-            source,
-            format!(
-                "Mathematical function requires numeric operand (scale or number), got {:?}",
-                operand_type
-            ),
-        );
-    }
-}
-
-fn compute_fact_type(
-    fact_path: &FactPath,
-    graph: &Graph,
-    fact_source: &Source,
-    errors: &mut Vec<LemmaError>,
-) -> LemmaType {
-    let entry = match graph.facts().get(fact_path) {
-        Some(e) => e,
-        None => {
-            // This can happen when a rule is referenced without `?` and ends up as a FactPath
-            // (e.g. `employee.annual`). Do not panic: report a semantic error at the source span.
-            let maybe_rule_path = RulePath {
-                segments: fact_path.segments.clone(),
-                rule: fact_path.fact.clone(),
-            };
-
-            if graph.rules().contains_key(&maybe_rule_path) {
-                errors.push(LemmaError::semantic(
-                    format!(
-                        "Rule reference '{}' must use '?' (did you mean '{}?')",
-                        fact_path, fact_path
-                    ),
-                    fact_source.clone(),
-                    graph.source_text_for(fact_source),
-                    None::<String>,
-                ));
-            } else {
-                // If it isn't a rule either, then this is user code referencing something
-                // that doesn't exist. That's a semantic error.
-                errors.push(LemmaError::semantic(
-                    format!("Unknown fact reference '{}'", fact_path),
-                    fact_source.clone(),
-                    graph.source_text_for(fact_source),
-                    None::<String>,
-                ));
-            }
-
-            // Benign fallback type to avoid cascaded panics.
-            return primitive_text().clone();
-        }
-    };
-    match entry {
-        FactData::Value { value, .. } => value.lemma_type.clone(),
-        FactData::TypeDeclaration { resolved_type, .. } => resolved_type.clone(),
-        FactData::DocumentRef { .. } => {
-            push_engine_error_at(
-                errors,
-                graph,
-                entry.source(),
-                format!(
-                    "Cannot compute type for document reference fact '{}'",
-                    fact_path
-                ),
-            );
-            LemmaType::veto_type()
-        }
-    }
-}
-
-fn compute_arithmetic_result_type(
-    left_type: LemmaType,
-    right_type: LemmaType,
-    operator: &ArithmeticComputation,
-) -> LemmaType {
-    let left = &left_type;
-    let right = &right_type;
-
-    if left.is_date() || left.is_time() || right.is_date() || right.is_time() {
-        return compute_temporal_arithmetic_result_type(left, right, operator);
-    }
-    if left == right {
-        return left_type;
-    }
-
-    // Handle Scale + Number or Number + Scale: result is Scale (Scale has units, Number doesn't)
-    if left.is_scale() && right.is_number() {
-        return left_type; // Scale + Number → Scale
-    }
-    if left.is_number() && right.is_scale() {
-        return right_type; // Number + Scale → Scale
-    }
-
-    // Handle Ratio operations
-    // Ratio op Number or Number op Ratio → Number
-    if left.is_ratio() && right.is_number() {
-        return primitive_number().clone(); // Ratio op Number → Number
-    }
-    if left.is_number() && right.is_ratio() {
-        return primitive_number().clone(); // Number op Ratio → Number
-    }
-    // Ratio op Ratio → Ratio
-    if left.is_ratio() && right.is_ratio() {
-        return left_type; // Ratio op Ratio → Ratio (preserve Ratio type)
-    }
-    // Ratio op Scale or Scale op Ratio → Scale
-    if left.is_ratio() && right.is_scale() {
-        return right_type; // Ratio op Scale → Scale
-    }
-    if left.is_scale() && right.is_ratio() {
-        return left_type; // Scale op Ratio → Scale
-    }
-
-    // Handle primitive (no name) + custom (has name) case: result is the custom type
-    // This handles: STANDARD_SCALE + custom_scale, STANDARD_NUMBER + custom_scale, etc.
-    // ORDER DOES NOT MATTER for Add/Subtract/Multiply/Divide - both orders return the custom type
-    // For Power/Modulo, validation ensures correct order (custom op primitive)
-    let one_is_primitive_one_is_custom = left_type.name.is_none() != right_type.name.is_none();
-
-    if one_is_primitive_one_is_custom {
-        // One is primitive, one is custom → result is the custom type (order-independent)
-        // Return whichever operand is the custom type (has a name)
-        if left_type.name.is_some() {
-            return left_type;
-        } else {
-            return right_type;
-        }
-    }
-
-    // Both are numeric types, check if we can preserve custom type
-    // If we reach here, validation should have ensured types are compatible
-    if left.name.is_some() && right.name.is_some() {
-        // Both are custom types
-        // Different Scale types are already rejected in validate_arithmetic_types
-        // But different custom Number types with same base are allowed
-        // Return the left type (result type is left operand for same base operations)
-        return left_type;
-    }
-
-    // Both are primitive types (both name.is_none()) - determine result type
-    // Scale op Scale (same type) → Scale
-    // Number op Number → Number
-    // Scale op Number → Scale (handled above)
-    // Number op Scale → Scale (handled above)
-    if left.is_scale() && right.is_scale() {
-        // Both are Scale - they must be the same type (validation ensures this)
-        return left_type;
-    }
-    if left.is_number() && right.is_number() {
-        // Both are Number
-        return primitive_number().clone();
-    }
-
-    // Fallback (should not reach here if validation is correct)
-    primitive_number().clone()
-}
-
-fn compute_temporal_arithmetic_result_type(
-    left: &LemmaType,
-    right: &LemmaType,
-    operator: &ArithmeticComputation,
-) -> LemmaType {
-    match operator {
-        ArithmeticComputation::Subtract => {
-            // Date - Date → Duration (supported)
-            if left.is_date() && right.is_date() {
-                return primitive_duration().clone();
-            }
-            // Time - Time → Duration (supported)
-            if left.is_time() && right.is_time() {
-                return primitive_duration().clone();
-            }
-            // Date - Time → Duration (supported: datetime - time = duration)
-            if left.is_date() && right.is_time() {
-                return primitive_duration().clone();
-            }
-            // Time - Date → Duration (supported: time - datetime = duration)
-            if left.is_time() && right.is_date() {
-                return primitive_duration().clone();
-            }
-            // Date - Duration → Date (supported)
-            if left.is_date() && right.is_duration() {
-                return left.clone();
-            }
-            // Time - Duration → Time (supported)
-            if left.is_time() && right.is_duration() {
-                return left.clone();
-            }
-        }
-        ArithmeticComputation::Add => {
-            // Date + Duration → Date (supported)
-            if left.is_date() && right.is_duration() {
-                return left.clone();
-            }
-            // Time + Duration → Time (supported)
-            if left.is_time() && right.is_duration() {
-                return left.clone();
-            }
-            // Duration + Date → Date (supported)
-            if left.is_duration() && right.is_date() {
-                return right.clone();
-            }
-            // Duration + Time → Time (supported)
-            if left.is_duration() && right.is_time() {
-                return right.clone();
-            }
-        }
-        _ => {}
-    }
-    // Unsupported temporal arithmetic - validation should have caught this
-    // Return fallback type (validation will fail due to errors vector)
-    primitive_duration().clone()
-}
-
-fn validate_all_rule_references_exist(graph: &Graph, errors: &mut Vec<LemmaError>) {
-    let existing_rules: HashSet<&RulePath> = graph.rules().keys().collect();
-    for (rule_path, rule_node) in graph.rules() {
-        for dependency in &rule_node.depends_on_rules {
-            if !existing_rules.contains(dependency) {
-                push_engine_error_at(
-                    errors,
-                    graph,
-                    &rule_node.source,
-                    format!(
-                        "Rule '{}' references non-existent rule '{}'",
-                        rule_path.rule, dependency.rule
-                    ),
-                );
-            }
-        }
-    }
-}
-
-fn validate_fact_and_rule_name_collisions(graph: &Graph, errors: &mut Vec<LemmaError>) {
-    // Disallow fact/rule name collision in the same namespace (same traversal segments).
-    for rule_path in graph.rules().keys() {
-        let fact_path = FactPath::new(rule_path.segments.clone(), rule_path.rule.clone());
-        if graph.facts().contains_key(&fact_path) {
-            let rule_node = graph.rules().get(rule_path).unwrap_or_else(|| {
-                unreachable!(
-                    "BUG: rule '{}' missing from graph while validating name collisions",
-                    rule_path.rule
-                )
-            });
-            push_engine_error_at(
-                errors,
-                graph,
-                &rule_node.source,
-                format!(
-                    "Name collision: '{}' is defined as both a fact and a rule",
-                    fact_path
-                ),
-            );
-        }
-    }
+    computed_types
 }
 
 fn compute_referenced_rules_by_path(graph: &Graph) -> HashMap<Vec<String>, HashSet<String>> {
@@ -2806,6 +2758,7 @@ mod tests {
                 col: 0,
             },
             "test",
+            Arc::from("doc test\nfact x = 1\nrule result = x"),
         )
     }
 
@@ -2856,7 +2809,7 @@ mod tests {
     fn create_literal_expr(value: Value) -> ast::Expression {
         ast::Expression {
             kind: ast::ExpressionKind::Literal(value),
-            source_location: test_source(),
+            source_location: Some(test_source()),
         }
     }
 
@@ -2890,7 +2843,7 @@ mod tests {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source_location: test_source(),
+            source_location: Some(test_source()),
         };
 
         let rule = LemmaRule {
@@ -3013,7 +2966,7 @@ mod tests {
                 segments: Vec::new(),
                 fact: "nonexistent".to_string(),
             }),
-            source_location: test_source(),
+            source_location: Some(test_source()),
         };
 
         let rule = LemmaRule {
@@ -3069,7 +3022,7 @@ mod tests {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source_location: test_source(),
+            source_location: Some(test_source()),
         };
 
         let rule = LemmaRule {
@@ -3101,7 +3054,7 @@ mod tests {
                 segments: Vec::new(),
                 fact: "age".to_string(),
             }),
-            source_location: test_source(),
+            source_location: Some(test_source()),
         };
 
         let rule1 = LemmaRule {
@@ -3117,7 +3070,7 @@ mod tests {
                 segments: Vec::new(),
                 rule: "rule1".to_string(),
             }),
-            source_location: test_source(),
+            source_location: Some(test_source()),
         };
 
         let rule2 = LemmaRule {
@@ -3169,7 +3122,7 @@ mod tests {
                 segments: Vec::new(),
                 fact: "nonexistent".to_string(),
             }),
-            source_location: test_source(),
+            source_location: Some(test_source()),
         };
 
         let rule = LemmaRule {
@@ -3206,6 +3159,7 @@ mod tests {
                 col: 0,
             },
             "doc_a",
+            Arc::from("doc test\nfact x = 1\nrule result = x"),
         );
         let doc_a = create_test_doc("doc_a")
             .with_attribute("a.lemma".to_string())
@@ -3231,6 +3185,7 @@ mod tests {
                 col: 0,
             },
             "doc_b",
+            Arc::from("doc test\nfact x = 1\nrule result = x"),
         );
         let doc_b = create_test_doc("doc_b")
             .with_attribute("b.lemma".to_string())

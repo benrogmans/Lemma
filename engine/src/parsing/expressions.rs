@@ -11,11 +11,17 @@ fn create_expression_with_location(
     pair: &Pair<Rule>,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Expression {
     let span = Span::from_pest_span(pair.as_span());
     Expression::new(
         kind,
-        Source::new(attribute.to_string(), span, doc_name.to_string()),
+        Source::new(
+            attribute.to_string(),
+            span,
+            doc_name.to_string(),
+            source_text.clone(),
+        ),
     )
 }
 
@@ -23,14 +29,14 @@ fn parse_literal_expression(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let literal_pair = if pair.as_rule() == Rule::literal {
         let span = Span::from_pest_span(pair.as_span());
         pair.into_inner().next().ok_or_else(|| {
             LemmaError::engine(
                 "Empty literal wrapper",
-                Source::new(attribute, span, doc_name),
-                Arc::from(""),
+                Some(Source::new(attribute, span, doc_name, source_text.clone())),
                 None::<String>,
             )
         })?
@@ -44,23 +50,30 @@ fn parse_literal_expression(
             literal_pair.clone(),
             attribute,
             doc_name,
+            source_text.clone(),
         )?;
         return Ok(create_expression_with_location(
             ExpressionKind::UnresolvedUnitLiteral(number, unit_name),
             &literal_pair,
             attribute,
             doc_name,
+            source_text.clone(),
         ));
     }
 
-    let literal_value =
-        crate::parsing::literals::parse_literal(literal_pair.clone(), attribute, doc_name)?;
+    let literal_value = crate::parsing::literals::parse_literal(
+        literal_pair.clone(),
+        attribute,
+        doc_name,
+        source_text.clone(),
+    )?;
 
     Ok(create_expression_with_location(
         ExpressionKind::Literal(literal_value),
         &literal_pair,
         attribute,
         doc_name,
+        source_text.clone(),
     ))
 }
 
@@ -69,6 +82,7 @@ pub(crate) fn parse_primary(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let rule = pair.as_rule();
     match rule {
@@ -82,7 +96,7 @@ pub(crate) fn parse_primary(
         | Rule::time_literal
         | Rule::duration_literal
         | Rule::number_unit_literal => {
-            return parse_literal_expression(pair, attribute, doc_name);
+            return parse_literal_expression(pair, attribute, doc_name, source_text.clone());
         }
         Rule::rule_reference => {
             let rule_ref = parse_rule_reference(pair.clone())?;
@@ -91,6 +105,7 @@ pub(crate) fn parse_primary(
                 &pair,
                 attribute,
                 doc_name,
+                source_text.clone(),
             ));
         }
         Rule::fact_reference => {
@@ -100,6 +115,7 @@ pub(crate) fn parse_primary(
                 &pair,
                 attribute,
                 doc_name,
+                source_text.clone(),
             ));
         }
         Rule::sqrt_expr
@@ -115,7 +131,13 @@ pub(crate) fn parse_primary(
         | Rule::floor_expr
         | Rule::ceil_expr
         | Rule::round_expr => {
-            return parse_logical_expression(pair, depth_tracker, attribute, doc_name);
+            return parse_logical_expression(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            );
         }
         _ => {}
     }
@@ -132,7 +154,7 @@ pub(crate) fn parse_primary(
             | Rule::time_literal
             | Rule::duration_literal
             | Rule::number_unit_literal => {
-                return parse_literal_expression(inner, attribute, doc_name);
+                return parse_literal_expression(inner, attribute, doc_name, source_text.clone());
             }
             Rule::rule_reference => {
                 let rule_ref = parse_rule_reference(inner.clone())?;
@@ -141,6 +163,7 @@ pub(crate) fn parse_primary(
                     &inner,
                     attribute,
                     doc_name,
+                    source_text.clone(),
                 ));
             }
             Rule::fact_reference => {
@@ -150,10 +173,17 @@ pub(crate) fn parse_primary(
                     &inner,
                     attribute,
                     doc_name,
+                    source_text.clone(),
                 ));
             }
             Rule::expression => {
-                return parse_expression(inner, depth_tracker, attribute, doc_name);
+                return parse_expression(
+                    inner,
+                    depth_tracker,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                );
             }
             Rule::sqrt_expr
             | Rule::sin_expr
@@ -168,14 +198,20 @@ pub(crate) fn parse_primary(
             | Rule::floor_expr
             | Rule::ceil_expr
             | Rule::round_expr => {
-                return parse_logical_expression(inner, depth_tracker, attribute, doc_name);
+                return parse_logical_expression(
+                    inner,
+                    depth_tracker,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                );
             }
             _ => {}
         }
     }
     Err(LemmaError::engine(
         "Empty primary expression",
-        Source::new(
+        Some(Source::new(
             attribute,
             Span {
                 start: 0,
@@ -184,8 +220,8 @@ pub(crate) fn parse_primary(
                 col: 0,
             },
             doc_name,
-        ),
-        Arc::from(""),
+            source_text.clone(),
+        )),
         None::<String>,
     ))
 }
@@ -195,6 +231,7 @@ pub(crate) fn parse_expression(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     if let Err(msg) = depth_tracker.push_depth() {
         let actual_depth = msg
@@ -211,7 +248,13 @@ pub(crate) fn parse_expression(
         });
     }
 
-    let result = parse_expression_impl(pair, depth_tracker, attribute, doc_name);
+    let result = parse_expression_impl(
+        pair,
+        depth_tracker,
+        attribute,
+        doc_name,
+        source_text.clone(),
+    );
     depth_tracker.pop_depth();
     result
 }
@@ -221,6 +264,7 @@ fn parse_expression_impl(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     match pair.as_rule() {
         Rule::expression => {
@@ -232,22 +276,33 @@ fn parse_expression_impl(
                 inner.next().ok_or_else(|| {
                     LemmaError::engine(
                         "Missing left operand in logical OR expression",
-                        Source::new(attribute, span, doc_name),
-                        Arc::from(""),
+                        Some(Source::new(attribute, span, doc_name, source_text.clone())),
                         None::<String>,
                     )
                 })?,
                 depth_tracker,
                 attribute,
                 doc_name,
+                source_text.clone(),
             )?;
 
             for child in inner {
                 if child.as_rule() == Rule::and_expression {
-                    let right =
-                        parse_and_expression(child.clone(), depth_tracker, attribute, doc_name)?;
+                    let right = parse_and_expression(
+                        child.clone(),
+                        depth_tracker,
+                        attribute,
+                        doc_name,
+                        source_text.clone(),
+                    )?;
                     let kind = ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right));
-                    left = create_expression_with_location(kind, &original, attribute, doc_name);
+                    left = create_expression_with_location(
+                        kind,
+                        &original,
+                        attribute,
+                        doc_name,
+                        source_text.clone(),
+                    );
                 }
             }
 
@@ -255,27 +310,89 @@ fn parse_expression_impl(
         }
 
         Rule::and_expression => {
-            return parse_and_expression(pair, depth_tracker, attribute, doc_name);
+            return parse_and_expression(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            );
         }
 
         Rule::and_operand => {
-            return parse_and_operand(pair, depth_tracker, attribute, doc_name);
+            return parse_and_operand(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            );
         }
 
         Rule::base_expression => {
-            return parse_base_expression(pair, depth_tracker, attribute, doc_name);
+            return parse_base_expression(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            );
         }
-        Rule::term => return parse_term(pair, depth_tracker, attribute, doc_name),
-        Rule::power => return parse_power(pair, depth_tracker, attribute, doc_name),
-        Rule::factor => return parse_factor(pair, depth_tracker, attribute, doc_name),
-        Rule::primary => return parse_primary(pair, depth_tracker, attribute, doc_name),
+        Rule::term => {
+            return parse_term(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            )
+        }
+        Rule::power => {
+            return parse_power(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            )
+        }
+        Rule::factor => {
+            return parse_factor(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            )
+        }
+        Rule::primary => {
+            return parse_primary(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            )
+        }
 
         Rule::conversion_expression => {
-            return parse_conversion_expression(pair, depth_tracker, attribute, doc_name);
+            return parse_conversion_expression(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            );
         }
 
         Rule::comparison_expression => {
-            return parse_comparison_expression(pair, depth_tracker, attribute, doc_name)
+            return parse_comparison_expression(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            )
         }
 
         Rule::sqrt_expr
@@ -292,7 +409,13 @@ fn parse_expression_impl(
         | Rule::ceil_expr
         | Rule::round_expr
         | Rule::not_expr => {
-            return parse_logical_expression(pair, depth_tracker, attribute, doc_name)
+            return parse_logical_expression(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            )
         }
         _ => {}
     }
@@ -308,7 +431,12 @@ fn parse_expression_impl(
             | Rule::date_time_literal
             | Rule::time_literal
             | Rule::duration_literal => {
-                return parse_literal_expression(inner_pair, attribute, doc_name);
+                return parse_literal_expression(
+                    inner_pair,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                );
             }
 
             Rule::rule_reference => {
@@ -318,6 +446,7 @@ fn parse_expression_impl(
                     &inner_pair,
                     attribute,
                     doc_name,
+                    source_text.clone(),
                 ));
             }
 
@@ -328,11 +457,18 @@ fn parse_expression_impl(
                     &inner_pair,
                     attribute,
                     doc_name,
+                    source_text.clone(),
                 ));
             }
 
             Rule::conversion_expression => {
-                return parse_conversion_expression(inner_pair, depth_tracker, attribute, doc_name);
+                return parse_conversion_expression(
+                    inner_pair,
+                    depth_tracker,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                );
             }
             Rule::expression
             | Rule::and_expression
@@ -343,7 +479,13 @@ fn parse_expression_impl(
             | Rule::power
             | Rule::factor
             | Rule::primary => {
-                return parse_expression(inner_pair, depth_tracker, attribute, doc_name);
+                return parse_expression(
+                    inner_pair,
+                    depth_tracker,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                );
             }
 
             Rule::not_expr
@@ -360,7 +502,13 @@ fn parse_expression_impl(
             | Rule::floor_expr
             | Rule::ceil_expr
             | Rule::round_expr => {
-                return parse_logical_expression(inner_pair, depth_tracker, attribute, doc_name);
+                return parse_logical_expression(
+                    inner_pair,
+                    depth_tracker,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                );
             }
 
             _ => {}
@@ -373,8 +521,7 @@ fn parse_expression_impl(
             "Invalid expression: unable to parse '{}' as any valid expression type",
             pair.as_str()
         ),
-        Source::new(attribute, span, doc_name),
-        Arc::from(""),
+        Some(Source::new(attribute, span, doc_name, source_text.clone())),
         None::<String>,
     ))
 }
@@ -404,6 +551,7 @@ fn parse_and_operand(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     match pair.as_rule() {
         Rule::and_operand => {
@@ -412,25 +560,60 @@ fn parse_and_operand(
             let first = inner.next().ok_or_else(|| {
                 LemmaError::engine(
                     "Empty and_operand",
-                    Source::new(attribute, span, doc_name),
-                    Arc::from(""),
+                    Some(Source::new(attribute, span, doc_name, source_text.clone())),
                     None::<String>,
                 )
             })?;
-            parse_and_operand(first, depth_tracker, attribute, doc_name)
+            parse_and_operand(
+                first,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            )
         }
-        Rule::not_expr => parse_not_expression(pair, depth_tracker, attribute, doc_name),
-        Rule::comparison_expression => {
-            parse_comparison_expression(pair, depth_tracker, attribute, doc_name)
-        }
-        Rule::conversion_expression => {
-            parse_conversion_expression(pair, depth_tracker, attribute, doc_name)
-        }
-        Rule::base_expression => parse_base_expression(pair, depth_tracker, attribute, doc_name),
-        Rule::term | Rule::power | Rule::factor | Rule::primary => {
-            parse_expression_impl(pair, depth_tracker, attribute, doc_name)
-        }
-        _ => parse_expression_impl(pair, depth_tracker, attribute, doc_name),
+        Rule::not_expr => parse_not_expression(
+            pair,
+            depth_tracker,
+            attribute,
+            doc_name,
+            source_text.clone(),
+        ),
+        Rule::comparison_expression => parse_comparison_expression(
+            pair,
+            depth_tracker,
+            attribute,
+            doc_name,
+            source_text.clone(),
+        ),
+        Rule::conversion_expression => parse_conversion_expression(
+            pair,
+            depth_tracker,
+            attribute,
+            doc_name,
+            source_text.clone(),
+        ),
+        Rule::base_expression => parse_base_expression(
+            pair,
+            depth_tracker,
+            attribute,
+            doc_name,
+            source_text.clone(),
+        ),
+        Rule::term | Rule::power | Rule::factor | Rule::primary => parse_expression_impl(
+            pair,
+            depth_tracker,
+            attribute,
+            doc_name,
+            source_text.clone(),
+        ),
+        _ => parse_expression_impl(
+            pair,
+            depth_tracker,
+            attribute,
+            doc_name,
+            source_text.clone(),
+        ),
     }
 }
 
@@ -439,6 +622,7 @@ fn parse_and_expression(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let original_pair = pair.clone();
     let span = Span::from_pest_span(original_pair.as_span());
@@ -447,21 +631,33 @@ fn parse_and_expression(
         pairs.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing left operand in logical AND expression",
-                Source::new(attribute, span, doc_name),
-                Arc::from(""),
+                Some(Source::new(attribute, span, doc_name, source_text.clone())),
                 None::<String>,
             )
         })?,
         depth_tracker,
         attribute,
         doc_name,
+        source_text.clone(),
     )?;
 
     for right_pair in pairs {
         if right_pair.as_rule() == Rule::and_operand {
-            let right = parse_and_operand(right_pair.clone(), depth_tracker, attribute, doc_name)?;
+            let right = parse_and_operand(
+                right_pair.clone(),
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            )?;
             let kind = ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right));
-            left = create_expression_with_location(kind, &original_pair, attribute, doc_name);
+            left = create_expression_with_location(
+                kind,
+                &original_pair,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            );
         }
     }
 
@@ -473,6 +669,7 @@ fn parse_base_expression(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let original_pair = pair.clone();
     let span = Span::from_pest_span(original_pair.as_span());
@@ -482,14 +679,19 @@ fn parse_base_expression(
         inner.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing left term in base_expression",
-                Source::new(attribute, span.clone(), doc_name),
-                Arc::from(""),
+                Some(Source::new(
+                    attribute,
+                    span.clone(),
+                    doc_name,
+                    source_text.clone(),
+                )),
                 None::<String>,
             )
         })?,
         depth_tracker,
         attribute,
         doc_name,
+        source_text.clone(),
     )?;
 
     while let Some(op_pair) = inner.next() {
@@ -500,8 +702,7 @@ fn parse_base_expression(
                 let span = Span::from_pest_span(op_pair.as_span());
                 return Err(LemmaError::engine(
                     format!("Unexpected operator in base_expression: {:?}", other),
-                    Source::new(attribute, span, doc_name),
-                    Arc::from(""),
+                    Some(Source::new(attribute, span, doc_name, source_text.clone())),
                     None::<String>,
                 ));
             }
@@ -510,16 +711,32 @@ fn parse_base_expression(
         let right_term_pair = inner.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing right term after + or - in base_expression",
-                Source::new(attribute, span.clone(), doc_name),
-                Arc::from(""),
+                Some(Source::new(
+                    attribute,
+                    span.clone(),
+                    doc_name,
+                    source_text.clone(),
+                )),
                 None::<String>,
             )
         })?;
 
-        let right = parse_term(right_term_pair, depth_tracker, attribute, doc_name)?;
+        let right = parse_term(
+            right_term_pair,
+            depth_tracker,
+            attribute,
+            doc_name,
+            source_text.clone(),
+        )?;
 
         let kind = ExpressionKind::Arithmetic(Arc::new(left), operation, Arc::new(right));
-        left = create_expression_with_location(kind, &original_pair, attribute, doc_name);
+        left = create_expression_with_location(
+            kind,
+            &original_pair,
+            attribute,
+            doc_name,
+            source_text.clone(),
+        );
     }
 
     Ok(left)
@@ -530,6 +747,7 @@ fn parse_conversion_expression(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let original_pair = pair.clone();
     let mut base: Option<Expression> = None;
@@ -543,6 +761,7 @@ fn parse_conversion_expression(
                     depth_tracker,
                     attribute,
                     doc_name,
+                    source_text.clone(),
                 )?);
             }
             Rule::conversion_target_name => {
@@ -556,16 +775,24 @@ fn parse_conversion_expression(
     let base_expr = base.ok_or_else(|| {
         LemmaError::engine(
             "Missing base expression in conversion_expression",
-            Source::new(attribute, span.clone(), doc_name),
-            Arc::from(""),
+            Some(Source::new(
+                attribute,
+                span.clone(),
+                doc_name,
+                source_text.clone(),
+            )),
             None::<String>,
         )
     })?;
     let unit_name = unit.ok_or_else(|| {
         LemmaError::engine(
             "Missing unit in conversion_expression",
-            Source::new(attribute, span.clone(), doc_name),
-            Arc::from(""),
+            Some(Source::new(
+                attribute,
+                span.clone(),
+                doc_name,
+                source_text.clone(),
+            )),
             None::<String>,
         )
     })?;
@@ -579,6 +806,7 @@ fn parse_conversion_expression(
         &original_pair,
         attribute,
         doc_name,
+        source_text.clone(),
     ))
 }
 
@@ -604,6 +832,7 @@ fn parse_term(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
     let mut pairs = pair.clone().into_inner();
@@ -611,14 +840,19 @@ fn parse_term(
         pairs.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing left power in term",
-                Source::new(attribute, span.clone(), doc_name),
-                Arc::from(""),
+                Some(Source::new(
+                    attribute,
+                    span.clone(),
+                    doc_name,
+                    source_text.clone(),
+                )),
                 None::<String>,
             )
         })?,
         depth_tracker,
         attribute,
         doc_name,
+        source_text.clone(),
     )?;
 
     while let Some(op_pair) = pairs.next() {
@@ -630,8 +864,7 @@ fn parse_term(
                 let span = Span::from_pest_span(op_pair.as_span());
                 return Err(LemmaError::engine(
                     format!("Unexpected operator in term: {:?}", op_pair.as_rule()),
-                    Source::new(attribute, span, doc_name),
-                    Arc::from(""),
+                    Some(Source::new(attribute, span, doc_name, source_text.clone())),
                     None::<String>,
                 ));
             }
@@ -641,18 +874,24 @@ fn parse_term(
             pairs.next().ok_or_else(|| {
                 LemmaError::engine(
                     "Missing right power in term",
-                    Source::new(attribute, span.clone(), doc_name),
-                    Arc::from(""),
+                    Some(Source::new(
+                        attribute,
+                        span.clone(),
+                        doc_name,
+                        source_text.clone(),
+                    )),
                     None::<String>,
                 )
             })?,
             depth_tracker,
             attribute,
             doc_name,
+            source_text.clone(),
         )?;
 
         let kind = ExpressionKind::Arithmetic(Arc::new(left), operation, Arc::new(right));
-        left = create_expression_with_location(kind, &pair, attribute, doc_name);
+        left =
+            create_expression_with_location(kind, &pair, attribute, doc_name, source_text.clone());
     }
 
     Ok(left)
@@ -663,6 +902,7 @@ fn parse_power(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
     let mut pairs = pair.clone().into_inner();
@@ -670,14 +910,19 @@ fn parse_power(
         pairs.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing factor in power",
-                Source::new(attribute, span.clone(), doc_name),
-                Arc::from(""),
+                Some(Source::new(
+                    attribute,
+                    span.clone(),
+                    doc_name,
+                    source_text.clone(),
+                )),
                 None::<String>,
             )
         })?,
         depth_tracker,
         attribute,
         doc_name,
+        source_text.clone(),
     )?;
 
     if let Some(op_pair) = pairs.next() {
@@ -686,14 +931,19 @@ fn parse_power(
                 pairs.next().ok_or_else(|| {
                     LemmaError::engine(
                         "Missing right power in power expression",
-                        Source::new(attribute, span.clone(), doc_name),
-                        Arc::from(""),
+                        Some(Source::new(
+                            attribute,
+                            span.clone(),
+                            doc_name,
+                            source_text.clone(),
+                        )),
                         None::<String>,
                     )
                 })?,
                 depth_tracker,
                 attribute,
                 doc_name,
+                source_text.clone(),
             )?;
 
             let kind = ExpressionKind::Arithmetic(
@@ -702,7 +952,11 @@ fn parse_power(
                 Arc::new(right),
             );
             return Ok(create_expression_with_location(
-                kind, &pair, attribute, doc_name,
+                kind,
+                &pair,
+                attribute,
+                doc_name,
+                source_text.clone(),
             ));
         }
     }
@@ -715,6 +969,7 @@ fn parse_factor(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let mut pairs = pair.clone().into_inner();
     let mut is_negative = false;
@@ -726,7 +981,13 @@ fn parse_factor(
             }
             Rule::op_add => {}
             _ => {
-                let expr = parse_primary(first_pair, depth_tracker, attribute, doc_name)?;
+                let expr = parse_primary(
+                    first_pair,
+                    depth_tracker,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                )?;
                 return Ok(expr);
             }
         }
@@ -734,12 +995,17 @@ fn parse_factor(
 
     let span = Span::from_pest_span(pair.as_span());
     let expr = if let Some(expr_pair) = pairs.next() {
-        parse_primary(expr_pair, depth_tracker, attribute, doc_name)?
+        parse_primary(
+            expr_pair,
+            depth_tracker,
+            attribute,
+            doc_name,
+            source_text.clone(),
+        )?
     } else {
         return Err(LemmaError::engine(
             "Missing expression after unary operator",
-            Source::new(attribute, span, doc_name),
-            Arc::from(""),
+            Some(Source::new(attribute, span, doc_name, source_text.clone())),
             None::<String>,
         ));
     };
@@ -750,6 +1016,7 @@ fn parse_factor(
             &pair,
             attribute,
             doc_name,
+            source_text.clone(),
         );
         let kind = ExpressionKind::Arithmetic(
             Arc::new(zero),
@@ -757,7 +1024,11 @@ fn parse_factor(
             Arc::new(expr),
         );
         Ok(create_expression_with_location(
-            kind, &pair, attribute, doc_name,
+            kind,
+            &pair,
+            attribute,
+            doc_name,
+            source_text.clone(),
         ))
     } else {
         Ok(expr)
@@ -769,6 +1040,7 @@ fn parse_comparison_expression(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
     let mut pairs = pair.clone().into_inner();
@@ -776,14 +1048,19 @@ fn parse_comparison_expression(
         pairs.next().ok_or_else(|| {
             LemmaError::engine(
                 "Missing left operand in comparison expression",
-                Source::new(attribute, span.clone(), doc_name),
-                Arc::from(""),
+                Some(Source::new(
+                    attribute,
+                    span.clone(),
+                    doc_name,
+                    source_text.clone(),
+                )),
                 None::<String>,
             )
         })?,
         depth_tracker,
         attribute,
         doc_name,
+        source_text.clone(),
     )?;
 
     if let Some(op_pair) = pairs.next() {
@@ -793,8 +1070,12 @@ fn parse_comparison_expression(
                 let inner_pair = op_pair.into_inner().next().ok_or_else(|| {
                     LemmaError::engine(
                         "Empty comparison operator",
-                        Source::new(attribute, inner_span, doc_name),
-                        Arc::from(""),
+                        Some(Source::new(
+                            attribute,
+                            inner_span,
+                            doc_name,
+                            source_text.clone(),
+                        )),
                         None::<String>,
                     )
                 })?;
@@ -811,8 +1092,12 @@ fn parse_comparison_expression(
                         let inner_span = Span::from_pest_span(inner_pair.as_span());
                         return Err(LemmaError::engine(
                             format!("Invalid comparison operator: {:?}", inner_pair.as_rule()),
-                            Source::new(attribute, inner_span, doc_name),
-                            Arc::from(""),
+                            Some(Source::new(
+                                attribute,
+                                inner_span,
+                                doc_name,
+                                source_text.clone(),
+                            )),
                             None::<String>,
                         ));
                     }
@@ -830,8 +1115,12 @@ fn parse_comparison_expression(
                 let op_span = Span::from_pest_span(op_pair.as_span());
                 return Err(LemmaError::engine(
                     format!("Invalid comparison operator: {:?}", op_pair.as_rule()),
-                    Source::new(attribute, op_span, doc_name),
-                    Arc::from(""),
+                    Some(Source::new(
+                        attribute,
+                        op_span,
+                        doc_name,
+                        source_text.clone(),
+                    )),
                     None::<String>,
                 ));
             }
@@ -841,19 +1130,28 @@ fn parse_comparison_expression(
             pairs.next().ok_or_else(|| {
                 LemmaError::engine(
                     "Missing right operand in comparison expression",
-                    Source::new(attribute, span.clone(), doc_name),
-                    Arc::from(""),
+                    Some(Source::new(
+                        attribute,
+                        span.clone(),
+                        doc_name,
+                        source_text.clone(),
+                    )),
                     None::<String>,
                 )
             })?,
             depth_tracker,
             attribute,
             doc_name,
+            source_text.clone(),
         )?;
 
         let kind = ExpressionKind::Comparison(Arc::new(left), operator, Arc::new(right));
         return Ok(create_expression_with_location(
-            kind, &pair, attribute, doc_name,
+            kind,
+            &pair,
+            attribute,
+            doc_name,
+            source_text.clone(),
         ));
     }
 
@@ -865,6 +1163,7 @@ fn parse_not_expression(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let original_pair = pair.clone();
     let span = Span::from_pest_span(original_pair.as_span());
@@ -872,13 +1171,18 @@ fn parse_not_expression(
     let operand_pair = inner.next().ok_or_else(|| {
         LemmaError::engine(
             "not: missing expression",
-            Source::new(attribute, span, doc_name),
-            Arc::from(""),
+            Some(Source::new(attribute, span, doc_name, source_text.clone())),
             None::<String>,
         )
     })?;
 
-    let operand = parse_expression(operand_pair, depth_tracker, attribute, doc_name)?;
+    let operand = parse_expression(
+        operand_pair,
+        depth_tracker,
+        attribute,
+        doc_name,
+        source_text.clone(),
+    )?;
     let kind = ExpressionKind::LogicalNegation(Arc::new(operand), NegationType::Not);
 
     Ok(create_expression_with_location(
@@ -886,6 +1190,7 @@ fn parse_not_expression(
         &original_pair,
         attribute,
         doc_name,
+        source_text.clone(),
     ))
 }
 
@@ -894,6 +1199,7 @@ fn parse_logical_expression(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     match pair.as_rule() {
         Rule::sqrt_expr
@@ -934,20 +1240,39 @@ fn parse_logical_expression(
             for inner in pair.clone().into_inner() {
                 match inner.as_rule() {
                     Rule::base_expression => {
-                        let operand =
-                            parse_base_expression(inner, depth_tracker, attribute, doc_name)?;
+                        let operand = parse_base_expression(
+                            inner,
+                            depth_tracker,
+                            attribute,
+                            doc_name,
+                            source_text.clone(),
+                        )?;
                         let kind =
                             ExpressionKind::MathematicalComputation(operator, Arc::new(operand));
                         return Ok(create_expression_with_location(
-                            kind, &pair, attribute, doc_name,
+                            kind,
+                            &pair,
+                            attribute,
+                            doc_name,
+                            source_text.clone(),
                         ));
                     }
                     Rule::term | Rule::primary => {
-                        let operand = parse_expression(inner, depth_tracker, attribute, doc_name)?;
+                        let operand = parse_expression(
+                            inner,
+                            depth_tracker,
+                            attribute,
+                            doc_name,
+                            source_text.clone(),
+                        )?;
                         let kind =
                             ExpressionKind::MathematicalComputation(operator, Arc::new(operand));
                         return Ok(create_expression_with_location(
-                            kind, &pair, attribute, doc_name,
+                            kind,
+                            &pair,
+                            attribute,
+                            doc_name,
+                            source_text.clone(),
                         ));
                     }
                     _ => {}
@@ -956,8 +1281,7 @@ fn parse_logical_expression(
             let span = Span::from_pest_span(pair.as_span());
             return Err(LemmaError::engine(
                 "Mathematical operator missing operand",
-                Source::new(attribute, span, doc_name),
-                Arc::from(""),
+                Some(Source::new(attribute, span, doc_name, source_text.clone())),
                 None::<String>,
             ));
         }
@@ -966,28 +1290,57 @@ fn parse_logical_expression(
     let span = Span::from_pest_span(pair.as_span());
     if let Some(node) = pair.into_inner().next() {
         match node.as_rule() {
-            Rule::literal => return parse_expression(node, depth_tracker, attribute, doc_name),
-            Rule::primary => return parse_primary(node, depth_tracker, attribute, doc_name),
+            Rule::literal => {
+                return parse_expression(
+                    node,
+                    depth_tracker,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                )
+            }
+            Rule::primary => {
+                return parse_primary(
+                    node,
+                    depth_tracker,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                )
+            }
             Rule::not_expr => {
                 for inner in node.clone().into_inner() {
                     let negated_expr = match inner.as_rule() {
-                        Rule::primary => parse_primary(inner, depth_tracker, attribute, doc_name)?,
-                        Rule::literal => {
-                            parse_expression(inner, depth_tracker, attribute, doc_name)?
-                        }
+                        Rule::primary => parse_primary(
+                            inner,
+                            depth_tracker,
+                            attribute,
+                            doc_name,
+                            source_text.clone(),
+                        )?,
+                        Rule::literal => parse_expression(
+                            inner,
+                            depth_tracker,
+                            attribute,
+                            doc_name,
+                            source_text.clone(),
+                        )?,
                         _ => continue,
                     };
                     let kind =
                         ExpressionKind::LogicalNegation(Arc::new(negated_expr), NegationType::Not);
                     return Ok(create_expression_with_location(
-                        kind, &node, attribute, doc_name,
+                        kind,
+                        &node,
+                        attribute,
+                        doc_name,
+                        source_text.clone(),
                     ));
                 }
                 let span = Span::from_pest_span(node.as_span());
                 return Err(LemmaError::engine(
                     "not: missing expression",
-                    Source::new(attribute, span, doc_name),
-                    Arc::from(""),
+                    Some(Source::new(attribute, span, doc_name, source_text.clone())),
                     None::<String>,
                 ));
             }
@@ -1022,8 +1375,7 @@ fn parse_logical_expression(
                         let span = Span::from_pest_span(node.as_span());
                         return Err(LemmaError::engine(
                             "Unknown mathematical operator",
-                            Source::new(attribute, span, doc_name),
-                            Arc::from(""),
+                            Some(Source::new(attribute, span, doc_name, source_text.clone())),
                             None::<String>,
                         ));
                     }
@@ -1032,25 +1384,43 @@ fn parse_logical_expression(
                 for inner in node.clone().into_inner() {
                     match inner.as_rule() {
                         Rule::base_expression => {
-                            let operand =
-                                parse_base_expression(inner, depth_tracker, attribute, doc_name)?;
+                            let operand = parse_base_expression(
+                                inner,
+                                depth_tracker,
+                                attribute,
+                                doc_name,
+                                source_text.clone(),
+                            )?;
                             let kind = ExpressionKind::MathematicalComputation(
                                 operator,
                                 Arc::new(operand),
                             );
                             return Ok(create_expression_with_location(
-                                kind, &node, attribute, doc_name,
+                                kind,
+                                &node,
+                                attribute,
+                                doc_name,
+                                source_text.clone(),
                             ));
                         }
                         Rule::term | Rule::primary => {
-                            let operand =
-                                parse_expression(inner, depth_tracker, attribute, doc_name)?;
+                            let operand = parse_expression(
+                                inner,
+                                depth_tracker,
+                                attribute,
+                                doc_name,
+                                source_text.clone(),
+                            )?;
                             let kind = ExpressionKind::MathematicalComputation(
                                 operator,
                                 Arc::new(operand),
                             );
                             return Ok(create_expression_with_location(
-                                kind, &node, attribute, doc_name,
+                                kind,
+                                &node,
+                                attribute,
+                                doc_name,
+                                source_text.clone(),
                             ));
                         }
                         _ => {}
@@ -1059,8 +1429,7 @@ fn parse_logical_expression(
                 let span = Span::from_pest_span(node.as_span());
                 return Err(LemmaError::engine(
                     "Mathematical operator missing operand",
-                    Source::new(attribute, span, doc_name),
-                    Arc::from(""),
+                    Some(Source::new(attribute, span, doc_name, source_text.clone())),
                     None::<String>,
                 ));
             }
@@ -1069,8 +1438,7 @@ fn parse_logical_expression(
     }
     Err(LemmaError::engine(
         "Empty logical expression",
-        Source::new(attribute, span, doc_name),
-        Arc::from(""),
+        Some(Source::new(attribute, span, doc_name, source_text.clone())),
         None::<String>,
     ))
 }

@@ -11,9 +11,9 @@ pub(crate) fn parse_rule_definition(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<LemmaRule, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
-    let pair_str = pair.as_str();
     let mut rule_name = None;
     let mut rule_expression = None;
 
@@ -26,6 +26,7 @@ pub(crate) fn parse_rule_definition(
                     depth_tracker,
                     attribute,
                     doc_name,
+                    source_text.clone(),
                 )?)
             }
             _ => {}
@@ -35,16 +36,24 @@ pub(crate) fn parse_rule_definition(
     let name = rule_name.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: rule_definition missing rule_name",
-            Source::new(attribute, span.clone(), doc_name),
-            Arc::from(pair_str),
+            Some(Source::new(
+                attribute,
+                span.clone(),
+                doc_name,
+                source_text.clone(),
+            )),
             None::<String>,
         )
     })?;
     let (expression, unless_clauses) = rule_expression.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: rule_definition missing rule_expression",
-            Source::new(attribute, span.clone(), doc_name),
-            Arc::from(pair_str),
+            Some(Source::new(
+                attribute,
+                span.clone(),
+                doc_name,
+                source_text.clone(),
+            )),
             None::<String>,
         )
     })?;
@@ -53,7 +62,7 @@ pub(crate) fn parse_rule_definition(
         name,
         expression,
         unless_clauses,
-        source_location: Source::new(attribute.to_string(), span.clone(), doc_name.to_string()),
+        source_location: Source::new(attribute, span.clone(), doc_name, source_text.clone()),
     })
 }
 
@@ -62,9 +71,9 @@ fn parse_rule_expression(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<(Expression, Vec<UnlessClause>), LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
-    let pair_str = pair.as_str();
     let mut expression = None;
     let mut unless_clauses = Vec::new();
 
@@ -76,14 +85,25 @@ fn parse_rule_expression(
                     depth_tracker,
                     attribute,
                     doc_name,
+                    source_text.clone(),
                 )?);
             }
             Rule::veto_expression => {
-                expression = Some(parse_veto_expression(inner_pair, attribute, doc_name)?);
+                expression = Some(parse_veto_expression(
+                    inner_pair,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                )?);
             }
             Rule::unless_statement => {
-                let unless_clause =
-                    parse_unless_statement(inner_pair, depth_tracker, attribute, doc_name)?;
+                let unless_clause = parse_unless_statement(
+                    inner_pair,
+                    depth_tracker,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                )?;
                 unless_clauses.push(unless_clause);
             }
             _ => {}
@@ -93,8 +113,7 @@ fn parse_rule_expression(
     let expr = expression.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: rule_expression missing expression",
-            Source::new(attribute, span, doc_name),
-            Arc::from(pair_str),
+            Some(Source::new(attribute, span, doc_name, source_text.clone())),
             None::<String>,
         )
     })?;
@@ -105,6 +124,7 @@ fn parse_veto_expression(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let veto_span = Span::from_pest_span(pair.as_span());
     // Pest grammar: ^"veto" ~ (SPACE+ ~ text_literal)?
@@ -115,16 +135,19 @@ fn parse_veto_expression(
         .find(|p| p.as_rule() == Rule::text_literal)
     {
         Some(string_pair) => {
-            let value =
-                crate::parsing::literals::parse_literal(string_pair.clone(), attribute, doc_name)?;
+            let value = crate::parsing::literals::parse_literal(
+                string_pair.clone(),
+                attribute,
+                doc_name,
+                source_text.clone(),
+            )?;
             match value {
                 Value::Text(s) => Some(s),
                 _ => {
                     let span = Span::from_pest_span(string_pair.as_span());
                     return Err(LemmaError::engine(
                         "veto message must be a text literal",
-                        Source::new(attribute, span, doc_name),
-                        Arc::from(string_pair.as_str()),
+                        Some(Source::new(attribute, span, doc_name, source_text.clone())),
                         None::<String>,
                     ));
                 }
@@ -135,7 +158,7 @@ fn parse_veto_expression(
     let kind = ExpressionKind::Veto(VetoExpression { message });
     Ok(Expression::new(
         kind,
-        Source::new(attribute.to_string(), veto_span, doc_name.to_string()),
+        Source::new(attribute, veto_span, doc_name, source_text.clone()),
     ))
 }
 
@@ -144,6 +167,7 @@ fn parse_unless_statement(
     depth_tracker: &mut DepthTracker,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<UnlessClause, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
     let mut condition = None;
@@ -158,6 +182,7 @@ fn parse_unless_statement(
                         depth_tracker,
                         attribute,
                         doc_name,
+                        source_text.clone(),
                     )?);
                 } else {
                     result = Some(crate::parsing::expressions::parse_expression(
@@ -165,11 +190,17 @@ fn parse_unless_statement(
                         depth_tracker,
                         attribute,
                         doc_name,
+                        source_text.clone(),
                     )?);
                 }
             }
             Rule::veto_expression => {
-                result = Some(parse_veto_expression(inner_pair, attribute, doc_name)?);
+                result = Some(parse_veto_expression(
+                    inner_pair,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                )?);
             }
             _ => {}
         }
@@ -178,16 +209,24 @@ fn parse_unless_statement(
     let cond = condition.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: unless_statement missing condition",
-            Source::new(attribute, span.clone(), doc_name),
-            Arc::from(pair.as_str()),
+            Some(Source::new(
+                attribute,
+                span.clone(),
+                doc_name,
+                source_text.clone(),
+            )),
             None::<String>,
         )
     })?;
     let res = result.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: unless_statement missing result",
-            Source::new(attribute, span.clone(), doc_name),
-            Arc::from(pair.as_str()),
+            Some(Source::new(
+                attribute,
+                span.clone(),
+                doc_name,
+                source_text.clone(),
+            )),
             None::<String>,
         )
     })?;
@@ -195,7 +234,7 @@ fn parse_unless_statement(
     Ok(UnlessClause {
         condition: cond,
         result: res,
-        source_location: Source::new(attribute.to_string(), span.clone(), doc_name.to_string()),
+        source_location: Source::new(attribute, span.clone(), doc_name, source_text.clone()),
     })
 }
 

@@ -1,4 +1,5 @@
 pub mod http {
+    use crate::response;
     use axum::{
         extract::{Path, Query, State},
         http::{HeaderMap, StatusCode},
@@ -7,7 +8,6 @@ pub mod http {
         Router,
     };
     use lemma::Engine;
-    use serde::Serialize;
 
     use std::collections::HashMap;
     use std::net::SocketAddr;
@@ -25,17 +25,7 @@ pub mod http {
         proofs_enabled: bool,
     }
 
-    #[derive(Debug, Serialize)]
-    struct RuleResultWithProofJson {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        value: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        veto_reason: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        proof: Option<serde_json::Value>,
-    }
-
-    #[derive(Debug, Serialize)]
+    #[derive(Debug, serde::Serialize)]
     struct ErrorResponse {
         error: String,
     }
@@ -83,6 +73,8 @@ pub mod http {
             .route("/openapi.json", get(openapi_spec))
             .route("/docs", get(scalar_docs))
             .route("/scalar.js", get(scalar_js))
+            .route("/schema/{doc_name}", get(schema_all_rules))
+            .route("/schema/{doc_name}/{rules}", get(schema_for_rules))
             .route("/{doc_name}", get(evaluate_get).post(evaluate_post))
             .route(
                 "/{doc_name}/{rules}",
@@ -114,7 +106,7 @@ pub mod http {
         let documents: Vec<lemma::DocumentSchema> = document_names
             .iter()
             .filter_map(|name| engine.get_execution_plan(name))
-            .map(|plan| plan.document_schema())
+            .map(|plan| plan.schema())
             .collect();
 
         Json(documents)
@@ -166,7 +158,7 @@ pub mod http {
       hideClientButton: true,
       hideTestRequestButton: false,
       showSidebar: true,
-      showDeveloperTools: 'localhost',
+      showDeveloperTools: 'never',
       operationTitleSource: 'summary',
       persistAuth: false,
       telemetry: false,
@@ -213,6 +205,60 @@ pub mod http {
     }
 
     // -----------------------------------------------------------------------
+    // Schema routes
+    // -----------------------------------------------------------------------
+
+    /// `GET /schema/{doc_name}` — full document schema (all facts and rules).
+    async fn schema_all_rules(
+        State(state): State<AppState>,
+        Path(doc_name): Path<String>,
+    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+        schema_inner(&state.engine, &doc_name, &[]).await
+    }
+
+    /// `GET /schema/{doc_name}/{rules}` — schema scoped to specific rules and
+    /// only the facts those rules need.
+    async fn schema_for_rules(
+        State(state): State<AppState>,
+        Path((doc_name, rules)): Path<(String, String)>,
+    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+        let rule_names = parse_rule_names(&rules);
+        schema_inner(&state.engine, &doc_name, &rule_names).await
+    }
+
+    async fn schema_inner(
+        engine: &SharedEngine,
+        doc_name: &str,
+        rule_names: &[String],
+    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+        let engine = engine.read().await;
+
+        let plan = engine.get_execution_plan(doc_name).ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Document '{}' not found", doc_name),
+                }),
+            )
+        })?;
+
+        if rule_names.is_empty() {
+            return Ok(Json(plan.schema()));
+        }
+
+        let schema = plan.schema_for_rules(rule_names).map_err(|err| {
+            (
+                lemma_error_to_status(&err),
+                Json(ErrorResponse {
+                    error: err.to_string(),
+                }),
+            )
+        })?;
+
+        Ok(Json(schema))
+    }
+
+    // -----------------------------------------------------------------------
     // Document evaluation routes
     // -----------------------------------------------------------------------
 
@@ -232,7 +278,7 @@ pub mod http {
         Query(params): Query<HashMap<String, String>>,
         headers: HeaderMap,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        evaluate_with_query_params(
+        evaluate_inner(
             &state.engine,
             &doc_name,
             &[],
@@ -251,18 +297,7 @@ pub mod http {
         headers: HeaderMap,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let rule_names = parse_rule_names(&rules);
-        if rule_names.is_empty() {
-            return evaluate_with_query_params(
-                &state.engine,
-                &doc_name,
-                &[],
-                params,
-                want_proofs(&state, &headers),
-            )
-            .await;
-        }
-        validate_rule_names(&state.engine, &doc_name, &rule_names).await?;
-        evaluate_with_query_params(
+        evaluate_inner(
             &state.engine,
             &doc_name,
             &rule_names,
@@ -279,11 +314,12 @@ pub mod http {
         headers: HeaderMap,
         Json(body): Json<serde_json::Value>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        evaluate_with_json_body(
+        let fact_values = lemma_openapi::json_body_to_fact_values(&body);
+        evaluate_inner(
             &state.engine,
             &doc_name,
             &[],
-            &body,
+            fact_values,
             want_proofs(&state, &headers),
         )
         .await
@@ -298,22 +334,12 @@ pub mod http {
         Json(body): Json<serde_json::Value>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let rule_names = parse_rule_names(&rules);
-        if rule_names.is_empty() {
-            return evaluate_with_json_body(
-                &state.engine,
-                &doc_name,
-                &[],
-                &body,
-                want_proofs(&state, &headers),
-            )
-            .await;
-        }
-        validate_rule_names(&state.engine, &doc_name, &rule_names).await?;
-        evaluate_with_json_body(
+        let fact_values = lemma_openapi::json_body_to_fact_values(&body);
+        evaluate_inner(
             &state.engine,
             &doc_name,
             &rule_names,
-            &body,
+            fact_values,
             want_proofs(&state, &headers),
         )
         .await
@@ -323,37 +349,28 @@ pub mod http {
     // Shared evaluation logic
     // -----------------------------------------------------------------------
 
-    async fn evaluate_with_query_params(
+    async fn evaluate_inner(
         engine: &SharedEngine,
         doc_name: &str,
         rule_names: &[String],
-        params: HashMap<String, String>,
+        fact_values: HashMap<String, String>,
         include_proofs: bool,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let engine = engine.read().await;
 
-        if engine.get_document(doc_name).is_none() {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Document '{}' not found", doc_name),
-                }),
-            ));
-        }
-
         let response = engine
-            .evaluate(doc_name, rule_names.to_vec(), params)
+            .evaluate(doc_name, rule_names.to_vec(), fact_values)
             .map_err(|err| {
                 error!("Evaluation failed for '{}': {}", doc_name, err);
                 (
-                    StatusCode::BAD_REQUEST,
+                    lemma_error_to_status(&err),
                     Json(ErrorResponse {
-                        error: format!("Evaluation failed: {}", err),
+                        error: err.to_string(),
                     }),
                 )
             })?;
 
-        let results = convert_response_to_json(&response, include_proofs);
+        let results = response::convert_response(&response, include_proofs);
         info!(
             "Evaluated '{}' with {} results",
             doc_name,
@@ -363,118 +380,21 @@ pub mod http {
         Ok(Json(results))
     }
 
-    async fn evaluate_with_json_body(
-        engine: &SharedEngine,
-        doc_name: &str,
-        rule_names: &[String],
-        body: &serde_json::Value,
-        include_proofs: bool,
-    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let engine = engine.read().await;
-
-        if engine.get_document(doc_name).is_none() {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Document '{}' not found", doc_name),
-                }),
-            ));
+    /// Map a `LemmaError` to an HTTP status code.
+    ///
+    /// Engine errors mentioning "not found" → 404; everything else → 400.
+    fn lemma_error_to_status(err: &lemma::LemmaError) -> StatusCode {
+        let msg = err.to_string();
+        if msg.contains("not found") {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::BAD_REQUEST
         }
-
-        let fact_values = lemma_openapi::json_body_to_fact_values(body);
-
-        let response = engine
-            .evaluate(doc_name, rule_names.to_vec(), fact_values)
-            .map_err(|err| {
-                error!("Evaluation failed for '{}': {}", doc_name, err);
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: format!("Evaluation failed: {}", err),
-                    }),
-                )
-            })?;
-
-        let results = convert_response_to_json(&response, include_proofs);
-        info!(
-            "Evaluated '{}' (POST) with {} results",
-            doc_name,
-            response.results.len()
-        );
-
-        Ok(Json(results))
-    }
-
-    // -----------------------------------------------------------------------
-    // Response conversion
-    // -----------------------------------------------------------------------
-
-    fn convert_response_to_json(
-        response: &lemma::Response,
-        include_proofs: bool,
-    ) -> HashMap<String, RuleResultWithProofJson> {
-        response
-            .results
-            .iter()
-            .map(|(name, rule_result)| {
-                let (value, veto_reason) = match &rule_result.result {
-                    lemma::OperationResult::Value(v) => (Some(v.to_string()), None),
-                    lemma::OperationResult::Veto(msg) => (None, msg.clone()),
-                };
-                let proof = if include_proofs {
-                    rule_result
-                        .proof
-                        .as_ref()
-                        .and_then(|p| serde_json::to_value(p).ok())
-                } else {
-                    None
-                };
-                (
-                    name.clone(),
-                    RuleResultWithProofJson {
-                        value,
-                        veto_reason,
-                        proof,
-                    },
-                )
-            })
-            .collect()
     }
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
-
-    /// Verify that all requested rule names exist in the document. Returns 404 if any are unknown.
-    async fn validate_rule_names(
-        engine: &SharedEngine,
-        doc_name: &str,
-        rule_names: &[String],
-    ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-        let engine = engine.read().await;
-        if let Some(plan) = engine.get_execution_plan(doc_name) {
-            let known: std::collections::HashSet<&str> = plan
-                .rules
-                .iter()
-                .filter(|r| r.path.segments.is_empty())
-                .map(|r| r.name.as_str())
-                .collect();
-            let unknown: Vec<&str> = rule_names
-                .iter()
-                .filter(|name| !known.contains(name.as_str()))
-                .map(|s| s.as_str())
-                .collect();
-            if !unknown.is_empty() {
-                return Err((
-                    StatusCode::NOT_FOUND,
-                    Json(ErrorResponse {
-                        error: format!("Unknown rule(s) in '{}': {}", doc_name, unknown.join(", ")),
-                    }),
-                ));
-            }
-        }
-        Ok(())
-    }
 
     /// Parse comma-separated rule names from a URL path segment.
     /// Filters out empty strings and the literal `{rules}` placeholder that

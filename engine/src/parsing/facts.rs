@@ -11,6 +11,7 @@ pub(crate) fn parse_fact_definition(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
     _types: &[TypeDef],
 ) -> Result<LemmaFact, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
@@ -23,7 +24,12 @@ pub(crate) fn parse_fact_definition(
         match inner_pair.as_rule() {
             Rule::fact_reference_segment => fact_name = Some(inner_pair.as_str().to_string()),
             Rule::fact_value => {
-                fact_value = Some(parse_fact_value(inner_pair, attribute_str, doc_name_str)?)
+                fact_value = Some(parse_fact_value(
+                    inner_pair,
+                    attribute_str,
+                    doc_name_str,
+                    source_text.clone(),
+                )?)
             }
             _ => {}
         }
@@ -32,16 +38,24 @@ pub(crate) fn parse_fact_definition(
     let name = fact_name.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: fact_definition missing reference",
-            Source::new(attribute, span.clone(), doc_name),
-            Arc::from(""),
+            Some(Source::new(
+                attribute,
+                span.clone(),
+                doc_name,
+                source_text.clone(),
+            )),
             None::<String>,
         )
     })?;
     let value = fact_value.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: fact_definition missing fact_value",
-            Source::new(attribute, span.clone(), doc_name),
-            Arc::from(""),
+            Some(Source::new(
+                attribute,
+                span.clone(),
+                doc_name,
+                source_text.clone(),
+            )),
             None::<String>,
         )
     })?;
@@ -49,7 +63,12 @@ pub(crate) fn parse_fact_definition(
     let fact = LemmaFact::new(
         FactReference::local(name),
         value,
-        Source::new(attribute.to_string(), span, doc_name.to_string()),
+        Source::new(
+            attribute.to_string(),
+            span,
+            doc_name.to_string(),
+            source_text.clone(),
+        ),
     );
     Ok(fact)
 }
@@ -58,6 +77,7 @@ pub(crate) fn parse_fact_binding(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
     _types: &[TypeDef],
 ) -> Result<LemmaFact, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
@@ -73,10 +93,16 @@ pub(crate) fn parse_fact_binding(
                     inner_pair,
                     attribute_str,
                     doc_name_str,
+                    source_text.clone(),
                 )?)
             }
             Rule::fact_value => {
-                fact_value = Some(parse_fact_value(inner_pair, attribute_str, doc_name_str)?)
+                fact_value = Some(parse_fact_value(
+                    inner_pair,
+                    attribute_str,
+                    doc_name_str,
+                    source_text.clone(),
+                )?)
             }
             _ => {}
         }
@@ -85,16 +111,24 @@ pub(crate) fn parse_fact_binding(
     let binding_ref_path = fact_reference_path.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: fact_binding missing fact_reference",
-            Source::new(attribute, span.clone(), doc_name),
-            Arc::from(""),
+            Some(Source::new(
+                attribute,
+                span.clone(),
+                doc_name,
+                source_text.clone(),
+            )),
             None::<String>,
         )
     })?;
     let value = fact_value.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: fact_binding missing fact_value",
-            Source::new(attribute, span.clone(), doc_name),
-            Arc::from(""),
+            Some(Source::new(
+                attribute,
+                span.clone(),
+                doc_name,
+                source_text.clone(),
+            )),
             None::<String>,
         )
     })?;
@@ -103,7 +137,12 @@ pub(crate) fn parse_fact_binding(
     let fact = LemmaFact::new(
         binding_ref,
         value,
-        Source::new(attribute.to_string(), span, doc_name.to_string()),
+        Source::new(
+            attribute.to_string(),
+            span,
+            doc_name.to_string(),
+            source_text.clone(),
+        ),
     );
     Ok(fact)
 }
@@ -112,6 +151,7 @@ fn parse_fact_reference_path(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<Vec<String>, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
     let text = pair.as_str();
@@ -119,8 +159,7 @@ fn parse_fact_reference_path(
     if parts.is_empty() {
         return Err(LemmaError::engine(
             "Grammar error: fact_reference has no segments",
-            Source::new(attribute, span, doc_name),
-            Arc::from(text),
+            Some(Source::new(attribute, span, doc_name, source_text.clone())),
             None::<String>,
         ));
     }
@@ -131,28 +170,39 @@ fn parse_fact_value(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<FactValue, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
-    let pair_str = pair.as_str();
     for inner_pair in pair.into_inner() {
         match inner_pair.as_rule() {
             Rule::type_declaration => {
-                return parse_type_declaration(inner_pair, attribute, doc_name)
+                return parse_type_declaration(inner_pair, attribute, doc_name, source_text.clone())
             }
             Rule::inline_type_definition => {
-                return parse_inline_type_definition(inner_pair, attribute, doc_name)
+                return parse_inline_type_definition(
+                    inner_pair,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                )
             }
             Rule::doc_reference => {
-                return parse_fact_document_reference(inner_pair, attribute, doc_name)
+                return parse_fact_document_reference(
+                    inner_pair,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                )
             }
-            Rule::literal => return parse_fact_literal(inner_pair, attribute, doc_name),
+            Rule::literal => {
+                return parse_fact_literal(inner_pair, attribute, doc_name, source_text.clone())
+            }
             _ => {}
         }
     }
     Err(LemmaError::engine(
         "Grammar error: fact_value must contain literal, type_declaration, inline_type_definition, or doc_reference",
-        Source::new(attribute, span, doc_name),
-        Arc::from(pair_str),
+        Some(Source::new(attribute, span, doc_name, source_text.clone())),
         None::<String>,
     ))
 }
@@ -165,21 +215,19 @@ fn parse_type_declaration(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<FactValue, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
-    let pair_str = pair.as_str();
     let type_name_def = pair.into_inner().next().ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: type_declaration must contain type_name_def",
-            Source::new(attribute, span, doc_name),
-            Arc::from(pair_str),
+            Some(Source::new(attribute, span, doc_name, source_text.clone())),
             None::<String>,
         )
     })?;
 
     let type_name = type_name_def.as_str().to_string();
 
-    // Just store the name - no resolution during parsing
     Ok(FactValue::TypeDeclaration {
         base: type_name,
         constraints: None,
@@ -195,22 +243,24 @@ fn parse_inline_type_definition(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<FactValue, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
-    let pair_str = pair.as_str();
     let type_arrow_chain = pair.into_inner().next().ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: inline_type_definition must contain type_arrow_chain",
-            Source::new(attribute, span, doc_name),
-            Arc::from(pair_str),
+            Some(Source::new(attribute, span, doc_name, source_text.clone())),
             None::<String>,
         )
     })?;
 
-    let (parent_name, inline_constraints, from_doc) =
-        types::parse_type_arrow_chain_with_commands(type_arrow_chain, attribute, doc_name)?;
+    let (parent_name, inline_constraints, from_doc) = types::parse_type_arrow_chain_with_commands(
+        type_arrow_chain,
+        attribute,
+        doc_name,
+        source_text.clone(),
+    )?;
 
-    // Just store the base name, constraints, and from - no resolution during parsing
     Ok(FactValue::TypeDeclaration {
         base: parent_name,
         constraints: inline_constraints,
@@ -222,17 +272,16 @@ fn parse_fact_document_reference(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<FactValue, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
-    let pair_str = pair.as_str();
     let raw_doc_name = pair
         .into_inner()
         .next()
         .ok_or_else(|| {
             LemmaError::engine(
                 "Grammar error: doc_reference must contain doc_name",
-                Source::new(attribute, span, doc_name),
-                Arc::from(pair_str),
+                Some(Source::new(attribute, span, doc_name, source_text.clone())),
                 None::<String>,
             )
         })?
@@ -245,20 +294,24 @@ fn parse_fact_literal(
     pair: Pair<Rule>,
     attribute: &str,
     doc_name: &str,
+    source_text: Arc<str>,
 ) -> Result<FactValue, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
-    let pair_str = pair.as_str();
     let mut inner = pair.into_inner();
     let literal_pair = inner.next().ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: literal must contain a literal value",
-            Source::new(attribute, span, doc_name),
-            Arc::from(pair_str),
+            Some(Source::new(attribute, span, doc_name, source_text.clone())),
             None::<String>,
         )
     })?;
 
-    let literal_value = crate::parsing::literals::parse_literal(literal_pair, attribute, doc_name)?;
+    let literal_value = crate::parsing::literals::parse_literal(
+        literal_pair,
+        attribute,
+        doc_name,
+        source_text.clone(),
+    )?;
     Ok(FactValue::Literal(literal_value))
 }
 

@@ -299,7 +299,7 @@ mod tests {
 
         let error_in_file = LemmaError::parse(
             "bad syntax",
-            lemma::Source::new(
+            Some(lemma::Source::new(
                 "file_a.lemma",
                 Span {
                     start: 0,
@@ -308,13 +308,13 @@ mod tests {
                     col: 1,
                 },
                 "test",
-            ),
-            Arc::from("doc test"),
+                Arc::from("doc test"),
+            )),
             None::<String>,
         );
         let error_in_other_file = LemmaError::parse(
             "also bad",
-            lemma::Source::new(
+            Some(lemma::Source::new(
                 "file_b.lemma",
                 Span {
                     start: 0,
@@ -323,8 +323,8 @@ mod tests {
                     col: 1,
                 },
                 "other",
-            ),
-            Arc::from("doc other"),
+                Arc::from("doc other"),
+            )),
             None::<String>,
         );
 

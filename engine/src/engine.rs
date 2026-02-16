@@ -1,10 +1,8 @@
 use crate::evaluation::Evaluator;
-use crate::parsing::ast::{LemmaDoc, Span};
-use crate::parsing::source::Source;
-use crate::planning::semantics::{FactPath, LemmaType};
+use crate::parsing::ast::LemmaDoc;
 use crate::registry::Registry;
 use crate::{parse, LemmaError, LemmaResult, ResourceLimits, Response};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Engine for evaluating Lemma rules
@@ -99,16 +97,44 @@ impl Engine {
         let mut errors: Vec<LemmaError> = Vec::new();
         let mut all_new_docs: Vec<LemmaDoc> = Vec::new();
 
-        // 1. Parse all files, collect parse errors
+        // 1. Parse all files, collect parse errors and detect duplicate document names.
+        //    Duplicates are checked against both existing documents (from prior calls)
+        //    and documents parsed earlier in this same call.
         for (source_id, code) in &files {
             match parse(code, source_id, &self.limits) {
                 Ok(new_docs) => {
-                    for doc in &new_docs {
+                    let source_text: Arc<str> = Arc::from(code.as_str());
+                    for doc in new_docs {
                         let attribute = doc.attribute.clone().unwrap_or_else(|| doc.name.clone());
-                        self.sources.insert(attribute, code.clone());
-                        self.documents.insert(doc.name.clone(), doc.clone());
+
+                        if let Some(existing) = self.documents.get(&doc.name) {
+                            let earlier_attr =
+                                existing.attribute.as_deref().unwrap_or(&existing.name);
+                            errors.push(LemmaError::semantic(
+                                format!(
+                                    "Duplicate document name '{}' (previously declared in '{}')",
+                                    doc.name, earlier_attr
+                                ),
+                                Some(crate::Source::new(
+                                    &attribute,
+                                    crate::parsing::ast::Span {
+                                        start: 0,
+                                        end: 0,
+                                        line: doc.start_line,
+                                        col: 0,
+                                    },
+                                    &doc.name,
+                                    source_text.clone(),
+                                )),
+                                None::<String>,
+                            ));
+                        } else {
+                            self.sources.insert(attribute, code.clone());
+                            self.documents.insert(doc.name.clone(), doc.clone());
+                        }
+
+                        all_new_docs.push(doc);
                     }
-                    all_new_docs.extend(new_docs);
                 }
                 Err(e) => errors.push(e),
             }
@@ -174,109 +200,12 @@ impl Engine {
         self.execution_plans.get(doc_name)
     }
 
-    /// Rule names for a document (from the execution plan).
-    pub fn get_document_rule_names(&self, doc_name: &str) -> Vec<String> {
-        self.execution_plans
-            .get(doc_name)
-            .map(|plan| plan.rules.iter().map(|r| r.name.clone()).collect())
-            .unwrap_or_default()
-    }
-
     pub fn get_document_rules(&self, doc_name: &str) -> Vec<&crate::LemmaRule> {
         if let Some(doc) = self.documents.get(doc_name) {
             doc.rules.iter().collect()
         } else {
             Vec::new()
         }
-    }
-
-    /// Get the facts (with types) required to evaluate a document's rules.
-    ///
-    /// - If `rule_names` is empty, returns facts for **all local** rules in the document.
-    /// - Otherwise, returns facts for the specified rules (by name).
-    ///
-    /// Returns facts (with types) required to evaluate the document's rules, in document definition order.
-    pub fn get_facts(
-        &self,
-        doc_name: &str,
-        rule_names: &[String],
-    ) -> LemmaResult<Vec<(FactPath, LemmaType)>> {
-        let plan = self.execution_plans.get(doc_name).ok_or_else(|| {
-            LemmaError::engine(
-                format!("Document '{}' not found", doc_name),
-                Source::new(
-                    "<engine>",
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    doc_name,
-                ),
-                Arc::from(""),
-                None::<String>,
-            )
-        })?;
-
-        let mut fact_paths = HashSet::new();
-
-        if rule_names.is_empty() {
-            for rule in plan.rules.iter().filter(|r| r.path.segments.is_empty()) {
-                fact_paths.extend(rule.needs_facts.iter().cloned());
-            }
-        } else {
-            for rule_name in rule_names {
-                let rule = plan.get_rule(rule_name).ok_or_else(|| {
-                    LemmaError::engine(
-                        format!("Rule '{}' not found in document '{}'", rule_name, doc_name),
-                        Source::new(
-                            "<engine>",
-                            Span {
-                                start: 0,
-                                end: 0,
-                                line: 1,
-                                col: 0,
-                            },
-                            doc_name,
-                        ),
-                        Arc::from(""),
-                        None::<String>,
-                    )
-                })?;
-                fact_paths.extend(rule.needs_facts.iter().cloned());
-            }
-        }
-
-        let doc_order: Vec<FactPath> = self
-            .documents
-            .get(doc_name)
-            .map(|doc| {
-                doc.facts
-                    .iter()
-                    .filter(|f| f.reference.segments.is_empty())
-                    .map(|f| FactPath::local(f.reference.fact.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let mut result = Vec::new();
-        for path in doc_order {
-            if fact_paths.contains(&path) {
-                if let Some(lemma_type) = plan.facts.get(&path).and_then(|d| d.schema_type()) {
-                    result.push((path, lemma_type.clone()));
-                }
-            }
-        }
-        for path in fact_paths {
-            if !result.iter().any(|(p, _)| p == &path) {
-                if let Some(lemma_type) = plan.facts.get(&path).and_then(|d| d.schema_type()) {
-                    result.push((path, lemma_type.clone()));
-                }
-            }
-        }
-
-        Ok(result)
     }
 
     /// Evaluate rules in a document with JSON values for facts.
@@ -298,17 +227,7 @@ impl Engine {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
                 format!("Document '{}' not found", doc_name),
-                Source::new(
-                    "<engine>",
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    doc_name,
-                ),
-                Arc::from(""),
+                None,
                 None::<String>,
             )
         })?;
@@ -339,17 +258,7 @@ impl Engine {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
                 format!("Document '{}' not found", doc_name),
-                Source::new(
-                    "<engine>",
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    doc_name,
-                ),
-                Arc::from(""),
+                None,
                 None::<String>,
             )
         })?;
@@ -375,17 +284,7 @@ impl Engine {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
                 format!("Document '{}' not found", doc_name),
-                Source::new(
-                    "<engine>",
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    doc_name,
-                ),
-                Arc::from(""),
+                None,
                 None::<String>,
             )
         })?;
@@ -408,17 +307,7 @@ impl Engine {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
             LemmaError::engine(
                 format!("Document '{}' not found", doc_name),
-                Source::new(
-                    "<engine>",
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 0,
-                    },
-                    doc_name,
-                ),
-                Arc::from(""),
+                None,
                 None::<String>,
             )
         })?;

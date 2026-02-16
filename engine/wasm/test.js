@@ -87,7 +87,7 @@ export async function test() {
     console.log('✓ Document added successfully');
 
     // Test 3: Evaluate document
-    const evalResult = engine.evaluate('test', '{}');
+    const evalResult = engine.evaluate('test', '[]', '{}');
     const evalParsed = JSON.parse(evalResult);
     if (!evalParsed.success) {
       throw new Error('Failed to evaluate document: ' + JSON.stringify(evalParsed));
@@ -123,7 +123,7 @@ export async function test() {
     console.log('✓ Complex document added successfully');
 
     // Test 6: Evaluation with facts (as JSON object)
-    const factsResult = engine.evaluate('pricing', JSON.stringify({
+    const factsResult = engine.evaluate('pricing', '[]', JSON.stringify({
       quantity: 100,
       is_vip: true
     }));
@@ -151,7 +151,7 @@ export async function test() {
     }
 
     // Test with various types in the object
-    const typedFactsResult = engine.evaluate('type_test', JSON.stringify({
+    const typedFactsResult = engine.evaluate('type_test', '[]', JSON.stringify({
       number_fact: 50,
       bool_fact: true,
       string_fact: "world",
@@ -195,7 +195,7 @@ export async function test() {
     console.log('✓ Parse error handling successful');
 
     // Test 9: Error handling - evaluate non-existent document
-    const nonExistentResult = engine.evaluate('nonexistent', '{}');
+    const nonExistentResult = engine.evaluate('nonexistent', '[]', '{}');
     const nonExistentParsed = JSON.parse(nonExistentResult);
     if (nonExistentParsed.success) {
       throw new Error('Expected error for non-existent document but got success');
@@ -203,7 +203,7 @@ export async function test() {
     console.log('✓ Non-existent document error handling successful');
 
     // Test 10: Error handling - invalid JSON in facts
-    const invalidJsonResult = engine.evaluate('test', 'not json');
+    const invalidJsonResult = engine.evaluate('test', '[]', 'not json');
     const invalidJsonParsed = JSON.parse(invalidJsonResult);
     if (invalidJsonParsed.success) {
       throw new Error('Expected error for invalid JSON but got success');
@@ -220,7 +220,7 @@ export async function test() {
     if (!vetoAddParsed.success) {
       throw new Error('Failed to add veto test document: ' + JSON.stringify(vetoAddParsed));
     }
-    const vetoEvalResult = engine.evaluate('veto_test', '{}');
+    const vetoEvalResult = engine.evaluate('veto_test', '[]', '{}');
     const vetoEvalParsed = JSON.parse(vetoEvalResult);
     if (!vetoEvalParsed.success) {
       throw new Error('Failed to evaluate veto test: ' + JSON.stringify(vetoEvalParsed));
@@ -245,7 +245,7 @@ export async function test() {
     if (!missingAddParsed.success) {
       throw new Error('Failed to add missing facts test document: ' + JSON.stringify(missingAddParsed));
     }
-    const missingEvalResult = engine.evaluate('missing_test', JSON.stringify({ x: 10 }));
+    const missingEvalResult = engine.evaluate('missing_test', '[]', JSON.stringify({ x: 10 }));
     const missingEvalParsed = JSON.parse(missingEvalResult);
     if (!missingEvalParsed.success) {
       throw new Error('Failed to evaluate missing facts test: ' + JSON.stringify(missingEvalParsed));
@@ -265,7 +265,7 @@ export async function test() {
     console.log('✓ Missing facts handling successful');
 
     // Test 13: Operations array
-    const opsResult = engine.evaluate('test', '{}');
+    const opsResult = engine.evaluate('test', '[]', '{}');
     const opsParsed = JSON.parse(opsResult);
     if (!opsParsed.success) {
       throw new Error('Failed to evaluate for operations test: ' + JSON.stringify(opsParsed));
@@ -292,7 +292,7 @@ export async function test() {
     if (!unitsAddParsed.success) {
       throw new Error('Failed to add units test document: ' + JSON.stringify(unitsAddParsed));
     }
-    const unitsEvalResult = engine.evaluate('units_test', '{}');
+    const unitsEvalResult = engine.evaluate('units_test', '[]', '{}');
     const unitsEvalParsed = JSON.parse(unitsEvalResult);
     if (!unitsEvalParsed.success) {
       throw new Error('Failed to evaluate units test: ' + JSON.stringify(unitsEvalParsed));
@@ -316,7 +316,7 @@ export async function test() {
     if (!scaleConvParsed.success) {
       throw new Error('Failed to add scale conversion doc: ' + JSON.stringify(scaleConvParsed));
     }
-    const scaleConvEval = JSON.parse(engine.evaluate('scale_conv', '{}'));
+    const scaleConvEval = JSON.parse(engine.evaluate('scale_conv', '[]', '{}'));
     if (!scaleConvEval.success) {
       throw new Error('Failed to evaluate scale conversion doc: ' + JSON.stringify(scaleConvEval));
     }
@@ -338,8 +338,8 @@ export async function test() {
     console.log('✓ Scale unit conversion via `in` works');
 
     // Test 16: Empty facts object vs empty string
-    const emptyFacts1 = engine.evaluate('test', '{}');
-    const emptyFacts2 = engine.evaluate('test', '');
+    const emptyFacts1 = engine.evaluate('test', '[]', '{}');
+    const emptyFacts2 = engine.evaluate('test', '[]', '');
     const emptyParsed1 = JSON.parse(emptyFacts1);
     const emptyParsed2 = JSON.parse(emptyFacts2);
     if (!emptyParsed1.success || !emptyParsed2.success) {

@@ -3,7 +3,7 @@
 //! Takes a Lemma `Engine` and produces a complete OpenAPI specification as JSON.
 //! Used by both `lemma server` (CLI) and LemmaBase.com for consistent API docs.
 
-use lemma::{Engine, ExecutionPlan, LemmaType, TypeSpecification};
+use lemma::{Engine, LemmaType, TypeSpecification};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
@@ -31,14 +31,15 @@ pub fn generate_openapi(engine: &Engine, proofs_enabled: bool) -> Value {
     // Document routes (rendered first so they appear above Meta in the sidebar)
     for doc_name in &document_names {
         if let Some(plan) = engine.get_execution_plan(doc_name) {
-            let facts = collect_input_facts(plan);
-            let rule_names = collect_rule_names(plan);
+            let schema = plan.schema();
+            let facts = collect_input_facts_from_schema(&schema);
+            let rule_names: Vec<String> = schema.rules.keys().cloned().collect();
 
             // Response schema for this document
             let response_schema_name = format!("{}_response", doc_name);
             components_schemas.insert(
                 response_schema_name.clone(),
-                build_response_schema(plan, &rule_names, proofs_enabled),
+                build_response_schema(&schema, &rule_names, proofs_enabled),
             );
 
             // POST body schema
@@ -156,42 +157,28 @@ struct InputFact {
     has_default: bool,
 }
 
-/// Collect all input facts (value and type-declaration facts) from a plan.
-/// Only includes facts local to the document (no path segments).
-fn collect_input_facts(plan: &ExecutionPlan) -> Vec<InputFact> {
-    let mut facts: Vec<InputFact> = plan
+/// Collect all local input facts from a pre-built schema.
+///
+/// Only includes facts local to the document (no dot-separated cross-document
+/// paths like `calc.price`). Already sorted alphabetically by `schema()`.
+fn collect_input_facts_from_schema(schema: &lemma::DocumentSchema) -> Vec<InputFact> {
+    schema
         .facts
         .iter()
-        .filter(|(path, _)| path.segments.is_empty())
-        .filter_map(|(path, data)| {
-            data.schema_type().map(|lemma_type| InputFact {
-                name: path.fact.clone(),
-                lemma_type: lemma_type.clone(),
-                has_default: data.value().is_some(),
-            })
+        .filter(|(name, _)| !name.contains('.'))
+        .map(|(name, (lemma_type, default))| InputFact {
+            name: name.clone(),
+            lemma_type: lemma_type.clone(),
+            has_default: default.is_some(),
         })
-        .collect();
-    facts.sort_by(|a, b| a.name.cmp(&b.name));
-    facts
-}
-
-/// Collect rule names from the plan (local rules only, sorted).
-fn collect_rule_names(plan: &ExecutionPlan) -> Vec<String> {
-    let mut names: Vec<String> = plan
-        .rules
-        .iter()
-        .filter(|r| r.path.segments.is_empty())
-        .map(|r| r.name.clone())
-        .collect();
-    names.sort();
-    names
+        .collect()
 }
 
 /// Convenience wrapper: get rule names for a document by name.
 fn collect_rule_names_for_doc(engine: &Engine, doc_name: &str) -> Vec<String> {
     engine
         .get_execution_plan(doc_name)
-        .map(collect_rule_names)
+        .map(|plan| plan.schema().rules.into_keys().collect())
         .unwrap_or_default()
 }
 
@@ -206,17 +193,9 @@ fn index_path_item(document_names: &[String], engine: &Engine) -> Value {
             let (facts_count, rules_count) = engine
                 .get_execution_plan(name)
                 .map(|p| {
-                    let facts_count = p
-                        .facts
-                        .iter()
-                        .filter(|(path, _)| path.segments.is_empty())
-                        .filter(|(_, data)| data.schema_type().is_some())
-                        .count();
-                    let rules_count = p
-                        .rules
-                        .iter()
-                        .filter(|r| r.path.segments.is_empty())
-                        .count();
+                    let schema = p.schema();
+                    let facts_count = schema.facts.keys().filter(|n| !n.contains('.')).count();
+                    let rules_count = schema.rules.len();
                     (facts_count, rules_count)
                 })
                 .unwrap_or((0, 0));
@@ -553,6 +532,9 @@ fn type_help(lemma_type: &LemmaType) -> String {
         TypeSpecification::Time { help, .. } => help.clone(),
         TypeSpecification::Duration { help, .. } => help.clone(),
         TypeSpecification::Veto { .. } => String::new(),
+        TypeSpecification::Error => unreachable!(
+            "BUG: type_help called with Error sentinel type; this type must never reach OpenAPI generation"
+        ),
     }
 }
 
@@ -572,6 +554,9 @@ fn type_default_as_string(lemma_type: &LemmaType) -> Option<String> {
             default.as_ref().map(|(v, u)| format!("{}+{}", v, u))
         }
         TypeSpecification::Veto { .. } => None,
+        TypeSpecification::Error => unreachable!(
+            "BUG: type_default_as_string called with Error sentinel type; this type must never reach OpenAPI generation"
+        ),
     }
 }
 
@@ -604,6 +589,9 @@ fn type_default_as_json(lemma_type: &LemmaType) -> Option<Value> {
             })
         }),
         TypeSpecification::Veto { .. } => None,
+        TypeSpecification::Error => unreachable!(
+            "BUG: type_default_as_json called with Error sentinel type; this type must never reach OpenAPI generation"
+        ),
     }
 }
 
@@ -729,6 +717,9 @@ fn build_get_parameter_description(lemma_type: &LemmaType) -> String {
             parts.push("Units: years, months, weeks, days, hours, minutes, seconds".to_string());
         }
         TypeSpecification::Veto { .. } => {}
+        TypeSpecification::Error => unreachable!(
+            "BUG: build_get_parameter_description called with Error sentinel type; this type must never reach OpenAPI generation"
+        ),
     }
 
     parts.join(". ")
@@ -763,6 +754,9 @@ fn build_get_example(lemma_type: &LemmaType) -> Option<String> {
         TypeSpecification::Time { .. } => Some("14:30:00".to_string()),
         TypeSpecification::Duration { .. } => Some("40+hours".to_string()),
         TypeSpecification::Veto { .. } => None,
+        TypeSpecification::Error => unreachable!(
+            "BUG: build_get_example called with Error sentinel type; this type must never reach OpenAPI generation"
+        ),
     }
 }
 
@@ -926,6 +920,9 @@ fn build_post_property_schema_inner(lemma_type: &LemmaType) -> Value {
         TypeSpecification::Veto { .. } => {
             json!({ "type": "string" })
         }
+        TypeSpecification::Error => unreachable!(
+            "BUG: build_post_property_schema_inner called with Error sentinel type; this type must never reach OpenAPI generation"
+        ),
     }
 }
 
@@ -934,7 +931,7 @@ fn build_post_property_schema_inner(lemma_type: &LemmaType) -> Value {
 // ---------------------------------------------------------------------------
 
 fn build_response_schema(
-    plan: &ExecutionPlan,
+    schema: &lemma::DocumentSchema,
     rule_names: &[String],
     proofs_enabled: bool,
 ) -> Value {
@@ -948,8 +945,8 @@ fn build_response_schema(
     });
 
     for rule_name in rule_names {
-        if let Some(rule) = plan.rules.iter().find(|r| &r.name == rule_name) {
-            let result_type_name = type_base_name(&rule.rule_type);
+        if let Some(rule_type) = schema.rules.get(rule_name) {
+            let result_type_name = type_base_name(rule_type);
             let mut value_props = Map::new();
             value_props.insert(
                 "value".to_string(),
@@ -1015,6 +1012,9 @@ fn type_base_name(lemma_type: &LemmaType) -> String {
         TypeSpecification::Duration { .. } => "duration".to_string(),
         TypeSpecification::Ratio { .. } => "ratio".to_string(),
         TypeSpecification::Veto { .. } => "veto".to_string(),
+        TypeSpecification::Error => unreachable!(
+            "BUG: type_base_name called with Error sentinel type; this type must never reach OpenAPI generation"
+        ),
     }
 }
 
@@ -1466,11 +1466,8 @@ rule result = quantity
                 .unwrap(),
             "Whether the feature is enabled"
         );
-        assert_eq!(
-            req_schema["properties"]["active"]["default"]
-                .as_bool()
-                .unwrap(),
-            true
-        );
+        assert!(req_schema["properties"]["active"]["default"]
+            .as_bool()
+            .unwrap());
     }
 }

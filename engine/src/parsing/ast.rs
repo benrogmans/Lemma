@@ -138,7 +138,7 @@ pub struct LemmaRule {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Expression {
     pub kind: ExpressionKind,
-    pub source_location: Source,
+    pub source_location: Option<Source>,
 }
 
 impl Expression {
@@ -147,7 +147,7 @@ impl Expression {
     pub fn new(kind: ExpressionKind, source_location: Source) -> Self {
         Self {
             kind,
-            source_location,
+            source_location: Some(source_location),
         }
     }
 
@@ -158,9 +158,10 @@ impl Expression {
         &self,
         sources: &std::collections::HashMap<String, String>,
     ) -> Option<String> {
+        let loc = self.source_location.as_ref()?;
         sources
-            .get(&self.source_location.attribute)
-            .and_then(|source| self.source_location.extract_text(source))
+            .get(&loc.attribute)
+            .and_then(|source| loc.extract_text(source))
     }
 }
 
@@ -1720,6 +1721,7 @@ mod tests {
                     col: 0,
                 },
                 "test",
+                std::sync::Arc::from("doc test\nfact x = 1"),
             ),
             name: "status".to_string(),
             parent: "text".to_string(),
@@ -1751,6 +1753,7 @@ mod tests {
                     col: 0,
                 },
                 "test",
+                std::sync::Arc::from("doc test\nfact x = 1"),
             ),
             name: "money".to_string(),
             parent: "scale".to_string(),

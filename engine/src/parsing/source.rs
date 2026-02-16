@@ -1,12 +1,13 @@
 use crate::parsing::ast::Span;
+use std::sync::Arc;
 
 /// Unified source location information
 ///
-/// Combines source file identifier, span, and document name.
-/// Pass this type through; do not unpack into (attribute, span, doc_name).
+/// Combines source file identifier, span, document name, and the full source text.
+/// Pass this type through; do not unpack into individual fields.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Source {
-    /// Source file identifier (e.g., filename or "<input>")
+    /// Source file identifier (e.g., filename)
     pub attribute: String,
 
     /// Span in source code (uses Lemma's existing `Span` type from `crate::ast::Span`)
@@ -14,16 +15,25 @@ pub struct Source {
 
     /// Document name (the Lemma document containing this code)
     pub doc_name: String,
+
+    /// Full source text of the file this location refers to
+    pub source_text: Arc<str>,
 }
 
 impl Source {
     /// Create a new Source.
     #[must_use]
-    pub fn new(attribute: impl Into<String>, span: Span, doc_name: impl Into<String>) -> Self {
+    pub fn new(
+        attribute: impl Into<String>,
+        span: Span,
+        doc_name: impl Into<String>,
+        source_text: Arc<str>,
+    ) -> Self {
         Self {
             attribute: attribute.into(),
             span,
             doc_name: doc_name.into(),
+            source_text,
         }
     }
 }
@@ -46,6 +56,10 @@ impl Source {
 mod tests {
     use super::*;
 
+    fn test_arc() -> Arc<str> {
+        Arc::from("hello world")
+    }
+
     #[test]
     fn test_extract_text_valid() {
         let source = "hello world";
@@ -55,7 +69,7 @@ mod tests {
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span, "test");
+        let loc = Source::new("test.lemma", span, "test", test_arc());
         assert_eq!(loc.extract_text(source), Some("hello".to_string()));
     }
 
@@ -68,7 +82,7 @@ mod tests {
             line: 1,
             col: 6,
         };
-        let loc = Source::new("test.lemma", span, "test");
+        let loc = Source::new("test.lemma", span, "test", test_arc());
         assert_eq!(loc.extract_text(source), Some("world".to_string()));
     }
 
@@ -81,7 +95,7 @@ mod tests {
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span, "test");
+        let loc = Source::new("test.lemma", span, "test", test_arc());
         assert_eq!(loc.extract_text(source), Some("hello world".to_string()));
     }
 
@@ -94,7 +108,7 @@ mod tests {
             line: 1,
             col: 5,
         };
-        let loc = Source::new("test.lemma", span, "test");
+        let loc = Source::new("test.lemma", span, "test", test_arc());
         assert_eq!(loc.extract_text(source), Some("".to_string()));
     }
 
@@ -107,7 +121,7 @@ mod tests {
             line: 1,
             col: 10,
         };
-        let loc = Source::new("test.lemma", span, "test");
+        let loc = Source::new("test.lemma", span, "test", test_arc());
         assert_eq!(loc.extract_text(source), None);
     }
 
@@ -120,7 +134,7 @@ mod tests {
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span, "test");
+        let loc = Source::new("test.lemma", span, "test", test_arc());
         assert_eq!(loc.extract_text(source), None);
     }
 
@@ -133,7 +147,7 @@ mod tests {
             line: 1,
             col: 6,
         };
-        let loc = Source::new("test.lemma", span, "test");
+        let loc = Source::new("test.lemma", span, "test", test_arc());
         assert_eq!(loc.extract_text(source), Some("世界".to_string()));
     }
 
@@ -145,9 +159,10 @@ mod tests {
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span, "test");
+        let loc = Source::new("test.lemma", span, "test", test_arc());
         assert_eq!(loc.attribute, "test.lemma");
         assert_eq!(loc.doc_name, "test");
+        assert_eq!(&*loc.source_text, "hello world");
     }
 
     #[test]
@@ -158,8 +173,9 @@ mod tests {
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span, "test");
+        let loc = Source::new("test.lemma", span, "test", Arc::from("other"));
         assert_eq!(loc.attribute, "test.lemma");
         assert_eq!(loc.doc_name, "test");
+        assert_eq!(&*loc.source_text, "other");
     }
 }

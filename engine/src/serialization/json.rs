@@ -1,32 +1,20 @@
-use crate::planning::semantics::{FactData, FactPath, Span};
+use crate::planning::semantics::{FactData, FactPath};
 use crate::planning::ExecutionPlan;
 use crate::LemmaError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 /// Parse JSON to string values for use with ExecutionPlan::with_values().
 ///
 /// - `null` values are skipped
 /// - All other values are converted to their string representation
-pub fn from_json(json: &[u8], plan: &ExecutionPlan) -> Result<HashMap<String, String>, LemmaError> {
+pub fn from_json(
+    json: &[u8],
+    _plan: &ExecutionPlan,
+) -> Result<HashMap<String, String>, LemmaError> {
     let map: HashMap<String, Value> = serde_json::from_slice(json).map_err(|e| {
-        LemmaError::engine(
-            format!("JSON parse error: {}", e),
-            crate::Source::new(
-                "<input>",
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                &plan.doc_name,
-            ),
-            Arc::from(""),
-            None::<String>,
-        )
+        LemmaError::engine(format!("JSON parse error: {}", e), None, None::<String>)
     })?;
 
     Ok(map

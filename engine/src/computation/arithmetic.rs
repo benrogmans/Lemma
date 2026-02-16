@@ -59,124 +59,135 @@ pub fn arithmetic_operation(
             }
         }
 
-        // Duration with number
-        (ValueKind::Duration(value, unit), ValueKind::Number(n)) => match op {
-            ArithmeticComputation::Multiply => OperationResult::Value(Box::new(
-                LiteralValue::duration_with_type(value * n, unit.clone(), left.lemma_type.clone()),
-            )),
-            ArithmeticComputation::Divide => {
-                if *n == Decimal::ZERO {
-                    return OperationResult::Veto(Some("Division by zero".to_string()));
-                }
+        // Duration with Number → Duration
+        (ValueKind::Duration(value, unit), ValueKind::Number(n)) => {
+            match number_arithmetic(*value, op, *n) {
+                Ok(result) => OperationResult::Value(Box::new(LiteralValue::duration_with_type(
+                    result,
+                    unit.clone(),
+                    left.lemma_type.clone(),
+                ))),
+                Err(msg) => OperationResult::Veto(Some(msg)),
+            }
+        }
+
+        // Number with Duration → Duration (commutative for Multiply/Add)
+        (ValueKind::Number(n), ValueKind::Duration(value, unit)) => {
+            match number_arithmetic(*n, op, *value) {
+                Ok(result) => OperationResult::Value(Box::new(LiteralValue::duration_with_type(
+                    result,
+                    unit.clone(),
+                    right.lemma_type.clone(),
+                ))),
+                Err(msg) => OperationResult::Veto(Some(msg)),
+            }
+        }
+
+        // Ratio with Number → Number (ratio semantics: add/subtract apply as multiplier)
+        (ValueKind::Ratio(r, _), ValueKind::Number(n)) => match op {
+            ArithmeticComputation::Add => {
+                let result = *n * (Decimal::ONE + *r);
+                OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                    result,
+                    primitive_number().clone(),
+                )))
+            }
+            ArithmeticComputation::Subtract => {
+                let result = *n * (Decimal::ONE - *r);
+                OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                    result,
+                    primitive_number().clone(),
+                )))
+            }
+            _ => match number_arithmetic(*r, op, *n) {
+                Ok(result) => OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                    result,
+                    primitive_number().clone(),
+                ))),
+                Err(msg) => OperationResult::Veto(Some(msg)),
+            },
+        },
+
+        // Number with Ratio → Number (ratio semantics: add/subtract apply as multiplier)
+        (ValueKind::Number(n), ValueKind::Ratio(r, _)) => match op {
+            ArithmeticComputation::Add => {
+                let result = *n * (Decimal::ONE + *r);
+                OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                    result,
+                    primitive_number().clone(),
+                )))
+            }
+            ArithmeticComputation::Subtract => {
+                let result = *n * (Decimal::ONE - *r);
+                OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                    result,
+                    primitive_number().clone(),
+                )))
+            }
+            _ => match number_arithmetic(*n, op, *r) {
+                Ok(result) => OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                    result,
+                    primitive_number().clone(),
+                ))),
+                Err(msg) => OperationResult::Veto(Some(msg)),
+            },
+        },
+
+        // Duration with Ratio → Duration (ratio semantics: add/subtract apply as multiplier)
+        (ValueKind::Duration(value, unit), ValueKind::Ratio(r, _)) => match op {
+            ArithmeticComputation::Add => {
+                let result = *value * (Decimal::ONE + *r);
                 OperationResult::Value(Box::new(LiteralValue::duration_with_type(
-                    value / n,
+                    result,
                     unit.clone(),
                     left.lemma_type.clone(),
                 )))
             }
-            _ => OperationResult::Veto(Some(format!(
-                "Operation {:?} not supported for duration and number",
-                op
-            ))),
+            ArithmeticComputation::Subtract => {
+                let result = *value * (Decimal::ONE - *r);
+                OperationResult::Value(Box::new(LiteralValue::duration_with_type(
+                    result,
+                    unit.clone(),
+                    left.lemma_type.clone(),
+                )))
+            }
+            _ => match number_arithmetic(*value, op, *r) {
+                Ok(result) => OperationResult::Value(Box::new(LiteralValue::duration_with_type(
+                    result,
+                    unit.clone(),
+                    left.lemma_type.clone(),
+                ))),
+                Err(msg) => OperationResult::Veto(Some(msg)),
+            },
         },
 
-        (ValueKind::Number(n), ValueKind::Duration(value, unit)) => match op {
-            ArithmeticComputation::Multiply => OperationResult::Value(Box::new(
-                LiteralValue::duration_with_type(n * value, unit.clone(), left.lemma_type.clone()),
-            )),
-            _ => OperationResult::Veto(Some(format!(
-                "Operation {:?} not supported for number and duration",
-                op
-            ))),
+        // Ratio with Duration → Duration (commutative for multiply)
+        (ValueKind::Ratio(r, _), ValueKind::Duration(value, unit)) => match op {
+            ArithmeticComputation::Add => {
+                let result = *value * (Decimal::ONE + *r);
+                OperationResult::Value(Box::new(LiteralValue::duration_with_type(
+                    result,
+                    unit.clone(),
+                    right.lemma_type.clone(),
+                )))
+            }
+            ArithmeticComputation::Subtract => {
+                let result = *value * (Decimal::ONE - *r);
+                OperationResult::Value(Box::new(LiteralValue::duration_with_type(
+                    result,
+                    unit.clone(),
+                    right.lemma_type.clone(),
+                )))
+            }
+            _ => match number_arithmetic(*r, op, *value) {
+                Ok(result) => OperationResult::Value(Box::new(LiteralValue::duration_with_type(
+                    result,
+                    unit.clone(),
+                    right.lemma_type.clone(),
+                ))),
+                Err(msg) => OperationResult::Veto(Some(msg)),
+            },
         },
-
-        // Ratio operations
-        // Ratio op Number → Number (ratio semantics: ratio + number = number * (1 + ratio))
-        (ValueKind::Ratio(r, _), ValueKind::Number(n)) if right.get_type().is_number() => {
-            match op {
-                ArithmeticComputation::Add => {
-                    // ratio + number = number * (1 + ratio)
-                    let result = *n * (Decimal::ONE + *r);
-                    OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                        result,
-                        primitive_number().clone(),
-                    )))
-                }
-                ArithmeticComputation::Subtract => {
-                    // ratio - number = number * (1 - ratio)
-                    let result = *n * (Decimal::ONE - *r);
-                    OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                        result,
-                        primitive_number().clone(),
-                    )))
-                }
-                ArithmeticComputation::Multiply => match number_arithmetic(*r, op, *n) {
-                    Ok(result) => OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                        result,
-                        primitive_number().clone(),
-                    ))),
-                    Err(msg) => OperationResult::Veto(Some(msg)),
-                },
-                ArithmeticComputation::Divide => {
-                    if *n == Decimal::ZERO {
-                        return OperationResult::Veto(Some("Division by zero".to_string()));
-                    }
-                    match number_arithmetic(*r, op, *n) {
-                        Ok(result) => OperationResult::Value(Box::new(
-                            LiteralValue::number_with_type(result, primitive_number().clone()),
-                        )),
-                        Err(msg) => OperationResult::Veto(Some(msg)),
-                    }
-                }
-                _ => OperationResult::Veto(Some(format!(
-                    "Operation {:?} not supported for ratio and number",
-                    op
-                ))),
-            }
-        }
-        // Number op Ratio → Number (ratio semantics: number + ratio = number * (1 + ratio))
-        (ValueKind::Number(n), ValueKind::Ratio(r, _)) if left.get_type().is_number() => {
-            match op {
-                ArithmeticComputation::Add => {
-                    // number + ratio = number * (1 + ratio)
-                    let result = *n * (Decimal::ONE + *r);
-                    OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                        result,
-                        primitive_number().clone(),
-                    )))
-                }
-                ArithmeticComputation::Subtract => {
-                    // number - ratio = number * (1 - ratio)
-                    let result = *n * (Decimal::ONE - *r);
-                    OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                        result,
-                        primitive_number().clone(),
-                    )))
-                }
-                ArithmeticComputation::Multiply => match number_arithmetic(*n, op, *r) {
-                    Ok(result) => OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                        result,
-                        primitive_number().clone(),
-                    ))),
-                    Err(msg) => OperationResult::Veto(Some(msg)),
-                },
-                ArithmeticComputation::Divide => {
-                    if *r == Decimal::ZERO {
-                        return OperationResult::Veto(Some("Division by zero".to_string()));
-                    }
-                    match number_arithmetic(*n, op, *r) {
-                        Ok(result) => OperationResult::Value(Box::new(
-                            LiteralValue::number_with_type(result, primitive_number().clone()),
-                        )),
-                        Err(msg) => OperationResult::Veto(Some(msg)),
-                    }
-                }
-                _ => OperationResult::Veto(Some(format!(
-                    "Operation {:?} not supported for number and ratio",
-                    op
-                ))),
-            }
-        }
         // Ratio op Ratio → Ratio
         (ValueKind::Ratio(l, lu), ValueKind::Ratio(r, _ru)) => {
             // Preserve unit from left operand
@@ -347,28 +358,25 @@ pub fn arithmetic_operation(
                 Err(msg) => OperationResult::Veto(Some(msg)),
             }
         }
-        // Scale op Duration - not supported
-        (ValueKind::Scale(_scale_val, _scale_unit), ValueKind::Duration(_d_val, _d_unit)) => {
-            match op {
-                ArithmeticComputation::Multiply => {
-                    OperationResult::Veto(Some("Cannot multiply scale and duration".to_string()))
-                }
-                _ => OperationResult::Veto(Some(format!(
-                    "Operation {:?} not supported for scale and duration",
-                    op
+        // Scale with Duration → Number
+        (ValueKind::Scale(scale_val, _), ValueKind::Duration(dur_val, _)) => {
+            match number_arithmetic(*scale_val, op, *dur_val) {
+                Ok(result) => OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                    result,
+                    primitive_number().clone(),
                 ))),
+                Err(msg) => OperationResult::Veto(Some(msg)),
             }
         }
-        // Duration op Scale - not supported
-        (ValueKind::Duration(_d_val, _d_unit), ValueKind::Scale(_scale_val, _scale_unit)) => {
-            match op {
-                ArithmeticComputation::Multiply => {
-                    OperationResult::Veto(Some("Cannot multiply duration and scale".to_string()))
-                }
-                _ => OperationResult::Veto(Some(format!(
-                    "Operation {:?} not supported for duration and scale",
-                    op
+
+        // Duration with Scale → Number
+        (ValueKind::Duration(dur_val, _), ValueKind::Scale(scale_val, _)) => {
+            match number_arithmetic(*dur_val, op, *scale_val) {
+                Ok(result) => OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                    result,
+                    primitive_number().clone(),
                 ))),
+                Err(msg) => OperationResult::Veto(Some(msg)),
             }
         }
         _ => OperationResult::Veto(Some(format!(

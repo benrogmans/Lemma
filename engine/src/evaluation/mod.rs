@@ -126,16 +126,7 @@ impl Evaluator {
                         fact_list.push(Fact {
                             path: fact_ref.clone(),
                             value: FactValue::Literal(value.clone()),
-                            source: crate::Source::new(
-                                "",
-                                crate::Span {
-                                    start: 0,
-                                    end: 0,
-                                    line: 0,
-                                    col: 0,
-                                },
-                                "",
-                            ),
+                            source: None,
                         });
                     }
                 }

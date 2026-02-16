@@ -2,6 +2,7 @@ mod error_formatter;
 mod formatter;
 mod interactive;
 mod mcp;
+pub(crate) mod response;
 mod server;
 
 use anyhow::Result;
@@ -142,6 +143,9 @@ enum Commands {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
+        /// Enable admin tools: add_document, get_document_source (read-only by default)
+        #[arg(long)]
+        admin: bool,
     },
     /// Format .lemma files to canonical style
     ///
@@ -191,7 +195,7 @@ fn main() {
             watch,
             proofs,
         } => server_command(workdir, host, *port, *watch, *proofs),
-        Commands::Mcp { workdir } => mcp_command(workdir),
+        Commands::Mcp { workdir, admin } => mcp_command(workdir, *admin),
         Commands::Fmt {
             paths,
             check,
@@ -292,46 +296,10 @@ struct RunOutputJson {
     doc_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     facts: Option<Vec<lemma::Facts>>,
-    results: HashMap<String, RuleResultJson>,
-}
-
-#[derive(Serialize)]
-struct RuleResultJson {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    value: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    veto_reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    proof: Option<serde_json::Value>,
+    results: HashMap<String, response::RuleResultJson>,
 }
 
 fn format_response_json(response: &lemma::Response, explain: bool) -> RunOutputJson {
-    let results: HashMap<String, RuleResultJson> = response
-        .results
-        .iter()
-        .map(|(name, rule_result)| {
-            let (value, veto_reason) = match &rule_result.result {
-                lemma::OperationResult::Value(v) => (Some(v.to_string()), None),
-                lemma::OperationResult::Veto(msg) => (None, msg.clone()),
-            };
-            let proof = if explain {
-                rule_result
-                    .proof
-                    .as_ref()
-                    .and_then(|p| serde_json::to_value(p).ok())
-            } else {
-                None
-            };
-            (
-                name.clone(),
-                RuleResultJson {
-                    value,
-                    veto_reason,
-                    proof,
-                },
-            )
-        })
-        .collect();
     RunOutputJson {
         doc_name: response.doc_name.clone(),
         facts: if explain {
@@ -339,7 +307,7 @@ fn format_response_json(response: &lemma::Response, explain: bool) -> RunOutputJ
         } else {
             None
         },
-        results,
+        results: response::convert_response(response, explain),
     }
 }
 
@@ -386,7 +354,7 @@ fn list_command(root: &PathBuf) -> Result<()> {
     let schemas: Vec<lemma::DocumentSchema> = document_names
         .iter()
         .filter_map(|name| engine.get_execution_plan(name))
-        .map(|plan| plan.document_schema())
+        .map(|plan| plan.schema())
         .collect();
 
     let formatter = Formatter;
@@ -416,21 +384,24 @@ fn server_command(workdir: &Path, host: &str, port: u16, watch: bool, proofs: bo
     Ok(())
 }
 
-fn mcp_command(workdir: &Path) -> Result<()> {
+fn mcp_command(workdir: &Path, admin: bool) -> Result<()> {
     #[cfg(feature = "mcp")]
     {
         let mut engine = Engine::new();
         load_workspace(&mut engine, workdir)?;
 
+        let config = mcp::McpConfig { admin };
+
         println!(
             "Starting MCP server with {} document(s) loaded",
             engine.list_documents().len()
         );
-        mcp::server::start_server(engine)?;
+        mcp::server::start_server(engine, config)?;
     }
 
     #[cfg(not(feature = "mcp"))]
     {
+        let _ = admin;
         eprintln!("Error: MCP feature not enabled");
         eprintln!("Recompile with: cargo build --features mcp");
         std::process::exit(1);

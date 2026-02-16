@@ -189,10 +189,10 @@ fn solve_recursive(
             }
 
             let solved_inner = solve_recursive(inner, unknown_fact, target)?;
-            Ok(Expression::new(
-                ExpressionKind::UnitConversion(Arc::new(solved_inner), target_unit.clone()),
-                expression.source_location.clone(),
-            ))
+            Ok(Expression {
+                kind: ExpressionKind::UnitConversion(Arc::new(solved_inner), target_unit.clone()),
+                source_location: None,
+            })
         }
 
         ExpressionKind::MathematicalComputation(operation, inner) => {
@@ -201,20 +201,20 @@ fn solve_recursive(
             }
 
             let new_target = match operation {
-                MathematicalComputation::Exp => Expression::new(
-                    ExpressionKind::MathematicalComputation(
+                MathematicalComputation::Exp => Expression {
+                    kind: ExpressionKind::MathematicalComputation(
                         MathematicalComputation::Log,
                         Arc::new(target.clone()),
                     ),
-                    expression.source_location.clone(),
-                ),
-                MathematicalComputation::Log => Expression::new(
-                    ExpressionKind::MathematicalComputation(
+                    source_location: None,
+                },
+                MathematicalComputation::Log => Expression {
+                    kind: ExpressionKind::MathematicalComputation(
                         MathematicalComputation::Exp,
                         Arc::new(target.clone()),
                     ),
-                    expression.source_location.clone(),
-                ),
+                    source_location: None,
+                },
                 other => {
                     return Err(SolveError::UnsupportedOperation {
                         description: format!("Mathematical operation {:?}", other),
@@ -238,9 +238,11 @@ fn solve_recursive(
             }
 
             if left_contains {
-                solve_left_operand(expression, left, operation, right, unknown_fact, target)
+                let new_target = invert_operation(operation, target, right, true)?;
+                solve_recursive(left, unknown_fact, &new_target)
             } else if right_contains {
-                solve_right_operand(expression, left, operation, right, unknown_fact, target)
+                let new_target = invert_operation(operation, target, left, false)?;
+                solve_recursive(right, unknown_fact, &new_target)
             } else {
                 Err(SolveError::CannotIsolateUnknown)
             }
@@ -250,152 +252,95 @@ fn solve_recursive(
     }
 }
 
-fn solve_left_operand(
-    expression: &Expression,
-    left: &Expression,
+/// Invert an arithmetic operation to isolate the unknown operand.
+/// `target` is the desired result, `known` is the operand whose value is known.
+/// `unknown_is_left`: true when the unknown is on the left side of the original operation.
+///
+/// For commutative ops (add, multiply): target - known / target / known
+/// For non-commutative ops (subtract, divide, power): the inversion differs by side.
+fn invert_operation(
     operation: &ArithmeticComputation,
-    right: &Expression,
-    unknown_fact: &FactPath,
     target: &Expression,
+    known: &Expression,
+    unknown_is_left: bool,
 ) -> Result<Expression, SolveError> {
-    let new_target = match operation {
-        ArithmeticComputation::Add => Expression::new(
-            ExpressionKind::Arithmetic(
-                Arc::new(target.clone()),
-                ArithmeticComputation::Subtract,
-                Arc::new(right.clone()),
-            ),
-            expression.source_location.clone(),
+    let expr = |left: Expression, op: ArithmeticComputation, right: Expression| Expression {
+        kind: ExpressionKind::Arithmetic(Arc::new(left), op, Arc::new(right)),
+        source_location: None,
+    };
+
+    let result = match (operation, unknown_is_left) {
+        // a + b = target  =>  unknown = target - known
+        (ArithmeticComputation::Add, _) => expr(
+            target.clone(),
+            ArithmeticComputation::Subtract,
+            known.clone(),
         ),
-        ArithmeticComputation::Subtract => Expression::new(
-            ExpressionKind::Arithmetic(
-                Arc::new(target.clone()),
-                ArithmeticComputation::Add,
-                Arc::new(right.clone()),
-            ),
-            expression.source_location.clone(),
+        // unknown - known = target  =>  unknown = target + known
+        (ArithmeticComputation::Subtract, true) => {
+            expr(target.clone(), ArithmeticComputation::Add, known.clone())
+        }
+        // known - unknown = target  =>  unknown = known - target
+        (ArithmeticComputation::Subtract, false) => expr(
+            known.clone(),
+            ArithmeticComputation::Subtract,
+            target.clone(),
         ),
-        ArithmeticComputation::Multiply => Expression::new(
-            ExpressionKind::Arithmetic(
-                Arc::new(target.clone()),
-                ArithmeticComputation::Divide,
-                Arc::new(right.clone()),
-            ),
-            expression.source_location.clone(),
+        // a * b = target  =>  unknown = target / known
+        (ArithmeticComputation::Multiply, _) => {
+            expr(target.clone(), ArithmeticComputation::Divide, known.clone())
+        }
+        // unknown / known = target  =>  unknown = target * known
+        (ArithmeticComputation::Divide, true) => expr(
+            target.clone(),
+            ArithmeticComputation::Multiply,
+            known.clone(),
         ),
-        ArithmeticComputation::Divide => Expression::new(
-            ExpressionKind::Arithmetic(
-                Arc::new(target.clone()),
-                ArithmeticComputation::Multiply,
-                Arc::new(right.clone()),
-            ),
-            expression.source_location.clone(),
-        ),
-        ArithmeticComputation::Power => {
-            let one = Expression::new(
-                ExpressionKind::Literal(Box::new(LiteralValue::number(rust_decimal::Decimal::ONE))),
-                expression.source_location.clone(),
-            );
-            let inverse_exponent = Expression::new(
-                ExpressionKind::Arithmetic(
-                    Arc::new(one),
-                    ArithmeticComputation::Divide,
-                    Arc::new(right.clone()),
-                ),
-                expression.source_location.clone(),
-            );
-            Expression::new(
-                ExpressionKind::Arithmetic(
-                    Arc::new(target.clone()),
-                    ArithmeticComputation::Power,
-                    Arc::new(inverse_exponent),
-                ),
-                expression.source_location.clone(),
+        // known / unknown = target  =>  unknown = known / target
+        (ArithmeticComputation::Divide, false) => {
+            expr(known.clone(), ArithmeticComputation::Divide, target.clone())
+        }
+        // unknown ^ known = target  =>  unknown = target ^ (1 / known)
+        (ArithmeticComputation::Power, true) => {
+            let one = Expression {
+                kind: ExpressionKind::Literal(Box::new(LiteralValue::number(
+                    rust_decimal::Decimal::ONE,
+                ))),
+                source_location: None,
+            };
+            let inverse_exponent = expr(one, ArithmeticComputation::Divide, known.clone());
+            expr(
+                target.clone(),
+                ArithmeticComputation::Power,
+                inverse_exponent,
             )
         }
-        other => {
+        // known ^ unknown = target  =>  unknown = log(target) / log(known)
+        (ArithmeticComputation::Power, false) => {
+            let log_target = Expression {
+                kind: ExpressionKind::MathematicalComputation(
+                    MathematicalComputation::Log,
+                    Arc::new(target.clone()),
+                ),
+                source_location: None,
+            };
+            let log_known = Expression {
+                kind: ExpressionKind::MathematicalComputation(
+                    MathematicalComputation::Log,
+                    Arc::new(known.clone()),
+                ),
+                source_location: None,
+            };
+            expr(log_target, ArithmeticComputation::Divide, log_known)
+        }
+        (other, _) => {
             return Err(SolveError::UnsupportedOperation {
                 description: format!("Arithmetic operation {:?}", other),
             });
         }
     };
 
-    solve_recursive(left, unknown_fact, &new_target)
-}
-
-fn solve_right_operand(
-    expression: &Expression,
-    left: &Expression,
-    operation: &ArithmeticComputation,
-    right: &Expression,
-    unknown_fact: &FactPath,
-    target: &Expression,
-) -> Result<Expression, SolveError> {
-    let new_target = match operation {
-        ArithmeticComputation::Add => Expression::new(
-            ExpressionKind::Arithmetic(
-                Arc::new(target.clone()),
-                ArithmeticComputation::Subtract,
-                Arc::new(left.clone()),
-            ),
-            expression.source_location.clone(),
-        ),
-        ArithmeticComputation::Subtract => Expression::new(
-            ExpressionKind::Arithmetic(
-                Arc::new(left.clone()),
-                ArithmeticComputation::Subtract,
-                Arc::new(target.clone()),
-            ),
-            expression.source_location.clone(),
-        ),
-        ArithmeticComputation::Multiply => Expression::new(
-            ExpressionKind::Arithmetic(
-                Arc::new(target.clone()),
-                ArithmeticComputation::Divide,
-                Arc::new(left.clone()),
-            ),
-            expression.source_location.clone(),
-        ),
-        ArithmeticComputation::Divide => Expression::new(
-            ExpressionKind::Arithmetic(
-                Arc::new(left.clone()),
-                ArithmeticComputation::Divide,
-                Arc::new(target.clone()),
-            ),
-            expression.source_location.clone(),
-        ),
-        ArithmeticComputation::Power => {
-            let numerator = Expression::new(
-                ExpressionKind::MathematicalComputation(
-                    MathematicalComputation::Log,
-                    Arc::new(target.clone()),
-                ),
-                expression.source_location.clone(),
-            );
-            let denominator = Expression::new(
-                ExpressionKind::MathematicalComputation(
-                    MathematicalComputation::Log,
-                    Arc::new(left.clone()),
-                ),
-                expression.source_location.clone(),
-            );
-            Expression::new(
-                ExpressionKind::Arithmetic(
-                    Arc::new(numerator),
-                    ArithmeticComputation::Divide,
-                    Arc::new(denominator),
-                ),
-                expression.source_location.clone(),
-            )
-        }
-        other => {
-            return Err(SolveError::UnsupportedOperation {
-                description: format!("Arithmetic operation {:?}", other),
-            });
-        }
-    };
-
-    solve_recursive(right, unknown_fact, &new_target)
+    Ok(result)
 }
 
 /// Check if expression contains a specific fact path
@@ -520,10 +465,10 @@ pub fn solve_arithmetic_batch(
 )> {
     let mut results = Vec::new();
 
-    let target_expression = Expression::new(
-        ExpressionKind::Literal(Box::new(target_value.clone())),
-        crate::inversion::synthetic_source(),
-    );
+    let target_expression = Expression {
+        kind: ExpressionKind::Literal(Box::new(target_value.clone())),
+        source_location: None,
+    };
 
     for arithmetic_solution in arithmetic_solutions {
         if let Some(solve_result) = try_solve_for_any_unknown(
@@ -552,17 +497,17 @@ mod tests {
     use rust_decimal::Decimal;
 
     fn literal_expression(value: LiteralValue) -> Expression {
-        Expression::new(
-            ExpressionKind::Literal(Box::new(value)),
-            crate::inversion::synthetic_source(),
-        )
+        Expression {
+            kind: ExpressionKind::Literal(Box::new(value)),
+            source_location: None,
+        }
     }
 
     fn fact_expression(name: &str) -> Expression {
-        Expression::new(
-            ExpressionKind::FactPath(FactPath::new(vec![], name.to_string())),
-            crate::inversion::synthetic_source(),
-        )
+        Expression {
+            kind: ExpressionKind::FactPath(FactPath::new(vec![], name.to_string())),
+            source_location: None,
+        }
     }
 
     fn number(n: i64) -> LiteralValue {
@@ -571,14 +516,14 @@ mod tests {
 
     #[test]
     fn test_find_unknown_facts() {
-        let expression = Expression::new(
-            ExpressionKind::Arithmetic(
+        let expression = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(fact_expression("price")),
                 ArithmeticComputation::Multiply,
                 Arc::new(fact_expression("quantity")),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
         let mut provided = HashSet::new();
         provided.insert(FactPath::new(vec![], "quantity".to_string()));
@@ -590,14 +535,14 @@ mod tests {
 
     #[test]
     fn test_can_solve_single_unknown() {
-        let expression = Expression::new(
-            ExpressionKind::Arithmetic(
+        let expression = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(fact_expression("price")),
                 ArithmeticComputation::Multiply,
                 Arc::new(literal_expression(number(5))),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
         let unknown = FactPath::new(vec![], "price".to_string());
         assert!(can_solve_for_fact(&expression, &unknown));
@@ -605,14 +550,14 @@ mod tests {
 
     #[test]
     fn test_cannot_solve_multiple_occurrences() {
-        let expression = Expression::new(
-            ExpressionKind::Arithmetic(
+        let expression = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(fact_expression("price")),
                 ArithmeticComputation::Add,
                 Arc::new(fact_expression("price")),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
         let unknown = FactPath::new(vec![], "price".to_string());
         assert!(!can_solve_for_fact(&expression, &unknown));
@@ -620,14 +565,14 @@ mod tests {
 
     #[test]
     fn test_solve_simple_multiplication() {
-        let expression = Expression::new(
-            ExpressionKind::Arithmetic(
+        let expression = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(fact_expression("price")),
                 ArithmeticComputation::Multiply,
                 Arc::new(literal_expression(number(5))),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
         let unknown = FactPath::new(vec![], "price".to_string());
         let target = literal_expression(number(50));
@@ -640,14 +585,14 @@ mod tests {
 
     #[test]
     fn test_solve_simple_addition() {
-        let expression = Expression::new(
-            ExpressionKind::Arithmetic(
+        let expression = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(fact_expression("x")),
                 ArithmeticComputation::Add,
                 Arc::new(literal_expression(number(10))),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
         let unknown = FactPath::new(vec![], "x".to_string());
         let target = literal_expression(number(25));
@@ -660,14 +605,14 @@ mod tests {
 
     #[test]
     fn test_solve_simple_subtraction() {
-        let expression = Expression::new(
-            ExpressionKind::Arithmetic(
+        let expression = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(fact_expression("x")),
                 ArithmeticComputation::Subtract,
                 Arc::new(literal_expression(number(5))),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
         let unknown = FactPath::new(vec![], "x".to_string());
         let target = literal_expression(number(20));
@@ -680,14 +625,14 @@ mod tests {
 
     #[test]
     fn test_solve_simple_division() {
-        let expression = Expression::new(
-            ExpressionKind::Arithmetic(
+        let expression = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(fact_expression("x")),
                 ArithmeticComputation::Divide,
                 Arc::new(literal_expression(number(2))),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
         let unknown = FactPath::new(vec![], "x".to_string());
         let target = literal_expression(number(10));
@@ -700,23 +645,23 @@ mod tests {
 
     #[test]
     fn test_solve_chained_operations() {
-        let inner = Expression::new(
-            ExpressionKind::Arithmetic(
+        let inner = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(fact_expression("hours")),
                 ArithmeticComputation::Multiply,
                 Arc::new(literal_expression(number(25))),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
-        let expression = Expression::new(
-            ExpressionKind::Arithmetic(
+        let expression = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(inner),
                 ArithmeticComputation::Multiply,
                 Arc::new(literal_expression(LiteralValue::number(Decimal::new(8, 1)))),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
         let unknown = FactPath::new(vec![], "hours".to_string());
         let target = literal_expression(number(800));
@@ -728,15 +673,15 @@ mod tests {
     }
 
     #[test]
-    fn test_solve_right_operand_subtraction() {
-        let expression = Expression::new(
-            ExpressionKind::Arithmetic(
+    fn test_solve_subtraction_unknown_on_right() {
+        let expression = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(literal_expression(number(100))),
                 ArithmeticComputation::Subtract,
                 Arc::new(fact_expression("discount")),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
         let unknown = FactPath::new(vec![], "discount".to_string());
         let target = literal_expression(number(70));
@@ -749,14 +694,14 @@ mod tests {
 
     #[test]
     fn test_try_solve_for_any_unknown() {
-        let expression = Expression::new(
-            ExpressionKind::Arithmetic(
+        let expression = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(fact_expression("price")),
                 ArithmeticComputation::Multiply,
                 Arc::new(literal_expression(number(5))),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
         let target = literal_expression(number(50));
         let provided = HashSet::new();
@@ -774,14 +719,14 @@ mod tests {
 
     #[test]
     fn test_error_multiple_occurrences() {
-        let expression = Expression::new(
-            ExpressionKind::Arithmetic(
+        let expression = Expression {
+            kind: ExpressionKind::Arithmetic(
                 Arc::new(fact_expression("x")),
                 ArithmeticComputation::Add,
                 Arc::new(fact_expression("x")),
             ),
-            crate::inversion::synthetic_source(),
-        );
+            source_location: None,
+        };
 
         let unknown = FactPath::new(vec![], "x".to_string());
         let target = literal_expression(number(20));

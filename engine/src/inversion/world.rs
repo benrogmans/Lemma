@@ -381,13 +381,13 @@ fn substitute_rules_in_expression(
 ) -> LemmaResult<Expression> {
     enum WorkItem {
         Process(usize),
-        BuildArithmetic(ArithmeticComputation, Source),
-        BuildComparison(ComparisonComputation, Source),
-        BuildLogicalAnd(Source),
-        BuildLogicalOr(Source),
-        BuildLogicalNegation(NegationType, Source),
-        BuildUnitConversion(SemanticConversionTarget, Source),
-        BuildMathematicalComputation(MathematicalComputation, Source),
+        BuildArithmetic(ArithmeticComputation, Option<Source>),
+        BuildComparison(ComparisonComputation, Option<Source>),
+        BuildLogicalAnd(Option<Source>),
+        BuildLogicalOr(Option<Source>),
+        BuildLogicalNegation(NegationType, Option<Source>),
+        BuildUnitConversion(SemanticConversionTarget, Option<Source>),
+        BuildMathematicalComputation(MathematicalComputation, Option<Source>),
         PopVisitedRules,
     }
 
@@ -432,7 +432,7 @@ fn substitute_rules_in_expression(
                                 }
                             }
                         }
-                        result_pool.push(Expression::new(
+                        result_pool.push(Expression::with_source(
                             ExpressionKind::RulePath(rule_path.clone()),
                             source_loc,
                         ));
@@ -518,19 +518,19 @@ fn substitute_rules_in_expression(
                         work_stack.push(WorkItem::Process(inner_idx));
                     }
                     ExpressionKind::Literal(lit) => {
-                        result_pool.push(Expression::new(
+                        result_pool.push(Expression::with_source(
                             ExpressionKind::Literal(lit.clone()),
                             source_loc,
                         ));
                     }
                     ExpressionKind::FactPath(fact_path) => {
-                        result_pool.push(Expression::new(
+                        result_pool.push(Expression::with_source(
                             ExpressionKind::FactPath(fact_path.clone()),
                             source_loc,
                         ));
                     }
                     ExpressionKind::Veto(veto) => {
-                        result_pool.push(Expression::new(
+                        result_pool.push(Expression::with_source(
                             ExpressionKind::Veto(veto.clone()),
                             source_loc,
                         ));
@@ -548,7 +548,7 @@ fn substitute_rules_in_expression(
                         "BUG: missing left expression for Arithmetic during inversion hydration"
                     )
                 });
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::Arithmetic(Arc::new(left), op, Arc::new(right)),
                     source_loc,
                 ));
@@ -564,7 +564,7 @@ fn substitute_rules_in_expression(
                         "BUG: missing left expression for Comparison during inversion hydration"
                     )
                 });
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::Comparison(Arc::new(left), op, Arc::new(right)),
                     source_loc,
                 ));
@@ -580,7 +580,7 @@ fn substitute_rules_in_expression(
                         "BUG: missing left expression for LogicalAnd during inversion hydration"
                     )
                 });
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right)),
                     source_loc,
                 ));
@@ -596,7 +596,7 @@ fn substitute_rules_in_expression(
                         "BUG: missing left expression for LogicalOr during inversion hydration"
                     )
                 });
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
                     source_loc,
                 ));
@@ -605,7 +605,7 @@ fn substitute_rules_in_expression(
                 let inner = result_pool
                     .pop()
                     .expect("Internal error: missing expression for LogicalNegation");
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::LogicalNegation(Arc::new(inner), neg_type),
                     source_loc,
                 ));
@@ -614,7 +614,7 @@ fn substitute_rules_in_expression(
                 let inner = result_pool
                     .pop()
                     .expect("Internal error: missing expression for UnitConversion");
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::UnitConversion(Arc::new(inner), unit),
                     source_loc,
                 ));
@@ -623,7 +623,7 @@ fn substitute_rules_in_expression(
                 let inner = result_pool
                     .pop()
                     .expect("Internal error: missing expression for MathematicalComputation");
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::MathematicalComputation(func, Arc::new(inner)),
                     source_loc,
                 ));
@@ -654,13 +654,13 @@ fn hydrate_facts_in_expression(
 ) -> LemmaResult<Expression> {
     enum WorkItem {
         Process(usize),
-        BuildArithmetic(ArithmeticComputation, Source),
-        BuildComparison(ComparisonComputation, Source),
-        BuildLogicalAnd(Source),
-        BuildLogicalOr(Source),
-        BuildLogicalNegation(NegationType, Source),
-        BuildUnitConversion(SemanticConversionTarget, Source),
-        BuildMathematicalComputation(MathematicalComputation, Source),
+        BuildArithmetic(ArithmeticComputation, Option<Source>),
+        BuildComparison(ComparisonComputation, Option<Source>),
+        BuildLogicalAnd(Option<Source>),
+        BuildLogicalOr(Option<Source>),
+        BuildLogicalNegation(NegationType, Option<Source>),
+        BuildUnitConversion(SemanticConversionTarget, Option<Source>),
+        BuildMathematicalComputation(MathematicalComputation, Option<Source>),
     }
 
     let mut expr_pool: Vec<Arc<Expression>> = Vec::new();
@@ -683,14 +683,14 @@ fn hydrate_facts_in_expression(
                     ExpressionKind::FactPath(fact_path) => {
                         if provided_facts.contains(fact_path) {
                             if let Some(lit) = plan.facts.get(fact_path).and_then(|d| d.value()) {
-                                result_pool.push(Expression::new(
+                                result_pool.push(Expression::with_source(
                                     ExpressionKind::Literal(Box::new(lit.clone())),
                                     source_loc,
                                 ));
                                 continue;
                             }
                         }
-                        result_pool.push(Expression::new(
+                        result_pool.push(Expression::with_source(
                             ExpressionKind::FactPath(fact_path.clone()),
                             source_loc,
                         ));
@@ -776,19 +776,19 @@ fn hydrate_facts_in_expression(
                         work_stack.push(WorkItem::Process(inner_idx));
                     }
                     ExpressionKind::Literal(lit) => {
-                        result_pool.push(Expression::new(
+                        result_pool.push(Expression::with_source(
                             ExpressionKind::Literal(lit.clone()),
                             source_loc,
                         ));
                     }
                     ExpressionKind::RulePath(rule_path) => {
-                        result_pool.push(Expression::new(
+                        result_pool.push(Expression::with_source(
                             ExpressionKind::RulePath(rule_path.clone()),
                             source_loc,
                         ));
                     }
                     ExpressionKind::Veto(veto) => {
-                        result_pool.push(Expression::new(
+                        result_pool.push(Expression::with_source(
                             ExpressionKind::Veto(veto.clone()),
                             source_loc,
                         ));
@@ -802,7 +802,7 @@ fn hydrate_facts_in_expression(
                 let left = result_pool
                     .pop()
                     .unwrap_or_else(|| unreachable!("BUG: missing left expression for Arithmetic"));
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::Arithmetic(Arc::new(left), op, Arc::new(right)),
                     source_loc,
                 ));
@@ -814,7 +814,7 @@ fn hydrate_facts_in_expression(
                 let left = result_pool
                     .pop()
                     .unwrap_or_else(|| unreachable!("BUG: missing left expression for Comparison"));
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::Comparison(Arc::new(left), op, Arc::new(right)),
                     source_loc,
                 ));
@@ -826,7 +826,7 @@ fn hydrate_facts_in_expression(
                 let left = result_pool
                     .pop()
                     .unwrap_or_else(|| unreachable!("BUG: missing left expression for LogicalAnd"));
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right)),
                     source_loc,
                 ));
@@ -838,7 +838,7 @@ fn hydrate_facts_in_expression(
                 let left = result_pool
                     .pop()
                     .unwrap_or_else(|| unreachable!("BUG: missing left expression for LogicalOr"));
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
                     source_loc,
                 ));
@@ -847,7 +847,7 @@ fn hydrate_facts_in_expression(
                 let inner = result_pool
                     .pop()
                     .expect("Internal error: missing expression for LogicalNegation");
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::LogicalNegation(Arc::new(inner), neg_type),
                     source_loc,
                 ));
@@ -856,7 +856,7 @@ fn hydrate_facts_in_expression(
                 let inner = result_pool
                     .pop()
                     .expect("Internal error: missing expression for UnitConversion");
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::UnitConversion(Arc::new(inner), unit),
                     source_loc,
                 ));
@@ -865,7 +865,7 @@ fn hydrate_facts_in_expression(
                 let inner = result_pool
                     .pop()
                     .expect("Internal error: missing expression for MathematicalComputation");
-                result_pool.push(Expression::new(
+                result_pool.push(Expression::with_source(
                     ExpressionKind::MathematicalComputation(func, Arc::new(inner)),
                     source_loc,
                 ));
@@ -972,13 +972,13 @@ pub(crate) fn try_constant_fold_expression(expr: &Expression) -> Option<Expressi
             {
                 if let Some(result) = evaluate_arithmetic(left_val.as_ref(), op, right_val.as_ref())
                 {
-                    return Some(Expression::new(
+                    return Some(Expression::with_source(
                         ExpressionKind::Literal(Box::new(result)),
                         expr.source_location.clone(),
                     ));
                 }
             }
-            Some(Expression::new(
+            Some(Expression::with_source(
                 ExpressionKind::Arithmetic(
                     Arc::new(left_folded),
                     op.clone(),
@@ -995,13 +995,13 @@ pub(crate) fn try_constant_fold_expression(expr: &Expression) -> Option<Expressi
             {
                 if let Some(result) = evaluate_comparison(left_val.as_ref(), op, right_val.as_ref())
                 {
-                    return Some(Expression::new(
+                    return Some(Expression::with_source(
                         ExpressionKind::Literal(Box::new(LiteralValue::from_bool(result))),
                         expr.source_location.clone(),
                     ));
                 }
             }
-            Some(Expression::new(
+            Some(Expression::with_source(
                 ExpressionKind::Comparison(
                     Arc::new(left_folded),
                     op.clone(),
@@ -1061,16 +1061,13 @@ mod tests {
     use rust_decimal::Decimal;
 
     fn literal_expr(val: LiteralValue) -> Expression {
-        Expression::new(
-            ExpressionKind::Literal(Box::new(val)),
-            crate::inversion::synthetic_source(),
-        )
+        Expression::with_source(ExpressionKind::Literal(Box::new(val)), None)
     }
 
     fn fact_expr(name: &str) -> Expression {
-        Expression::new(
+        Expression::with_source(
             ExpressionKind::FactPath(FactPath::new(vec![], name.to_string())),
-            crate::inversion::synthetic_source(),
+            None,
         )
     }
 
@@ -1134,9 +1131,9 @@ mod tests {
     fn test_constant_fold_arithmetic() {
         let left = literal_expr(num(10));
         let right = literal_expr(num(5));
-        let expr = Expression::new(
+        let expr = Expression::with_source(
             ExpressionKind::Arithmetic(Arc::new(left), ArithmeticComputation::Add, Arc::new(right)),
-            crate::inversion::synthetic_source(),
+            None,
         );
 
         let folded = try_constant_fold_expression(&expr).unwrap();
@@ -1156,13 +1153,13 @@ mod tests {
     fn test_constant_fold_comparison() {
         let left = literal_expr(num(10));
         let right = literal_expr(num(5));
-        let expr = Expression::new(
+        let expr = Expression::with_source(
             ExpressionKind::Comparison(
                 Arc::new(left),
                 ComparisonComputation::GreaterThan,
                 Arc::new(right),
             ),
-            crate::inversion::synthetic_source(),
+            None,
         );
 
         let folded = try_constant_fold_expression(&expr).unwrap();

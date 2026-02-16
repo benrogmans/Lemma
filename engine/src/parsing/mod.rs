@@ -46,13 +46,20 @@ pub fn parse(
 
     let mut depth_tracker = DepthTracker::with_max_depth(limits.max_expression_depth);
 
+    let source_text: Arc<str> = Arc::from(content);
+
     match LemmaParser::parse(Rule::lemma_file, content) {
         Ok(mut pairs) => {
             let mut docs = Vec::new();
             if let Some(lemma_file_pair) = pairs.next() {
                 for inner_pair in lemma_file_pair.into_inner() {
                     if inner_pair.as_rule() == Rule::doc {
-                        docs.push(parse_doc(inner_pair, attribute, &mut depth_tracker)?);
+                        docs.push(parse_doc(
+                            inner_pair,
+                            attribute,
+                            &mut depth_tracker,
+                            source_text.clone(),
+                        )?);
                     }
                 }
             }
@@ -76,8 +83,12 @@ pub fn parse(
 
             Err(LemmaError::parse(
                 e.variant.to_string(),
-                crate::parsing::source::Source::new(attribute, pest_span, "<parse-error>"),
-                Arc::from(content),
+                Some(crate::parsing::source::Source::new(
+                    attribute,
+                    pest_span,
+                    "",
+                    source_text,
+                )),
                 None::<String>,
             ))
         }
@@ -88,6 +99,7 @@ fn parse_doc(
     pair: Pair<Rule>,
     attribute: &str,
     depth_tracker: &mut DepthTracker,
+    source_text: Arc<str>,
 ) -> Result<LemmaDoc, LemmaError> {
     let doc_start_line = pair.as_span().start_pos().line_col().0;
 
@@ -123,7 +135,7 @@ fn parse_doc(
     let name = doc_name.ok_or_else(|| {
         LemmaError::engine(
             "Grammar error: doc missing doc_declaration",
-            crate::parsing::source::Source::new(
+            Some(crate::parsing::source::Source::new(
                 attribute,
                 Span {
                     start: 0,
@@ -131,31 +143,34 @@ fn parse_doc(
                     line: 1,
                     col: 0,
                 },
-                "<parse-error>",
-            ),
-            std::sync::Arc::from(""),
+                "",
+                source_text.clone(),
+            )),
             None::<String>,
         )
     })?;
 
     // First pass: collect all named type definitions from doc_body
-    // These are explicit type definitions like: `type money = number -> minimum 0`
-    // and type imports like: `type money from "other_doc"`
-    // Note: Inline type definitions (e.g., `fact price = [number -> minimum 0]`) are
-    // handled during fact parsing, not collected here.
     for inner_pair in pair.clone().into_inner() {
         if inner_pair.as_rule() == Rule::doc_body {
             for body_item in inner_pair.into_inner() {
                 match body_item.as_rule() {
                     Rule::type_definition => {
                         let type_def = crate::parsing::types::parse_type_definition(
-                            body_item, attribute, &name,
+                            body_item,
+                            attribute,
+                            &name,
+                            source_text.clone(),
                         )?;
                         types.push(type_def);
                     }
                     Rule::type_import => {
-                        let type_def =
-                            crate::parsing::types::parse_type_import(body_item, attribute, &name)?;
+                        let type_def = crate::parsing::types::parse_type_import(
+                            body_item,
+                            attribute,
+                            &name,
+                            source_text.clone(),
+                        )?;
                         types.push(type_def);
                     }
                     _ => {}
@@ -164,21 +179,28 @@ fn parse_doc(
         }
     }
 
-    // Second pass: parse facts and rules from doc_body (which may reference named types via type_declaration
-    // or use inline_type_definition for inline type definitions)
+    // Second pass: parse facts and rules from doc_body
     for inner_pair in pair.into_inner() {
         if inner_pair.as_rule() == Rule::doc_body {
             for body_item in inner_pair.into_inner() {
                 match body_item.as_rule() {
                     Rule::fact_definition => {
                         let fact = crate::parsing::facts::parse_fact_definition(
-                            body_item, attribute, &name, &types,
+                            body_item,
+                            attribute,
+                            &name,
+                            source_text.clone(),
+                            &types,
                         )?;
                         facts.push(fact);
                     }
                     Rule::fact_binding => {
                         let fact = crate::parsing::facts::parse_fact_binding(
-                            body_item, attribute, &name, &types,
+                            body_item,
+                            attribute,
+                            &name,
+                            source_text.clone(),
+                            &types,
                         )?;
                         facts.push(fact);
                     }
@@ -188,6 +210,7 @@ fn parse_doc(
                             depth_tracker,
                             attribute,
                             &name,
+                            source_text.clone(),
                         )?;
                         rules.push(rule);
                     }
@@ -507,8 +530,9 @@ fact age = 25
 
         match result {
             Err(LemmaError::Parse(details)) => {
-                assert_eq!(details.source_location.attribute, "test.lemma");
-                assert_eq!(details.source_location.doc_name, "<parse-error>");
+                let src = details.source.as_ref().expect("should have source");
+                assert_eq!(src.attribute, "test.lemma");
+                assert_eq!(src.doc_name, "");
             }
             Err(e) => panic!("Expected Parse error, got: {e:?}"),
             Ok(_) => panic!("Expected parse error for unclosed string"),

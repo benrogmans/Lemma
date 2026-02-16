@@ -178,6 +178,59 @@ pub fn datetime_arithmetic(
             )))
         }
 
+        // Duration + Date → Date
+        (ValueKind::Duration(value, unit), ValueKind::Date(date), ArithmeticComputation::Add) => {
+            let dt = match semantic_datetime_to_chrono(date) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            let new_dt = match unit {
+                SemanticDurationUnit::Month => {
+                    let months = match value.to_i32() {
+                        Some(m) => m,
+                        None => {
+                            return OperationResult::Veto(Some("Month value too large".to_string()))
+                        }
+                    };
+                    match dt.checked_add_months(chrono::Months::new(months as u32)) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+                SemanticDurationUnit::Year => {
+                    let years = match value.to_i32() {
+                        Some(y) => y,
+                        None => {
+                            return OperationResult::Veto(Some("Year value too large".to_string()))
+                        }
+                    };
+                    match dt.checked_add_months(chrono::Months::new(
+                        (years * MONTHS_PER_YEAR as i32) as u32,
+                    )) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+                _ => {
+                    let seconds = super::units::duration_to_seconds(*value, unit);
+                    let duration = match seconds_to_chrono_duration(seconds) {
+                        Ok(d) => d,
+                        Err(msg) => return OperationResult::Veto(Some(msg)),
+                    };
+                    match dt.checked_add_signed(duration) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+            };
+
+            OperationResult::Value(Box::new(LiteralValue::date_with_type(
+                chrono_to_semantic_datetime(new_dt),
+                right.lemma_type.clone(),
+            )))
+        }
+
         (ValueKind::Date(date), ValueKind::Time(time), ArithmeticComputation::Subtract) => {
             // Date - Time: Create a datetime from the date's date components and the time's time components
             // Then subtract to get the duration
@@ -424,6 +477,24 @@ pub fn time_arithmetic(
             OperationResult::Value(Box::new(LiteralValue::duration(
                 seconds,
                 SemanticDurationUnit::Second,
+            )))
+        }
+
+        // Duration + Time → Time
+        (ValueKind::Duration(value, unit), ValueKind::Time(time), ArithmeticComputation::Add) => {
+            let seconds = super::units::duration_to_seconds(*value, unit);
+            let time_aware = match semantic_time_to_chrono_datetime(time) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let duration = match seconds_to_chrono_duration(seconds) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let result_dt = time_aware + duration;
+            OperationResult::Value(Box::new(LiteralValue::time_with_type(
+                chrono_datetime_to_semantic_time(result_dt),
+                right.lemma_type.clone(),
             )))
         }
 

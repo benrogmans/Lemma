@@ -193,10 +193,10 @@ impl Formatter {
                 col_name.push("Facts".to_string());
                 col_type.push(String::new());
                 col_default.push(String::new());
-                for (name, fact) in &schema.facts {
+                for (name, (lemma_type, default)) in &schema.facts {
                     col_name.push(format!("  {}", name));
-                    col_type.push(fact.fact_type.clone());
-                    col_default.push(fact.default.as_deref().unwrap_or("").to_string());
+                    col_type.push(lemma_type.name());
+                    col_default.push(default.as_ref().map(|v| v.to_string()).unwrap_or_default());
                 }
             }
 
@@ -210,9 +210,9 @@ impl Formatter {
                 col_name.push("Rules".to_string());
                 col_type.push(String::new());
                 col_default.push(String::new());
-                for (name, rule) in &schema.rules {
+                for (name, rule_type) in &schema.rules {
                     col_name.push(format!("  {}", name));
-                    col_type.push(rule.rule_type.clone());
+                    col_type.push(rule_type.name());
                     col_default.push(String::new());
                 }
             }

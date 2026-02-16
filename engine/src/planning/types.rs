@@ -11,7 +11,6 @@ use crate::parsing::ast::{CommandArg, FactReference, TypeDef};
 use crate::planning::semantics::{self, LemmaType, TypeExtends, TypeSpecification};
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 /// Fully resolved types for a single document
 /// After resolution, all imports are inlined - documents are independent
@@ -42,7 +41,7 @@ pub struct TypeRegistry {
     inline_type_definitions: HashMap<String, HashMap<FactReference, TypeDef>>,
     /// Source text per file attribute, used for error reporting.
     /// Maps source attribute (e.g. filename) to the full source code string.
-    sources: HashMap<String, String>,
+    _sources: HashMap<String, String>,
 }
 
 impl TypeRegistry {
@@ -51,21 +50,8 @@ impl TypeRegistry {
         TypeRegistry {
             named_types: HashMap::new(),
             inline_type_definitions: HashMap::new(),
-            sources,
+            _sources: sources,
         }
-    }
-
-    /// Look up the source text for a given source location.
-    /// Panics if the source attribute is not found in the sources map,
-    /// because that indicates a bug in the pipeline (all sources must be registered).
-    fn source_text_for(&self, source: &crate::Source) -> Arc<str> {
-        let text = self.sources.get(&source.attribute).unwrap_or_else(|| {
-            unreachable!(
-                "BUG: missing source text for attribute '{}' (doc '{}') in TypeRegistry",
-                source.attribute, source.doc_name
-            )
-        });
-        Arc::from(text.as_str())
     }
 
     /// Register a user-defined type for a given document
@@ -80,8 +66,7 @@ impl TypeRegistry {
                 if doc_types.contains_key(name) {
                     return Err(LemmaError::engine(
                         format!("Type '{}' is already defined in document '{}'", name, doc),
-                        def_loc.clone(),
-                        self.source_text_for(&def_loc),
+                        Some(def_loc.clone()),
                         None::<String>,
                     ));
                 }
@@ -103,8 +88,7 @@ impl TypeRegistry {
                             "Inline type definition for fact '{}' is already defined in document '{}'",
                             fact_ref.fact, doc
                         ),
-                        def_loc.clone(),
-                        self.source_text_for(&def_loc),
+                        Some(def_loc.clone()),
                         None::<String>,
                     ));
                 }
@@ -333,11 +317,9 @@ impl TypeRegistry {
                         doc, name
                     )
                 });
-            let source_text = self.source_text_for(&source_location);
             return Err(LemmaError::circular_dependency(
                 format!("Circular dependency detected in type resolution: {}", key),
-                source_location,
-                source_text,
+                Some(source_location),
                 vec![],
                 None::<String>,
             ));
@@ -395,8 +377,7 @@ impl TypeRegistry {
                 let source = type_def.source_location().clone();
                 return Err(LemmaError::engine(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
-                    source.clone(),
-                    self.source_text_for(&source),
+                    Some(source.clone()),
                     None::<String>,
                 ));
             }
@@ -476,8 +457,7 @@ impl TypeRegistry {
                     // Type was never registered - invalid parent type
                     Err(LemmaError::engine(
                         format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
-                        source.clone(),
-                        self.source_text_for(source),
+                        Some(source.clone()),
                         None::<String>,
                     ))
                 } else {
@@ -522,8 +502,7 @@ impl TypeRegistry {
                 Err(e) => {
                     errors.push(LemmaError::engine(
                         format!("Failed to apply constraint '{}': {}", command, e),
-                        source.clone(),
-                        self.source_text_for(source),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                     specs = specs_clone;
@@ -562,8 +541,7 @@ impl TypeRegistry {
                 // Inline type definitions should have valid parent types
                 return Err(LemmaError::engine(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
-                    def_loc.clone(),
-                    self.source_text_for(&def_loc),
+                    Some(def_loc.clone()),
                     None::<String>,
                 ));
             }
@@ -629,8 +607,7 @@ impl TypeRegistry {
                             "Unit '{}' is defined more than once in type '{}'",
                             unit, type_name
                         ),
-                        source.clone(),
-                        self.source_text_for(&source),
+                        Some(source.clone()),
                         None::<String>,
                     ));
                 }
@@ -655,6 +632,12 @@ impl TypeRegistry {
                     continue;
                 }
 
+                // Siblings in the same scale family (e.g. both extend "money")
+                // inherit the same unit — not ambiguous.
+                if existing_type.same_scale_family(resolved_type) {
+                    continue;
+                }
+
                 let source = self
                     .named_types
                     .get(doc)
@@ -667,8 +650,7 @@ impl TypeRegistry {
                         "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
                         unit, doc, existing_name, type_name
                     ),
-                    source.clone(),
-                    self.source_text_for(&source),
+                    Some(source.clone()),
                     None::<String>,
                 ));
             }
@@ -704,8 +686,7 @@ impl TypeRegistry {
                         "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
                         unit, doc, existing_name, type_name
                     ),
-                    source.clone(),
-                    self.source_text_for(&source),
+                    Some(source.clone()),
                     None::<String>,
                 ));
             }
@@ -741,6 +722,7 @@ mod tests {
     use crate::parse;
     use crate::ResourceLimits;
     use rust_decimal::Decimal;
+    use std::sync::Arc;
 
     fn test_registry() -> TypeRegistry {
         let mut sources = HashMap::new();
@@ -784,6 +766,7 @@ mod tests {
                     col: 0,
                 },
                 "test_doc",
+                Arc::from("doc test\nfact x = 1"),
             ),
             name: "money".to_string(),
             parent: "number".to_string(),
@@ -809,6 +792,7 @@ mod tests {
                     col: 0,
                 },
                 "test_doc",
+                Arc::from("doc test\nfact x = 1"),
             ),
             parent: "number".to_string(),
             constraints: Some(vec![
@@ -849,6 +833,7 @@ mod tests {
                     col: 0,
                 },
                 "test_doc",
+                Arc::from("doc test\nfact x = 1"),
             ),
             name: "money".to_string(),
             parent: "number".to_string(),
@@ -875,6 +860,7 @@ mod tests {
                     col: 0,
                 },
                 "test_doc",
+                Arc::from("doc test\nfact x = 1"),
             ),
             name: "money".to_string(),
             parent: "number".to_string(),

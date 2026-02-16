@@ -1,14 +1,16 @@
-use crate::evaluation::response::{Response, RuleResult};
-use crate::{Expression, ExpressionKind, LemmaRule, LiteralValue, OperationResult};
+use crate::evaluation::response::{EvaluatedRule, Response, RuleResult};
+use crate::planning::semantics::{
+    Expression, ExpressionKind, LiteralValue, RulePath, Source, Span,
+};
+use crate::OperationResult;
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::str::FromStr;
+use std::sync::Arc;
 
-fn dummy_rule(name: &str) -> LemmaRule {
-    use crate::parsing::ast::Span;
-    use crate::parsing::Source;
-    let src = Source::new(
-        "<test>",
+fn dummy_source() -> Source {
+    Source::new(
+        "test.lemma",
         Span {
             start: 0,
             end: 0,
@@ -16,15 +18,21 @@ fn dummy_rule(name: &str) -> LemmaRule {
             col: 1,
         },
         "test_doc",
-    );
-    LemmaRule {
+        Arc::from("doc test_doc\nrule dummy = true"),
+    )
+}
+
+fn dummy_rule(name: &str) -> EvaluatedRule {
+    EvaluatedRule {
         name: name.to_string(),
-        expression: Expression {
-            kind: ExpressionKind::Literal(LiteralValue::boolean(crate::BooleanValue::True)),
-            source_location: src.clone(),
-        },
-        unless_clauses: vec![],
-        source_location: src,
+        path: RulePath::new(vec![], name.to_string()),
+        default_expression: Expression::new(
+            ExpressionKind::Literal(Box::new(LiteralValue::from_bool(true))),
+            dummy_source(),
+        ),
+        unless_branches: vec![],
+        source_location: dummy_source(),
+        rule_type: crate::planning::semantics::primitive_boolean().clone(),
     }
 }
 
@@ -35,7 +43,9 @@ fn test_response_serialization() {
         "test_rule".to_string(),
         RuleResult {
             rule: dummy_rule("test_rule"),
-            result: OperationResult::Value(LiteralValue::number(Decimal::from_str("42").unwrap())),
+            result: OperationResult::Value(Box::new(LiteralValue::number(
+                Decimal::from_str("42").unwrap(),
+            ))),
             facts: vec![],
             operations: vec![],
             proof: None,
@@ -49,9 +59,16 @@ fn test_response_serialization() {
     };
 
     let json = serde_json::to_string(&response).unwrap();
-    assert!(json.contains("test_doc"));
-    assert!(json.contains("test_rule"));
-    assert!(json.contains("results"));
+    let deserialized: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized["doc_name"], "test_doc");
+    assert!(deserialized["results"]
+        .as_object()
+        .unwrap()
+        .contains_key("test_rule"));
+    assert_eq!(
+        deserialized["results"]["test_rule"]["result"]["value"]["display_value"],
+        "42"
+    );
 }
 
 #[test]
@@ -61,7 +78,7 @@ fn test_response_filter_rules() {
         "rule1".to_string(),
         RuleResult {
             rule: dummy_rule("rule1"),
-            result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::True)),
+            result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
             facts: vec![],
             operations: vec![],
             proof: None,
@@ -72,7 +89,7 @@ fn test_response_filter_rules() {
         "rule2".to_string(),
         RuleResult {
             rule: dummy_rule("rule2"),
-            result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::False)),
+            result: OperationResult::Value(Box::new(LiteralValue::from_bool(false))),
             facts: vec![],
             operations: vec![],
             proof: None,
@@ -95,7 +112,7 @@ fn test_response_filter_rules() {
 fn test_rule_result_types() {
     let success = RuleResult {
         rule: dummy_rule("rule1"),
-        result: OperationResult::Value(LiteralValue::boolean(crate::BooleanValue::True)),
+        result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
         facts: vec![],
         operations: vec![],
         proof: None,
@@ -111,16 +128,7 @@ fn test_rule_result_types() {
             value: crate::planning::semantics::FactValue::Literal(
                 crate::planning::semantics::LiteralValue::from_bool(false),
             ),
-            source: crate::Source::new(
-                "",
-                crate::Span {
-                    start: 0,
-                    end: 0,
-                    line: 0,
-                    col: 0,
-                },
-                "",
-            ),
+            source: None,
         }],
         operations: vec![],
         proof: None,

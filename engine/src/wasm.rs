@@ -1,4 +1,4 @@
-use crate::{parse, Engine, LemmaError, ResourceLimits};
+use crate::{Engine, LemmaError};
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -46,13 +46,12 @@ impl WasmEngine {
         })
     }
 
+    /// Evaluate rules in a document.
+    ///
+    /// Pass `rule_names_json` as `"[]"` or `""` to evaluate all rules.
+    /// Pass a JSON array like `'["total","discount"]'` to evaluate specific rules.
     #[wasm_bindgen(js_name = evaluate)]
-    pub fn evaluate(&self, doc_name: &str, fact_values_json: &str) -> String {
-        self.evaluate_rules(doc_name, "[]", fact_values_json)
-    }
-
-    #[wasm_bindgen(js_name = evaluateRules)]
-    pub fn evaluate_rules(
+    pub fn evaluate(
         &self,
         doc_name: &str,
         rule_names_json: &str,
@@ -85,56 +84,56 @@ impl WasmEngine {
         }
     }
 
+    /// List all loaded documents with their full schemas.
+    ///
+    /// Returns `{ success: true, documents: [DocumentSchema, ...] }` sorted by
+    /// document name, consistent with the HTTP and MCP interfaces.
     #[wasm_bindgen(js_name = listDocuments)]
     pub fn list_documents(&self) -> String {
+        let engine = self.engine.borrow();
+        let mut names = engine.list_documents();
+        names.sort();
+        let schemas: Vec<serde_json::Value> = names
+            .iter()
+            .filter_map(|name| engine.get_execution_plan(name))
+            .map(|plan| serde_json::to_value(&plan.schema()).unwrap_or(json!({})))
+            .collect();
         to_json_response(json!({
             "success": true,
-            "documents": self.engine.borrow().list_documents()
+            "documents": schemas
         }))
     }
 
-    /// Return a UI-friendly schema for a document: facts + resolved types (from execution plan).
+    /// Return the full document schema: all facts and rules with their types.
     ///
-    /// This is intended for frontends to build fact input forms without having to parse Lemma code.
-    #[wasm_bindgen(js_name = getDocumentSchema)]
-    pub fn get_document_schema(&self, doc_name: &str) -> String {
-        self.get_required_facts(doc_name, "[]")
-    }
+    /// Returns the `DocumentSchema` used by all Lemma interfaces, serialized as
+    /// JSON. Use `getSchema` with specific rule names to get only the facts
+    /// required by those rules.
+    #[wasm_bindgen(js_name = getSchema)]
+    pub fn get_schema(&self, doc_name: &str, rule_names_json: &str) -> String {
+        let engine = self.engine.borrow();
+        let plan = match engine.get_execution_plan(doc_name) {
+            Some(p) => p,
+            None => return to_json_error_string(&format!("Document '{}' not found", doc_name)),
+        };
 
-    #[wasm_bindgen(js_name = getRequiredFacts)]
-    pub fn get_required_facts(&self, doc_name: &str, rule_names_json: &str) -> String {
         let rule_names: Vec<String> = match parse_rule_names(rule_names_json) {
             Ok(v) => v,
             Err(msg) => return to_json_error_string(&msg),
         };
 
-        let necessary_facts = match self.engine.borrow().get_facts(doc_name, &rule_names) {
-            Ok(facts) => facts,
-            Err(e) => return to_json_error_string(&e.to_string()),
+        let schema = if rule_names.is_empty() {
+            plan.schema()
+        } else {
+            match plan.schema_for_rules(&rule_names) {
+                Ok(s) => s,
+                Err(e) => return to_json_error_string(&e.to_string()),
+            }
         };
-
-        let facts: Vec<_> = necessary_facts
-            .into_iter()
-            .map(|(path, schema_type)| {
-                let schema_type_json =
-                    serde_json::to_value(&schema_type).unwrap_or(serde_json::Value::Null);
-                json!({
-                    "name": path.to_string(),
-                    "required": true,
-                    "valueKind": "type_declaration",
-                    "schemaType": schema_type_json,
-                    "defaultValue": serde_json::Value::Null
-                })
-            })
-            .collect();
 
         to_json_response(json!({
             "success": true,
-            "doc": {
-                "name": doc_name,
-                "rules": rule_names,
-                "facts": facts
-            }
+            "schema": serde_json::to_value(&schema).unwrap_or(json!({}))
         }))
     }
 
@@ -147,16 +146,6 @@ impl WasmEngine {
         _provided_values_json: &str,
     ) -> String {
         to_json_error_string("Inversion not implemented")
-    }
-
-    /// Return LSP-style diagnostics for the given Lemma source (parse + plan errors).
-    /// Used by the WASM playground to show inline errors in the editor.
-    /// Returns a JSON array of { message, severity, startLine, startColumn, endLine, endColumn }
-    /// (Monaco uses 1-based line and column).
-    #[wasm_bindgen(js_name = getDiagnostics)]
-    pub fn get_diagnostics(&self, code: &str, source_attribute: &str) -> String {
-        let diagnostics = collect_diagnostics(code, source_attribute);
-        to_json_response(serde_json::to_value(&diagnostics).unwrap_or(json!([])))
     }
 
     /// Format Lemma source code. Returns a JSON string: `{ "success": true, "formatted": "..." }`
@@ -236,100 +225,4 @@ fn format_error(error: &LemmaError) -> String {
             format!("Multiple Errors:\n{}", error_messages.join("\n"))
         }
     }
-}
-
-/// Convert byte offset in source text to (line, column) 1-based for Monaco.
-fn byte_offset_to_line_col(text: &str, byte_offset: usize) -> (u32, u32) {
-    let clamped = byte_offset.min(text.len());
-    let mut line = 1u32;
-    let mut col = 1u32;
-    for (i, &b) in text.as_bytes().iter().enumerate() {
-        if i >= clamped {
-            break;
-        }
-        if b == b'\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    (line, col)
-}
-
-fn flatten_errors(error: &LemmaError) -> Vec<&LemmaError> {
-    match error {
-        LemmaError::MultipleErrors(errors) => errors.iter().flat_map(flatten_errors).collect(),
-        other => vec![other],
-    }
-}
-
-fn collect_diagnostics(code: &str, source_attribute: &str) -> Vec<serde_json::Value> {
-    let limits = ResourceLimits::default();
-    let mut result = Vec::new();
-
-    let docs = match parse(code, source_attribute, &limits) {
-        Ok(d) => d,
-        Err(e) => {
-            for err in flatten_errors(&e) {
-                result.push(lemma_error_to_diagnostic(err, code, source_attribute));
-            }
-            return result;
-        }
-    };
-
-    let sources: HashMap<String, String> =
-        std::iter::once((source_attribute.to_string(), code.to_string())).collect();
-
-    let docs_to_plan: Vec<&crate::parsing::ast::LemmaDoc> = docs.iter().collect();
-    let (_plans, plan_errors) = crate::planning::plan(&docs_to_plan, &docs, sources);
-    for err in &plan_errors {
-        let err_attribute = err
-            .location()
-            .map(|s| s.attribute.as_str())
-            .unwrap_or(source_attribute);
-        if err_attribute == source_attribute {
-            result.push(lemma_error_to_diagnostic(err, code, source_attribute));
-        }
-    }
-
-    result
-}
-
-fn lemma_error_to_diagnostic(
-    error: &LemmaError,
-    text: &str,
-    file_attribute: &str,
-) -> serde_json::Value {
-    let message = format_error(error);
-    let (start_line, start_col, end_line, end_col) = match error {
-        LemmaError::ResourceLimitExceeded { .. } => (1u32, 1u32, 1u32, 1u32),
-        other => {
-            if let Some(source) = other.location() {
-                if source.attribute != file_attribute {
-                    return json!({
-                        "message": message,
-                        "severity": "error",
-                        "startLine": 1,
-                        "startColumn": 1,
-                        "endLine": 1,
-                        "endColumn": 1
-                    });
-                }
-                let (sl, sc) = byte_offset_to_line_col(text, source.span.start);
-                let (el, ec) = byte_offset_to_line_col(text, source.span.end);
-                (sl, sc, el, ec)
-            } else {
-                (1, 1, 1, 1)
-            }
-        }
-    };
-    json!({
-        "message": message,
-        "severity": "error",
-        "startLine": start_line,
-        "startColumn": start_col,
-        "endLine": end_line,
-        "endColumn": end_col
-    })
 }

@@ -52,3 +52,61 @@ rule total = age + adult_age + twenties
     // 25 + 30 + 25 = 80
     assert_eq!(total_rule.result.value().unwrap().to_string(), "80");
 }
+
+/// Regression test: scale type with `-> default` before `-> unit` must work.
+/// Previously, constraints were applied in declaration order, so `default`
+/// would fail to find the unit because it hadn't been registered yet.
+#[test]
+fn test_scale_type_default_before_unit_declarations() {
+    let mut engine = Engine::new();
+
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
+        doc pricing
+        type money = scale
+          -> default 4 eur
+          -> unit eur 1
+          -> unit usd 1.19
+        fact price = [money]
+        rule doubled = price * 2
+    "#,
+        "pricing.lemma",
+    )
+    .expect("default before unit should be valid");
+
+    let plan = engine.get_execution_plan("pricing").unwrap();
+    let schema = plan.schema();
+    assert!(
+        schema.facts.contains_key("price"),
+        "price fact should exist"
+    );
+}
+
+/// Verify that `-> default` after `-> unit` (the original order) still works.
+#[test]
+fn test_scale_type_default_after_unit_declarations() {
+    let mut engine = Engine::new();
+
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
+        doc pricing
+        type money = scale
+          -> unit eur 1
+          -> unit usd 1.19
+          -> default 4 eur
+        fact price = [money]
+        rule doubled = price * 2
+    "#,
+        "pricing.lemma",
+    )
+    .expect("default after unit should be valid");
+
+    let plan = engine.get_execution_plan("pricing").unwrap();
+    let schema = plan.schema();
+    assert!(
+        schema.facts.contains_key("price"),
+        "price fact should exist"
+    );
+}

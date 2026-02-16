@@ -72,7 +72,7 @@ mod tests {
 
     fn dummy_source() -> Source {
         Source::new(
-            "<test>",
+            "test",
             Span {
                 start: 0,
                 end: 0,
@@ -80,6 +80,7 @@ mod tests {
                 col: 1,
             },
             "test_doc",
+            std::sync::Arc::from("doc test_doc\nfact x = 1\nrule result = x"),
         )
     }
 
@@ -182,16 +183,7 @@ mod tests {
                 value: crate::planning::semantics::FactValue::Literal(
                     crate::planning::semantics::LiteralValue::from_bool(false),
                 ),
-                source: crate::Source::new(
-                    "",
-                    crate::Span {
-                        start: 0,
-                        end: 0,
-                        line: 0,
-                        col: 0,
-                    },
-                    "",
-                ),
+                source: None,
             }],
             operations: vec![],
             proof: None,

@@ -7,14 +7,13 @@
 use crate::planning::graph::Graph;
 use crate::planning::semantics;
 use crate::planning::semantics::{
-    Expression, FactData, FactPath, LemmaType, LiteralValue, RulePath, ValueKind,
+    Expression, FactData, FactPath, LemmaType, LiteralValue, RulePath, TypeSpecification, ValueKind,
 };
 use crate::LemmaError;
 use crate::ResourceLimits;
 use crate::Source;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 /// A complete execution plan ready for the evaluator
 ///
@@ -176,77 +175,172 @@ fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
     }
 }
 
-/// Schema of a Lemma document: its typed facts (inputs) and rules (outputs).
+/// A document's public interface: its facts (inputs) and rules (outputs) with
+/// full structured type information.
 ///
-/// Built from an [`ExecutionPlan`] via [`ExecutionPlan::document_schema`].
-/// Shared by the HTTP server, the CLI, and any other consumer that needs to
-/// describe a document's interface without evaluating it.
+/// Built from an [`ExecutionPlan`] via [`ExecutionPlan::schema`] (all facts and
+/// rules) or [`ExecutionPlan::schema_for_rules`] (scoped to specific rules and
+/// only the facts they need).
+///
+/// Shared by the HTTP server, the CLI, the MCP server, WASM, and any other
+/// consumer. Carries the real [`LemmaType`] and [`LiteralValue`] so consumers
+/// can work at whatever fidelity they need — structured types for input forms,
+/// or `Display` for plain text.
 #[derive(Debug, Clone, Serialize)]
 pub struct DocumentSchema {
     /// Document name
     pub doc: String,
-    /// Facts (inputs) keyed by name, with their types and optional defaults
-    pub facts: indexmap::IndexMap<String, FactSchema>,
-    /// Rules (outputs) keyed by name, with their computed types
-    pub rules: indexmap::IndexMap<String, RuleSchema>,
+    /// Facts (inputs) keyed by name: (type, optional default value)
+    pub facts: indexmap::IndexMap<String, (LemmaType, Option<LiteralValue>)>,
+    /// Rules (outputs) keyed by name, with their computed result types
+    pub rules: indexmap::IndexMap<String, LemmaType>,
 }
 
-/// Schema for a single fact: type and optional default value.
-#[derive(Debug, Clone, Serialize)]
-pub struct FactSchema {
-    /// Type name (e.g. "number", "boolean", "money", user-defined type names)
-    #[serde(rename = "type")]
-    pub fact_type: String,
-    /// Default value as a display string, or `None` if the caller must supply it
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<String>,
+impl std::fmt::Display for DocumentSchema {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Document: {}", self.doc)?;
+
+        if !self.facts.is_empty() {
+            write!(f, "\n\nFacts:")?;
+            for (name, (lemma_type, default)) in &self.facts {
+                write!(f, "\n  {} ({}", name, lemma_type.name())?;
+                if let Some(constraints) = format_type_constraints(&lemma_type.specifications) {
+                    write!(f, ", {}", constraints)?;
+                }
+                if let Some(val) = default {
+                    write!(f, ", default: {}", val)?;
+                }
+                write!(f, ")")?;
+            }
+        }
+
+        if !self.rules.is_empty() {
+            write!(f, "\n\nRules:")?;
+            for (name, rule_type) in &self.rules {
+                write!(f, "\n  {} ({})", name, rule_type.name())?;
+            }
+        }
+
+        if self.facts.is_empty() && self.rules.is_empty() {
+            write!(f, "\n  (no facts or rules)")?;
+        }
+
+        Ok(())
+    }
 }
 
-/// Schema for a single rule: computed result type.
-#[derive(Debug, Clone, Serialize)]
-pub struct RuleSchema {
-    /// Computed result type (e.g. "boolean", "scale", "money")
-    #[serde(rename = "type")]
-    pub rule_type: String,
+/// Produce a human-readable summary of type constraints, or `None` when there
+/// are no constraints worth showing (e.g. bare `boolean`).
+fn format_type_constraints(spec: &TypeSpecification) -> Option<String> {
+    let mut parts = Vec::new();
+
+    match spec {
+        TypeSpecification::Number {
+            minimum, maximum, ..
+        } => {
+            if let Some(v) = minimum {
+                parts.push(format!("minimum: {}", v));
+            }
+            if let Some(v) = maximum {
+                parts.push(format!("maximum: {}", v));
+            }
+        }
+        TypeSpecification::Scale {
+            minimum,
+            maximum,
+            decimals,
+            units,
+            ..
+        } => {
+            let unit_names: Vec<&str> = units.0.iter().map(|u| u.name.as_str()).collect();
+            if !unit_names.is_empty() {
+                parts.push(format!("units: {}", unit_names.join(", ")));
+            }
+            if let Some(v) = minimum {
+                parts.push(format!("minimum: {}", v));
+            }
+            if let Some(v) = maximum {
+                parts.push(format!("maximum: {}", v));
+            }
+            if let Some(d) = decimals {
+                parts.push(format!("decimals: {}", d));
+            }
+        }
+        TypeSpecification::Ratio {
+            minimum, maximum, ..
+        } => {
+            if let Some(v) = minimum {
+                parts.push(format!("minimum: {}", v));
+            }
+            if let Some(v) = maximum {
+                parts.push(format!("maximum: {}", v));
+            }
+        }
+        TypeSpecification::Text { options, .. } => {
+            if !options.is_empty() {
+                let quoted: Vec<String> = options.iter().map(|o| format!("\"{}\"", o)).collect();
+                parts.push(format!("options: {}", quoted.join(", ")));
+            }
+        }
+        TypeSpecification::Date {
+            minimum, maximum, ..
+        } => {
+            if let Some(v) = minimum {
+                parts.push(format!("minimum: {}", v));
+            }
+            if let Some(v) = maximum {
+                parts.push(format!("maximum: {}", v));
+            }
+        }
+        TypeSpecification::Time {
+            minimum, maximum, ..
+        } => {
+            if let Some(v) = minimum {
+                parts.push(format!("minimum: {}", v));
+            }
+            if let Some(v) = maximum {
+                parts.push(format!("maximum: {}", v));
+            }
+        }
+        TypeSpecification::Boolean { .. }
+        | TypeSpecification::Duration { .. }
+        | TypeSpecification::Veto { .. }
+        | TypeSpecification::Error => {}
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
 }
 
 impl ExecutionPlan {
-    /// Build a [`DocumentSchema`] summarising this plan's facts and rules.
+    /// Build a [`DocumentSchema`] summarising **all** of this plan's facts and
+    /// rules.
     ///
-    /// Only local facts (no cross-document segments) with a schema type are
-    /// included. Document-reference facts are excluded.
+    /// All facts with a typed schema (local and cross-document) are included.
+    /// Document-reference facts (which have no schema type) are excluded.
     /// Only local rules (no cross-document segments) are included.
     /// Results are sorted alphabetically by name for deterministic output.
-    pub fn document_schema(&self) -> DocumentSchema {
-        let mut fact_entries: Vec<(String, FactSchema)> = self
+    pub fn schema(&self) -> DocumentSchema {
+        let mut fact_entries: Vec<(String, (LemmaType, Option<LiteralValue>))> = self
             .facts
             .iter()
-            .filter(|(path, _)| path.segments.is_empty())
             .filter(|(_, data)| data.schema_type().is_some())
             .map(|(path, data)| {
-                (
-                    path.fact.clone(),
-                    FactSchema {
-                        fact_type: data.schema_type().unwrap().name(),
-                        default: data.value().map(|v| v.to_string()),
-                    },
-                )
+                let lemma_type = data.schema_type().unwrap().clone();
+                let default = data.value().cloned();
+                (path.to_string(), (lemma_type, default))
             })
             .collect();
         fact_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let mut rule_entries: Vec<(String, RuleSchema)> = self
+        let mut rule_entries: Vec<(String, LemmaType)> = self
             .rules
             .iter()
             .filter(|r| r.path.segments.is_empty())
-            .map(|r| {
-                (
-                    r.name.clone(),
-                    RuleSchema {
-                        rule_type: r.rule_type.name(),
-                    },
-                )
-            })
+            .map(|r| (r.name.clone(), r.rule_type.clone()))
             .collect();
         rule_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -255,6 +349,53 @@ impl ExecutionPlan {
             facts: fact_entries.into_iter().collect(),
             rules: rule_entries.into_iter().collect(),
         }
+    }
+
+    /// Build a [`DocumentSchema`] scoped to specific rules.
+    ///
+    /// The returned schema contains only the facts **needed** by the given rules
+    /// (transitively, via `needs_facts`) and only those rules. This is the
+    /// "what do I need to evaluate these rules?" view.
+    ///
+    /// Returns `Err` if any rule name is not found in the plan.
+    pub fn schema_for_rules(&self, rule_names: &[String]) -> Result<DocumentSchema, LemmaError> {
+        let mut needed_facts = HashSet::new();
+        let mut rule_entries: Vec<(String, LemmaType)> = Vec::new();
+
+        for rule_name in rule_names {
+            let rule = self.get_rule(rule_name).ok_or_else(|| {
+                LemmaError::engine(
+                    format!(
+                        "Rule '{}' not found in document '{}'",
+                        rule_name, self.doc_name
+                    ),
+                    None,
+                    None::<String>,
+                )
+            })?;
+            needed_facts.extend(rule.needs_facts.iter().cloned());
+            rule_entries.push((rule.name.clone(), rule.rule_type.clone()));
+        }
+        rule_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut fact_entries: Vec<(String, (LemmaType, Option<LiteralValue>))> = self
+            .facts
+            .iter()
+            .filter(|(path, _)| needed_facts.contains(path))
+            .filter(|(_, data)| data.schema_type().is_some())
+            .map(|(path, data)| {
+                let lemma_type = data.schema_type().unwrap().clone();
+                let default = data.value().cloned();
+                (path.to_string(), (lemma_type, default))
+            })
+            .collect();
+        fact_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        Ok(DocumentSchema {
+            doc: self.doc_name.clone(),
+            facts: fact_entries.into_iter().collect(),
+            rules: rule_entries.into_iter().collect(),
+        })
     }
 
     /// Look up a fact by its path string (e.g., "age" or "rules.base_price").
@@ -296,38 +437,14 @@ impl ExecutionPlan {
                         name,
                         available.join(", ")
                     ),
-                    Source::new(
-                        "<input>",
-                        crate::parsing::ast::Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        &self.doc_name,
-                    ),
-                    std::sync::Arc::from(""),
+                    None,
                     None::<String>,
                 )
             })?;
             let fact_path = fact_path.clone();
 
             let fact_data = self.facts.get(&fact_path).ok_or_else(|| {
-                LemmaError::engine(
-                    format!("Unknown fact: {}", name),
-                    Source::new(
-                        "<input>",
-                        crate::parsing::ast::Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        &self.doc_name,
-                    ),
-                    std::sync::Arc::from(""),
-                    None::<String>,
-                )
+                LemmaError::engine(format!("Unknown fact: {}", name), None, None::<String>)
             })?;
 
             let fact_source = fact_data.source().clone();
@@ -337,31 +454,16 @@ impl ExecutionPlan {
                         "Fact '{}' is a document reference; cannot provide a value.",
                         name
                     ),
-                    Source::new(
-                        "<input>",
-                        crate::parsing::ast::Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        &self.doc_name,
-                    ),
-                    std::sync::Arc::from(""),
+                    None,
                     None::<String>,
                 )
             })?;
-
-            let source_text: Arc<str> = self
-                .sources
-                .get(&fact_source.attribute)
-                .map(|s| Arc::from(s.as_str()))
-                .unwrap_or_else(|| Arc::from(""));
 
             // Parse string to typed value
             let parsed_value = crate::planning::semantics::parse_value_from_string(
                 &raw_value,
                 &expected_type.specifications,
+                &fact_source,
             )
             .map_err(|e| {
                 LemmaError::engine(
@@ -371,16 +473,14 @@ impl ExecutionPlan {
                         expected_type.name(),
                         e
                     ),
-                    fact_source.clone(),
-                    source_text.clone(),
+                    Some(fact_source.clone()),
                     None::<String>,
                 )
             })?;
             let semantic_value = semantics::value_to_semantic(&parsed_value).map_err(|e| {
                 LemmaError::engine(
                     format!("Failed to convert fact '{}' value: {}", name, e),
-                    fact_source.clone(),
-                    source_text.clone(),
+                    Some(fact_source.clone()),
                     None::<String>,
                 )
             })?;
@@ -412,8 +512,7 @@ impl ExecutionPlan {
                         expected_type.name(),
                         msg
                     ),
-                    fact_source.clone(),
-                    source_text.clone(),
+                    Some(fact_source.clone()),
                     None::<String>,
                 )
             })?;
@@ -517,20 +616,7 @@ pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<
         };
 
         if let Err(msg) = validate_value_against_type(expected_type, lit) {
-            let (span, attribute, source_text, doc_name) = {
-                let s = fact_data.source();
-                let source_text: Arc<str> = plan
-                    .sources
-                    .get(&s.attribute)
-                    .map(|t| Arc::from(t.as_str()))
-                    .unwrap_or_else(|| Arc::from(""));
-                (
-                    s.span.clone(),
-                    s.attribute.as_str(),
-                    source_text,
-                    s.doc_name.as_str(),
-                )
-            };
+            let source = fact_data.source().clone();
             errors.push(LemmaError::engine(
                 format!(
                     "Invalid value for fact {} (expected {}): {}",
@@ -538,8 +624,7 @@ pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<
                     expected_type.name(),
                     msg
                 ),
-                Source::new(attribute, span, doc_name),
-                source_text,
+                Some(source),
                 None::<String>,
             ));
         }
@@ -700,6 +785,7 @@ mod tests {
                 col: 0,
             },
             doc_name: "<test>".to_string(),
+            source_text: Arc::from("doc test\nfact x = 1\nrule result = x"),
         }
     }
 
@@ -754,6 +840,7 @@ mod tests {
                 col: 0,
             },
             "test",
+            Arc::from("doc test\nfact x = 1\nrule result = x"),
         );
         let mut facts = HashMap::new();
         facts.insert(
@@ -807,6 +894,7 @@ mod tests {
                 col: 0,
             },
             "test",
+            Arc::from("doc test\nfact x = 1\nrule result = x"),
         );
         let mut facts = HashMap::new();
         facts.insert(
@@ -867,6 +955,7 @@ mod tests {
                 col: 0,
             },
             "test",
+            Arc::from("doc test\nfact x = 1\nrule result = x"),
         );
         let mut facts = HashMap::new();
         facts.insert(

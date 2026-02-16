@@ -24,7 +24,8 @@ pub enum LogicalComputation {
 use crate::parsing::ast::{
     BooleanValue, CommandArg, ConversionTarget, DateTimeValue, DurationUnit, TimeValue,
 };
-use crate::parsing::literals::{parse_date_string, parse_time_string};
+use crate::parsing::literals::{parse_date_string, parse_duration_from_string, parse_time_string};
+use crate::LemmaError;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -210,6 +211,10 @@ pub enum TypeSpecification {
     Veto {
         message: Option<String>,
     },
+    /// Sentinel type used during type inference to represent "type could not be determined."
+    /// This propagates through expressions without generating cascading errors.
+    /// It must never appear in a successfully validated graph or execution plan.
+    Error,
 }
 
 impl TypeSpecification {
@@ -431,7 +436,6 @@ impl TypeSpecification {
                                 .parse::<Decimal>()
                                 .map_err(|_| format!("invalid default value: {:?}", s))?;
                             let unit_name = args[1].value().to_string();
-                            units.get(unit_name.as_str())?;
                             *default = Some((value, unit_name));
                         }
                         other => {
@@ -839,6 +843,12 @@ impl TypeSpecification {
                     command
                 ));
             }
+            TypeSpecification::Error => {
+                return Err(format!(
+                    "Invalid command '{}' for error sentinel type. Error is an internal type used during type inference and cannot have constraints",
+                    command
+                ));
+            }
         }
         Ok(self)
     }
@@ -915,20 +925,23 @@ pub fn parse_number_unit(
 pub fn parse_value_from_string(
     value_str: &str,
     type_spec: &TypeSpecification,
-) -> Result<crate::parsing::ast::Value, String> {
+    source: &Source,
+) -> Result<crate::parsing::ast::Value, LemmaError> {
     use crate::parsing::ast::{BooleanValue, Value};
-    use crate::parsing::literals::{parse_date_string, parse_time_string};
     use std::str::FromStr;
+
+    let to_err = |msg: String| LemmaError::engine(msg, Some(source.clone()), None::<String>);
 
     match type_spec {
         TypeSpecification::Text { .. } => Ok(Value::Text(value_str.to_string())),
         TypeSpecification::Number { .. } => {
             let clean = value_str.replace(['_', ','], "");
-            let n = Decimal::from_str(&clean)
-                .map_err(|_| format!("Invalid number: '{}'", value_str))?;
+            let n = Decimal::from_str(&clean).map_err(|_| to_err(format!("Invalid number: '{}'", value_str)))?;
             Ok(Value::Number(n))
         }
-        TypeSpecification::Scale { .. } => parse_number_unit(value_str, type_spec),
+        TypeSpecification::Scale { .. } => {
+            parse_number_unit(value_str, type_spec).map_err(to_err)
+        }
         TypeSpecification::Boolean { .. } => {
             let bv = match value_str.to_lowercase().as_str() {
                 "true" => BooleanValue::True,
@@ -937,24 +950,30 @@ pub fn parse_value_from_string(
                 "no" => BooleanValue::No,
                 "accept" => BooleanValue::Accept,
                 "reject" => BooleanValue::Reject,
-                _ => return Err(format!("Invalid boolean: '{}'", value_str)),
+                _ => return Err(to_err(format!("Invalid boolean: '{}'", value_str))),
             };
             Ok(Value::Boolean(bv))
         }
         TypeSpecification::Date { .. } => {
-            let date = parse_date_string(value_str)?;
+            let date = parse_date_string(value_str).map_err(to_err)?;
             Ok(Value::Date(date))
         }
         TypeSpecification::Time { .. } => {
-            let time = parse_time_string(value_str)?;
+            let time = parse_time_string(value_str).map_err(to_err)?;
             Ok(Value::Time(time))
         }
-        TypeSpecification::Duration { .. } => Err(format!(
-            "Duration parsing not yet supported: '{}'",
-            value_str
+        TypeSpecification::Duration { .. } => {
+            parse_duration_from_string(value_str, source)
+        }
+        TypeSpecification::Ratio { .. } => {
+            parse_number_unit(value_str, type_spec).map_err(to_err)
+        }
+        TypeSpecification::Veto { .. } => Err(to_err(
+            "Veto type cannot be parsed from string".to_string(),
         )),
-        TypeSpecification::Ratio { .. } => parse_number_unit(value_str, type_spec),
-        TypeSpecification::Veto { .. } => Err("Veto type cannot be parsed from string".to_string()),
+        TypeSpecification::Error => unreachable!(
+            "BUG: parse_value_from_string called with Error sentinel type; this type exists only during type inference"
+        ),
     }
 }
 
@@ -1022,6 +1041,18 @@ pub struct SemanticTimezone {
     pub offset_minutes: u8,
 }
 
+impl fmt::Display for SemanticTimezone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.offset_hours == 0 && self.offset_minutes == 0 {
+            write!(f, "Z")
+        } else {
+            let sign = if self.offset_hours >= 0 { "+" } else { "-" };
+            let hours = self.offset_hours.abs();
+            write!(f, "{}{:02}:{:02}", sign, hours, self.offset_minutes)
+        }
+    }
+}
+
 /// Time-of-day for semantic values
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SemanticTime {
@@ -1051,11 +1082,21 @@ pub struct SemanticDateTime {
 
 impl fmt::Display for SemanticDateTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-            self.year, self.month, self.day, self.hour, self.minute, self.second
-        )
+        let is_date_only =
+            self.hour == 0 && self.minute == 0 && self.second == 0 && self.timezone.is_none();
+        if is_date_only {
+            write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
+        } else {
+            write!(
+                f,
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+                self.year, self.month, self.day, self.hour, self.minute, self.second
+            )?;
+            if let Some(tz) = &self.timezone {
+                write!(f, "{}", tz)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1188,11 +1229,19 @@ impl RulePath {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Expression {
     pub kind: ExpressionKind,
-    pub source_location: Source,
+    pub source_location: Option<Source>,
 }
 
 impl Expression {
     pub fn new(kind: ExpressionKind, source_location: Source) -> Self {
+        Self {
+            kind,
+            source_location: Some(source_location),
+        }
+    }
+
+    /// Create an expression with an optional source location
+    pub fn with_source(kind: ExpressionKind, source_location: Option<Source>) -> Self {
         Self {
             kind,
             source_location,
@@ -1201,8 +1250,9 @@ impl Expression {
 
     /// Get source text for this expression if available
     pub fn get_source_text(&self, sources: &HashMap<String, String>) -> Option<String> {
-        let file_source = sources.get(&self.source_location.attribute)?;
-        let span = &self.source_location.span;
+        let source = self.source_location.as_ref()?;
+        let file_source = sources.get(&source.attribute)?;
+        let span = &source.span;
         Some(file_source.get(span.start..span.end)?.to_string())
     }
 
@@ -1379,6 +1429,7 @@ impl LemmaType {
                 TypeSpecification::Duration { .. } => "duration",
                 TypeSpecification::Ratio { .. } => "ratio",
                 TypeSpecification::Veto { .. } => "veto",
+                TypeSpecification::Error => "error",
             }
             .to_string()
         })
@@ -1437,6 +1488,11 @@ impl LemmaType {
         matches!(&self.specifications, TypeSpecification::Veto { .. })
     }
 
+    /// Check if this type is the error sentinel (type could not be determined during inference)
+    pub fn is_error(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::Error)
+    }
+
     /// Check if two types have the same base type specification (ignoring constraints)
     pub fn has_same_base_type(&self, other: &LemmaType) -> bool {
         use TypeSpecification::*;
@@ -1451,6 +1507,7 @@ impl LemmaType {
                 | (Duration { .. }, Duration { .. })
                 | (Ratio { .. }, Ratio { .. })
                 | (Veto { .. }, Veto { .. })
+                | (Error, Error)
         )
     }
 
@@ -1501,6 +1558,7 @@ impl LemmaType {
                 .map(|(v, u)| ValueKind::Duration(v, duration_unit_to_semantic(&u))),
             TypeSpecification::Ratio { .. } => None, // Ratio default requires (value, unit); type spec has only Decimal
             TypeSpecification::Veto { .. } => None,
+            TypeSpecification::Error => None,
         };
 
         value.map(|v| LiteralValue {
@@ -1512,6 +1570,12 @@ impl LemmaType {
     /// Create a Veto LemmaType (internal use only - not user-declarable)
     pub fn veto_type() -> Self {
         Self::primitive(TypeSpecification::veto())
+    }
+
+    /// Create an Error sentinel LemmaType (used during type inference when a type cannot be determined).
+    /// This type propagates through expressions and is never present in a validated graph.
+    pub fn error_type() -> Self {
+        Self::primitive(TypeSpecification::Error)
     }
 
     /// Decimal places for display (Number, Scale, and Ratio). Used by formatters.
@@ -1537,6 +1601,9 @@ impl LemmaType {
             TypeSpecification::Time { .. } => "14:30:00",
             TypeSpecification::Duration { .. } => "90 minutes",
             TypeSpecification::Ratio { .. } => "50%",
+            TypeSpecification::Error => unreachable!(
+                "BUG: example_value called on Error sentinel type; this type must never reach user-facing code"
+            ),
         }
     }
 
@@ -1748,7 +1815,7 @@ pub enum FactValue {
 pub struct Fact {
     pub path: FactPath,
     pub value: FactValue,
-    pub source: Source,
+    pub source: Option<Source>,
 }
 
 /// Resolved fact value for the execution plan: aligned with [`FactValue`] but with source per variant.
