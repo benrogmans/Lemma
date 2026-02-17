@@ -8,8 +8,8 @@ Simple logic that's easy to understand.
 
 type temperature = scale
   -> unit celsius 1.0
-  -> minimum -70
-  -> maximum 70
+  -> minimum -70 celsius
+  -> maximum 70 celsius
 
 type clothing_style = text
   -> option "none"
@@ -23,9 +23,9 @@ type comfort = text
   -> option "hot"
   -> option "uncomfortable"
 
+fact is_raining  = [boolean]
 fact temperature = [temperature]
-fact is_raining = [boolean]
-fact wind_speed = [number -> minimum 0]
+fact wind_speed  = [number -> minimum 0]
 
 rule clothing_layer = "light"
   unless temperature < 5 celsius then "very_warm"
@@ -47,9 +47,13 @@ rule needs_hat = no
 rule comfort_level = "comfortable"
   unless temperature < 5 celsius then "cold"
   unless temperature > 30 celsius then "hot"
-  unless is_raining and temperature < 10 celsius then "uncomfortable"
+  unless is_raining and temperature < 10 celsius
+    then "uncomfortable"
 
 rule recommendation = "Enjoy your day!"
-  unless comfort_level? == "cold" then "Dress warmly and stay indoors if possible"
-  unless comfort_level? == "hot" then "Stay hydrated and seek shade"
-  unless comfort_level? == "uncomfortable" then "Consider postponing outdoor activities"
+  unless comfort_level? == "cold"
+    then "Dress warmly and stay indoors if possible"
+  unless comfort_level? == "hot"
+    then "Stay hydrated and seek shade"
+  unless comfort_level? == "uncomfortable"
+    then "Consider postponing outdoor activities"

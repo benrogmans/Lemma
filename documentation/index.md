@@ -376,7 +376,7 @@ use std::collections::HashMap;
 
 let mut engine = Engine::new();
 
-engine.add_lemma_code(r#"
+engine.add_lemma_files(HashMap::from([("pricing.lemma".into(), r#"
     doc pricing
     fact quantity = [number]
     fact is_vip = false
@@ -385,7 +385,7 @@ engine.add_lemma_code(r#"
       unless quantity >= 10 then 10%
       unless quantity >= 50 then 20%
       unless is_vip then 25%
-"#, "pricing.lemma")?;
+"#.into())]))?;
 
 // Find what gives a 25% discount
 use rust_decimal::Decimal;
@@ -404,7 +404,7 @@ The inversion response contains:
 - **Shape**: Symbolic representation of all valid solutions
 - **Free variables**: Facts that can vary while still satisfying the target
 
-See the [engine README](../lemma/README.md#inverse-reasoning) for detailed API documentation.
+See the [engine README](../engine/README.md#inverse-reasoning) for detailed API documentation.
 
 ## Complete Examples
 
@@ -427,7 +427,7 @@ Lemma uses a pure Rust evaluator for fast and deterministic execution:
 # Run a document
 lemma run document
 
-# Override facts
+# Provide fact values
 lemma run document age=25 income=50000
 
 # Load multiple documents

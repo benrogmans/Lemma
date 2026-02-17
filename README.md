@@ -1,6 +1,6 @@
 # Lemma
 
-[![CI](https://github.com/benrogmans/lemma/workflows/CI/badge.svg)](https://github.com/benrogmans/lemma/actions/workflows/ci.yml)
+[![CI](https://github.com/benrogmans/engine/workflows/CI/badge.svg)](https://github.com/benrogmans/engine/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/lemma-engine.svg)](https://crates.io/crates/lemma-engine)
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -154,7 +154,7 @@ fact tax_rate = 22%
 fact deadline = 2024-12-31
 ```
 
-**Standard Types:**
+**Primitive types:**
 - `boolean` - true/false values
 - `number` - dimensionless numeric values
 - `scale` - numeric values that can have units
@@ -263,7 +263,7 @@ lemma run simple_facts
 # Run specific rules only
 lemma run tax_calculation:tax_owed
 
-# Override facts at runtime
+# Provide fact values
 lemma run tax_calculation income=75000 filing_status="married"
 
 # Interactive mode for exploring documents and facts
@@ -298,16 +298,29 @@ Start a server with your workspace pre-loaded:
 ```bash
 lemma server --dir ./policies
 
-# Evaluate with inline code
-curl -X POST http://localhost:3000/evaluate \
+# Evaluate a document (all rules) via query parameters
+curl "http://localhost:3000/@pricing?quantity=10&is_member=true"
+
+# Evaluate specific rules only
+curl "http://localhost:3000/@pricing/discount,total?quantity=10"
+
+# Evaluate via JSON body
+curl -X POST http://localhost:3000/@pricing \
   -H "Content-Type: application/json" \
-  -d '{
-    "code": "doc calc\nfact x = 10\nrule double = x * 2",
-    "facts": {"x": 25}
-  }'
+  -d '{"quantity": 10, "is_member": true}'
 ```
 
-The server provides endpoints for doc evaluation, fact inspection, and rule validation.
+The server auto-generates typed REST endpoints for each loaded document. Meta routes:
+- `GET /` — list all documents with their schemas
+- `GET /openapi.json` — OpenAPI 3.1 specification
+- `GET /docs` — interactive API documentation (Scalar)
+- `GET /health` — health check
+
+Use `--watch` to live-reload when `.lemma` files change:
+
+```bash
+lemma server --dir ./policies --watch
+```
 
 ### MCP Server
 
@@ -331,24 +344,26 @@ Lemma is still in an early stage of development and is **not yet recommended for
 ## Project structure overview
 
 ```
-lemma/
 ├── cli/                    # CLI application (includes HTTP, MCP, interactive modes)
 │   ├── src/
 │   │   ├── main.rs         # CLI commands
-│   │   ├── server.rs       # HTTP server module
+│   │   ├── server.rs       # HTTP server (auto-generated REST API + OpenAPI)
 │   │   ├── mcp.rs          # MCP (Model Context Protocol) server
 │   │   ├── interactive.rs  # Interactive command helpers
-│   │   └── formatter.rs
-│   └── tests/
-│       └── cli_integration_test.rs
-├── lemma/                  # Core engine library
+│   │   └── formatter.rs    # Output formatting
+│   └── tests/              # CLI integration tests
+├── engine/                 # Core engine library
 │   ├── src/
-│   │   ├── parser/         # Grammar and parsing logic
-│   │   ├── evaluator/      # Evaluation pipeline
-│   │   ├── serializers/    # Output serializers (JSON, etc.)
-│   │   └── ...             # Engine modules (analysis, validator, wasm, tests)
+│   │   ├── parsing/        # Grammar (Pest) and AST
+│   │   ├── planning/       # Validation, type resolution, execution plans
+│   │   ├── evaluation/     # Expression evaluation pipeline
+│   │   ├── computation/    # Arithmetic, comparison, datetime, units
+│   │   ├── inversion/      # Inverse reasoning (find inputs for desired outputs)
+│   │   ├── serialization/  # Output serializers (JSON, etc.)
+│   │   └── ...             # Engine, error, registry, wasm modules
 │   └── tests/              # Engine integration tests
-├── documentation/                   # Documentation & examples
+├── openapi/                # Shared crate for Lemma-to-OpenAPI generation
+├── documentation/          # Documentation & examples
 │   ├── examples/           # Example .lemma files
 │   └── *.md                # Guides, reference, roadmap, etc.
 └── README.md               # This file

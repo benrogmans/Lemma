@@ -268,7 +268,7 @@ Lemma understands that subtracting a ratio from a number means "subtract 25% of 
 
 ### 4.1 Primitive types
 
-Lemma provides several standard primitive types:
+Lemma provides several primitive types:
 
 - **Boolean**: true/false, yes/no, accept/reject
 - **Number**: Dimensionless integers and floating-point values
@@ -424,9 +424,9 @@ rule manager_bonus = employee.salary * 0.15
 
 This pattern allows creating specialized variants of base documents without duplication.
 
-### 5.3 Fact overrides
+### 5.3 Fact bindings
 
-Facts can be overridden at different levels:
+Facts can be bound at different levels:
 
 ```lemma
 doc pricing
@@ -956,7 +956,7 @@ rule tax_bracket = "10%"
   unless income > 95375 then "22%"
 EOF
 
-# Override facts
+# Provide fact values
 lemma run example income=100000
 ```
 
@@ -1056,7 +1056,7 @@ Fact Definition:
   fact <name> = <value>
   fact <name> = [<type>]
 
-Fact Override:
+Fact Binding:
   fact <qualified.name> = <value>
 
 Rule Definition:

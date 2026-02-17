@@ -56,8 +56,8 @@ cargo deny check --config .cargo/deny.toml
 ## Project Structure
 
 - `cli/` - CLI application
-- `lemma/` - Core parser and evaluator
-- `lemma/fuzz/` - Fuzz testing targets
+- `engine/` - Core parser and evaluator
+- `engine/fuzz/` - Fuzz testing targets
 - `documentation/examples/` - Example `.lemma` files
 
 ## Testing
@@ -71,7 +71,7 @@ cargo test --workspace
 Requires nightly Rust. Uses cargo-fuzz to test parser robustness.
 
 ```bash
-cd lemma/fuzz
+cd engine/fuzz
 cargo +nightly fuzz list                    # List available fuzz targets
 cargo +nightly fuzz run fuzz_parser -- -max_total_time=60  # Run for 60 seconds
 ```
@@ -95,14 +95,14 @@ The WASM scripts:
 
 The build automatically generates a package.json from Cargo.toml metadata.
 
-For detailed JavaScript API documentation, see [lemma/wasm/README.md](../lemma/wasm/README.md).
+For detailed JavaScript API documentation, see [lemma/wasm/README.md](../engine/wasm/README.md).
 
 This will run comprehensive tests and show results in the terminal.
 
 ## Release (maintainers only)
 
 To release:
-1. Update version in `lemma/Cargo.toml` and/or `cli/Cargo.toml`
+1. Update version in `engine/Cargo.toml` and/or `cli/Cargo.toml`
 2. Open PR and merge to main
 3. CI automatically detects version changes and publishes to crates.io
 

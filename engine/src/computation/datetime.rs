@@ -1,0 +1,598 @@
+//! DateTime operations
+//!
+//! Handles arithmetic and comparisons with dates and datetimes.
+//! Returns OperationResult with Veto for errors instead of Result.
+
+use crate::evaluation::OperationResult;
+use crate::planning::semantics::{
+    ArithmeticComputation, ComparisonComputation, LiteralValue, SemanticDateTime,
+    SemanticDurationUnit, SemanticTime, SemanticTimezone, ValueKind,
+};
+use chrono::{
+    DateTime, Datelike, Duration as ChronoDuration, FixedOffset, NaiveDate, NaiveDateTime,
+    NaiveTime, TimeZone, Timelike,
+};
+use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
+
+const SECONDS_PER_HOUR: i32 = 3600;
+const SECONDS_PER_MINUTE: i32 = 60;
+const MONTHS_PER_YEAR: u32 = 12;
+const MILLISECONDS_PER_SECOND: f64 = 1000.0;
+
+const EPOCH_YEAR: i32 = 1970;
+const EPOCH_MONTH: u32 = 1;
+const EPOCH_DAY: u32 = 1;
+
+fn create_semantic_timezone_offset(
+    timezone: &Option<SemanticTimezone>,
+) -> Result<FixedOffset, String> {
+    if let Some(tz) = timezone {
+        let offset_seconds = (tz.offset_hours as i32 * SECONDS_PER_HOUR)
+            + (tz.offset_minutes as i32 * SECONDS_PER_MINUTE);
+        FixedOffset::east_opt(offset_seconds).ok_or_else(|| {
+            format!(
+                "Invalid timezone offset: {}:{}",
+                tz.offset_hours, tz.offset_minutes
+            )
+        })
+    } else {
+        FixedOffset::east_opt(0).ok_or_else(|| "Failed to create UTC offset".to_string())
+    }
+}
+
+/// Perform date/datetime arithmetic, returning OperationResult (Veto on error)
+pub fn datetime_arithmetic(
+    left: &LiteralValue,
+    op: &ArithmeticComputation,
+    right: &LiteralValue,
+) -> OperationResult {
+    match (&left.value, &right.value, op) {
+        (ValueKind::Date(date), ValueKind::Duration(value, unit), ArithmeticComputation::Add) => {
+            let dt = match semantic_datetime_to_chrono(date) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            let new_dt = match unit {
+                SemanticDurationUnit::Month => {
+                    let months = match value.to_i32() {
+                        Some(m) => m,
+                        None => {
+                            return OperationResult::Veto(Some("Month value too large".to_string()))
+                        }
+                    };
+                    match dt.checked_add_months(chrono::Months::new(months as u32)) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+                SemanticDurationUnit::Year => {
+                    let years = match value.to_i32() {
+                        Some(y) => y,
+                        None => {
+                            return OperationResult::Veto(Some("Year value too large".to_string()))
+                        }
+                    };
+                    match dt.checked_add_months(chrono::Months::new(
+                        (years * MONTHS_PER_YEAR as i32) as u32,
+                    )) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+                _ => {
+                    let seconds = super::units::duration_to_seconds(*value, unit);
+                    let duration = match seconds_to_chrono_duration(seconds) {
+                        Ok(d) => d,
+                        Err(msg) => return OperationResult::Veto(Some(msg)),
+                    };
+                    match dt.checked_add_signed(duration) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+            };
+
+            OperationResult::Value(Box::new(LiteralValue::date_with_type(
+                chrono_to_semantic_datetime(new_dt),
+                left.lemma_type.clone(),
+            )))
+        }
+
+        (
+            ValueKind::Date(date),
+            ValueKind::Duration(value, unit),
+            ArithmeticComputation::Subtract,
+        ) => {
+            let dt = match semantic_datetime_to_chrono(date) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            let new_dt = match unit {
+                SemanticDurationUnit::Month => {
+                    let months = match value.to_i32() {
+                        Some(m) => m,
+                        None => {
+                            return OperationResult::Veto(Some("Month value too large".to_string()))
+                        }
+                    };
+                    match dt.checked_sub_months(chrono::Months::new(months as u32)) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+                SemanticDurationUnit::Year => {
+                    let years = match value.to_i32() {
+                        Some(y) => y,
+                        None => {
+                            return OperationResult::Veto(Some("Year value too large".to_string()))
+                        }
+                    };
+                    match dt.checked_sub_months(chrono::Months::new(
+                        (years * MONTHS_PER_YEAR as i32) as u32,
+                    )) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+                _ => {
+                    let seconds = super::units::duration_to_seconds(*value, unit);
+                    let duration = match seconds_to_chrono_duration(seconds) {
+                        Ok(d) => d,
+                        Err(msg) => return OperationResult::Veto(Some(msg)),
+                    };
+                    match dt.checked_sub_signed(duration) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+            };
+
+            OperationResult::Value(Box::new(LiteralValue::date_with_type(
+                chrono_to_semantic_datetime(new_dt),
+                left.lemma_type.clone(),
+            )))
+        }
+
+        (
+            ValueKind::Date(left_date),
+            ValueKind::Date(right_date),
+            ArithmeticComputation::Subtract,
+        ) => {
+            let left_dt = match semantic_datetime_to_chrono(left_date) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let right_dt = match semantic_datetime_to_chrono(right_date) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let duration = left_dt - right_dt;
+
+            let seconds = Decimal::from(duration.num_seconds());
+            OperationResult::Value(Box::new(LiteralValue::duration(
+                seconds,
+                SemanticDurationUnit::Second,
+            )))
+        }
+
+        // Duration + Date → Date
+        (ValueKind::Duration(value, unit), ValueKind::Date(date), ArithmeticComputation::Add) => {
+            let dt = match semantic_datetime_to_chrono(date) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            let new_dt = match unit {
+                SemanticDurationUnit::Month => {
+                    let months = match value.to_i32() {
+                        Some(m) => m,
+                        None => {
+                            return OperationResult::Veto(Some("Month value too large".to_string()))
+                        }
+                    };
+                    match dt.checked_add_months(chrono::Months::new(months as u32)) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+                SemanticDurationUnit::Year => {
+                    let years = match value.to_i32() {
+                        Some(y) => y,
+                        None => {
+                            return OperationResult::Veto(Some("Year value too large".to_string()))
+                        }
+                    };
+                    match dt.checked_add_months(chrono::Months::new(
+                        (years * MONTHS_PER_YEAR as i32) as u32,
+                    )) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+                _ => {
+                    let seconds = super::units::duration_to_seconds(*value, unit);
+                    let duration = match seconds_to_chrono_duration(seconds) {
+                        Ok(d) => d,
+                        Err(msg) => return OperationResult::Veto(Some(msg)),
+                    };
+                    match dt.checked_add_signed(duration) {
+                        Some(d) => d,
+                        None => return OperationResult::Veto(Some("Date overflow".to_string())),
+                    }
+                }
+            };
+
+            OperationResult::Value(Box::new(LiteralValue::date_with_type(
+                chrono_to_semantic_datetime(new_dt),
+                right.lemma_type.clone(),
+            )))
+        }
+
+        (ValueKind::Date(date), ValueKind::Time(time), ArithmeticComputation::Subtract) => {
+            // Date - Time: Create a datetime from the date's date components and the time's time components
+            // Then subtract to get the duration
+            let date_dt = match semantic_datetime_to_chrono(date) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            // Create a datetime using the date's date components and the time's time components
+            let naive_date = match NaiveDate::from_ymd_opt(date.year, date.month, date.day) {
+                Some(d) => d,
+                None => {
+                    return OperationResult::Veto(Some(format!(
+                        "Invalid date: {}-{}-{}",
+                        date.year, date.month, date.day
+                    )))
+                }
+            };
+            let naive_time = match NaiveTime::from_hms_opt(time.hour, time.minute, time.second) {
+                Some(t) => t,
+                None => {
+                    return OperationResult::Veto(Some(format!(
+                        "Invalid time: {}:{}:{}",
+                        time.hour, time.minute, time.second
+                    )))
+                }
+            };
+            let naive_dt = NaiveDateTime::new(naive_date, naive_time);
+
+            // Use the date's timezone, or UTC if not specified
+            let offset = match create_semantic_timezone_offset(&date.timezone) {
+                Ok(o) => o,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let time_dt = match offset.from_local_datetime(&naive_dt).single() {
+                Some(dt) => dt,
+                None => {
+                    return OperationResult::Veto(Some(
+                        "Ambiguous or invalid datetime for timezone".to_string(),
+                    ))
+                }
+            };
+
+            let duration = date_dt - time_dt;
+            let seconds = Decimal::from(duration.num_seconds());
+            OperationResult::Value(Box::new(LiteralValue::duration(
+                seconds,
+                SemanticDurationUnit::Second,
+            )))
+        }
+
+        _ => OperationResult::Veto(Some(format!(
+            "DateTime arithmetic operation {:?} not supported for these operand types",
+            op
+        ))),
+    }
+}
+
+fn semantic_datetime_to_chrono(date: &SemanticDateTime) -> Result<DateTime<FixedOffset>, String> {
+    let naive_date = NaiveDate::from_ymd_opt(date.year, date.month, date.day)
+        .ok_or_else(|| format!("Invalid date: {}-{}-{}", date.year, date.month, date.day))?;
+
+    let naive_time =
+        NaiveTime::from_hms_opt(date.hour, date.minute, date.second).ok_or_else(|| {
+            format!(
+                "Invalid time: {}:{}:{}",
+                date.hour, date.minute, date.second
+            )
+        })?;
+
+    let naive_dt = NaiveDateTime::new(naive_date, naive_time);
+
+    let offset = create_semantic_timezone_offset(&date.timezone)?;
+    offset
+        .from_local_datetime(&naive_dt)
+        .single()
+        .ok_or_else(|| "Ambiguous or invalid datetime for timezone".to_string())
+}
+
+fn chrono_to_semantic_datetime(dt: DateTime<FixedOffset>) -> SemanticDateTime {
+    let offset_seconds = dt.offset().local_minus_utc();
+    let offset_hours = (offset_seconds / SECONDS_PER_HOUR) as i8;
+    let offset_minutes = ((offset_seconds.abs() % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE) as u8;
+
+    SemanticDateTime {
+        year: dt.year(),
+        month: dt.month(),
+        day: dt.day(),
+        hour: dt.hour(),
+        minute: dt.minute(),
+        second: dt.second(),
+        timezone: Some(SemanticTimezone {
+            offset_hours,
+            offset_minutes,
+        }),
+    }
+}
+
+fn seconds_to_chrono_duration(seconds: Decimal) -> Result<ChronoDuration, String> {
+    let seconds_f64 = seconds
+        .to_f64()
+        .ok_or_else(|| "Duration conversion failed".to_string())?;
+
+    let milliseconds = (seconds_f64 * MILLISECONDS_PER_SECOND) as i64;
+    Ok(ChronoDuration::milliseconds(milliseconds))
+}
+
+/// Perform date/datetime comparisons, returning OperationResult (Veto on error)
+pub fn datetime_comparison(
+    left: &LiteralValue,
+    op: &ComparisonComputation,
+    right: &LiteralValue,
+) -> OperationResult {
+    match (&left.value, &right.value) {
+        (ValueKind::Date(l), ValueKind::Date(r)) => {
+            let l_dt = match semantic_datetime_to_chrono(l) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let r_dt = match semantic_datetime_to_chrono(r) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            let l_utc = l_dt.naive_utc();
+            let r_utc = r_dt.naive_utc();
+
+            let result = match op {
+                ComparisonComputation::GreaterThan => l_utc > r_utc,
+                ComparisonComputation::LessThan => l_utc < r_utc,
+                ComparisonComputation::GreaterThanOrEqual => l_utc >= r_utc,
+                ComparisonComputation::LessThanOrEqual => l_utc <= r_utc,
+                ComparisonComputation::Equal | ComparisonComputation::Is => l_utc == r_utc,
+                ComparisonComputation::NotEqual | ComparisonComputation::IsNot => l_utc != r_utc,
+            };
+
+            OperationResult::Value(Box::new(LiteralValue::from_bool(result)))
+        }
+
+        _ => OperationResult::Veto(Some("Invalid datetime comparison operands".to_string())),
+    }
+}
+
+/// Perform time comparisons, returning OperationResult (Veto on error)
+pub fn time_comparison(
+    left: &LiteralValue,
+    op: &ComparisonComputation,
+    right: &LiteralValue,
+) -> OperationResult {
+    match (&left.value, &right.value) {
+        (ValueKind::Time(l), ValueKind::Time(r)) => {
+            let l_dt = match semantic_time_to_chrono_datetime(l) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let r_dt = match semantic_time_to_chrono_datetime(r) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            let l_utc = l_dt.naive_utc();
+            let r_utc = r_dt.naive_utc();
+
+            let result = match op {
+                ComparisonComputation::GreaterThan => l_utc > r_utc,
+                ComparisonComputation::LessThan => l_utc < r_utc,
+                ComparisonComputation::GreaterThanOrEqual => l_utc >= r_utc,
+                ComparisonComputation::LessThanOrEqual => l_utc <= r_utc,
+                ComparisonComputation::Equal | ComparisonComputation::Is => l_utc == r_utc,
+                ComparisonComputation::NotEqual | ComparisonComputation::IsNot => l_utc != r_utc,
+            };
+
+            OperationResult::Value(Box::new(LiteralValue::from_bool(result)))
+        }
+        _ => unreachable!(
+            "BUG: time_comparison called with non-time operands; this should be enforced by planning and dispatch"
+        ),
+    }
+}
+
+/// Perform time arithmetic operations, returning OperationResult (Veto on error)
+pub fn time_arithmetic(
+    left: &LiteralValue,
+    op: &ArithmeticComputation,
+    right: &LiteralValue,
+) -> OperationResult {
+    match (&left.value, &right.value, op) {
+        (ValueKind::Time(time), ValueKind::Duration(value, unit), ArithmeticComputation::Add) => {
+            let seconds = super::units::duration_to_seconds(*value, unit);
+            let time_aware = match semantic_time_to_chrono_datetime(time) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let duration = match seconds_to_chrono_duration(seconds) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let result_dt = time_aware + duration;
+            OperationResult::Value(Box::new(LiteralValue::time_with_type(
+                chrono_datetime_to_semantic_time(result_dt),
+                left.lemma_type.clone(),
+            )))
+        }
+
+        (
+            ValueKind::Time(time),
+            ValueKind::Duration(value, unit),
+            ArithmeticComputation::Subtract,
+        ) => {
+            let seconds = super::units::duration_to_seconds(*value, unit);
+            let time_aware = match semantic_time_to_chrono_datetime(time) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let duration = match seconds_to_chrono_duration(seconds) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let result_dt = time_aware - duration;
+            OperationResult::Value(Box::new(LiteralValue::time_with_type(
+                chrono_datetime_to_semantic_time(result_dt),
+                left.lemma_type.clone(),
+            )))
+        }
+
+        (
+            ValueKind::Time(left_time),
+            ValueKind::Time(right_time),
+            ArithmeticComputation::Subtract,
+        ) => {
+            let left_dt = match semantic_time_to_chrono_datetime(left_time) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let right_dt = match semantic_time_to_chrono_datetime(right_time) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            let diff = left_dt.naive_utc() - right_dt.naive_utc();
+            let diff_seconds = diff.num_seconds();
+            let seconds = Decimal::from(diff_seconds);
+
+            OperationResult::Value(Box::new(LiteralValue::duration(
+                seconds,
+                SemanticDurationUnit::Second,
+            )))
+        }
+
+        // Duration + Time → Time
+        (ValueKind::Duration(value, unit), ValueKind::Time(time), ArithmeticComputation::Add) => {
+            let seconds = super::units::duration_to_seconds(*value, unit);
+            let time_aware = match semantic_time_to_chrono_datetime(time) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let duration = match seconds_to_chrono_duration(seconds) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let result_dt = time_aware + duration;
+            OperationResult::Value(Box::new(LiteralValue::time_with_type(
+                chrono_datetime_to_semantic_time(result_dt),
+                right.lemma_type.clone(),
+            )))
+        }
+
+        (ValueKind::Time(time), ValueKind::Date(date), ArithmeticComputation::Subtract) => {
+            // Time - Date: Create a datetime from the date's date components and the time's time components
+            // Then subtract to get the duration
+            let time_dt = match semantic_time_to_chrono_datetime(time) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+
+            // Create a datetime using the date's date components and the time's time components
+            let naive_date = match NaiveDate::from_ymd_opt(date.year, date.month, date.day) {
+                Some(d) => d,
+                None => {
+                    return OperationResult::Veto(Some(format!(
+                        "Invalid date: {}-{}-{}",
+                        date.year, date.month, date.day
+                    )))
+                }
+            };
+            let naive_time = match NaiveTime::from_hms_opt(time.hour, time.minute, time.second) {
+                Some(t) => t,
+                None => {
+                    return OperationResult::Veto(Some(format!(
+                        "Invalid time: {}:{}:{}",
+                        time.hour, time.minute, time.second
+                    )))
+                }
+            };
+            let naive_dt = NaiveDateTime::new(naive_date, naive_time);
+
+            // Use the time's timezone, or UTC if not specified
+            let offset = match create_semantic_timezone_offset(&time.timezone) {
+                Ok(o) => o,
+                Err(msg) => return OperationResult::Veto(Some(msg)),
+            };
+            let date_dt = match offset.from_local_datetime(&naive_dt).single() {
+                Some(dt) => dt,
+                None => {
+                    return OperationResult::Veto(Some(
+                        "Ambiguous or invalid datetime for timezone".to_string(),
+                    ))
+                }
+            };
+
+            let duration = time_dt - date_dt;
+            let seconds = Decimal::from(duration.num_seconds());
+            OperationResult::Value(Box::new(LiteralValue::duration(
+                seconds,
+                SemanticDurationUnit::Second,
+            )))
+        }
+
+        _ => OperationResult::Veto(Some(format!(
+            "Time arithmetic operation {:?} not supported for these operand types",
+            op
+        ))),
+    }
+}
+
+fn semantic_time_to_chrono_datetime(time: &SemanticTime) -> Result<DateTime<FixedOffset>, String> {
+    let naive_date =
+        NaiveDate::from_ymd_opt(EPOCH_YEAR, EPOCH_MONTH, EPOCH_DAY).ok_or_else(|| {
+            format!(
+                "Invalid epoch date: {}-{}-{}",
+                EPOCH_YEAR, EPOCH_MONTH, EPOCH_DAY
+            )
+        })?;
+    let naive_time =
+        NaiveTime::from_hms_opt(time.hour, time.minute, time.second).ok_or_else(|| {
+            format!(
+                "Invalid time: {}:{}:{}",
+                time.hour, time.minute, time.second
+            )
+        })?;
+
+    let naive_dt = NaiveDateTime::new(naive_date, naive_time);
+
+    let offset = create_semantic_timezone_offset(&time.timezone)?;
+    offset
+        .from_local_datetime(&naive_dt)
+        .single()
+        .ok_or_else(|| "Ambiguous or invalid time for timezone".to_string())
+}
+
+fn chrono_datetime_to_semantic_time(dt: DateTime<FixedOffset>) -> SemanticTime {
+    let offset_seconds = dt.offset().local_minus_utc();
+    let offset_hours = (offset_seconds / SECONDS_PER_HOUR) as i8;
+    let offset_minutes = ((offset_seconds.abs() % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE) as u8;
+
+    SemanticTime {
+        hour: dt.hour(),
+        minute: dt.minute(),
+        second: dt.second(),
+        timezone: Some(SemanticTimezone {
+            offset_hours,
+            offset_minutes,
+        }),
+    }
+}

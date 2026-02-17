@@ -17,7 +17,7 @@ struct TextConstraints {
     minimum: Option<usize>,
     maximum: Option<usize>,
     length: Option<usize>,
-    help: Option<String>,
+    help: String,
 }
 
 #[derive(Clone, Debug)]
@@ -25,7 +25,7 @@ struct NumericConstraints {
     minimum: Option<Decimal>,
     maximum: Option<Decimal>,
     decimals: Option<u8>,
-    help: Option<String>,
+    help: String,
 }
 
 pub fn run_interactive(
@@ -68,11 +68,10 @@ fn select_document(engine: &Engine) -> Result<String> {
     let display_options: Vec<String> = documents
         .iter()
         .map(|doc_name| {
-            let facts_count = engine
-                .get_facts(doc_name, &[])
-                .map(|f| f.len())
-                .unwrap_or(0);
-            let rules_count = engine.get_document_rules(doc_name).len();
+            let (facts_count, rules_count) = engine
+                .get_execution_plan(doc_name)
+                .map(|p| (p.facts.len(), p.rules.len()))
+                .unwrap_or((0, 0));
             format!(
                 "{} ({} facts, {} rules)",
                 doc_name, facts_count, rules_count
@@ -94,13 +93,14 @@ fn select_document(engine: &Engine) -> Result<String> {
 }
 
 fn select_rules(engine: &Engine, doc_name: &str) -> Result<Option<Vec<String>>> {
-    let all_rules = engine.get_document_rules(doc_name);
+    let plan = engine
+        .get_execution_plan(doc_name)
+        .context(format!("Document '{}' not found", doc_name))?;
+    let rule_names: Vec<String> = plan.schema().rules.keys().cloned().collect();
 
-    if all_rules.is_empty() {
+    if rule_names.is_empty() {
         return Ok(None);
     }
-
-    let rule_names: Vec<String> = all_rules.iter().map(|r| r.name.clone()).collect();
 
     if rule_names.len() == 1 {
         return Ok(None);
@@ -111,7 +111,7 @@ fn select_rules(engine: &Engine, doc_name: &str) -> Result<Option<Vec<String>>> 
         .prompt()
         .context("Failed to get rule selection")?;
 
-    if selected.is_empty() || selected.len() == all_rules.len() {
+    if selected.is_empty() || selected.len() == rule_names.len() {
         Ok(None)
     } else {
         Ok(Some(selected))
@@ -183,14 +183,22 @@ fn prompt_facts(
     rule_names: &Option<Vec<String>>,
     provided_facts: &HashMap<String, String>,
 ) -> Result<HashMap<String, String>> {
-    let selected_rules: Vec<String> = rule_names.clone().unwrap_or_default();
-    let necessary_facts = engine
-        .get_facts(doc_name, &selected_rules)
-        .context("Failed to get facts")?;
+    let plan = engine
+        .get_execution_plan(doc_name)
+        .context(format!("Document '{}' not found", doc_name))?;
 
-    let promptable_facts: Vec<_> = necessary_facts
+    let selected_rules: Vec<String> = rule_names.clone().unwrap_or_default();
+    let schema = if selected_rules.is_empty() {
+        plan.schema()
+    } else {
+        plan.schema_for_rules(&selected_rules)
+            .context("Failed to get schema for rules")?
+    };
+
+    let promptable_facts: Vec<_> = schema
+        .facts
         .into_iter()
-        .filter(|(path, _)| !provided_facts.contains_key(&path.to_string()))
+        .filter(|(name, _)| !provided_facts.contains_key(name))
         .collect();
 
     if promptable_facts.is_empty() {
@@ -201,9 +209,11 @@ fn prompt_facts(
 
     println!("\nEnter values for facts (press Enter to accept defaults):");
 
-    for (fact_path, lemma_type) in promptable_facts {
-        let fact_name = fact_path.to_string();
-        let default_value = default_value_from_type(&lemma_type);
+    for (fact_name, (lemma_type, value_opt)) in promptable_facts {
+        let default_value = value_opt
+            .as_ref()
+            .map(|v| v.display_value().to_string())
+            .or_else(|| default_value_from_type(&lemma_type));
 
         let input_value = prompt_value_for_type(&fact_name, &lemma_type, default_value.as_deref())?;
         facts.insert(fact_name, input_value);
@@ -227,6 +237,9 @@ fn default_value_from_type(lemma_type: &LemmaType) -> Option<String> {
             default.as_ref().map(|(v, u)| format!("{} {}", v, u))
         }
         TypeSpecification::Veto { .. } => None,
+        TypeSpecification::Error => unreachable!(
+            "BUG: default_value_from_type called with Error sentinel type; this type must never reach interactive mode"
+        ),
     }
 }
 
@@ -253,11 +266,12 @@ fn prompt_value_for_type(
             ..
         } => {
             if !options.is_empty() {
-                let prompt_message = format!("{} [{}]", fact_name, type_str);
-                let mut prompt = Select::new(&prompt_message, options.clone());
-                if let Some(help) = help.as_ref() {
-                    prompt = prompt.with_help_message(help);
+                if options.len() == 1 {
+                    return Ok(options[0].clone());
                 }
+                let prompt_message = format!("{} [{}]", fact_name, type_str);
+                let mut prompt =
+                    Select::new(&prompt_message, options.clone()).with_help_message(help.as_str());
                 if let Some(default) = default_value {
                     if let Some(idx) = options.iter().position(|o| o == default) {
                         prompt = prompt.with_starting_cursor(idx);
@@ -326,22 +340,25 @@ fn prompt_value_for_type(
             units,
             *minimum,
             *maximum,
-            help.as_deref(),
+            help.as_str(),
         ),
         TypeSpecification::Date { .. } => prompt_date_fact(fact_name, default_value),
         TypeSpecification::Time { help, .. } => prompt_simple_text(
             fact_name,
             &type_str,
             default_value,
-            help.as_deref(),
+            help.as_str(),
             "12:34:56",
         ),
         TypeSpecification::Duration { help, .. } => {
-            prompt_duration_fact(fact_name, &type_str, default_value, help.as_deref())
+            prompt_duration_fact(fact_name, &type_str, default_value, help.as_str())
         }
         TypeSpecification::Veto { .. } => {
             anyhow::bail!("Fact '{}' has veto type which is not promptable", fact_name)
         }
+        TypeSpecification::Error => unreachable!(
+            "BUG: prompt_value_for_type called with Error sentinel type; this type must never reach interactive mode"
+        ),
     }
 }
 
@@ -434,7 +451,11 @@ fn prompt_text_fact_with_constraints(
     };
 
     let mut prompt = Text::new(&prompt_message).with_validator(validator);
-    let help_message = help.unwrap_or_else(|| format!("Example: {}", example));
+    let help_message = if help.is_empty() {
+        format!("Example: {}", example)
+    } else {
+        help.clone()
+    };
     prompt = prompt.with_help_message(&help_message);
 
     if let Some(default) = default_value {
@@ -450,7 +471,7 @@ fn prompt_simple_text(
     fact_name: &str,
     type_str: &str,
     default_value: Option<&str>,
-    help: Option<&str>,
+    help: &str,
     example: &str,
 ) -> Result<String> {
     let prompt_message = format!("{} [{}]", fact_name, type_str);
@@ -462,9 +483,11 @@ fn prompt_simple_text(
         }
     };
     let mut prompt = Text::new(&prompt_message).with_validator(validator);
-    let help_message = help
-        .map(|h| h.to_string())
-        .unwrap_or_else(|| format!("Example: {}", example));
+    let help_message = if help.is_empty() {
+        format!("Example: {}", example)
+    } else {
+        help.to_string()
+    };
     prompt = prompt.with_help_message(&help_message);
     if let Some(default) = default_value {
         prompt = prompt.with_default(default);
@@ -488,7 +511,7 @@ fn prompt_scale_fact(
     fact_name: &str,
     type_str: &str,
     default_value: Option<&str>,
-    units: &[lemma::Unit],
+    units: &lemma::ScaleUnits,
     constraints: &NumericConstraints,
 ) -> Result<String> {
     let prompt_message = format!("{} [{}]", fact_name, type_str);
@@ -498,14 +521,22 @@ fn prompt_scale_fact(
     }
 
     let unit_names: Vec<String> = units.iter().map(|u| u.name.clone()).collect();
-    let unit = Select::new(&format!("Select unit for {}", fact_name), unit_names)
-        .prompt()
-        .context(format!("Failed to get unit for {}", fact_name))?;
+    let unit = if unit_names.len() == 1 {
+        unit_names[0].clone()
+    } else {
+        Select::new(&format!("Select unit for {}", fact_name), unit_names)
+            .prompt()
+            .context(format!("Failed to get unit for {}", fact_name))?
+    };
 
+    let value_constraints = NumericConstraints {
+        help: format!("Enter numeric value (unit: {})", unit),
+        ..constraints.clone()
+    };
     let value = prompt_decimal_input(
         &format!("Enter value for {} ({})", fact_name, unit),
         None,
-        constraints,
+        &value_constraints,
         "7.65",
     )?;
 
@@ -516,22 +547,29 @@ fn prompt_ratio_fact(
     fact_name: &str,
     type_str: &str,
     default_value: Option<&str>,
-    units: &[lemma::Unit],
+    units: &lemma::RatioUnits,
     minimum: Option<Decimal>,
     maximum: Option<Decimal>,
-    help: Option<&str>,
+    help: &str,
 ) -> Result<String> {
     // Ratio types typically support percent/permille; offer a unit selector.
     let prompt_message = format!("{} [{}]", fact_name, type_str);
-    let mut unit_choices: Vec<String> = vec!["(none)".to_string()];
-    unit_choices.extend(units.iter().map(|u| u.name.clone()));
-
-    let selected_unit = Select::new(
-        &format!("Select ratio unit for {}", fact_name),
-        unit_choices,
-    )
-    .prompt()
-    .context(format!("Failed to get ratio unit for {}", fact_name))?;
+    let selected_unit = if units.len() == 1 {
+        units
+            .iter()
+            .next()
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| "(none)".to_string())
+    } else {
+        let mut unit_choices: Vec<String> = vec!["(none)".to_string()];
+        unit_choices.extend(units.iter().map(|u| u.name.clone()));
+        Select::new(
+            &format!("Select ratio unit for {}", fact_name),
+            unit_choices,
+        )
+        .prompt()
+        .context(format!("Failed to get ratio unit for {}", fact_name))?
+    };
 
     let value = prompt_decimal_input(
         &prompt_message,
@@ -540,7 +578,7 @@ fn prompt_ratio_fact(
             minimum,
             maximum,
             decimals: None,
-            help: help.map(|h| h.to_string()),
+            help: help.to_string(),
         },
         "0.10",
     )?;
@@ -557,18 +595,18 @@ fn prompt_duration_fact(
     fact_name: &str,
     type_str: &str,
     default_value: Option<&str>,
-    help: Option<&str>,
+    help: &str,
 ) -> Result<String> {
     // If there is a default, let the user accept it.
     if let Some(default) = default_value {
         let prompt_message = format!("{} [{}]", fact_name, type_str);
-        let mut prompt = Text::new(&prompt_message);
-        if let Some(help) = help {
-            prompt = prompt.with_help_message(help);
+        let help_message = if help.is_empty() {
+            "Example: 5 days".to_string()
         } else {
-            prompt = prompt.with_help_message("Example: 5 days");
-        }
-        return prompt
+            help.to_string()
+        };
+        return Text::new(&prompt_message)
+            .with_help_message(&help_message)
             .with_default(default)
             .prompt()
             .context(format!("Failed to get duration for {}", fact_name));
@@ -596,7 +634,7 @@ fn prompt_duration_fact(
             minimum: None,
             maximum: None,
             decimals: None,
-            help: help.map(|h| h.to_string()),
+            help: help.to_string(),
         },
         "5",
     )?;
@@ -656,7 +694,11 @@ fn prompt_decimal_input(
     };
 
     let mut prompt = Text::new(prompt_message).with_validator(validator);
-    let help_message = help.unwrap_or_else(|| format!("Example: {}", example));
+    let help_message = if help.is_empty() {
+        format!("Example: {}", example)
+    } else {
+        help.clone()
+    };
     prompt = prompt.with_help_message(&help_message);
 
     if let Some(default) = default_value {

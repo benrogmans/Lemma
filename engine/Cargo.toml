@@ -1,0 +1,51 @@
+[package]
+name = "lemma-engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A language that means business."
+homepage = "https://github.com/benrogmans/lemma"
+documentation = "https://docs.rs/lemma-engine"
+readme = "README.md"
+keywords = ["logic", "rules", "declarative", "dsl", "rust"]
+categories = ["parser-implementations", "development-tools"]
+
+[lib]
+name = "lemma"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pest = "2.7"
+pest_derive = "2.7"
+chrono.workspace = true
+regex = "1.0"
+serde.workspace = true
+serde_json.workspace = true
+rust_decimal.workspace = true
+strum = "0.26"
+strum_macros = "0.26"
+indexmap = { version = "2.0", features = ["serde"] }
+boolean_expression = "0.4"
+async-trait = "0.1"
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls"] }
+
+[features]
+default = ["registry"]
+registry = ["reqwest"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.104"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+gloo-net = "0.6"
+
+[lints.rust]
+dead_code = "deny"
+
+[dev-dependencies]
+proptest = "1.4"
+insta = "1.34"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

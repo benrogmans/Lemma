@@ -1,9 +1,9 @@
 doc rules_and_unless
 
-fact base_price = [number -> minimum 0]
-fact quantity = [number -> minimum 0]
-fact is_premium = yes
+fact is_premium   = yes
+fact base_price   = [number -> minimum 0]
 fact customer_age = [number -> minimum 0 -> maximum 120]
+fact quantity     = [number -> minimum 0]
 
 rule total_before_discount = base_price * quantity
 
@@ -21,7 +21,8 @@ rule shipping_cost = 15
 rule final_total = total_after_discount? + shipping_cost?
 
 rule age_validation = true
-  unless customer_age < 18 then veto "Customer must be 18 or older"
+  unless customer_age < 18
+    then veto "Customer must be 18 or older"
   unless customer_age > 120 then veto "Invalid age"
 
 rule can_process = yes
@@ -32,5 +33,7 @@ rule priority_processing = no
   unless is_premium then yes
 
 rule message = "Standard order"
-  unless final_total? > 1000 then "High-value order - manager approval required"
-  unless is_premium then "Premium order - expedited processing"
+  unless final_total? > 1000
+    then "High-value order - manager approval required"
+  unless is_premium
+    then "Premium order - expedited processing"

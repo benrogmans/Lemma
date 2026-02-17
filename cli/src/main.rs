@@ -2,12 +2,15 @@ mod error_formatter;
 mod formatter;
 mod interactive;
 mod mcp;
+pub(crate) mod response;
 mod server;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use formatter::Formatter;
 use lemma::Engine;
+use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -24,11 +27,18 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(Clone, Copy, Default, clap::ValueEnum)]
+enum OutputFormat {
+    #[default]
+    Table,
+    Json,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Evaluate rules and display results (try: doc:rule1,rule2)
     ///
-    /// Loads all .lemma files from the workspace, evaluates the specified doc with optional fact overrides,
+    /// Loads all .lemma files from the workspace, evaluates the specified doc with optional fact values,
     /// and displays the computed results. Use this for command-line evaluation and testing.
     ///
     /// Syntax: doc or doc:rule1,rule2,rule3
@@ -41,7 +51,7 @@ enum Commands {
         ///   pricing:total,tax    - evaluate total and tax rules
         #[arg(value_name = "[DOC[:RULES]]")]
         doc_name: Option<String>,
-        /// Facts to override (format: name=value or ref_doc.fact=value)
+        /// Fact values to provide (format: name=value or ref_doc.fact=value)
         ///
         /// Examples: price=100, quantity=5, config.tax_rate=0.21
         facts: Vec<String>,
@@ -58,9 +68,17 @@ enum Commands {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
-        /// Output raw values only (for piping to other tools)
-        #[arg(short = 'r', long)]
-        raw: bool,
+        /// Output format: table (human-readable) or json (machine-readable)
+        #[arg(
+            short = 'o',
+            long = "output",
+            value_name = "FORMAT",
+            default_value = "table"
+        )]
+        output: OutputFormat,
+        /// Include facts and proof trees (table) or proof objects (json)
+        #[arg(long)]
+        explain: bool,
         /// Enable interactive mode for document/rule/fact selection
         #[arg(short = 'i', long)]
         interactive: bool,
@@ -85,11 +103,20 @@ enum Commands {
         #[arg(default_value = ".")]
         root: PathBuf,
     },
-    /// Start HTTP REST API server (default: localhost:3000)
+    /// Start HTTP REST API server with auto-generated typed endpoints (default: localhost:3000)
     ///
-    /// Runs a server that evaluates Lemma docs via HTTP POST requests.
-    /// Useful for integrating Lemma rules into web applications and microservices.
-    /// API: POST /evaluate with {code, facts}
+    /// Loads all .lemma files from the workspace and generates typed REST API endpoints
+    /// for each document. Interactive OpenAPI documentation is available at /docs.
+    ///
+    /// Routes:
+    ///   GET  /{doc}              — evaluate all rules (facts as query params)
+    ///   POST /{doc}              — evaluate all rules (facts as JSON body)
+    ///   GET  /{doc}/{rules}      — evaluate specific rules (comma-separated)
+    ///   POST /{doc}/{rules}      — evaluate specific rules (JSON body)
+    ///   GET  /                   — list all documents
+    ///   GET  /docs               — interactive API documentation
+    ///   GET  /openapi.json       — OpenAPI 3.1 specification
+    ///   GET  /health             — health check
     Server {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
@@ -100,6 +127,12 @@ enum Commands {
         /// Port number to listen on
         #[arg(short, long, default_value = "3000")]
         port: u16,
+        /// Watch workspace for .lemma file changes and reload automatically
+        #[arg(short, long)]
+        watch: bool,
+        /// Enable proof generation; clients send header x-proofs to receive proof objects in responses
+        #[arg(long)]
+        proofs: bool,
     },
     /// Start MCP server for AI assistant integration (stdio)
     ///
@@ -110,6 +143,24 @@ enum Commands {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
+        /// Enable admin tools: add_document, get_document_source (read-only by default)
+        #[arg(long)]
+        admin: bool,
+    },
+    /// Format .lemma files to canonical style
+    ///
+    /// Parses and re-emits .lemma files with consistent formatting.
+    /// Without flags, formats files in place. Use --check for CI.
+    Fmt {
+        /// Files or directories to format (default: current directory)
+        #[arg(default_value = ".")]
+        paths: Vec<PathBuf>,
+        /// Check formatting without modifying files (exit 1 if any file would change)
+        #[arg(long)]
+        check: bool,
+        /// Write formatted output to stdout instead of modifying files
+        #[arg(long)]
+        stdout: bool,
     },
 }
 
@@ -122,6 +173,8 @@ fn main() {
             doc_name,
             facts,
             target,
+            output,
+            explain,
             interactive,
             ..
         } => run_command(
@@ -129,6 +182,8 @@ fn main() {
             doc_name.as_ref(),
             facts,
             target.as_ref(),
+            *output,
+            *explain,
             *interactive,
         ),
         Commands::Show { workdir, doc_name } => show_command(workdir, doc_name),
@@ -137,8 +192,15 @@ fn main() {
             workdir,
             host,
             port,
-        } => server_command(workdir, host, *port),
-        Commands::Mcp { workdir } => mcp_command(workdir),
+            watch,
+            proofs,
+        } => server_command(workdir, host, *port, *watch, *proofs),
+        Commands::Mcp { workdir, admin } => mcp_command(workdir, *admin),
+        Commands::Fmt {
+            paths,
+            check,
+            stdout,
+        } => fmt_command(paths, *check, *stdout),
     };
 
     if let Err(e) = result {
@@ -157,6 +219,8 @@ fn run_command(
     doc_name: Option<&String>,
     facts: &[String],
     target: Option<&String>,
+    output: OutputFormat,
+    explain: bool,
     interactive: bool,
 ) -> Result<()> {
     let mut engine = Engine::new();
@@ -172,7 +236,7 @@ fn run_command(
             );
             eprintln!("  lemma run pricing:total              - Evaluate only 'total' rule");
             eprintln!("  lemma run pricing:total,tax          - Evaluate 'total' and 'tax' rules");
-            eprintln!("  lemma run pricing price=100 qty=5    - Evaluate with fact overrides");
+            eprintln!("  lemma run pricing price=100 qty=5    - Evaluate with fact values");
             eprintln!("  lemma run --interactive              - Interactive mode for selection\n");
             eprintln!("To see available documents:");
             eprintln!("  lemma list\n");
@@ -201,8 +265,8 @@ fn run_command(
         (d, r.unwrap_or_default(), all_facts, interactive_target)
     } else if let Some(name) = doc_name {
         let (doc, rules) = parse_doc_and_rules(name);
-        let fact_overrides = parse_fact_strings(facts);
-        (doc, rules.unwrap_or_default(), fact_overrides, None)
+        let fact_values = parse_fact_strings(facts);
+        (doc, rules.unwrap_or_default(), fact_values, None)
     } else {
         unreachable!()
     };
@@ -215,13 +279,40 @@ fn run_command(
     // Normal evaluation mode
     let response = engine.evaluate(&doc, rules, final_facts)?;
     let formatter = Formatter;
-    print!("{}", formatter.format_response(&response));
+
+    match output {
+        OutputFormat::Table => print!("{}", formatter.format_response(&response, explain)),
+        OutputFormat::Json => {
+            let json = format_response_json(&response, explain);
+            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        }
+    }
 
     Ok(())
 }
 
-/// Parse fact override strings in "key=value" format into a HashMap
-fn parse_fact_strings(facts: &[String]) -> std::collections::HashMap<String, String> {
+#[derive(Serialize)]
+struct RunOutputJson {
+    doc_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    facts: Option<Vec<lemma::Facts>>,
+    results: HashMap<String, response::RuleResultJson>,
+}
+
+fn format_response_json(response: &lemma::Response, explain: bool) -> RunOutputJson {
+    RunOutputJson {
+        doc_name: response.doc_name.clone(),
+        facts: if explain {
+            Some(response.facts.clone())
+        } else {
+            None
+        },
+        results: response::convert_response(response, explain),
+    }
+}
+
+/// Parse fact value strings in "key=value" format into a HashMap
+fn parse_fact_strings(facts: &[String]) -> HashMap<String, String> {
     facts
         .iter()
         .filter_map(|s| {
@@ -235,15 +326,9 @@ fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
-    if let Some(doc) = engine.get_document(doc_name) {
-        let facts: Vec<&lemma::LemmaFact> = doc.facts.iter().collect();
-        let rules: Vec<&lemma::LemmaRule> = doc.rules.iter().collect();
-
+    if let Some(plan) = engine.get_execution_plan(doc_name) {
         let formatter = Formatter;
-        print!(
-            "{}",
-            formatter.format_document_inspection(doc, &facts, &rules)
-        );
+        print!("{}", formatter.format_document_inspection(plan));
     } else {
         eprintln!("Error: Document '{}' not found", doc_name);
         std::process::exit(1);
@@ -255,81 +340,68 @@ fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
 fn list_command(root: &PathBuf) -> Result<()> {
     let mut engine = Engine::new();
 
-    let mut file_count = 0;
-    for entry in WalkDir::new(root) {
-        let entry = entry?;
-        if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
-            file_count += 1;
-            let path = entry.path();
-            let source_id = path.to_string_lossy().to_string();
-            engine.add_lemma_code(&fs::read_to_string(path)?, &source_id)?;
-        }
-    }
+    let file_count = WalkDir::new(root)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("lemma"))
+        .count();
 
-    let documents = engine.list_documents();
+    load_workspace(&mut engine, root)?;
 
-    let mut doc_stats: Vec<(String, usize, usize)> = documents
+    let mut document_names = engine.list_documents();
+    document_names.sort();
+
+    let schemas: Vec<lemma::DocumentSchema> = document_names
         .iter()
-        .map(|doc_name| {
-            let doc = engine.get_document(doc_name);
-            let facts_count = doc.map(|d| d.facts.len()).unwrap_or(0);
-            let rules_count = doc.map(|d| d.rules.len()).unwrap_or(0);
-            (doc_name.clone(), facts_count, rules_count)
-        })
+        .filter_map(|name| engine.get_execution_plan(name))
+        .map(|plan| plan.schema())
         .collect();
-    doc_stats.sort_by(|a, b| a.0.cmp(&b.0));
 
     let formatter = Formatter;
     println!(
         "{}",
-        formatter.format_workspace_summary(file_count, documents.len(), &doc_stats)
+        formatter.format_workspace_summary(file_count, &schemas)
     );
 
     Ok(())
 }
 
-fn server_command(workdir: &Path, host: &str, port: u16) -> Result<()> {
-    #[cfg(feature = "server")]
-    {
-        use tokio::runtime::Runtime;
-        let rt = Runtime::new()?;
-        rt.block_on(async {
-            let mut engine = Engine::new();
-            load_workspace(&mut engine, workdir)?;
+fn server_command(workdir: &Path, host: &str, port: u16, watch: bool, proofs: bool) -> Result<()> {
+    use tokio::runtime::Runtime;
+    let rt = Runtime::new()?;
+    rt.block_on(async {
+        let mut engine = Engine::new();
+        load_workspace_async(&mut engine, workdir).await?;
 
-            println!(
-                "Starting HTTP server with {} document(s) loaded",
-                engine.list_documents().len()
-            );
-            server::http::start_server(engine, host, port).await
-        })?;
-    }
-
-    #[cfg(not(feature = "server"))]
-    {
-        eprintln!("Error: Server feature not enabled");
-        eprintln!("Recompile with: cargo build --features server");
-        std::process::exit(1);
-    }
-
+        let document_names = engine.list_documents();
+        let document_count = document_names.len();
+        println!(
+            "Starting HTTP server with {} document(s) loaded...",
+            document_count
+        );
+        server::http::start_server(engine, host, port, watch, proofs, workdir.to_path_buf()).await
+    })?;
     Ok(())
 }
 
-fn mcp_command(workdir: &Path) -> Result<()> {
+fn mcp_command(workdir: &Path, admin: bool) -> Result<()> {
     #[cfg(feature = "mcp")]
     {
         let mut engine = Engine::new();
         load_workspace(&mut engine, workdir)?;
 
+        let config = mcp::McpConfig { admin };
+
         println!(
             "Starting MCP server with {} document(s) loaded",
             engine.list_documents().len()
         );
-        mcp::server::start_server(engine)?;
+        mcp::server::start_server(engine, config)?;
     }
 
     #[cfg(not(feature = "mcp"))]
     {
+        let _ = admin;
         eprintln!("Error: MCP feature not enabled");
         eprintln!("Recompile with: cargo build --features mcp");
         std::process::exit(1);
@@ -338,16 +410,49 @@ fn mcp_command(workdir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Load all .lemma files from the workspace directory
+/// Load all .lemma files from the workspace directory.
+///
+/// Collects all files then calls `add_lemma_files` once so that registry
+/// resolution runs a single time and all errors are collected.
 fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> {
+    let mut files = std::collections::HashMap::new();
     for entry in WalkDir::new(workdir) {
         let entry = entry?;
         if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
             let path = entry.path();
             let source_id = path.to_string_lossy().to_string();
-            engine.add_lemma_code(&fs::read_to_string(path)?, &source_id)?;
+            let code = fs::read_to_string(path)?;
+            files.insert(source_id, code);
         }
     }
+
+    tokio::runtime::Runtime::new()?
+        .block_on(engine.add_lemma_files(files))
+        .map_err(lemma::LemmaError::MultipleErrors)?;
+
+    Ok(())
+}
+
+/// Async version of `load_workspace` for use inside an existing tokio runtime.
+///
+/// Collects all files then calls `add_lemma_files` once so that registry
+/// resolution runs a single time and all errors are collected.
+async fn load_workspace_async(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> {
+    let mut files = std::collections::HashMap::new();
+    for entry in WalkDir::new(workdir) {
+        let entry = entry?;
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
+            let path = entry.path();
+            let source_id = path.to_string_lossy().to_string();
+            let code = fs::read_to_string(path)?;
+            files.insert(source_id, code);
+        }
+    }
+
+    engine
+        .add_lemma_files(files)
+        .await
+        .map_err(lemma::LemmaError::MultipleErrors)?;
 
     Ok(())
 }
@@ -362,4 +467,87 @@ fn parse_doc_and_rules(input: &str) -> (String, Option<Vec<String>>) {
     } else {
         (input.to_string(), None)
     }
+}
+
+/// Collect all .lemma file paths from the given paths (each may be a file or directory).
+fn collect_lemma_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, std::io::Error> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for path in paths {
+        if path.is_file() {
+            if path.extension().and_then(|e| e.to_str()) == Some("lemma") {
+                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if seen.insert(canonical.clone()) {
+                    result.push(path.clone());
+                }
+            }
+        } else if path.is_dir() {
+            for entry in WalkDir::new(path).into_iter().flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("lemma") {
+                    if let Ok(canonical) = p.canonicalize() {
+                        if seen.insert(canonical) {
+                            result.push(p.to_path_buf());
+                        }
+                    } else if seen.insert(p.to_path_buf()) {
+                        result.push(p.to_path_buf());
+                    }
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn fmt_command(paths: &[PathBuf], check: bool, stdout: bool) -> Result<()> {
+    let files = collect_lemma_files(paths)?;
+    let mut any_changed = false;
+    let mut parse_errors = 0u32;
+
+    for file_path in &files {
+        let source = match fs::read_to_string(file_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error reading {}: {}", file_path.display(), e);
+                parse_errors += 1;
+                continue;
+            }
+        };
+        let attribute = file_path.to_string_lossy().to_string();
+        let formatted = match lemma::format_source(&source, &attribute) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{}", error_formatter::format_error(&e));
+                parse_errors += 1;
+                continue;
+            }
+        };
+
+        if stdout {
+            print!("{}", formatted);
+            continue;
+        }
+
+        if source == formatted {
+            continue;
+        }
+        any_changed = true;
+
+        if check {
+            eprintln!("Would reformat: {}", file_path.display());
+        } else if let Err(e) = fs::write(file_path, &formatted) {
+            eprintln!("Error writing {}: {}", file_path.display(), e);
+            parse_errors += 1;
+        } else {
+            eprintln!("Formatted: {}", file_path.display());
+        }
+    }
+
+    if parse_errors > 0 {
+        std::process::exit(1);
+    }
+    if check && any_changed {
+        std::process::exit(1);
+    }
+    Ok(())
 }

@@ -7,10 +7,10 @@ Perfect for understanding the basics of Lemma.
 """
 
 type money = scale
-  -> minimum 0
   -> decimals 2
   -> unit eur 1.00
   -> unit gbp 1.17
+  -> minimum 0 eur
 
 type coffee = text
   -> option "espresso"
@@ -27,29 +27,27 @@ type age = number
   -> maximum 100
   -> minimum 0
 
-fact price            = [money]
 fact age              = [age]
+fact has_loyalty_card = [boolean]
+fact price            = [money]
 fact product          = [coffee]
 fact size             = [size]
 fact number_of_cups   = [number -> maximum 10]
-fact has_loyalty_card = [boolean]
 
 rule base_price = veto "Unknown type of coffee"
-  unless product is "espresso"   then 2.50 eur
-  unless product is "latte"      then 3.50 eur
-  unless product is "cappuccino" then 3.50 eur
-  unless product is "mocha"      then 4.00 eur
+  unless product is "espresso" then 2.5 eur
+  unless product is "latte" then 3.5 eur
+  unless product is "cappuccino" then 3.5 eur
+  unless product is "mocha" then 4 eur
 
 rule size_multiplier = veto "Unknown size of coffee"
-  unless size is "small"  then 80%
+  unless size is "small" then 80%
   unless size is "medium" then 100%
-  unless size is "large"  then 120%
+  unless size is "large" then 120%
 
-rule price_per_cup =
-    base_price? * size_multiplier?
+rule price_per_cup = base_price? * size_multiplier?
 
-rule subtotal =
-    price_per_cup? * number_of_cups
+rule subtotal = price_per_cup? * number_of_cups
 
 rule loyalty_discount = 0%
   unless has_loyalty_card then 10%
@@ -57,6 +55,6 @@ rule loyalty_discount = 0%
 rule age_discount = 0%
   unless age >= 65 then 10%
 
-rule discount_amount = (subtotal? * loyalty_discount?) - age_discount?
+rule discount_amount = subtotal? * loyalty_discount? - age_discount?
 
 rule total = subtotal? - discount_amount?

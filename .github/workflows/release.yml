@@ -106,11 +106,11 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        run: curl -sSfL https://drager.github.io/wasm-pack/installer/init.sh | bash
 
       - name: Build WASM
         run: |
-          cd lemma
+          cd engine
           node wasm/build.js
 
       - name: Setup Node.js
@@ -120,7 +120,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Publish to NPM
-        working-directory: lemma/pkg
+        working-directory: engine/pkg
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

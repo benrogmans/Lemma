@@ -4,15 +4,15 @@ Corporate Base Compensation Policy
 Foundation for all employee compensation
 """
 
-fact company_name = "TechCorp Europe"
-fact base_salary_min = [number -> minimum 0 -> default 45000]
-fact base_salary_max = [number -> minimum 0 -> default 250000]
+fact bonus_pool_percentage     = 10%
+fact company_name              = "TechCorp Europe"
 fact cost_of_living_adjustment = 0%
-fact stock_grant_percentage = 2%
-fact bonus_pool_percentage = 10%
-fact health_premium_monthly = [number -> minimum 0 -> default 500]
-fact retirement_match_rate = 6%
-fact retirement_match_cap = 5%
+fact retirement_match_cap      = 5%
+fact retirement_match_rate     = 6%
+fact stock_grant_percentage    = 2%
+fact base_salary_max           = [number -> minimum 0 -> default 250000]
+fact base_salary_min           = [number -> minimum 0 -> default 45000]
+fact health_premium_monthly    = [number -> minimum 0 -> default 500]
 
 rule annual_health_cost = health_premium_monthly * 12
 
@@ -26,18 +26,18 @@ rule effective_cola = cost_of_living_adjustment
 doc compensation/engineering_dept
 """
 Engineering Department Compensation Rules
-Inherits base policy with engineering-specific overrides
+Inherits base policy with engineering-specific bindings
 """
 
-fact policy = doc compensation/base_policy
-fact policy.stock_grant_percentage = 5%
-fact policy.bonus_pool_percentage = 15%
-fact policy.cost_of_living_adjustment = 3%
-
-fact department = "Engineering"
-fact level_multiplier = [number -> minimum 0 -> default 1.0]
+fact department         = "Engineering"
+fact level_multiplier   = [number -> minimum 0 -> default 1.0]
 fact performance_rating = [number -> minimum 0 -> maximum 5 -> default 0.0]
-fact years_of_service = [number -> minimum 0 -> default 0]
+fact years_of_service   = [number -> minimum 0 -> default 0]
+
+fact policy                           = doc compensation/base_policy
+fact policy.bonus_pool_percentage     = 15%
+fact policy.cost_of_living_adjustment = 3%
+fact policy.stock_grant_percentage    = 5%
 
 rule base_for_level = policy.base_salary_min * level_multiplier
 
@@ -51,14 +51,11 @@ rule tenure_bonus = 0
   unless years_of_service >= 5 then 10000
   unless years_of_service >= 10 then 25000
 
-rule stock_value =
-    base_for_level? * policy.stock_grant_percentage
+rule stock_value = base_for_level? * policy.stock_grant_percentage
 
-rule annual_bonus_target =
-    base_for_level? * policy.bonus_pool_percentage
+rule annual_bonus_target = base_for_level? * policy.bonus_pool_percentage
 
-rule performance_bonus =
-    annual_bonus_target? * performance_bonus_rate?
+rule performance_bonus = annual_bonus_target? * performance_bonus_rate?
 
 rule total_cash_comp = base_for_level? + performance_bonus? + tenure_bonus?
 
@@ -67,7 +64,7 @@ rule total_comp_with_stock = total_cash_comp? + stock_value?
 rule retirement_contribution_employee = base_for_level? * 0.05
 
 rule retirement_match = retirement_contribution_employee?
-  unless retirement_contribution_employee? > (base_for_level? * policy.retirement_match_cap)
+  unless retirement_contribution_employee? > base_for_level? * policy.retirement_match_cap
     then base_for_level? * policy.retirement_match_cap
 
 rule total_retirement = retirement_contribution_employee? + retirement_match?
@@ -83,14 +80,14 @@ Senior Engineer (Level 3) - Specific Employee
 Multiple inheritance levels testing
 """
 
-fact eng_policy = doc compensation/engineering_dept
-fact eng_policy.level_multiplier = 2.5
-fact eng_policy.performance_rating = 4.2
-fact eng_policy.years_of_service = 7
-
 fact employee_name = "Alex van der Berg"
-fact location = "Amsterdam"
+fact location      = "Amsterdam"
 fact location_cola = 15%
+
+fact eng_policy                    = doc compensation/engineering_dept
+fact eng_policy.level_multiplier   = 2.5
+fact eng_policy.performance_rating = 4.2
+fact eng_policy.years_of_service   = 7
 
 rule effective_base = eng_policy.base_for_level? * (1 + location_cola)
 
@@ -98,9 +95,11 @@ rule location_adjusted_stock = eng_policy.stock_value? * (1 + location_cola)
 
 rule location_adjusted_bonus = eng_policy.performance_bonus? * (1 + location_cola)
 
-rule total_location_adjusted = effective_base? + location_adjusted_bonus? + eng_policy.tenure_bonus?
+rule total_location_adjusted = effective_base? + location_adjusted_bonus?
+  + eng_policy.tenure_bonus?
 
-rule final_total_comp = total_location_adjusted? + location_adjusted_stock? + eng_policy.benefits_value?
+rule final_total_comp = total_location_adjusted? + location_adjusted_stock?
+  + eng_policy.benefits_value?
 
 rule monthly_take_home_estimate = final_total_comp? / 12
 
@@ -113,7 +112,8 @@ rule is_highly_compensated = false
 
 rule compensation_tier = "Standard"
   unless final_total_comp? > 150000 then "Above Average"
-  unless final_total_comp? > 250000 then "Highly Compensated"
+  unless final_total_comp? > 250000
+    then "Highly Compensated"
   unless final_total_comp? > 400000 then "Executive Level"
 
 rule perf_rating = eng_policy.performance_rating
@@ -121,7 +121,7 @@ rule perf_rating = eng_policy.performance_rating
 rule performance_category = "Needs Improvement"
   unless perf_rating? >= 2.5 then "Meets Expectations"
   unless perf_rating? >= 3.5 then "Exceeds Expectations"
-  unless perf_rating? >= 4.0 then "Outstanding"
+  unless perf_rating? >= 4 then "Outstanding"
   unless perf_rating? >= 4.5 then "Exceptional"
 
 
@@ -131,20 +131,20 @@ Principal Engineer (Level 5) - Maximum complexity test
 Tests deep inheritance and complex calculations
 """
 
-fact eng_policy = doc compensation/engineering_dept
-fact eng_policy.level_multiplier = 4.5
-fact eng_policy.performance_rating = 4.8
-fact eng_policy.years_of_service = 12
-fact eng_policy.policy.stock_grant_percentage = 8%
-fact eng_policy.policy.bonus_pool_percentage = 20%
-
-fact employee_name = "Jordan Schmidt"
-fact location = "Berlin"
-fact location_cola = 20%
+fact employee_name      = "Jordan Schmidt"
 fact has_critical_skill = true
-fact manages_team = true
-fact team_size = [number -> minimum 0 -> default 15]
-fact on_call_rotation = true
+fact location           = "Berlin"
+fact location_cola      = 20%
+fact manages_team       = true
+fact on_call_rotation   = true
+fact team_size          = [number -> minimum 0 -> default 15]
+
+fact eng_policy                               = doc compensation/engineering_dept
+fact eng_policy.level_multiplier              = 4.5
+fact eng_policy.performance_rating            = 4.8
+fact eng_policy.policy.bonus_pool_percentage  = 20%
+fact eng_policy.policy.stock_grant_percentage = 8%
+fact eng_policy.years_of_service              = 12
 
 rule critical_skill_bonus = 0
   unless has_critical_skill then 15000
@@ -159,8 +159,10 @@ rule on_call_stipend = 0
 
 rule effective_base = eng_policy.base_for_level? * (1 + location_cola)
 
-rule all_bonuses = eng_policy.performance_bonus? + eng_policy.tenure_bonus? +
-                   critical_skill_bonus? + management_bonus? + on_call_stipend?
+rule all_bonuses = eng_policy.performance_bonus? + eng_policy.tenure_bonus?
+  + critical_skill_bonus?
+  + management_bonus?
+  + on_call_stipend?
 
 rule base_plus_bonuses = effective_base? + all_bonuses?
 
@@ -198,4 +200,3 @@ rule retention_risk = "Low"
   unless pay_vs_base_multiple? < 6 then "High"
 
 rule summary = "Principal Engineer - Exceptional compensation package"
-

@@ -6,11 +6,11 @@ This example demonstrates how to reference other rules using the ? suffix.
 Rule references are distinguished from fact references by the question mark.
 """
 
-fact age = 25
-fact has_drivers_license = true
+fact age                  = 25
+fact has_drivers_license  = true
+fact has_vehicle          = true
 fact license_is_suspended = false
-fact has_vehicle = true
-fact vehicle_is_insured = true
+fact vehicle_is_insured   = true
 
 rule is_of_legal_age = age >= 18
 
@@ -31,12 +31,12 @@ Eligibility Check with Rule References
 Shows complex rule composition and cross-rule dependencies.
 """
 
-fact user_age = [number -> minimum 0 -> maximum 120 -> default 30]
-fact has_passport = true
-fact passport_valid = true
-fact has_visa = false
 fact criminal_record = false
-fact debt_amount = [number -> minimum 0 -> default 0]
+fact has_passport    = true
+fact has_visa        = false
+fact passport_valid  = true
+fact debt_amount     = [number -> minimum 0 -> default 0]
+fact user_age        = [number -> minimum 0 -> maximum 120 -> default 30]
 
 rule is_adult = user_age >= 18
 
@@ -51,9 +51,11 @@ rule background_check_passed = not criminal_record
 rule financial_standing_good = debt_amount < 10000
 
 rule can_travel_internationally = is_adult? and travel_documents_valid? and background_check_passed? and financial_standing_good?
-  unless not travel_documents_valid? then veto "Valid travel documents required"
+  unless not travel_documents_valid?
+    then veto "Valid travel documents required"
 
 rule eligibility_message = "Not eligible"
-  unless not has_valid_visa? then "Valid passport but visa required"
-  unless can_travel_internationally? then "Eligible for international travel"
-
+  unless not has_valid_visa?
+    then "Valid passport but visa required"
+  unless can_travel_internationally?
+    then "Eligible for international travel"
