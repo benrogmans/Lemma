@@ -1,6 +1,6 @@
 # Lemma
 
-[![CI](https://github.com/benrogmans/engine/workflows/CI/badge.svg)](https://github.com/benrogmans/engine/actions/workflows/ci.yml)
+[![CI](https://github.com/benrogmans/lemma/workflows/CI/badge.svg)](https://github.com/benrogmans/lemma/actions/workflows/quality.yml)
 [![Crates.io](https://img.shields.io/crates/v/lemma-engine.svg)](https://crates.io/crates/lemma-engine)
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
