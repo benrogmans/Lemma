@@ -73,8 +73,8 @@ rule total_cost = base_shipping? + express_fee?
 Use spaces and tabs in `unless` expressions to align it like a table, making scanning the rule at a glance really easy.
 
 **What this calculates:**
-- Express fee: €0.00, unless `is_express` is true, then €4.99
-- Base shipping: €5.99, but for packages that weigh 1-5kg it is €8.99, and for all packages >5kg it is €15.99
+- Express fee: 0, unless `is_express` is true, then 4.99
+- Base shipping: 5.99, but for packages that weigh 1-5kg it is 8.99, and for all packages >5kg it is 15.99
 - Total cost: Base shipping plus express fee
 
 As obvious as it looks, that is how Lemma encodes it.
@@ -121,9 +121,9 @@ Rules start with a default value, then conditions override:
 
 ```lemma
 rule discount = 0%
-  unless quantity > 10 then 10%
-  unless quantity > 50 then 20%
-  unless is_premium_member then 25%
+  unless quantity >= 10 then 10%
+  unless quantity >= 50 then 20%
+  unless is_vip         then 25%
 
 rule price = 100 - discount?
 ```
@@ -226,6 +226,10 @@ doc bonus_policy
 fact bonus_rate = 10%
 
 doc calculations
+fact employee    = doc employee
+fact manager     = doc manager
+fact bonus_policy = doc bonus_policy
+
 rule employee_bonus = employee.base_salary * bonus_policy.bonus_rate
 rule manager_bonus = manager.base_salary * bonus_policy.bonus_rate
 ```
