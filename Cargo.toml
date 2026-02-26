@@ -10,12 +10,15 @@ default-members = ["cli"]
 exclude = ["engine/fuzz"]
 
 [workspace.package]
-version = "0.7.4"
+version = "0.7.5"
 edition = "2021"
 authors = ["benrogmans <ben@amrai.nl>"]
 description = "A language that means business."
 license = "Apache-2.0"
 repository = "https://github.com/benrogmans/lemma"
+
+[workspace.lints.rust]
+dead_code = "deny"
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive", "rc"] }
