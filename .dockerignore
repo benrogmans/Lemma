@@ -1,0 +1,12 @@
+target/
+.git/
+.github/
+documentation/
+engine/fuzz/
+engine/pkg/
+engine/wasm/
+*.md
+!README.md
+LICENSE
+.cargo/deny.toml
+.cursor/
