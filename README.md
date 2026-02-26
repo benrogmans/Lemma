@@ -120,12 +120,17 @@ lemma run shipping
 Rules start with a default value, then conditions override:
 
 ```lemma
-rule discount = 0%
-  unless quantity > 10 then 10%
-  unless quantity > 50 then 20%
-  unless is_premium_member then 25%
+doc pricing
 
-rule price = 100 - discount?
+fact quantity = [number]
+fact is_vip   = false
+
+rule discount = 0%
+  unless quantity >= 10 then 10%
+  unless quantity >= 50 then 20%
+  unless is_vip         then 25%
+
+rule price = 20 * quantity - discount?
 ```
 
 **The last matching condition wins** - mirroring how business rules, legal documents, and standard operating procedures are written: "In principle X applies, unless [more specific condition] Y, unless [even more specific] Z..."
@@ -135,21 +140,23 @@ rule price = 100 - discount?
 Define custom types with units and constraints:
 
 ```lemma
+doc type_examples
+
 type money = scale
   -> unit eur 1.00
-  -> unit usd 1.10
+  -> unit usd 1.18
   -> decimals 2
   -> minimum 0
 
 type mass = scale
-  -> unit kilogram 1.0
-  -> unit gram 0.001
-  -> unit pound 0.453592
+  -> unit gram 1
+  -> unit kilogram 1000
+  -> unit pound 453.592
 
-fact salary = 50000
+fact salary = 50_000 eur
 fact workweek = 40 hours
 fact vacation = 3 weeks
-fact weight = 75 kilograms
+fact weight = 75 kilogram
 fact tax_rate = 22%
 fact deadline = 2024-12-31
 ```
@@ -168,13 +175,16 @@ fact deadline = 2024-12-31
 Define custom types with units, constraints, and validation:
 
 ```lemma
+doc unit_conversions
+
 type money = scale
   -> unit eur 1.00
-  -> unit usd 1.10
+  -> unit usd 1.18
 
-type temperature = scale
-  -> unit celsius 1.0
-  -> unit fahrenheit 1.8
+type length = scale
+  -> unit meter 1.0
+  -> unit kilometer 1000.0
+  -> unit centimeter 0.01
 
 type discount = ratio
   -> minimum 0
@@ -184,9 +194,11 @@ type discount = ratio
 Unit conversions work within the same type:
 
 ```lemma
+doc unit_conversions
+
 type money = scale
   -> unit eur 1.00
-  -> unit usd 1.10
+  -> unit usd 1.18
 
 fact price = 100 eur
 
@@ -200,9 +212,14 @@ Compose complex logic from simple rules:
 ```lemma
 doc driving_eligibility
 
-fact age = 25
-fact license_status = "valid"
-fact license_suspended = false
+type license_status = text
+  -> option "valid"
+  -> option "suspended"
+  -> option "expired"
+
+fact age               = [number]
+fact license_status    = [license_status]
+fact license_suspended = [boolean]
 
 rule is_adult = age >= 18
 
@@ -214,34 +231,40 @@ rule can_drive = is_adult? and has_license?
 
 ### Document composition
 
+
 ```lemma
 doc employee
-fact base_salary = 60000
-fact years_service = 5
+fact years_service = 8
 
-doc manager
-fact base_salary = 80000
+doc leave_policy
+fact senior_threshold = 5
+fact base_leave_days  = 25
+fact bonus_leave_days = 5
 
-doc bonus_policy
-fact bonus_rate = 10%
+doc leave_entitlement
+fact employee     = doc employee
+fact leave_policy = doc leave_policy
 
-doc calculations
-rule employee_bonus = employee.base_salary * bonus_policy.bonus_rate
-rule manager_bonus = manager.base_salary * bonus_policy.bonus_rate
+rule is_senior         = employee.years_service >= leave_policy.senior_threshold
+rule annual_leave_days = leave_policy.base_leave_days
+  unless is_senior? then leave_policy.base_leave_days + leave_policy.bonus_leave_days
 ```
 
 ### Veto for hard constraints
 
+You should use types to constrain facts whenever possible. Sometimes though, you might need to consider multiple data points to validate a rule. This is where `veto` comes in. In the example below, we want to ensure that the review date is after the start date.
+
 ```lemma
-doc loan_approval
+doc performance_review
 
-fact credit_score = 650
-fact age = 25
-fact bankruptcy_flag = false
+fact start_date        = [date]
+fact review_date       = [date]
+fact performance_score = [number -> minimum 0 -> maximum 100]
 
-rule loan_approval = credit_score >= 600
-  unless bankruptcy_flag then reject
-  unless age < 18 then veto "Must be 18 or older"
+rule bonus_percentage = 0%
+  unless performance_score >= 70    then 5%
+  unless performance_score >= 90    then 10%
+  unless review_date < start_date then veto "Review date must be after start date"
 ```
 
 **Veto blocks the rule entirely**; there will not be any result.
