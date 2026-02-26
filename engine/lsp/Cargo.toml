@@ -17,24 +17,18 @@ crate-type = ["cdylib", "rlib"]
 name = "lsp"
 path = "src/main.rs"
 
-[lints.rust]
-dead_code = "deny"
+[lints]
+workspace = true
 
 [features]
 default = []
 
 [dependencies]
-lemma = { package = "lemma-engine", version = "0.7.4", path = "..", default-features = false }
+lemma = { package = "lemma-engine", version = "0.7.5", path = ".." }
 async-trait = "0.1"
 serde_json.workspace = true
 
-# Native: engine with registry (LemmaBase) + tokio + tower-lsp with stdio transport
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies.lemma]
-package = "lemma-engine"
-version = "0.7.4"
-path = ".."
-features = ["registry"]
-
+# Native: tokio (multi-threaded) + tower-lsp with stdio transport
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.tokio]
 version = "1"
 features = ["rt-multi-thread", "macros", "io-std", "time"]
@@ -43,13 +37,7 @@ features = ["rt-multi-thread", "macros", "io-std", "time"]
 version = "0.20"
 features = ["runtime-tokio"]
 
-# WASM: engine with registry (LemmaBase + gloo_net fetch) + minimal tokio + tower-lsp
-[target.'cfg(target_arch = "wasm32")'.dependencies.lemma]
-package = "lemma-engine"
-version = "0.7.4"
-path = ".."
-features = ["registry"]
-
+# WASM: minimal tokio + tower-lsp (runtime-agnostic) + browser bindings
 [target.'cfg(target_arch = "wasm32")'.dependencies.tokio]
 version = "1"
 default-features = false

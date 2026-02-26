@@ -12,8 +12,8 @@ name = "lemma"
 path = "src/main.rs"
 
 [dependencies]
-lemma = { package = "lemma-engine", version = "0.7.4", path = "../engine" }
-lemma-openapi = { version = "0.7.4", path = "../openapi" }
+lemma = { package = "lemma-engine", version = "0.7.5", path = "../engine" }
+lemma-openapi = { version = "0.7.5", path = "../openapi" }
 clap = { version = "4.0", features = ["derive"] }
 anyhow = "1.0"
 ariadne = "0.4"
@@ -36,8 +36,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 notify = "7"
 notify-debouncer-mini = "0.5"
 
-[lints.rust]
-dead_code = "deny"
+[lints]
+workspace = true
 
 [features]
 default = ["mcp"]
