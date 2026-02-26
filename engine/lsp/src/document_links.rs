@@ -17,7 +17,7 @@ pub fn find_registry_links(text: &str, registry: &dyn Registry) -> Vec<DocumentL
 
     // Scan for `@` characters and extract the identifier that follows.
     // Registry identifiers consist of: ASCII_ALPHA then (ASCII_ALPHANUMERIC | "_" | "-" | "/" | ".")*
-    // (matching the grammar's doc_identifier rule, but prefixed with @).
+    // (matching the grammar's doc_name rule after the optional @).
     let bytes = text.as_bytes();
     let mut byte_index = 0;
 
