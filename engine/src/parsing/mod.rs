@@ -122,7 +122,7 @@ fn parse_doc(
             }
             Rule::doc_declaration => {
                 for decl_inner in header_item.into_inner() {
-                    if decl_inner.as_rule() == Rule::doc_name_local {
+                    if decl_inner.as_rule() == Rule::doc_name {
                         doc_name = Some(decl_inner.as_str().to_string());
                         break;
                     }
