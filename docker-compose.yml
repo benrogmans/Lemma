@@ -1,0 +1,10 @@
+services:
+  lemma:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8012:8012"
+    volumes:
+      - ./documentation/examples:/docs:ro
+    command: ["server", "--host", "0.0.0.0", "--port", "8012", "--watch"]

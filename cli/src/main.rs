@@ -103,7 +103,7 @@ enum Commands {
         #[arg(default_value = ".")]
         root: PathBuf,
     },
-    /// Start HTTP REST API server with auto-generated typed endpoints (default: localhost:3000)
+    /// Start HTTP REST API server with auto-generated typed endpoints (default: localhost:8012)
     ///
     /// Loads all .lemma files from the workspace and generates typed REST API endpoints
     /// for each document. Interactive OpenAPI documentation is available at /docs.
@@ -125,7 +125,7 @@ enum Commands {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
         /// Port number to listen on
-        #[arg(short, long, default_value = "3000")]
+        #[arg(short, long, default_value = "8012")]
         port: u16,
         /// Watch workspace for .lemma file changes and reload automatically
         #[arg(short, long)]
