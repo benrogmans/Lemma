@@ -282,10 +282,10 @@ lemma list
 lemma list ./policies/
 
 # Start HTTP server (workspace auto-detected)
-lemma server --port 3000
+lemma server --port 8012
 
 # Start server with specific workspace
-lemma server --dir ./policies --port 3000
+lemma server --dir ./policies --port 8012
 
 # Start MCP server for AI assistant integration
 lemma mcp
@@ -299,13 +299,13 @@ Start a server with your workspace pre-loaded:
 lemma server --dir ./policies
 
 # Evaluate a document (all rules) via query parameters
-curl "http://localhost:3000/@pricing?quantity=10&is_member=true"
+curl "http://localhost:8012/@pricing?quantity=10&is_member=true"
 
 # Evaluate specific rules only
-curl "http://localhost:3000/@pricing/discount,total?quantity=10"
+curl "http://localhost:8012/@pricing/discount,total?quantity=10"
 
 # Evaluate via JSON body
-curl -X POST http://localhost:3000/@pricing \
+curl -X POST http://localhost:8012/@pricing \
   -H "Content-Type: application/json" \
   -d '{"quantity": 10, "is_member": true}'
 ```
@@ -336,6 +336,51 @@ npm install @benrogmans/lemma-engine
 
 See [WASM documentation](documentation/wasm.md) for usage examples.
 
+### Docker
+
+A minimal multi-architecture container image is published to the GitHub Container Registry on each release.
+
+```bash
+docker pull ghcr.io/benrogmans/lemma:latest
+```
+
+The image supports `linux/amd64` and `linux/arm64`. Docker automatically pulls the correct architecture.
+
+**Run the CLI:**
+
+```bash
+docker run --rm ghcr.io/benrogmans/lemma --help
+```
+
+**Evaluate a document:**
+
+Mount your workspace into the container's `/docs` directory:
+
+```bash
+docker run --rm -v "$(pwd):/docs" ghcr.io/benrogmans/lemma run shipping
+```
+
+**Deploy as an HTTP API:**
+
+```bash
+docker run -d -p 8012:8012 -v "$(pwd):/docs" ghcr.io/benrogmans/lemma \
+  server --host 0.0.0.0 --port 8012
+```
+
+Then visit `http://localhost:8012/docs` for interactive API documentation.
+
+**Docker Compose example:**
+
+```yaml
+services:
+  lemma:
+    image: ghcr.io/benrogmans/lemma:latest
+    ports:
+      - "8012:8012"
+    volumes:
+      - ./policies:/docs:ro
+    command: ["server", "--host", "0.0.0.0", "--port", "8012", "--watch"]
+```
 
 ## Status
 

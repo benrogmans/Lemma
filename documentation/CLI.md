@@ -133,7 +133,7 @@ lemma server [-d <path>] [--host <host>] [-p <port>]
 **Options:**
 - `-d, --dir` - Workspace root directory (default: `.`)
 - `--host` - Host to bind to (default: `127.0.0.1`)
-- `-p, --port` - Port to bind to (default: `3000`)
+- `-p, --port` - Port to bind to (default: `8012`)
 
 **Example:**
 ```bash
@@ -230,7 +230,7 @@ lemma run pricing base_price=200 quantity=5
 lemma show pricing
 
 # 6. Start HTTP server
-lemma server -p 3000
+lemma server -p 8012
 ```
 
 ### HTTP Server Usage
@@ -240,7 +240,7 @@ lemma server -p 3000
 lemma server --workdir ./policies &
 
 # Evaluate with inline code
-curl -X POST http://localhost:3000/evaluate \
+curl -X POST http://localhost:8012/evaluate \
   -H "Content-Type: application/json" \
   -d '{
     "code": "doc calc\nfact x = 10\nrule double = x * 2",
