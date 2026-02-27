@@ -1,6 +1,7 @@
 use super::ast::Span;
 use super::Rule;
 use crate::error::LemmaError;
+use crate::limits::MAX_VERSION_TAG_LENGTH;
 use crate::parsing::ast::*;
 use crate::parsing::types;
 use crate::Source;
@@ -12,7 +13,6 @@ pub(crate) fn parse_fact_definition(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-    _types: &[TypeDef],
 ) -> Result<LemmaFact, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
     let attribute_str = attribute;
@@ -78,7 +78,6 @@ pub(crate) fn parse_fact_binding(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-    _types: &[TypeDef],
 ) -> Result<LemmaFact, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
     let attribute_str = attribute;
@@ -275,19 +274,58 @@ fn parse_fact_document_reference(
     source_text: Arc<str>,
 ) -> Result<FactValue, LemmaError> {
     let span = Span::from_pest_span(pair.as_span());
-    let raw_doc_name = pair
-        .into_inner()
-        .next()
-        .ok_or_else(|| {
-            LemmaError::engine(
-                "Grammar error: doc_reference must contain doc_name",
-                Some(Source::new(attribute, span, doc_name, source_text.clone())),
-                None::<String>,
-            )
-        })?
-        .as_str();
+    let doc_name_pair = pair.into_inner().next().ok_or_else(|| {
+        LemmaError::engine(
+            "Grammar error: doc_reference must contain doc_name",
+            Some(Source::new(attribute, span, doc_name, source_text.clone())),
+            None::<String>,
+        )
+    })?;
 
-    Ok(FactValue::DocumentReference(DocRef::parse(raw_doc_name)))
+    Ok(FactValue::DocumentReference(parse_doc_name_pair(
+        doc_name_pair,
+    )?))
+}
+
+/// Extract a `DocRef` from a `doc_name` grammar pair by reading its named inner pairs.
+///
+/// Returns `Err` if the version tag exceeds [`MAX_VERSION_TAG_LENGTH`] characters.
+pub(crate) fn parse_doc_name_pair(pair: Pair<Rule>) -> Result<DocRef, LemmaError> {
+    let mut is_registry = false;
+    let mut name = String::new();
+    let mut version = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::doc_name_at => {
+                is_registry = true;
+            }
+            Rule::doc_name_base => {
+                name = inner.as_str().to_string();
+            }
+            Rule::doc_version_tag => {
+                let tag = inner.as_str();
+                if tag.len() > MAX_VERSION_TAG_LENGTH {
+                    return Err(LemmaError::parse(
+                        format!(
+                            "Version tag '{}' exceeds maximum length of {} characters",
+                            tag, MAX_VERSION_TAG_LENGTH
+                        ),
+                        None,
+                        None::<String>,
+                    ));
+                }
+                version = Some(tag.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    Ok(DocRef {
+        name,
+        version,
+        is_registry,
+    })
 }
 
 fn parse_fact_literal(

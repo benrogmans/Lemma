@@ -39,18 +39,13 @@ pub struct TypeRegistry {
     /// Inline type definitions per document: doc_name -> (fact_reference -> TypeDef)
     /// Stores inline type definitions keyed by their fact reference
     inline_type_definitions: HashMap<String, HashMap<FactReference, TypeDef>>,
-    /// Source text per file attribute, used for error reporting.
-    /// Maps source attribute (e.g. filename) to the full source code string.
-    _sources: HashMap<String, String>,
 }
 
 impl TypeRegistry {
-    /// Create a new, empty registry with access to source text for error reporting.
-    pub fn new(sources: HashMap<String, String>) -> Self {
+    pub fn new() -> Self {
         TypeRegistry {
             named_types: HashMap::new(),
             inline_type_definitions: HashMap::new(),
-            _sources: sources,
         }
     }
 
@@ -712,7 +707,7 @@ impl TypeRegistry {
 
 impl Default for TypeRegistry {
     fn default() -> Self {
-        Self::new(HashMap::new())
+        Self::new()
     }
 }
 
@@ -725,10 +720,7 @@ mod tests {
     use std::sync::Arc;
 
     fn test_registry() -> TypeRegistry {
-        let mut sources = HashMap::new();
-        sources.insert("<test>".to_string(), String::new());
-        sources.insert("test.lemma".to_string(), String::new());
-        TypeRegistry::new(sources)
+        TypeRegistry::new()
     }
 
     #[test]

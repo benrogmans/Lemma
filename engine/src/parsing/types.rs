@@ -103,7 +103,7 @@ pub(crate) fn parse_type_import(
                 type_names.push(inner_pair.as_str().to_string());
             }
             Rule::doc_name => {
-                imported_doc_name = Some(super::ast::DocRef::parse(inner_pair.as_str()));
+                imported_doc_name = Some(super::facts::parse_doc_name_pair(inner_pair)?);
             }
             _ => {}
         }
@@ -239,7 +239,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
                         )?);
                     }
                     Rule::doc_name => {
-                        imported_doc_name = Some(super::ast::DocRef::parse(item.as_str()));
+                        imported_doc_name = Some(super::facts::parse_doc_name_pair(item)?);
                     }
                     _ => {}
                 }

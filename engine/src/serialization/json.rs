@@ -1,5 +1,4 @@
 use crate::planning::semantics::{FactData, FactPath};
-use crate::planning::ExecutionPlan;
 use crate::LemmaError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -9,10 +8,7 @@ use std::collections::{HashMap, HashSet};
 ///
 /// - `null` values are skipped
 /// - All other values are converted to their string representation
-pub fn from_json(
-    json: &[u8],
-    _plan: &ExecutionPlan,
-) -> Result<HashMap<String, String>, LemmaError> {
+pub fn from_json(json: &[u8]) -> Result<HashMap<String, String>, LemmaError> {
     let map: HashMap<String, Value> = serde_json::from_slice(json).map_err(|e| {
         LemmaError::engine(format!("JSON parse error: {}", e), None, None::<String>)
     })?;
@@ -78,52 +74,39 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn create_test_plan() -> ExecutionPlan {
-        ExecutionPlan {
-            doc_name: "test".to_string(),
-            facts: HashMap::new(),
-            rules: vec![],
-            sources: HashMap::from([("<test>".to_string(), "".to_string())]),
-        }
-    }
 
     #[test]
     fn test_json_string_to_string() {
-        let plan = create_test_plan();
         let json = br#"{"name": "Alice"}"#;
-        let result = from_json(json, &plan).unwrap();
+        let result = from_json(json).unwrap();
         assert_eq!(result.get("name"), Some(&"Alice".to_string()));
     }
 
     #[test]
     fn test_json_number_to_string() {
-        let plan = create_test_plan();
         let json = br#"{"name": 42}"#;
-        let result = from_json(json, &plan).unwrap();
+        let result = from_json(json).unwrap();
         assert_eq!(result.get("name"), Some(&"42".to_string()));
     }
 
     #[test]
     fn test_json_boolean_to_string() {
-        let plan = create_test_plan();
         let json = br#"{"name": true}"#;
-        let result = from_json(json, &plan).unwrap();
+        let result = from_json(json).unwrap();
         assert_eq!(result.get("name"), Some(&"true".to_string()));
     }
 
     #[test]
     fn test_json_array_to_string() {
-        let plan = create_test_plan();
         let json = br#"{"data": [1, 2, 3]}"#;
-        let result = from_json(json, &plan).unwrap();
+        let result = from_json(json).unwrap();
         assert_eq!(result.get("data"), Some(&"[1,2,3]".to_string()));
     }
 
     #[test]
     fn test_json_object_to_string() {
-        let plan = create_test_plan();
         let json = br#"{"config": {"key": "value"}}"#;
-        let result = from_json(json, &plan).unwrap();
+        let result = from_json(json).unwrap();
         assert_eq!(
             result.get("config"),
             Some(&"{\"key\":\"value\"}".to_string())
@@ -132,9 +115,8 @@ mod tests {
 
     #[test]
     fn test_null_value_skipped() {
-        let plan = create_test_plan();
         let json = br#"{"name": null, "age": 30}"#;
-        let result = from_json(json, &plan).unwrap();
+        let result = from_json(json).unwrap();
         assert_eq!(result.len(), 1);
         assert!(!result.contains_key("name"));
         assert_eq!(result.get("age"), Some(&"30".to_string()));
@@ -142,17 +124,15 @@ mod tests {
 
     #[test]
     fn test_all_null_values() {
-        let plan = create_test_plan();
         let json = br#"{"name": null}"#;
-        let result = from_json(json, &plan).unwrap();
+        let result = from_json(json).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_mixed_valid_types() {
-        let plan = create_test_plan();
         let json = br#"{"name": "Test", "count": 5, "active": true, "discount": 21}"#;
-        let result = from_json(json, &plan).unwrap();
+        let result = from_json(json).unwrap();
         assert_eq!(result.len(), 4);
         assert_eq!(result.get("name"), Some(&"Test".to_string()));
         assert_eq!(result.get("count"), Some(&"5".to_string()));
@@ -162,9 +142,8 @@ mod tests {
 
     #[test]
     fn test_invalid_json_syntax() {
-        let plan = create_test_plan();
         let json = br#"{"name": }"#;
-        let result = from_json(json, &plan);
+        let result = from_json(json);
         assert!(result.is_err());
         let error_message = result.unwrap_err().to_string();
         assert!(error_message.contains("JSON parse error"));

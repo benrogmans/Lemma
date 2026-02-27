@@ -20,11 +20,7 @@ pub struct EvaluatedRule {
 pub struct Facts {
     pub fact_path: String,
     pub referencing_fact_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub document_reference: Option<String>,
     pub facts: Vec<Fact>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub referenced_docs: Vec<Facts>,
 }
 
 /// Response from evaluating a Lemma document

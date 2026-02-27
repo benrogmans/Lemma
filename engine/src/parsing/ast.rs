@@ -93,7 +93,10 @@ use std::sync::Arc;
 /// A Lemma document containing facts and rules
 #[derive(Debug, Clone, PartialEq)]
 pub struct LemmaDoc {
+    /// Base document name (without version tag).
     pub name: String,
+    /// Optional version tag (e.g. `"v1"`, `"1.2.3"`).
+    pub version: Option<String>,
     pub attribute: Option<String>,
     pub start_line: usize,
     pub commentary: Option<String>,
@@ -366,12 +369,14 @@ pub enum MathematicalComputation {
 
 /// A reference to a document, with a flag indicating whether the `@` registry
 /// qualifier was present in the source.  The `name` field always contains the
-/// plain document name (without `@`); `is_registry` is `true` when the author
-/// wrote `@name`, signalling that the document should be fetched from a registry.
+/// plain base document name (without `@` or version tag); `is_registry` is `true`
+/// when the author wrote `@name`; `version` holds the optional version tag.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DocRef {
-    /// Plain document name (never contains `@`).
+    /// Plain base document name (never contains `@` or version suffix).
     pub name: String,
+    /// Optional version tag (e.g. `"v1"`, `"1.2.3"`).
+    pub version: Option<String>,
     /// `true` when the source used the `@` qualifier (registry reference).
     pub is_registry: bool,
 }
@@ -379,10 +384,14 @@ pub struct DocRef {
 impl std::fmt::Display for DocRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.is_registry {
-            write!(f, "@{}", self.name)
+            write!(f, "@{}", self.name)?;
         } else {
-            write!(f, "{}", self.name)
+            write!(f, "{}", self.name)?;
         }
+        if let Some(ref v) = self.version {
+            write!(f, ".{}", v)?;
+        }
+        Ok(())
     }
 }
 
@@ -391,6 +400,16 @@ impl DocRef {
     pub fn local(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            version: None,
+            is_registry: false,
+        }
+    }
+
+    /// Create a local document reference with a version tag.
+    pub fn local_versioned(name: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            version: Some(version.into()),
             is_registry: false,
         }
     }
@@ -399,16 +418,26 @@ impl DocRef {
     pub fn registry(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            version: None,
             is_registry: true,
         }
     }
 
-    /// Parse a raw reference string that may start with `@`.
-    /// Strips the `@` and sets `is_registry` accordingly.
-    pub fn parse(raw: &str) -> Self {
-        match raw.strip_prefix('@') {
-            Some(stripped) => Self::registry(stripped),
-            None => Self::local(raw),
+    /// Create a registry document reference with a version tag.
+    pub fn registry_versioned(name: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            version: Some(version.into()),
+            is_registry: true,
+        }
+    }
+
+    /// A unique string identifier combining name and optional version.
+    /// Used as a key for document lookup maps.
+    pub fn full_id(&self) -> String {
+        match &self.version {
+            Some(v) => format!("{}.{}", self.name, v),
+            None => self.name.clone(),
         }
     }
 }
@@ -794,6 +823,7 @@ impl LemmaDoc {
     pub fn new(name: String) -> Self {
         Self {
             name,
+            version: None,
             attribute: None,
             start_line: 1,
             commentary: None,
@@ -801,6 +831,21 @@ impl LemmaDoc {
             facts: Vec::new(),
             rules: Vec::new(),
         }
+    }
+
+    /// A unique string identifier combining name and optional version.
+    /// Used as a key for document lookup maps.
+    pub fn full_id(&self) -> String {
+        match &self.version {
+            Some(v) => format!("{}.{}", self.name, v),
+            None => self.name.clone(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_version(mut self, version: String) -> Self {
+        self.version = Some(version);
+        self
     }
 
     #[must_use]
@@ -843,6 +888,9 @@ impl LemmaDoc {
 impl fmt::Display for LemmaDoc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "doc {}", self.name)?;
+        if let Some(ref v) = self.version {
+            write!(f, ".{}", v)?;
+        }
         writeln!(f)?;
 
         if let Some(ref commentary) = self.commentary {
