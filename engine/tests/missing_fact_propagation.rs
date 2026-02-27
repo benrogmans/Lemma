@@ -16,7 +16,7 @@ doc private_rules
 fact base_price: [number]
 fact quantity: [number]
 rule total_before_discount: base_price * quantity
-rule final_total: total_before_discount?
+rule final_total: total_before_discount
 "#;
 
     // Main document that references the private document
@@ -24,7 +24,7 @@ rule final_total: total_before_discount?
 doc examples/rules_and_unless
 fact rules: doc private_rules
 fact rules.base_price: 500
-rule total: rules.final_total?
+rule total: rules.final_total
 "#;
 
     add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();
@@ -73,7 +73,7 @@ doc private_rules
 fact base_price: [number]
 fact quantity: [number]
 rule total_before_discount: base_price * quantity
-rule final_total: total_before_discount?
+rule final_total: total_before_discount
 "#;
 
     // Main document
@@ -81,7 +81,7 @@ rule final_total: total_before_discount?
 doc examples/rules_and_unless
 fact rules: doc private_rules
 fact rules.base_price: 500
-rule total: rules.final_total?
+rule total: rules.final_total
 "#;
 
     add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();
@@ -239,7 +239,7 @@ fact base_price: [number]
 fact quantity: [number]
 fact tax_rate: [percent]
 rule subtotal: base_price * quantity
-rule total: subtotal? + (subtotal? * tax_rate)
+rule total: subtotal + (subtotal * tax_rate)
 "#;
 
     // Main document
@@ -247,7 +247,7 @@ rule total: subtotal? + (subtotal? * tax_rate)
 doc examples/rules_and_unless
 fact rules: doc private_rules
 fact rules.base_price: 500
-rule total: rules.total?
+rule total: rules.total
 "#;
 
     add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();

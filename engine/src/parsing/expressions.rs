@@ -93,20 +93,10 @@ pub(crate) fn parse_primary(
         | Rule::number_unit_literal => {
             return parse_literal_expression(pair, attribute, doc_name, source_text.clone());
         }
-        Rule::rule_reference => {
-            let rule_ref = parse_rule_reference(pair.clone())?;
+        Rule::reference => {
+            let reference = parse_reference(pair.clone())?;
             return Ok(create_expression_with_location(
-                ExpressionKind::RuleReference(rule_ref),
-                &pair,
-                attribute,
-                doc_name,
-                source_text.clone(),
-            ));
-        }
-        Rule::fact_reference => {
-            let reference = parse_fact_reference(pair.clone())?;
-            return Ok(create_expression_with_location(
-                ExpressionKind::FactReference(reference),
+                ExpressionKind::Reference(reference),
                 &pair,
                 attribute,
                 doc_name,
@@ -151,20 +141,10 @@ pub(crate) fn parse_primary(
             | Rule::number_unit_literal => {
                 return parse_literal_expression(inner, attribute, doc_name, source_text.clone());
             }
-            Rule::rule_reference => {
-                let rule_ref = parse_rule_reference(inner.clone())?;
+            Rule::reference => {
+                let reference = parse_reference(inner.clone())?;
                 return Ok(create_expression_with_location(
-                    ExpressionKind::RuleReference(rule_ref),
-                    &inner,
-                    attribute,
-                    doc_name,
-                    source_text.clone(),
-                ));
-            }
-            Rule::fact_reference => {
-                let reference = parse_fact_reference(inner.clone())?;
-                return Ok(create_expression_with_location(
-                    ExpressionKind::FactReference(reference),
+                    ExpressionKind::Reference(reference),
                     &inner,
                     attribute,
                     doc_name,
@@ -415,21 +395,10 @@ fn parse_expression_impl(
                 );
             }
 
-            Rule::rule_reference => {
-                let rule_ref = parse_rule_reference(inner_pair.clone())?;
+            Rule::reference => {
+                let reference = parse_reference(inner_pair.clone())?;
                 return Ok(create_expression_with_location(
-                    ExpressionKind::RuleReference(rule_ref),
-                    &inner_pair,
-                    attribute,
-                    doc_name,
-                    source_text.clone(),
-                ));
-            }
-
-            Rule::fact_reference => {
-                let reference = parse_fact_reference(inner_pair.clone())?;
-                return Ok(create_expression_with_location(
-                    ExpressionKind::FactReference(reference),
+                    ExpressionKind::Reference(reference),
                     &inner_pair,
                     attribute,
                     doc_name,
@@ -502,23 +471,13 @@ fn parse_expression_impl(
     ))
 }
 
-fn parse_rule_reference(pair: Pair<Rule>) -> Result<RuleReference, Error> {
+fn parse_reference(pair: Pair<Rule>) -> Result<Reference, Error> {
     let parts: Vec<String> = pair
         .into_inner()
-        .filter(|p| p.as_rule() == Rule::rule_reference_segment)
+        .filter(|p| p.as_rule() == Rule::reference_segment)
         .map(|p| p.as_str().to_string())
         .collect();
-    let reference = RuleReference::from_path(parts);
-    Ok(reference)
-}
-
-fn parse_fact_reference(pair: Pair<Rule>) -> Result<FactReference, Error> {
-    let parts: Vec<String> = pair
-        .into_inner()
-        .filter(|p| p.as_rule() == Rule::fact_reference_segment)
-        .map(|p| p.as_str().to_string())
-        .collect();
-    let reference = FactReference::from_path(parts);
+    let reference = Reference::from_path(parts);
     Ok(reference)
 }
 
@@ -1299,7 +1258,7 @@ rule nested_ref: employee.salary"#;
         let input = r#"doc test
 fact income: 80000
 fact total_tax: 20000
-rule effective_tax_rate: total_tax? / income in percent"#;
+rule effective_tax_rate: total_tax / income in percent"#;
 
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(

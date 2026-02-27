@@ -604,8 +604,8 @@ fact tax_multiplier: [number]
 fact quantity: [number]
 
 rule discounted: base_price * discount_ratio
-rule with_tax: discounted? * tax_multiplier
-rule total: with_tax? * quantity"#;
+rule with_tax: discounted * tax_multiplier
+rule total: with_tax * quantity"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");

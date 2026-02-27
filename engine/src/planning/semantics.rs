@@ -2059,7 +2059,7 @@ impl fmt::Display for RulePath {
         for segment in &self.segments {
             write!(f, "{}.", segment)?;
         }
-        write!(f, "{}?", self.rule)
+        write!(f, "{}", self.rule)
     }
 }
 

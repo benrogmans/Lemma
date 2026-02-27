@@ -28,11 +28,9 @@ rule daily_fee: 0 eur
 rule is_in_grace_period: days_overdue <= 3
   unless book_type is "new_release" then no
 
-rule total_fee: days_overdue * daily_fee?
-
-rule final_fee: total_fee?
-  unless is_first_offense then total_fee? - 50%
-  unless is_in_grace_period? then 0 eur
+rule total_fee: days_overdue * daily_fee
+rule final_fee: total_fee  unless is_first_offense then total_fee - 50%
+  unless is_in_grace_period then 0 eur
 
 rule can_checkout: yes
-  unless final_fee? > 10 eur then no
+  unless final_fee > 10 eur then no

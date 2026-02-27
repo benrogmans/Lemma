@@ -47,7 +47,7 @@ rule doubled: value * 2
     let derived_doc = r#"
 doc derived
 fact base_data: doc base
-rule derived_value: base_data.doubled? + 10
+rule derived_value: base_data.doubled + 10
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -72,13 +72,13 @@ fn test_cross_doc_rule_reference_with_dependencies() {
 doc base_employee
 fact monthly_salary: 5000
 rule annual_salary: monthly_salary * 12
-rule with_bonus: annual_salary? * 1.1
+rule with_bonus: annual_salary * 1.1
 "#;
 
     let derived_doc = r#"
 doc manager
 fact employee: doc base_employee
-rule manager_bonus: employee.annual_salary? * 0.15
+rule manager_bonus: employee.annual_salary * 0.15
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -111,7 +111,7 @@ doc derived
 fact config: doc base
 fact config.price: 200
 fact config.quantity: 3
-rule derived_total: config.total?
+rule derived_total: config.total
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -149,7 +149,7 @@ rule processing_days: 5
 doc derived
 fact settings: doc config
 fact order_info: doc order
-rule total_days: settings.standard_processing_days? + order_info.processing_days?
+rule total_days: settings.standard_processing_days + order_info.processing_days
 "#;
 
     add_lemma_code_blocking(&mut engine, config_doc, "test.lemma").unwrap();
@@ -182,7 +182,7 @@ rule is_valid: value >= threshold
 doc derived
 fact base_data: doc base
 rule status: "invalid"
-  unless base_data.is_valid? then "valid"
+  unless base_data.is_valid then "valid"
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -212,7 +212,7 @@ rule calculated: input * 2
     let derived_doc = r#"
 doc derived
 fact base_data: doc base
-rule combined: base_data.input + base_data.calculated?
+rule combined: base_data.input + base_data.calculated
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -316,11 +316,11 @@ fact base: doc example1
     let example3_doc = r#"
 doc example3
 fact base: doc example2
-rule total1: base.base.total?
+rule total1: base.base.total
 
 fact base2: doc example2
 fact base2.base.price: 79
-rule total2: base2.base.total?
+rule total2: base2.base.total
 "#;
 
     add_lemma_code_blocking(&mut engine, example1_doc, "test.lemma").unwrap();
@@ -399,8 +399,8 @@ rule is_eligible_for_bonus: false
     let derived_doc = r#"
 doc specific_employee
 fact employee: doc base_employee
-rule salary_with_bonus: employee.annual_salary?
-  unless employee.is_eligible_for_bonus? then employee.annual_salary? * 1.1
+rule salary_with_bonus: employee.annual_salary
+  unless employee.is_eligible_for_bonus then employee.annual_salary * 1.1
 rule employee_summary: employee.monthly_salary
 "#;
 

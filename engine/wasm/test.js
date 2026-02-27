@@ -113,7 +113,7 @@ export async function test() {
         unless quantity >= 50 then 20%
         unless is_vip then 25%
 
-      rule price: 200 - discount?
+      rule price: 200 - discount
     `, 'pricing.lemma');
 
     const complexParsed = JSON.parse(complexResult);

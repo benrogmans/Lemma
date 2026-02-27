@@ -65,16 +65,16 @@ rule size_multiplier: veto "Unknown size of coffee"
   unless size is "medium" then 1.00
   unless size is "large"  then 1.20
 
-rule price_per_cup: base_price? * size_multiplier?
+rule price_per_cup: base_price * size_multiplier
 
-rule subtotal: price_per_cup? * number_of_cups
+rule subtotal: price_per_cup * number_of_cups
 
 rule loyalty_discount: 0.0
   unless has_loyalty_card then 0.10
 
-rule discount_amount: subtotal? * loyalty_discount?
+rule discount_amount: subtotal * loyalty_discount
 
-rule total: subtotal? - discount_amount?
+rule total: subtotal - discount_amount
 "#;
 
     add_lemma_code_blocking(&mut engine, examples, "examples.lemma")

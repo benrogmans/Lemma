@@ -22,7 +22,7 @@ pub(crate) fn parse_fact_definition(
 
     for inner_pair in pair.into_inner() {
         match inner_pair.as_rule() {
-            Rule::fact_reference_segment => fact_name = Some(inner_pair.as_str().to_string()),
+            Rule::reference_segment => fact_name = Some(inner_pair.as_str().to_string()),
             Rule::fact_value => {
                 fact_value = Some(parse_fact_value(
                     inner_pair,
@@ -40,7 +40,7 @@ pub(crate) fn parse_fact_definition(
     let value = fact_value.expect("BUG: grammar guarantees fact_definition has fact_value");
 
     let fact = LemmaFact::new(
-        FactReference::local(name),
+        Reference::local(name),
         value,
         Source::new(
             attribute.to_string(),
@@ -66,7 +66,7 @@ pub(crate) fn parse_fact_binding(
 
     for inner_pair in pair.into_inner() {
         match inner_pair.as_rule() {
-            Rule::fact_reference => {
+            Rule::reference => {
                 fact_reference_path = Some(parse_fact_reference_path(
                     inner_pair,
                     attribute_str,
@@ -90,7 +90,7 @@ pub(crate) fn parse_fact_binding(
         fact_reference_path.expect("BUG: grammar guarantees fact_binding has fact_reference");
     let value = fact_value.expect("BUG: grammar guarantees fact_binding has fact_value");
 
-    let binding_ref = FactReference::from_path(binding_ref_path);
+    let binding_ref = Reference::from_path(binding_ref_path);
     let fact = LemmaFact::new(
         binding_ref,
         value,
@@ -322,7 +322,7 @@ fact contract.base.rate: 100"#;
 
         assert_eq!(
             result[0].facts[0].reference,
-            crate::FactReference::from_path(vec!["contract".to_string()])
+            crate::Reference::from_path(vec!["contract".to_string()])
         );
         if let FactValue::DocumentReference(doc_ref) = &result[0].facts[0].value {
             assert_eq!(doc_ref.name, "employment_contract");
@@ -333,7 +333,7 @@ fact contract.base.rate: 100"#;
 
         assert_eq!(
             result[0].facts[1].reference,
-            crate::FactReference::from_path(vec!["contract".to_string(), "start_date".to_string()])
+            crate::Reference::from_path(vec!["contract".to_string(), "start_date".to_string()])
         );
         match &result[0].facts[1].value {
             FactValue::Literal(lit) => {
@@ -347,7 +347,7 @@ fact contract.base.rate: 100"#;
 
         assert_eq!(
             result[0].facts[2].reference,
-            crate::FactReference::from_path(vec!["contract".to_string(), "end_date".to_string()])
+            crate::Reference::from_path(vec!["contract".to_string(), "end_date".to_string()])
         );
         assert!(
             matches!(&result[0].facts[2].value, FactValue::TypeDeclaration { .. }),
@@ -356,7 +356,7 @@ fact contract.base.rate: 100"#;
 
         assert_eq!(
             result[0].facts[3].reference,
-            crate::FactReference::from_path(vec![
+            crate::Reference::from_path(vec![
                 "contract".to_string(),
                 "employment_type".to_string()
             ])
@@ -373,7 +373,7 @@ fact contract.base.rate: 100"#;
 
         assert_eq!(
             result[0].facts[4].reference,
-            crate::FactReference::from_path(vec!["contract".to_string(), "base".to_string()])
+            crate::Reference::from_path(vec!["contract".to_string(), "base".to_string()])
         );
         if let FactValue::DocumentReference(doc_ref) = &result[0].facts[4].value {
             assert_eq!(doc_ref.name, "base_contract");
@@ -384,7 +384,7 @@ fact contract.base.rate: 100"#;
 
         assert_eq!(
             result[0].facts[5].reference,
-            crate::FactReference::from_path(vec![
+            crate::Reference::from_path(vec![
                 "contract".to_string(),
                 "base".to_string(),
                 "rate".to_string()
@@ -444,6 +444,6 @@ fact zz: 1 eur"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].facts.len(), 1);
-        assert_eq!(result[0].facts[0].reference.fact, "zz".to_string())
+        assert_eq!(result[0].facts[0].reference.name, "zz".to_string())
     }
 }

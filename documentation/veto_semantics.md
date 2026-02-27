@@ -27,7 +27,7 @@ If a rule references a vetoed rule and needs its value, the veto applies to the 
 rule validated_price: price
   unless price < 0 then veto "Price cannot be negative"
 
-rule total: validated_price? * quantity
+rule total: validated_price * quantity
 ```
 
 If `validated_price` is vetoed, `total` is also vetoed because we need the price value.
@@ -38,8 +38,8 @@ If `validated_price` is vetoed, `total` is also vetoed because we need the price
 rule validated_weight: weight
   unless weight < 0 then veto "Weight cannot be negative"
 
-rule shipping_weight: validated_weight?
+rule shipping_weight: validated_weight
   unless use_estimated then 5
 ```
 
-If `validated_weight` is vetoed but `use_estimated` is true, then `shipping_weight` = 5. The veto doesn't apply because `validated_weight?` is never evaluated (the unless clause provides the value).
+If `validated_weight` is vetoed but `use_estimated` is true, then `shipping_weight` = 5. The veto doesn't apply because `validated_weight` is never evaluated (the unless clause provides the value).

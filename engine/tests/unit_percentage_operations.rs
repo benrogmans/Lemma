@@ -23,7 +23,7 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
             unless quantity >= 50 then 20%
             unless is_vip then 25%
 
-        rule price: 200 - discount?
+        rule price: 200 - discount
         "#,
         "pricing.lemma",
     )?;
@@ -230,7 +230,7 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
         fact loyalty_discount: 5%
 
         rule after_bulk: base_price - bulk_discount
-        rule final_price: after_bulk? - loyalty_discount
+        rule final_price: after_bulk - loyalty_discount
         "#,
         "complex.lemma",
     )?;
@@ -449,7 +449,7 @@ fn test_averaging_percentages() -> LemmaResult<()> {
         fact rate_c: 15%
 
         rule sum: rate_a + rate_b + rate_c
-        rule average: sum? / 3
+        rule average: sum / 3
         "#,
         "avg.lemma",
     )?;

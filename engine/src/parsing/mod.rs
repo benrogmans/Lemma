@@ -9,6 +9,7 @@ pub mod ast;
 pub mod expressions;
 pub mod facts;
 pub mod literals;
+pub mod meta;
 pub mod rules;
 pub mod source;
 pub mod types;
@@ -109,6 +110,7 @@ fn parse_doc(
     let mut facts = Vec::new();
     let mut rules = Vec::new();
     let mut types = Vec::new();
+    let mut meta_fields = Vec::new();
 
     // First, extract doc_header to get commentary and doc_declaration
     for header_item in pair.clone().into_inner() {
@@ -219,6 +221,15 @@ fn parse_doc(
                         )?;
                         rules.push(rule);
                     }
+                    Rule::meta_definition => {
+                        let meta = crate::parsing::meta::parse_meta_definition(
+                            body_item,
+                            attribute,
+                            &name,
+                            source_text.clone(),
+                        )?;
+                        meta_fields.push(meta);
+                    }
                     _ => {}
                 }
             }
@@ -243,6 +254,9 @@ fn parse_doc(
     }
     for type_def in types {
         doc = doc.add_type(type_def);
+    }
+    for meta in meta_fields {
+        doc = doc.add_meta_field(meta);
     }
 
     Ok(doc)

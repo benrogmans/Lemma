@@ -79,7 +79,7 @@ pub fn plan(
 #[cfg(test)]
 mod internal_tests {
     use super::plan;
-    use crate::parsing::ast::{FactReference, FactValue, LemmaDoc, LemmaFact, Span};
+    use crate::parsing::ast::{FactValue, LemmaDoc, LemmaFact, Reference, Span};
     use crate::parsing::source::Source;
     use crate::planning::execution_plan::ExecutionPlan;
     use crate::planning::semantics::{FactPath, PathSegment};
@@ -209,8 +209,8 @@ rule is_adult: age >= 21"#;
     #[test]
     fn test_circular_dependency() {
         let input = r#"doc test
-rule a: b?
-rule b: a?"#;
+rule a: b
+rule b: a"#;
 
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
@@ -233,11 +233,11 @@ rule b: a?"#;
     }
 
     #[test]
-    fn test_reference_type_errors() {
+    fn test_unified_references_work() {
         let input = r#"doc test
 fact age: 25
 rule is_adult: age >= 18
-rule test1: age?
+rule test1: age
 rule test2: is_adult"#;
 
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
@@ -248,19 +248,9 @@ rule test2: is_adult"#;
         let result = plan_single(&docs[0], &docs, sources);
 
         assert!(
-            result.is_err(),
-            "Reference type errors should cause validation error"
-        );
-        let errors = result.unwrap_err();
-        let error_string = errors
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        assert!(
-            error_string.contains("is a rule, not a fact") || error_string.contains("Reference"),
-            "Error should mention reference issue: {}",
-            error_string
+            result.is_ok(),
+            "Unified references should work: {:?}",
+            result.err()
         );
     }
 
@@ -334,9 +324,9 @@ fact contract: doc nonexistent"#;
             Arc::from("fact x: []"),
         );
         doc.facts.push(LemmaFact::new(
-            FactReference {
+            Reference {
                 segments: vec![],
-                fact: "x".to_string(),
+                name: "x".to_string(),
             },
             FactValue::TypeDeclaration {
                 base: String::new(),

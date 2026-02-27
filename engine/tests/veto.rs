@@ -325,7 +325,7 @@ fact age: 16
 fact has_permission: false
 rule is_adult: age >= 18
 rule eligible: has_permission
-    unless not is_adult? then veto "Must be adult or have permission"
+    unless not is_adult then veto "Must be adult or have permission"
 "#;
 
     let mut engine = Engine::new();

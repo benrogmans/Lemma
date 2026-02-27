@@ -749,7 +749,7 @@ mod imp {
                     expression.clone()
                 }
             }
-            ProofNode::RuleReference { rule_path, .. } => format!("{}?", rule_path.rule),
+            ProofNode::RuleReference { rule_path, .. } => rule_path.rule.to_string(),
             ProofNode::Value {
                 source: ValueSource::Fact { fact_ref },
                 ..

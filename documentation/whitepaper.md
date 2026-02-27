@@ -80,7 +80,7 @@ rule discount: 0%
   unless quantity >= 50 then 20%
   unless is_vip         then 25%
 
-rule price: 200 - discount?
+rule price: 200 - discount
 ```
 
 This document is immediately readable by business stakeholders while being fully executable by software systems. The semantics are clear: start with no discount, but if quantity is 10 or more, apply 10%; if 50 or more, apply 20%; if customer is VIP, apply 25%. The last matching condition wins, so a VIP customer with 100 units gets 25%, not 20%.
@@ -191,12 +191,12 @@ rule discount: 0%
   unless is_vip then 25%
 ```
 
-Rules can reference other rules using the `?` suffix:
+Rules can reference other rules by name (the engine resolves whether a name is a fact or a rule during planning):
 
 ```lemma
 rule is_adult: age >= 18
 rule has_license: license_status == "valid"
-rule can_drive: is_adult? and has_license?
+rule can_drive: is_adult and has_license
 ```
 
 ### 3.3 Unless clauses
@@ -243,7 +243,7 @@ rule is_eligible: age >= 18 and income > 30000
 **Logical**: `and`, `or`, `not`
 
 ```lemma
-rule can_approve: is_manager? and not is_suspended?
+rule can_approve: is_manager and not is_suspended
 ```
 
 **Mathematical**: `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `abs`, `floor`, `ceil`, `round`
@@ -585,18 +585,18 @@ doc tax_policy
 fact income: 85000
 fact filing_status: "single"
 
-rule taxable_income: income - standard_deduction?
+rule taxable_income: income - standard_deduction
 
 rule standard_deduction: 13850
   unless filing_status == "married" then 27700
 
 rule tax_owed: 0
-  unless taxable_income? > 11000
-    then (taxable_income? - 11000) * 10%
-  unless taxable_income? > 44725
-    then 3372.50 + (taxable_income? - 44725) * 12%
-  unless taxable_income? > 95375
-    then 9875 + (taxable_income? - 95375) * 22%
+  unless taxable_income > 11000
+    then (taxable_income - 11000) * 10%
+  unless taxable_income > 44725
+    then 3372.50 + (taxable_income - 44725) * 12%
+  unless taxable_income > 95375
+    then 9875 + (taxable_income - 95375) * 22%
 ```
 
 ### 7.2 E-commerce pricing
@@ -620,10 +620,10 @@ rule tier_discount: 0%
   unless customer_tier == "gold" then 10%
   unless customer_tier == "platinum" then 15%
 
-rule best_discount: volume_discount?
-  unless tier_discount? > volume_discount? then tier_discount?
+rule best_discount: volume_discount
+  unless tier_discount > volume_discount then tier_discount
 
-rule final_price: quantity * unit_price * (1 - best_discount?)
+rule final_price: quantity * unit_price * (1 - best_discount)
 ```
 
 ### 7.3 Insurance eligibility
@@ -645,10 +645,10 @@ rule eligible_health: not pre_existing_conditions
 rule eligible_employment: employment_status == "full_time"
   or employment_status == "part_time"
 
-rule is_eligible: eligible_age? and eligible_health? and eligible_employment?
-  unless eligible_age? == false then veto "Age not within eligible range"
-  unless eligible_health? == false then veto "Pre-existing conditions"
-  unless eligible_employment? == false then veto "Employment status ineligible"
+rule is_eligible: eligible_age and eligible_health and eligible_employment
+  unless eligible_age == false then veto "Age not within eligible range"
+  unless eligible_health == false then veto "Pre-existing conditions"
+  unless eligible_employment == false then veto "Employment status ineligible"
 ```
 
 ### 7.4 Shipping policy
@@ -678,8 +678,8 @@ rule expedited_fee: 0
 
 rule free_shipping: order_total >= 100 and destination == "US"
 
-rule final_shipping: base_rate? + weight_surcharge? + expedited_fee?
-  unless free_shipping? then 0
+rule final_shipping: base_rate + weight_surcharge + expedited_fee
+  unless free_shipping then 0
 ```
 
 ### 7.5 HR compensation policy
@@ -708,8 +708,8 @@ rule department_bonus: 0
   unless department == "sales" then base_salary * 10%
   unless department == "engineering" then base_salary * 5%
 
-rule total_compensation: base_salary + tenure_bonus?
-                          + performance_bonus? + department_bonus?
+rule total_compensation: base_salary + tenure_bonus
+                          + performance_bonus + department_bonus
 ```
 
 ---
@@ -994,14 +994,14 @@ rule cost_of_living_adjustment: 0%
   unless location == "New York" then 20%
   unless location == "Seattle" then 15%
 
-rule adjusted_salary: base_salary * (1 + cost_of_living_adjustment?)
+rule adjusted_salary: base_salary * (1 + cost_of_living_adjustment)
 
 rule tenure_bonus_rate: 0%
   unless years_of_service >= 5 then 5%
   unless years_of_service >= 10 then 10%
   unless years_of_service >= 15 then 15%
 
-rule tenure_bonus: adjusted_salary? * tenure_bonus_rate?
+rule tenure_bonus: adjusted_salary * tenure_bonus_rate
 
 rule performance_multiplier: 1.0
   unless performance_rating >= 3.0 then 1.0
@@ -1012,10 +1012,10 @@ rule target_bonus_rate: 10%
   unless is_manager then 20%
   unless department == "sales" then 30%
 
-rule performance_bonus: adjusted_salary? * target_bonus_rate? * performance_multiplier?
+rule performance_bonus: adjusted_salary * target_bonus_rate * performance_multiplier
 
 rule equity_grant_value: 0
-  unless is_manager then adjusted_salary? * 25%
+  unless is_manager then adjusted_salary * 25%
   unless years_of_service < 1 then veto "Not eligible for equity in first year"
 
 rule vacation_days: 15 days
@@ -1023,10 +1023,10 @@ rule vacation_days: 15 days
   unless years_of_service >= 10 then 25 days
   unless is_manager then 30 days
 
-rule total_compensation: adjusted_salary? + tenure_bonus?
-                          + performance_bonus? + equity_grant_value?
+rule total_compensation: adjusted_salary + tenure_bonus
+                          + performance_bonus + equity_grant_value
 
-rule compensation_summary: "Total: " + total_compensation?
+rule compensation_summary: "Total: " + total_compensation
 ```
 
 Query examples:
@@ -1069,7 +1069,7 @@ Expressions:
   <logical>          // and, or, not
   <mathematical>     // sqrt, sin, cos, tan, log, exp, abs, floor, ceil, round
   <unit-conversion>  // <value> in <unit>
-  <rule-reference>   // <name>?
+  <reference>        // name or path (resolved to fact or rule)
   <fact-reference>   // <name>
   veto [<message>]
 

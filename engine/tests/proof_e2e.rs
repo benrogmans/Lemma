@@ -64,7 +64,7 @@ doc test_proof_ref
 fact base_value: 50
 
 rule doubled: base_value * 2
-rule quadruple: doubled? * 2
+rule quadruple: doubled * 2
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
@@ -247,7 +247,7 @@ rule doubled: value * 2
     let main_doc = r#"
 doc main
 fact base_ref: doc base
-rule result: base_ref.doubled? + 50
+rule result: base_ref.doubled + 50
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
@@ -320,7 +320,7 @@ rule doubled: value * 2
     let main_doc = r#"
 doc main
 fact base_ref: doc base
-rule use_cross_doc: base_ref.doubled? + 1
+rule use_cross_doc: base_ref.doubled + 1
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
@@ -385,7 +385,7 @@ rule doubled: value * 2
     let main_doc = r#"
 doc main
 fact base_ref: doc base
-rule use_doubled: base_ref.doubled? + 10
+rule use_doubled: base_ref.doubled + 10
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();

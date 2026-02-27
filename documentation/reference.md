@@ -90,7 +90,7 @@ fact base_price: 120 eur
 
 doc order
 fact pricing: doc pricing.v1
-rule total: pricing.base_price?
+rule total: pricing.base_price
 ```
 
 `doc pricing.v1` and `doc pricing.v2` are distinct documents; they do not share

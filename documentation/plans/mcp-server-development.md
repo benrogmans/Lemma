@@ -83,7 +83,7 @@ Instead of a `get_document_schema` tool, `list_documents` returns full schemas i
 
 ### Proofs are flat plain-text reasoning traces
 
-The engine computes structured `Proof` trees with nested nodes (Value, RuleReference, Computation, Branches, Condition, Veto). The MCP server linearises these into a flat list of one-line-per-step reasoning traces. No JSON proof trees are sent to the LLM.
+The engine computes structured `Proof` trees with nested nodes (Value, RuleReference, Computation, Branches, Condition, Veto). (RuleReference here is the proof-tree node for evaluating a rule; in Lemma source, references are written by name without a `?` suffix.) The MCP server linearises these into a flat list of one-line-per-step reasoning traces. No JSON proof trees are sent to the LLM.
 
 The lineariser walks the proof tree depth-first:
 - Facts are emitted as `name = value` (deduplicated across branches).

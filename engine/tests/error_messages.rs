@@ -207,7 +207,7 @@ fn test_transpile_error_self_referencing_rule() {
         &mut engine,
         r#"
         doc test
-        rule x: x? + 1
+        rule x: x + 1
     "#,
         "test.lemma",
     );
@@ -451,8 +451,8 @@ fn test_circular_dependency_has_helpful_suggestion() {
         &mut engine,
         r#"
         doc test
-        rule x: y?
-        rule y: x?
+        rule x: y
+        rule y: x
     "#,
         "test.lemma",
     );
@@ -617,7 +617,7 @@ fn test_duplicate_detected_from_runtime_source() {
 // ============================================================================
 
 /// Regression test: the engine must report errors from BOTH graph building
-/// (e.g. bare rule reference without `?`) and type checking (e.g. branch type
+/// (e.g. missing reference) and type checking (e.g. branch type
 /// mismatch) in a single pass.  Previously, graph building errors caused an
 /// early return that prevented type checking from running at all.
 #[test]
@@ -642,7 +642,7 @@ fn test_multiple_error_phases_reported_together() {
           unless quantity >= 50 then 20%
           unless is_member then 15
 
-        rule total: price * quantity - discount
+        rule total: price * quantity - non_existent_rule
           unless price > 100 usd then veto "This price is too high."
     "#,
         "pricing.lemma",
@@ -653,13 +653,13 @@ fn test_multiple_error_phases_reported_together() {
             let messages: Vec<String> = errors.iter().map(|e| format!("{e}")).collect();
             let has_rule_ref_error = messages
                 .iter()
-                .any(|m| m.contains("discount") && m.contains("rule") && m.contains("?"));
+                .any(|m| m.contains("non_existent_rule") && m.contains("not found"));
             let has_type_mismatch = messages
                 .iter()
                 .any(|m| m.contains("Type mismatch") || m.contains("type mismatch"));
             assert!(
                 has_rule_ref_error,
-                "Should report missing `?` on rule reference. Got: {messages:?}"
+                "Should report missing reference. Got: {messages:?}"
             );
             assert!(
                 has_type_mismatch,

@@ -33,8 +33,8 @@ rule vacation_days_ok: vacation_days >= base.standard_vacation_days
 rule is_adult: employee_age >= base.min_age
 rule probation_end_date: start_date + base.probation_period
 
-rule contract_valid: is_salary_valid? and vacation_days_ok? and is_adult?
-    unless not is_adult? then veto "Employee must be 18 or older"
+rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
+    unless not is_adult then veto "Employee must be 18 or older"
 "#;
 
     add_lemma_code_blocking(&mut engine, base_contract, "test.lemma").unwrap();
@@ -87,17 +87,17 @@ fact bracket_low: 40000
 fact bracket_mid: 80000
 
 rule taxable_income: income - deductions
-rule in_low_bracket: taxable_income? <= bracket_low
-rule in_mid_bracket: taxable_income? > bracket_low and taxable_income? <= bracket_mid
-rule in_high_bracket: taxable_income? > bracket_mid
+rule in_low_bracket: taxable_income <= bracket_low
+rule in_mid_bracket: taxable_income > bracket_low and taxable_income <= bracket_mid
+rule in_high_bracket: taxable_income > bracket_mid
 
 rule tax_rate: tax_rate_low
-    unless in_mid_bracket? then tax_rate_mid
-    unless in_high_bracket? then tax_rate_high
+  unless in_mid_bracket then tax_rate_mid
+  unless in_high_bracket then tax_rate_high
 
-rule tax_amount: taxable_income? * tax_rate?
-rule net_income: income - tax_amount?
-rule effective_rate: (tax_amount? / income) * 100%
+rule tax_amount: taxable_income * tax_rate
+rule net_income: income - tax_amount
+rule effective_rate: (tax_amount / income) * 100%
 "#;
 
     add_lemma_code_blocking(&mut engine, tax_doc, "test.lemma").unwrap();
@@ -156,9 +156,9 @@ fact multiplier: [number]
 fact base_value: 100
 
 rule calculated_value: base_value * multiplier
-rule exceeds_threshold: calculated_value? > threshold
+rule exceeds_threshold: calculated_value > threshold
 rule status: "LOW"
-  unless exceeds_threshold? then "HIGH"
+  unless exceeds_threshold then "HIGH"
 "#;
 
     add_lemma_code_blocking(&mut engine, config_doc, "test.lemma").unwrap();
@@ -212,16 +212,16 @@ fact phase3_duration: 60 days
 fact today: 2024-02-15
 
 rule phase1_end: project_start + phase1_duration
-rule phase2_end: phase1_end? + phase2_duration
-rule phase3_end: phase2_end? + phase3_duration
+rule phase2_end: phase1_end + phase2_duration
+rule phase3_end: phase2_end + phase3_duration
 
 rule project_duration: phase1_duration + phase2_duration + phase3_duration
 rule elapsed_time: today - project_start
-rule days_remaining: phase3_end? - today
+rule days_remaining: phase3_end - today
 
-rule is_phase1_complete: today > phase1_end?
-rule is_phase2_complete: today > phase2_end?
-rule is_on_schedule: elapsed_time? <= phase1_duration + phase2_duration
+rule is_phase1_complete: today > phase1_end
+rule is_phase2_complete: today > phase2_end
+rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 "#;
 
     add_lemma_code_blocking(&mut engine, timeline_doc, "test.lemma").unwrap();
