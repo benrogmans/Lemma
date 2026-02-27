@@ -48,7 +48,6 @@ pub fn format_error(error: &LemmaError) -> String {
         LemmaError::Parse(details) => format_details("Parse error", details, ""),
         LemmaError::Semantic(details) => format_details("Semantic error", details, ""),
         LemmaError::Inversion(details) => format_details("Inversion error", details, ""),
-        LemmaError::Runtime(details) => format_details("Runtime error", details, ""),
         LemmaError::Engine(details) => format_details("Engine error", details, ""),
         LemmaError::MissingFact(details) => format_details("Missing fact", details, ""),
         LemmaError::CircularDependency { details, cycle } => {
