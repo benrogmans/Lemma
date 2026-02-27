@@ -111,7 +111,7 @@ impl Engine {
                         if let Some(existing) = self.documents.get(&doc_id) {
                             let earlier_attr =
                                 existing.attribute.as_deref().unwrap_or(&existing.name);
-                            errors.push(LemmaError::semantic(
+                            errors.push(LemmaError::engine(
                                 format!(
                                     "Duplicate document name '{}' (previously declared in '{}')",
                                     doc_id, earlier_attr

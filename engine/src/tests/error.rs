@@ -28,13 +28,6 @@ fn test_error_creation_and_display() {
         "Parse error: Invalid currency at test.lemma:1:15"
     );
 
-    let semantic_error =
-        LemmaError::semantic("Invalid currency", Some(source.clone()), None::<String>);
-    assert_eq!(
-        format!("{semantic_error}"),
-        "Semantic error: Invalid currency at test.lemma:1:15"
-    );
-
     let typo_source_text = "fact amont = 100";
     let typo_source = Source::new(
         "suggestion.lemma",
@@ -50,22 +43,12 @@ fn test_error_creation_and_display() {
 
     let parse_error_with_suggestion = LemmaError::parse_with_suggestion(
         "Typo in fact name",
-        Some(typo_source.clone()),
+        Some(typo_source),
         "Did you mean 'amount'?",
     );
     assert_eq!(
         format!("{parse_error_with_suggestion}"),
         "Parse error: Typo in fact name (suggestion: Did you mean 'amount'?) at suggestion.lemma:1:6"
-    );
-
-    let semantic_error_with_suggestion = LemmaError::semantic_with_suggestion(
-        "Incompatible types",
-        Some(typo_source),
-        "Try converting one of the types.",
-    );
-    assert_eq!(
-        format!("{semantic_error_with_suggestion}"),
-        "Semantic error: Incompatible types (suggestion: Try converting one of the types.) at suggestion.lemma:1:6"
     );
 
     let engine_error =
@@ -88,10 +71,9 @@ fn test_error_creation_and_display() {
         "Engine error: No source context"
     );
 
-    let multiple_errors =
-        LemmaError::MultipleErrors(vec![parse_error, semantic_error, engine_error_no_source]);
+    let multiple_errors = LemmaError::MultipleErrors(vec![parse_error, engine_error_no_source]);
     assert_eq!(
         format!("{multiple_errors}"),
-        "Multiple errors:\n  1. Parse error: Invalid currency at test.lemma:1:15\n  2. Semantic error: Invalid currency at test.lemma:1:15\n  3. Engine error: No source context"
+        "Multiple errors:\n  1. Parse error: Invalid currency at test.lemma:1:15\n  2. Engine error: No source context"
     );
 }

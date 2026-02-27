@@ -397,8 +397,8 @@ invoice_date in past calendar year
 ### Planning
 
 - `now` resolves to type `date` during planning
-- Date operand not `date` type → `LemmaError::Semantic`
-- Duration operand not `duration` type → `LemmaError::Semantic`
+- Date operand not `date` type → `LemmaError::Engine`
+- Duration operand not `duration` type → `LemmaError::Engine`
 
 ### Integration (`engine/tests/`)
 
