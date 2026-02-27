@@ -309,7 +309,7 @@ mod imp {
                     let error = match errs.len() {
                         0 => unreachable!("add_lemma_files returned Err with empty error list"),
                         1 => errs.into_iter().next().unwrap(),
-                        _ => lemma::LemmaError::MultipleErrors(errs),
+                        _ => lemma::Error::MultipleErrors(errs),
                     };
                     error!("Failed to add document: {}", error);
                     McpError::internal_error(format!("Failed to parse document: {error}"))

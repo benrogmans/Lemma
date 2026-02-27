@@ -25,7 +25,7 @@ use crate::parsing::ast::{
     BooleanValue, CommandArg, ConversionTarget, DateTimeValue, DurationUnit, TimeValue,
 };
 use crate::parsing::literals::{parse_date_string, parse_duration_from_string, parse_time_string};
-use crate::LemmaError;
+use crate::Error;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -926,11 +926,11 @@ pub fn parse_value_from_string(
     value_str: &str,
     type_spec: &TypeSpecification,
     source: &Source,
-) -> Result<crate::parsing::ast::Value, LemmaError> {
+) -> Result<crate::parsing::ast::Value, Error> {
     use crate::parsing::ast::{BooleanValue, Value};
     use std::str::FromStr;
 
-    let to_err = |msg: String| LemmaError::engine(msg, Some(source.clone()), None::<String>);
+    let to_err = |msg: String| Error::planning(msg, Some(source.clone()), None::<String>);
 
     match type_spec {
         TypeSpecification::Text { .. } => Ok(Value::Text(value_str.to_string())),
@@ -1620,7 +1620,7 @@ impl LemmaType {
     }
 
     /// Factor for a unit of this scale type (for unit conversion during evaluation only).
-    /// Planning must validate conversions first and return LemmaError for invalid units.
+    /// Planning must validate conversions first and return Error for invalid units.
     /// If called with a non-scale type or unknown unit name, panics (invariant violation).
     #[must_use]
     pub fn scale_unit_factor(&self, unit_name: &str) -> Decimal {
@@ -1639,7 +1639,7 @@ impl LemmaType {
             None => {
                 let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
                 unreachable!(
-                    "BUG: unknown unit '{}' for scale type {} (valid: {}); planning must reject invalid conversions with LemmaError",
+                    "BUG: unknown unit '{}' for scale type {} (valid: {}); planning must reject invalid conversions with Error",
                     unit_name,
                     self.name(),
                     valid.join(", ")

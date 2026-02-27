@@ -1,4 +1,4 @@
-use lemma::{Bound, Domain, Engine, FactPath, LemmaError, LiteralValue, Target, ValueKind};
+use lemma::{Bound, Domain, Engine, Error, FactPath, LiteralValue, Target, ValueKind};
 mod common;
 use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
@@ -239,7 +239,7 @@ rule r = 0
         )
         .unwrap_err();
 
-    assert!(matches!(err, LemmaError::Inversion(_)));
+    assert!(matches!(err, Error::Inversion(_)));
 }
 
 #[test]
@@ -263,5 +263,5 @@ rule r = 0
         )
         .unwrap_err();
 
-    assert!(matches!(err, LemmaError::Inversion(_)));
+    assert!(matches!(err, Error::Inversion(_)));
 }

@@ -1,4 +1,4 @@
-use crate::error::LemmaError;
+use crate::error::Error;
 use crate::limits::ResourceLimits;
 use pest::iterators::Pair;
 use pest::Parser;
@@ -26,9 +26,9 @@ pub fn parse(
     content: &str,
     attribute: &str,
     limits: &ResourceLimits,
-) -> Result<Vec<LemmaDoc>, LemmaError> {
+) -> Result<Vec<LemmaDoc>, Error> {
     if content.len() > limits.max_file_size_bytes {
-        return Err(LemmaError::ResourceLimitExceeded {
+        return Err(Error::ResourceLimitExceeded {
             limit_name: "max_file_size_bytes".to_string(),
             limit_value: format!(
                 "{} bytes ({} MB)",
@@ -81,7 +81,7 @@ pub fn parse(
                 },
             };
 
-            Err(LemmaError::parse(
+            Err(Error::parsing(
                 e.variant.to_string(),
                 Some(crate::parsing::source::Source::new(
                     attribute,
@@ -100,7 +100,7 @@ fn parse_doc(
     attribute: &str,
     depth_tracker: &mut DepthTracker,
     source_text: Arc<str>,
-) -> Result<LemmaDoc, LemmaError> {
+) -> Result<LemmaDoc, Error> {
     let doc_start_line = pair.as_span().start_pos().line_col().0;
 
     let mut doc_name: Option<String> = None;
@@ -132,7 +132,7 @@ fn parse_doc(
                                 Rule::doc_version_tag => {
                                     let tag = name_part.as_str();
                                     if tag.len() > crate::limits::MAX_VERSION_TAG_LENGTH {
-                                        return Err(LemmaError::parse(
+                                        return Err(Error::parsing(
                                             format!(
                                                 "Version tag '{}' exceeds maximum length of {} characters",
                                                 tag, crate::limits::MAX_VERSION_TAG_LENGTH
@@ -255,7 +255,7 @@ fn parse_doc(
 #[cfg(test)]
 mod tests {
     use super::parse;
-    use crate::LemmaError;
+    use crate::Error;
     use crate::ResourceLimits;
 
     #[test]
@@ -546,7 +546,7 @@ fact age = 25
         );
 
         match result {
-            Err(LemmaError::Parse(details)) => {
+            Err(Error::Parsing(details)) => {
                 let src = details.source.as_ref().expect("should have source");
                 assert_eq!(src.attribute, "test.lemma");
                 assert_eq!(src.doc_name, "");
@@ -761,7 +761,7 @@ this is not valid lemma syntax @#$%
 
         assert!(result.is_err(), "Should fail on malformed input");
         match result {
-            Err(LemmaError::Parse { .. }) => {
+            Err(Error::Parsing { .. }) => {
                 // Expected
             }
             Err(e) => panic!("Expected Parse error, got: {e:?}"),

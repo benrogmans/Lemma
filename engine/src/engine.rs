@@ -1,7 +1,7 @@
 use crate::evaluation::Evaluator;
 use crate::parsing::ast::LemmaDoc;
 use crate::registry::Registry;
-use crate::{parse, LemmaError, LemmaResult, ResourceLimits, Response};
+use crate::{parse, Error, LemmaResult, ResourceLimits, Response};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -93,8 +93,8 @@ impl Engine {
     pub async fn add_lemma_files(
         &mut self,
         files: HashMap<String, String>,
-    ) -> Result<(), Vec<LemmaError>> {
-        let mut errors: Vec<LemmaError> = Vec::new();
+    ) -> Result<(), Vec<Error>> {
+        let mut errors: Vec<Error> = Vec::new();
         let mut all_new_docs: Vec<LemmaDoc> = Vec::new();
 
         // 1. Parse all files, collect parse errors and detect duplicate document names.
@@ -111,7 +111,7 @@ impl Engine {
                         if let Some(existing) = self.documents.get(&doc_id) {
                             let earlier_attr =
                                 existing.attribute.as_deref().unwrap_or(&existing.name);
-                            errors.push(LemmaError::engine(
+                            errors.push(Error::planning(
                                 format!(
                                     "Duplicate document name '{}' (previously declared in '{}')",
                                     doc_id, earlier_attr
@@ -159,7 +159,7 @@ impl Engine {
                     }
                 }
                 Err(e) => match e {
-                    LemmaError::MultipleErrors(inner) => errors.extend(inner),
+                    Error::MultipleErrors(inner) => errors.extend(inner),
                     other => errors.push(other),
                 },
             }
@@ -226,7 +226,7 @@ impl Engine {
         json: &[u8],
     ) -> LemmaResult<Response> {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
-            LemmaError::engine(
+            Error::planning(
                 format!("Document '{}' not found", doc_name),
                 None,
                 None::<String>,
@@ -257,7 +257,7 @@ impl Engine {
         fact_values: HashMap<String, String>,
     ) -> LemmaResult<Response> {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
-            LemmaError::engine(
+            Error::planning(
                 format!("Document '{}' not found", doc_name),
                 None,
                 None::<String>,
@@ -298,7 +298,7 @@ impl Engine {
         values: HashMap<String, String>,
     ) -> LemmaResult<crate::InversionResponse> {
         let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
-            LemmaError::engine(
+            Error::planning(
                 format!("Document '{}' not found", doc_name),
                 None,
                 None::<String>,
@@ -346,7 +346,7 @@ mod tests {
             .map_err(|errs| match errs.len() {
                 0 => unreachable!("add_lemma_files returned Err with empty error list"),
                 1 => errs.into_iter().next().unwrap(),
-                _ => LemmaError::MultipleErrors(errs),
+                _ => Error::MultipleErrors(errs),
             })
     }
 
@@ -810,18 +810,15 @@ rule value = external.quantity"#,
         );
         let error = result.unwrap_err();
         let registry_err = match &error {
-            LemmaError::Registry { .. } => &error,
-            LemmaError::MultipleErrors(inner) => inner
+            Error::Registry { .. } => &error,
+            Error::MultipleErrors(inner) => inner
                 .iter()
-                .find(|e| matches!(e, LemmaError::Registry { .. }))
+                .find(|e| matches!(e, Error::Registry { .. }))
                 .expect("MultipleErrors should contain at least one Registry error"),
-            other => panic!(
-                "Expected LemmaError::Registry or MultipleErrors, got: {}",
-                other
-            ),
+            other => panic!("Expected Error::Registry or MultipleErrors, got: {}", other),
         };
         match registry_err {
-            LemmaError::Registry {
+            Error::Registry {
                 identifier, kind, ..
             } => {
                 assert_eq!(identifier, "org/project/missing");
@@ -912,7 +909,7 @@ rule total = helper.value + price"#,
 
         // The error should be a MultipleErrors variant since there are 2+ errors
         assert!(
-            matches!(error, LemmaError::MultipleErrors(_)),
+            matches!(error, Error::MultipleErrors(_)),
             "Expected MultipleErrors, got: {}",
             error_message
         );

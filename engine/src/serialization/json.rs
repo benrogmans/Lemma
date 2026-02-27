@@ -1,5 +1,5 @@
 use crate::planning::semantics::{FactData, FactPath};
-use crate::LemmaError;
+use crate::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -8,10 +8,9 @@ use std::collections::{HashMap, HashSet};
 ///
 /// - `null` values are skipped
 /// - All other values are converted to their string representation
-pub fn from_json(json: &[u8]) -> Result<HashMap<String, String>, LemmaError> {
-    let map: HashMap<String, Value> = serde_json::from_slice(json).map_err(|e| {
-        LemmaError::engine(format!("JSON parse error: {}", e), None, None::<String>)
-    })?;
+pub fn from_json(json: &[u8]) -> Result<HashMap<String, String>, Error> {
+    let map: HashMap<String, Value> = serde_json::from_slice(json)
+        .map_err(|e| Error::planning(format!("JSON parse error: {}", e), None, None::<String>))?;
 
     Ok(map
         .into_iter()

@@ -6,7 +6,7 @@
 //! - Detecting and preventing circular dependencies
 //! - Applying constraints to create final type specifications
 
-use crate::error::LemmaError;
+use crate::error::Error;
 use crate::parsing::ast::{CommandArg, FactReference, TypeDef};
 use crate::planning::semantics::{self, LemmaType, TypeExtends, TypeSpecification};
 
@@ -50,7 +50,7 @@ impl TypeRegistry {
     }
 
     /// Register a user-defined type for a given document
-    pub fn register_type(&mut self, doc: &str, def: TypeDef) -> Result<(), LemmaError> {
+    pub fn register_type(&mut self, doc: &str, def: TypeDef) -> Result<(), Error> {
         let def_loc = def.source_location().clone();
         match &def {
             TypeDef::Regular { name, .. } | TypeDef::Import { name, .. } => {
@@ -59,7 +59,7 @@ impl TypeRegistry {
 
                 // Check if this type already exists
                 if doc_types.contains_key(name) {
-                    return Err(LemmaError::engine(
+                    return Err(Error::planning(
                         format!("Type '{}' is already defined in document '{}'", name, doc),
                         Some(def_loc.clone()),
                         None::<String>,
@@ -78,7 +78,7 @@ impl TypeRegistry {
 
                 // Check if this inline type definition already exists
                 if doc_inline_types.contains_key(fact_ref) {
-                    return Err(LemmaError::engine(
+                    return Err(Error::planning(
                         format!(
                             "Inline type definition for fact '{}' is already defined in document '{}'",
                             fact_ref.fact, doc
@@ -104,12 +104,12 @@ impl TypeRegistry {
     ///
     /// # Errors
     /// Returns an error if a unit appears in multiple types within the same document (ambiguous unit).
-    pub fn resolve_types(&self, doc: &str) -> Result<ResolvedDocumentTypes, LemmaError> {
+    pub fn resolve_types(&self, doc: &str) -> Result<ResolvedDocumentTypes, Error> {
         self.resolve_types_internal(doc, true)
     }
 
     /// Resolve only named types (for validation before inline type definitions are registered)
-    pub fn resolve_named_types(&self, doc: &str) -> Result<ResolvedDocumentTypes, LemmaError> {
+    pub fn resolve_named_types(&self, doc: &str) -> Result<ResolvedDocumentTypes, Error> {
         self.resolve_types_internal(doc, false)
     }
 
@@ -123,7 +123,7 @@ impl TypeRegistry {
         &self,
         doc: &str,
         mut existing: ResolvedDocumentTypes,
-    ) -> Result<ResolvedDocumentTypes, LemmaError> {
+    ) -> Result<ResolvedDocumentTypes, Error> {
         let mut errors = Vec::new();
 
         // Resolve inline type definitions only
@@ -172,7 +172,7 @@ impl TypeRegistry {
         }
 
         if !errors.is_empty() {
-            return Err(LemmaError::MultipleErrors(errors));
+            return Err(Error::MultipleErrors(errors));
         }
 
         Ok(existing)
@@ -182,7 +182,7 @@ impl TypeRegistry {
         &self,
         doc: &str,
         include_anonymous: bool,
-    ) -> Result<ResolvedDocumentTypes, LemmaError> {
+    ) -> Result<ResolvedDocumentTypes, Error> {
         let mut named_types = HashMap::new();
         let mut inline_type_definitions = HashMap::new();
         let mut visited = HashSet::new();
@@ -281,7 +281,7 @@ impl TypeRegistry {
 
         // Return all collected errors if any, each with its own real source location
         if !errors.is_empty() {
-            return Err(LemmaError::MultipleErrors(errors));
+            return Err(Error::MultipleErrors(errors));
         }
 
         Ok(ResolvedDocumentTypes {
@@ -297,7 +297,7 @@ impl TypeRegistry {
         doc: &str,
         name: &str,
         visited: &mut HashSet<String>,
-    ) -> Result<Option<LemmaType>, LemmaError> {
+    ) -> Result<Option<LemmaType>, Error> {
         // Cycle detection using doc::name key
         let key = format!("{}::{}", doc, name);
         if visited.contains(&key) {
@@ -312,7 +312,7 @@ impl TypeRegistry {
                         doc, name
                     )
                 });
-            return Err(LemmaError::circular_dependency(
+            return Err(Error::circular_dependency(
                 format!("Circular dependency detected in type resolution: {}", key),
                 Some(source_location),
                 vec![],
@@ -370,7 +370,7 @@ impl TypeRegistry {
                 // (inline type definitions might have forward references, but named types should be resolvable)
                 visited.remove(&key);
                 let source = type_def.source_location().clone();
-                return Err(LemmaError::engine(
+                return Err(Error::planning(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                     Some(source.clone()),
                     None::<String>,
@@ -388,7 +388,7 @@ impl TypeRegistry {
                 Ok(specs) => specs,
                 Err(errors) => {
                     visited.remove(&key);
-                    return Err(LemmaError::MultipleErrors(errors));
+                    return Err(Error::MultipleErrors(errors));
                 }
             }
         } else {
@@ -429,7 +429,7 @@ impl TypeRegistry {
         from: &Option<crate::parsing::ast::DocRef>,
         visited: &mut HashSet<String>,
         source: &crate::Source,
-    ) -> Result<Option<TypeSpecification>, LemmaError> {
+    ) -> Result<Option<TypeSpecification>, Error> {
         // Try primitive types first
         if let Some(specs) = self.resolve_primitive_type(parent) {
             return Ok(Some(specs));
@@ -450,7 +450,7 @@ impl TypeRegistry {
 
                 if !type_exists {
                     // Type was never registered - invalid parent type
-                    Err(LemmaError::engine(
+                    Err(Error::planning(
                         format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                         Some(source.clone()),
                         None::<String>,
@@ -488,14 +488,14 @@ impl TypeRegistry {
         mut specs: TypeSpecification,
         constraints: &[(String, Vec<CommandArg>)],
         source: &crate::Source,
-    ) -> Result<TypeSpecification, Vec<LemmaError>> {
+    ) -> Result<TypeSpecification, Vec<Error>> {
         let mut errors = Vec::new();
         for (command, args) in constraints {
             let specs_clone = specs.clone();
             match specs.apply_constraint(command, args) {
                 Ok(updated_specs) => specs = updated_specs,
                 Err(e) => {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!("Failed to apply constraint '{}': {}", command, e),
                         Some(source.clone()),
                         None::<String>,
@@ -516,7 +516,7 @@ impl TypeRegistry {
         doc: &str,
         type_def: &TypeDef,
         visited: &mut HashSet<String>,
-    ) -> Result<Option<LemmaType>, LemmaError> {
+    ) -> Result<Option<LemmaType>, Error> {
         let def_loc = type_def.source_location().clone();
         let TypeDef::Inline {
             parent,
@@ -534,7 +534,7 @@ impl TypeRegistry {
             Ok(None) => {
                 // Parent type not found - this is an error for inline type definitions too
                 // Inline type definitions should have valid parent types
-                return Err(LemmaError::engine(
+                return Err(Error::planning(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                     Some(def_loc.clone()),
                     None::<String>,
@@ -547,7 +547,7 @@ impl TypeRegistry {
             match self.apply_constraints(parent_specs, constraints, &def_loc) {
                 Ok(specs) => specs,
                 Err(errors) => {
-                    return Err(LemmaError::MultipleErrors(errors));
+                    return Err(Error::MultipleErrors(errors));
                 }
             }
         } else {
@@ -582,7 +582,7 @@ impl TypeRegistry {
         resolved_type: &LemmaType,
         doc: &str,
         type_name: &str,
-    ) -> Result<(), LemmaError> {
+    ) -> Result<(), Error> {
         let units = self.extract_units_from_specs(&resolved_type.specifications);
         for unit in units {
             if let Some(existing_type) = unit_index.get(&unit) {
@@ -597,7 +597,7 @@ impl TypeRegistry {
                         .map(|def| def.source_location().clone())
                         .expect("BUG: named type definition must have source location");
 
-                    return Err(LemmaError::engine(
+                    return Err(Error::planning(
                         format!(
                             "Unit '{}' is defined more than once in type '{}'",
                             unit, type_name
@@ -640,7 +640,7 @@ impl TypeRegistry {
                     .map(|def| def.source_location().clone())
                     .expect("BUG: named type definition must have source location");
 
-                return Err(LemmaError::engine(
+                return Err(Error::planning(
                     format!(
                         "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
                         unit, doc, existing_name, type_name
@@ -661,7 +661,7 @@ impl TypeRegistry {
         resolved_type: &LemmaType,
         doc: &str,
         type_name: &str,
-    ) -> Result<(), LemmaError> {
+    ) -> Result<(), Error> {
         let units = self.extract_units_from_specs(&resolved_type.specifications);
         for unit in units {
             if let Some(existing_type) = unit_index.get(&unit) {
@@ -676,7 +676,7 @@ impl TypeRegistry {
                     .map(|def| def.source_location().clone())
                     .expect("BUG: named type definition must have source location");
 
-                return Err(LemmaError::engine(
+                return Err(Error::planning(
                     format!(
                         "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
                         unit, doc, existing_name, type_name

@@ -24,7 +24,7 @@ Lemma aims to be reliable enough for critical domains (e.g. aerospace, global re
 ### 2.1 Validation before execution
 
 - **Planning** (semantic + graph + execution plan) fully validates the document. Only if planning succeeds does the engine run evaluation.
-- Invalid Lemma must be rejected with **LemmaError** (Parse, Semantic, Engine, CircularDependency, etc.). Never “try to run and see.”
+- Invalid Lemma must be rejected with **Error** (Parse, Semantic, Engine, CircularDependency, etc.). Never “try to run and see.”
 
 ### 2.2 Post-validation: evaluation is guaranteed to complete
 
@@ -34,7 +34,7 @@ Lemma aims to be reliable enough for critical domains (e.g. aerospace, global re
 ### 2.3 No silent defaults or heuristics
 
 - **Silent defaults and heuristics are forbidden.** If the semantics don’t define a value, the code must either:
-  - return a **LemmaError** (during parse/planning), or
+  - return a **Error** (during parse/planning), or
   - return **Veto** (during evaluation, for domain-level “no value”), or
   - **panic / unreachable** when an invariant is violated.
 - Never infer or guess to “keep going”; that undermines Lemma’s certainty.
@@ -46,7 +46,7 @@ Lemma aims to be reliable enough for critical domains (e.g. aerospace, global re
 
 ### 2.5 Veto is a result, not an error
 
-- Rules that **cannot produce a value** (e.g. division by zero, or user-defined `veto "reason"`) yield **Veto**, not LemmaError.
+- Rules that **cannot produce a value** (e.g. division by zero, or user-defined `veto "reason"`) yield **Veto**, not Error.
 - **OperationResult** is either `Value(LiteralValue)` or `Veto(Option<String>)`.
 - Veto propagates to dependent rules only when the dependent rule **needs** the vetoed value; if an `unless` branch provides a value without evaluating the vetoed rule, that branch can still succeed. See `documentation/veto_semantics.md`.
 
@@ -72,10 +72,10 @@ High-level flow:
 
 3. **Planning** (`engine/src/planning/`)  
    - **Validation** (`validation.rs`): type/structure checks.  
-   - **Graph** (`graph.rs`): builds dependency graph, resolves types and references, converts fact/rule references to **FactPath** / **RulePath**. Returns **Vec&lt;LemmaError&gt;** on failure.  
+   - **Graph** (`graph.rs`): builds dependency graph, resolves types and references, converts fact/rule references to **FactPath** / **RulePath**. Returns **Vec&lt;Error&gt;** on failure.  
    - **Execution plan** (`execution_plan.rs`): builds **ExecutionPlan** from graph (topologically sorted rules, fact schema, fact values, sources).  
    - **Types** (`types.rs`): type registry and scale/unit resolution.  
-   - Entry: `plan::plan(main_doc, all_docs, sources)` → `Result<ExecutionPlan, Vec<LemmaError>>`.
+   - Entry: `plan::plan(main_doc, all_docs, sources)` → `Result<ExecutionPlan, Vec<Error>>`.
 
 4. **Evaluation** (`engine/src/evaluation/`)  
    - **Expression** (`expression.rs`): evaluates expressions against an **EvaluationContext**; produces **OperationResult** (Value or Veto).  
@@ -95,8 +95,8 @@ High-level flow:
    - `evaluate` runs the plan; no document parsing during evaluate.
 
 7. **Errors** (`engine/src/error.rs`)  
-   - **LemmaError**: Parse, Semantic, Inversion, Runtime, Engine, MissingFact, CircularDependency, ResourceLimitExceeded, MultipleErrors.  
-   - **LemmaResult&lt;T&gt;** = `Result<T, LemmaError>`.
+   - **Error**: Parse, Semantic, Inversion, Runtime, Engine, MissingFact, CircularDependency, ResourceLimitExceeded, MultipleErrors.  
+   - **LemmaResult&lt;T&gt;** = `Result<T, Error>`.
 
 ---
 
@@ -247,7 +247,7 @@ See **documentation/reference.md** and **documentation/index.md** for full synta
 
 ## 5. Error handling rules for implementers
 
-- **Parse/planning:** Invalid input ⇒ return **LemmaError** with clear, localized message (include source location where possible). Do not continue with a “best effort” plan.
+- **Parse/planning:** Invalid input ⇒ return **Error** with clear, localized message (include source location where possible). Do not continue with a “best effort” plan.
 - **Evaluation:**  
   - Domain failures (e.g. division by zero, user veto) ⇒ **OperationResult::Veto(...)**.  
   - Bug or invariant violation (e.g. missing node, wrong enum variant) ⇒ **panic!()** or **unreachable!()** with a message that includes context (e.g. “BUG: …”).
@@ -280,9 +280,9 @@ See **documentation/reference.md** and **documentation/index.md** for full synta
 ## 8. Summary for agents
 
 - Lemma is **strictly typed, pure, and function-free**; its goal is **extreme certainty** for documents that pass validation.
-- **Planning** validates everything and returns **LemmaError** on any misuse; **after** planning, evaluation is **guaranteed** to run to completion (no “maybe” evaluation).
+- **Planning** validates everything and returns **Error** on any misuse; **after** planning, evaluation is **guaranteed** to run to completion (no “maybe” evaluation).
 - **Unexpected state during evaluation** ⇒ crash with `unreachable!()` or `panic!()`. **No silent defaults or heuristics.**
 - **Execution plans** are **deterministic**; same inputs ⇒ same outputs (or same Veto).
 - **Veto** is the way “this rule has no value” is expressed (e.g. division by zero, user `veto "..."`); it is not an error. Propagate Veto according to `veto_semantics.md`.
-- When editing the codebase, preserve these guarantees, use **LemmaError** for invalid Lemma, use **Veto** for domain-level “no value,” and **panic/unreachable** for bugs. Prefer **cargo nextest** and TDD as in the project rules.
+- When editing the codebase, preserve these guarantees, use **Error** for invalid Lemma, use **Veto** for domain-level “no value,” and **panic/unreachable** for bugs. Prefer **cargo nextest** and TDD as in the project rules.
 - **Never use placeholders in Lemma code** (no dummy values, TODO literals, or fake data in `.lemma` files, docs, or tests). Placeholders destroy certainty; use real, intended values or omit/fail instead.
