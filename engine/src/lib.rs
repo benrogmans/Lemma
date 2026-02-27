@@ -67,7 +67,7 @@ pub mod serialization;
 pub mod wasm;
 
 pub use engine::Engine;
-pub use error::LemmaError;
+pub use error::Error;
 pub use evaluation::operations::{
     ComputationKind, OperationKind, OperationRecord, OperationResult,
 };
@@ -94,4 +94,4 @@ pub use registry::{
 };
 
 /// Result type for Lemma operations
-pub type LemmaResult<T> = Result<T, LemmaError>;
+pub type LemmaResult<T> = Result<T, Error>;

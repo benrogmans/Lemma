@@ -1,4 +1,4 @@
-use lemma::LemmaError;
+use lemma::Error;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 /// Convert a byte offset to an LSP Position (0-based line and UTF-16 code unit column).
@@ -60,25 +60,25 @@ fn default_range() -> Range {
     }
 }
 
-/// Flatten a LemmaError into a list of individual errors.
+/// Flatten a Error into a list of individual errors.
 ///
 /// MultipleErrors is recursively flattened. All other variants yield a single-element list.
-fn flatten_errors(error: &LemmaError) -> Vec<&LemmaError> {
+fn flatten_errors(error: &Error) -> Vec<&Error> {
     match error {
-        LemmaError::MultipleErrors(errors) => errors.iter().flat_map(flatten_errors).collect(),
+        Error::MultipleErrors(errors) => errors.iter().flat_map(flatten_errors).collect(),
         other => vec![other],
     }
 }
 
-/// Convert a single (non-MultipleErrors) LemmaError into an LSP Diagnostic.
+/// Convert a single (non-MultipleErrors) Error into an LSP Diagnostic.
 ///
 /// The `text` parameter is the current editor buffer content, used to convert
 /// byte offsets to LSP positions.
 /// The `file_attribute` is the source identifier for the file being diagnosed,
 /// used to filter errors that belong to this file.
-fn single_error_to_diagnostic(error: &LemmaError, text: &str) -> Diagnostic {
+fn single_error_to_diagnostic(error: &Error, text: &str) -> Diagnostic {
     let range = match error {
-        LemmaError::ResourceLimitExceeded { .. } => default_range(),
+        Error::ResourceLimitExceeded { .. } => default_range(),
         other => {
             if let Some(source) = other.location() {
                 let start = source.span.start;
@@ -111,7 +111,7 @@ fn single_error_to_diagnostic(error: &LemmaError, text: &str) -> Diagnostic {
     }
 }
 
-/// Convert all LemmaErrors into LSP Diagnostics for a given file.
+/// Convert all Errors into LSP Diagnostics for a given file.
 ///
 /// - `errors`: the errors to convert (may include MultipleErrors, which are flattened).
 /// - `text`: the current editor buffer content for the file being diagnosed.
@@ -119,7 +119,7 @@ fn single_error_to_diagnostic(error: &LemmaError, text: &str) -> Diagnostic {
 ///   Only errors whose source location `attribute` matches this value are included.
 ///   Errors without a source location (e.g. ResourceLimitExceeded) are always included.
 pub fn errors_to_diagnostics(
-    errors: &[LemmaError],
+    errors: &[Error],
     text: &str,
     file_attribute: &str,
 ) -> Vec<Diagnostic> {
@@ -131,7 +131,7 @@ pub fn errors_to_diagnostics(
             // Filter: only include errors that belong to this file,
             // or errors without a source location (they apply everywhere).
             let belongs_to_file = match single_error {
-                LemmaError::ResourceLimitExceeded { .. } => true,
+                Error::ResourceLimitExceeded { .. } => true,
                 other => match other.location() {
                     Some(source) => source.attribute == file_attribute,
                     None => true,
@@ -151,7 +151,7 @@ pub fn errors_to_diagnostics(
 ///
 /// This is used for the fast path: immediately publishing parse errors
 /// for the active file without waiting for the debounced workspace re-plan.
-pub fn parse_error_to_diagnostics(error: &LemmaError, text: &str) -> Vec<Diagnostic> {
+pub fn parse_error_to_diagnostics(error: &Error, text: &str) -> Vec<Diagnostic> {
     let flat = flatten_errors(error);
     flat.into_iter()
         .map(|single_error| single_error_to_diagnostic(single_error, text))
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn flatten_single_error() {
-        let error = LemmaError::ResourceLimitExceeded {
+        let error = Error::ResourceLimitExceeded {
             limit_name: "test".to_string(),
             limit_value: "100".to_string(),
             actual_value: "200".to_string(),
@@ -258,27 +258,27 @@ mod tests {
 
     #[test]
     fn flatten_multiple_errors_recursively() {
-        let error1 = LemmaError::ResourceLimitExceeded {
+        let error1 = Error::ResourceLimitExceeded {
             limit_name: "limit_a".to_string(),
             limit_value: "100".to_string(),
             actual_value: "200".to_string(),
             suggestion: "fix a".to_string(),
         };
-        let error2 = LemmaError::ResourceLimitExceeded {
+        let error2 = Error::ResourceLimitExceeded {
             limit_name: "limit_b".to_string(),
             limit_value: "50".to_string(),
             actual_value: "75".to_string(),
             suggestion: "fix b".to_string(),
         };
-        let inner_multiple = LemmaError::MultipleErrors(vec![error1]);
-        let outer_multiple = LemmaError::MultipleErrors(vec![inner_multiple, error2]);
+        let inner_multiple = Error::MultipleErrors(vec![error1]);
+        let outer_multiple = Error::MultipleErrors(vec![inner_multiple, error2]);
         let flat = flatten_errors(&outer_multiple);
         assert_eq!(flat.len(), 2);
     }
 
     #[test]
     fn resource_limit_exceeded_uses_default_range() {
-        let error = LemmaError::ResourceLimitExceeded {
+        let error = Error::ResourceLimitExceeded {
             limit_name: "max_file_size_bytes".to_string(),
             limit_value: "5MB".to_string(),
             actual_value: "10MB".to_string(),
@@ -297,7 +297,7 @@ mod tests {
         use lemma::Span;
         use std::sync::Arc;
 
-        let error_in_file = LemmaError::parse(
+        let error_in_file = Error::parsing(
             "bad syntax",
             Some(lemma::Source::new(
                 "file_a.lemma",
@@ -312,7 +312,7 @@ mod tests {
             )),
             None::<String>,
         );
-        let error_in_other_file = LemmaError::parse(
+        let error_in_other_file = Error::parsing(
             "also bad",
             Some(lemma::Source::new(
                 "file_b.lemma",

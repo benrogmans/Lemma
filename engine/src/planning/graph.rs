@@ -11,7 +11,7 @@ use crate::planning::types::{ResolvedDocumentTypes, TypeRegistry};
 use crate::planning::validation::{
     validate_document_interfaces, validate_type_specifications, RuleEntryForBindingCheck,
 };
-use crate::LemmaError;
+use crate::Error;
 use ast::FactValue as ParsedFactValue;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -179,7 +179,7 @@ impl Graph {
         }
     }
 
-    fn topological_sort(&self) -> Result<Vec<RulePath>, Vec<LemmaError>> {
+    fn topological_sort(&self) -> Result<Vec<RulePath>, Vec<Error>> {
         let mut in_degree: HashMap<RulePath, usize> = HashMap::new();
         let mut dependents: HashMap<RulePath, Vec<RulePath>> = HashMap::new();
         let mut queue = VecDeque::new();
@@ -243,7 +243,7 @@ impl Graph {
                 );
             };
 
-            return Err(vec![LemmaError::circular_dependency(
+            return Err(vec![Error::circular_dependency(
                 format!(
                     "Circular dependency detected. Rules involved: {}",
                     missing
@@ -282,7 +282,7 @@ struct GraphBuilder<'a> {
     sources: HashMap<String, String>,
     all_docs: HashMap<String, &'a LemmaDoc>,
     resolved_types: HashMap<String, ResolvedDocumentTypes>,
-    errors: Vec<LemmaError>,
+    errors: Vec<Error>,
 }
 
 /// Pre-built type state shared across multiple `Graph::build` calls.
@@ -303,9 +303,9 @@ impl Graph {
     ///
     /// Call this once and pass the result to [`Graph::build`] for each
     /// document being planned.
-    pub(crate) fn prepare_types(all_docs: &[LemmaDoc]) -> (PreparedTypes, Vec<LemmaError>) {
+    pub(crate) fn prepare_types(all_docs: &[LemmaDoc]) -> (PreparedTypes, Vec<Error>) {
         let mut type_registry = TypeRegistry::new();
-        let mut errors: Vec<LemmaError> = Vec::new();
+        let mut errors: Vec<Error> = Vec::new();
         let mut resolved_types: HashMap<String, ResolvedDocumentTypes> = HashMap::new();
 
         // Register all named type definitions from every document.
@@ -393,7 +393,7 @@ impl Graph {
         all_docs: &[LemmaDoc],
         sources: HashMap<String, String>,
         prepared: &PreparedTypes,
-    ) -> Result<Graph, Vec<LemmaError>> {
+    ) -> Result<Graph, Vec<Error>> {
         let mut type_registry = prepared.type_registry.clone();
 
         let mut builder = GraphBuilder {
@@ -444,7 +444,7 @@ impl Graph {
         }
     }
 
-    fn validate(&mut self, all_docs: &[LemmaDoc]) -> Result<(), Vec<LemmaError>> {
+    fn validate(&mut self, all_docs: &[LemmaDoc]) -> Result<(), Vec<Error>> {
         let mut errors = Vec::new();
 
         // Structural checks (no type info needed)
@@ -522,8 +522,8 @@ impl Graph {
 }
 
 impl<'a> GraphBuilder<'a> {
-    fn engine_error(&self, message: impl Into<String>, source: &Source) -> LemmaError {
-        LemmaError::engine(message.into(), Some(source.clone()), None::<String>)
+    fn engine_error(&self, message: impl Into<String>, source: &Source) -> Error {
+        Error::planning(message.into(), Some(source.clone()), None::<String>)
     }
 
     /// Resolve a `DocRef` to a concrete document's `full_id` key in `all_docs`.
@@ -567,7 +567,7 @@ impl<'a> GraphBuilder<'a> {
         type_decl: &ParsedFactValue,
         decl_source: &Source,
         context_doc: &str,
-    ) -> Result<LemmaType, Vec<LemmaError>> {
+    ) -> Result<LemmaType, Vec<Error>> {
         let ParsedFactValue::TypeDeclaration {
             base,
             constraints,
@@ -663,7 +663,7 @@ impl<'a> GraphBuilder<'a> {
         fact: &LemmaFact,
         current_segment_names: &[String],
         effective_doc_refs: &HashMap<String, String>,
-    ) -> Result<(Vec<String>, ParsedFactValue, Source), Vec<LemmaError>> {
+    ) -> Result<(Vec<String>, ParsedFactValue, Source), Vec<Error>> {
         let fact_source = &fact.source_location;
         let binding_path_display = format!(
             "{}.{}",
@@ -774,9 +774,9 @@ impl<'a> GraphBuilder<'a> {
         doc: &LemmaDoc,
         current_segment_names: &[String],
         effective_doc_refs: &HashMap<String, String>,
-    ) -> Result<FactBindings, Vec<LemmaError>> {
+    ) -> Result<FactBindings, Vec<Error>> {
         let mut bindings: FactBindings = HashMap::new();
-        let mut errors: Vec<LemmaError> = Vec::new();
+        let mut errors: Vec<Error> = Vec::new();
 
         for fact in &doc.facts {
             if fact.reference.segments.is_empty() {
@@ -1127,7 +1127,7 @@ impl<'a> GraphBuilder<'a> {
         current_segments: Vec<PathSegment>,
         fact_bindings: FactBindings,
         type_registry: &mut TypeRegistry,
-    ) -> Result<(), Vec<LemmaError>> {
+    ) -> Result<(), Vec<Error>> {
         if let Err(e) =
             crate::limits::check_max_length(&doc.name, crate::limits::MAX_DOC_NAME_LENGTH, "doc")
         {
@@ -1769,7 +1769,7 @@ impl<'a> GraphBuilder<'a> {
                                 format!("{} Valid units: {}", msg, valid.join(", "))
                             })
                             .unwrap_or(msg);
-                        self.errors.push(LemmaError::engine(
+                        self.errors.push(Error::planning(
                             full_msg,
                             expr.source_location.clone(),
                             None::<String>,
@@ -2047,9 +2047,9 @@ fn infer_fact_type(fact_path: &FactPath, graph: &Graph) -> LemmaType {
 // Phase 2: Pure type checking (validation only, no mutation, returns Result)
 // =============================================================================
 
-/// Construct a LemmaError::engine with source context.
-fn engine_error_at(source: &Source, message: impl Into<String>) -> LemmaError {
-    LemmaError::engine(message.into(), Some(source.clone()), None::<String>)
+/// Construct a Error::planning with source context.
+fn engine_error_at(source: &Source, message: impl Into<String>) -> Error {
+    Error::planning(message.into(), Some(source.clone()), None::<String>)
 }
 
 /// Check that both operands of a logical operation (and/or) are boolean.
@@ -2057,7 +2057,7 @@ fn check_logical_operands(
     left_type: &LemmaType,
     right_type: &LemmaType,
     source: &Source,
-) -> Result<(), Vec<LemmaError>> {
+) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
     if !left_type.is_boolean() {
         errors.push(engine_error_at(
@@ -2085,7 +2085,7 @@ fn check_logical_operands(
 }
 
 /// Check that the operand of a logical negation is boolean.
-fn check_logical_operand(operand_type: &LemmaType, source: &Source) -> Result<(), Vec<LemmaError>> {
+fn check_logical_operand(operand_type: &LemmaType, source: &Source) -> Result<(), Vec<Error>> {
     if !operand_type.is_boolean() {
         Err(vec![engine_error_at(
             source,
@@ -2105,7 +2105,7 @@ fn check_comparison_types(
     op: &crate::ComparisonComputation,
     right_type: &LemmaType,
     source: &Source,
-) -> Result<(), Vec<LemmaError>> {
+) -> Result<(), Vec<Error>> {
     let is_equality_only = matches!(
         op,
         crate::ComparisonComputation::Equal
@@ -2187,7 +2187,7 @@ fn check_arithmetic_types(
     right_type: &LemmaType,
     operator: &ArithmeticComputation,
     source: &Source,
-) -> Result<(), Vec<LemmaError>> {
+) -> Result<(), Vec<Error>> {
     // Date/Time: only Add and Subtract with Duration (or Date/Time - Date/Time)
     if left_type.is_date() || left_type.is_time() || right_type.is_date() || right_type.is_time() {
         let both_temporal = (left_type.is_date() || left_type.is_time())
@@ -2317,7 +2317,7 @@ fn check_unit_conversion_types(
     target: &SemanticConversionTarget,
     graph: &Graph,
     source: &Source,
-) -> Result<(), Vec<LemmaError>> {
+) -> Result<(), Vec<Error>> {
     match target {
         SemanticConversionTarget::ScaleUnit(unit_name)
         | SemanticConversionTarget::RatioUnit(unit_name) => {
@@ -2395,10 +2395,7 @@ fn check_unit_conversion_types(
 }
 
 /// Check that the operand of a mathematical function (sqrt, sin, etc.) is numeric.
-fn check_mathematical_operand(
-    operand_type: &LemmaType,
-    source: &Source,
-) -> Result<(), Vec<LemmaError>> {
+fn check_mathematical_operand(operand_type: &LemmaType, source: &Source) -> Result<(), Vec<Error>> {
     if !operand_type.is_scale() && !operand_type.is_number() {
         Err(vec![engine_error_at(
             source,
@@ -2413,7 +2410,7 @@ fn check_mathematical_operand(
 }
 
 /// Check that all rule references in the graph point to existing rules.
-fn check_all_rule_references_exist(graph: &Graph) -> Result<(), Vec<LemmaError>> {
+fn check_all_rule_references_exist(graph: &Graph) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
     let existing_rules: HashSet<&RulePath> = graph.rules().keys().collect();
     for (rule_path, rule_node) in graph.rules() {
@@ -2437,7 +2434,7 @@ fn check_all_rule_references_exist(graph: &Graph) -> Result<(), Vec<LemmaError>>
 }
 
 /// Check that no fact and rule share the same name in the same document.
-fn check_fact_and_rule_name_collisions(graph: &Graph) -> Result<(), Vec<LemmaError>> {
+fn check_fact_and_rule_name_collisions(graph: &Graph) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
     for rule_path in graph.rules().keys() {
         let fact_path = FactPath::new(rule_path.segments.clone(), rule_path.rule.clone());
@@ -2470,7 +2467,7 @@ fn check_fact_reference(
     fact_path: &FactPath,
     graph: &Graph,
     fact_source: &Source,
-) -> Result<(), Vec<LemmaError>> {
+) -> Result<(), Vec<Error>> {
     let entry = match graph.facts().get(fact_path) {
         Some(e) => e,
         None => {
@@ -2514,10 +2511,10 @@ fn check_expression(
     expression: &Expression,
     graph: &Graph,
     inferred_types: &HashMap<RulePath, LemmaType>,
-) -> Result<(), Vec<LemmaError>> {
+) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
 
-    let collect = |result: Result<(), Vec<LemmaError>>, errors: &mut Vec<LemmaError>| {
+    let collect = |result: Result<(), Vec<Error>>, errors: &mut Vec<Error>| {
         if let Err(errs) = result {
             errors.extend(errs);
         }
@@ -2694,10 +2691,10 @@ fn check_rule_types(
     graph: &Graph,
     execution_order: &[RulePath],
     inferred_types: &HashMap<RulePath, LemmaType>,
-) -> Result<(), Vec<LemmaError>> {
+) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
 
-    let collect = |result: Result<(), Vec<LemmaError>>, errors: &mut Vec<LemmaError>| {
+    let collect = |result: Result<(), Vec<Error>>, errors: &mut Vec<Error>| {
         if let Err(errs) = result {
             errors.extend(errs);
         }
@@ -2786,7 +2783,7 @@ fn check_rule_types(
                             ));
                         }
 
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!("Type mismatch in rule '{}' in document '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same primitive type.",
                             rule_path.rule,
                             rule_source.doc_name,
@@ -2922,7 +2919,7 @@ mod tests {
         main_doc: &LemmaDoc,
         all_docs: &[LemmaDoc],
         sources: HashMap<String, String>,
-    ) -> Result<Graph, Vec<LemmaError>> {
+    ) -> Result<Graph, Vec<Error>> {
         let (prepared, type_errors) = Graph::prepare_types(all_docs);
         match Graph::build(main_doc, all_docs, sources, &prepared) {
             Ok(graph) => {

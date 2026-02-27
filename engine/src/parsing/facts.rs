@@ -1,6 +1,6 @@
 use super::ast::Span;
 use super::Rule;
-use crate::error::LemmaError;
+use crate::error::Error;
 use crate::limits::MAX_VERSION_TAG_LENGTH;
 use crate::parsing::ast::*;
 use crate::parsing::types;
@@ -13,7 +13,7 @@ pub(crate) fn parse_fact_definition(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<LemmaFact, LemmaError> {
+) -> Result<LemmaFact, Error> {
     let span = Span::from_pest_span(pair.as_span());
     let attribute_str = attribute;
     let doc_name_str = doc_name;
@@ -57,7 +57,7 @@ pub(crate) fn parse_fact_binding(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<LemmaFact, LemmaError> {
+) -> Result<LemmaFact, Error> {
     let span = Span::from_pest_span(pair.as_span());
     let attribute_str = attribute;
     let doc_name_str = doc_name;
@@ -109,7 +109,7 @@ fn parse_fact_reference_path(
     _attribute: &str,
     _doc_name: &str,
     _source_text: Arc<str>,
-) -> Result<Vec<String>, LemmaError> {
+) -> Result<Vec<String>, Error> {
     let text = pair.as_str();
     let parts: Vec<String> = text.split('.').map(|s| s.to_string()).collect();
     assert!(
@@ -124,7 +124,7 @@ fn parse_fact_value(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<FactValue, LemmaError> {
+) -> Result<FactValue, Error> {
     for inner_pair in pair.into_inner() {
         match inner_pair.as_rule() {
             Rule::type_declaration => {
@@ -164,7 +164,7 @@ fn parse_type_declaration(
     _attribute: &str,
     _doc_name: &str,
     _source_text: Arc<str>,
-) -> Result<FactValue, LemmaError> {
+) -> Result<FactValue, Error> {
     let type_name_def = pair
         .into_inner()
         .next()
@@ -188,7 +188,7 @@ fn parse_inline_type_definition(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<FactValue, LemmaError> {
+) -> Result<FactValue, Error> {
     let type_arrow_chain = pair
         .into_inner()
         .next()
@@ -213,7 +213,7 @@ fn parse_fact_document_reference(
     _attribute: &str,
     _doc_name: &str,
     _source_text: Arc<str>,
-) -> Result<FactValue, LemmaError> {
+) -> Result<FactValue, Error> {
     let doc_name_pair = pair
         .into_inner()
         .next()
@@ -227,7 +227,7 @@ fn parse_fact_document_reference(
 /// Extract a `DocRef` from a `doc_name` grammar pair by reading its named inner pairs.
 ///
 /// Returns `Err` if the version tag exceeds [`MAX_VERSION_TAG_LENGTH`] characters.
-pub(crate) fn parse_doc_name_pair(pair: Pair<Rule>) -> Result<DocRef, LemmaError> {
+pub(crate) fn parse_doc_name_pair(pair: Pair<Rule>) -> Result<DocRef, Error> {
     let mut is_registry = false;
     let mut name = String::new();
     let mut version = None;
@@ -243,7 +243,7 @@ pub(crate) fn parse_doc_name_pair(pair: Pair<Rule>) -> Result<DocRef, LemmaError
             Rule::doc_version_tag => {
                 let tag = inner.as_str();
                 if tag.len() > MAX_VERSION_TAG_LENGTH {
-                    return Err(LemmaError::parse(
+                    return Err(Error::parsing(
                         format!(
                             "Version tag '{}' exceeds maximum length of {} characters",
                             tag, MAX_VERSION_TAG_LENGTH
@@ -270,7 +270,7 @@ fn parse_fact_literal(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<FactValue, LemmaError> {
+) -> Result<FactValue, Error> {
     let mut inner = pair.into_inner();
     let literal_pair = inner
         .next()

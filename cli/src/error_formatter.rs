@@ -1,10 +1,10 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use lemma::error::ErrorDetails;
-use lemma::LemmaError;
+use lemma::Error;
 
 /// Render an Ariadne error report for any error variant that carries ErrorDetails.
 ///
-/// `error_type` is the human-readable category (e.g. "Parse error", "Engine error").
+/// `error_type` is the human-readable category (e.g. "Parse error", "Planning error").
 /// `label_message` is the inline annotation on the source span (empty string for most variants).
 fn format_details(error_type: &str, details: &ErrorDetails, label_message: &str) -> String {
     let Some(ref src) = details.source else {
@@ -42,14 +42,14 @@ fn format_details(error_type: &str, details: &ErrorDetails, label_message: &str)
     }
 }
 
-/// Format a LemmaError with rich terminal output using Ariadne
-pub fn format_error(error: &LemmaError) -> String {
+/// Format a Error with rich terminal output using Ariadne
+pub fn format_error(error: &Error) -> String {
     match error {
-        LemmaError::Parse(details) => format_details("Parse error", details, ""),
-        LemmaError::Inversion(details) => format_details("Inversion error", details, ""),
-        LemmaError::Engine(details) => format_details("Engine error", details, ""),
-        LemmaError::MissingFact(details) => format_details("Missing fact", details, ""),
-        LemmaError::CircularDependency { details, cycle } => {
+        Error::Parsing(details) => format_details("Parse error", details, ""),
+        Error::Inversion(details) => format_details("Inversion error", details, ""),
+        Error::Planning(details) => format_details("Planning error", details, ""),
+        Error::MissingFact(details) => format_details("Missing fact", details, ""),
+        Error::CircularDependency { details, cycle } => {
             let cycle_note = if cycle.is_empty() {
                 String::new()
             } else {
@@ -61,7 +61,7 @@ pub fn format_error(error: &LemmaError) -> String {
             };
             format_details("Circular dependency", details, &cycle_note)
         }
-        LemmaError::Registry {
+        Error::Registry {
             details,
             identifier,
             kind,
@@ -70,7 +70,7 @@ pub fn format_error(error: &LemmaError) -> String {
             details,
             &format!("@{}", identifier),
         ),
-        LemmaError::ResourceLimitExceeded {
+        Error::ResourceLimitExceeded {
             limit_name,
             limit_value,
             actual_value,
@@ -80,7 +80,7 @@ pub fn format_error(error: &LemmaError) -> String {
                 "Resource limit exceeded: {limit_name}\n  Limit: {limit_value}\n  Actual: {actual_value}\n  {suggestion}"
             )
         }
-        LemmaError::MultipleErrors(errors) => {
+        Error::MultipleErrors(errors) => {
             let formatted: Vec<String> = errors.iter().map(format_error).collect();
             formatted.join("\n\n")
         }

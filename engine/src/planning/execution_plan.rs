@@ -9,7 +9,7 @@ use crate::planning::semantics;
 use crate::planning::semantics::{
     Expression, FactData, FactPath, LemmaType, LiteralValue, RulePath, TypeSpecification, ValueKind,
 };
-use crate::LemmaError;
+use crate::Error;
 use crate::ResourceLimits;
 use crate::Source;
 use serde::{Deserialize, Serialize};
@@ -358,13 +358,13 @@ impl ExecutionPlan {
     /// "what do I need to evaluate these rules?" view.
     ///
     /// Returns `Err` if any rule name is not found in the plan.
-    pub fn schema_for_rules(&self, rule_names: &[String]) -> Result<DocumentSchema, LemmaError> {
+    pub fn schema_for_rules(&self, rule_names: &[String]) -> Result<DocumentSchema, Error> {
         let mut needed_facts = HashSet::new();
         let mut rule_entries: Vec<(String, LemmaType)> = Vec::new();
 
         for rule_name in rule_names {
             let rule = self.get_rule(rule_name).ok_or_else(|| {
-                LemmaError::engine(
+                Error::planning(
                     format!(
                         "Rule '{}' not found in document '{}'",
                         rule_name, self.doc_name
@@ -427,11 +427,11 @@ impl ExecutionPlan {
         mut self,
         values: HashMap<String, String>,
         limits: &ResourceLimits,
-    ) -> Result<Self, LemmaError> {
+    ) -> Result<Self, Error> {
         for (name, raw_value) in values {
             let fact_path = self.get_fact_path_by_str(&name).ok_or_else(|| {
                 let available: Vec<String> = self.facts.keys().map(|p| p.input_key()).collect();
-                LemmaError::engine(
+                Error::planning(
                     format!(
                         "Fact '{}' not found. Available facts: {}",
                         name,
@@ -450,7 +450,7 @@ impl ExecutionPlan {
 
             let fact_source = fact_data.source().clone();
             let expected_type = fact_data.schema_type().cloned().ok_or_else(|| {
-                LemmaError::engine(
+                Error::planning(
                     format!(
                         "Fact '{}' is a document reference; cannot provide a value.",
                         name
@@ -467,7 +467,7 @@ impl ExecutionPlan {
                 &fact_source,
             )
             .map_err(|e| {
-                LemmaError::engine(
+                Error::planning(
                     format!(
                         "Failed to parse fact '{}' as {}: {}",
                         name,
@@ -479,7 +479,7 @@ impl ExecutionPlan {
                 )
             })?;
             let semantic_value = semantics::value_to_semantic(&parsed_value).map_err(|e| {
-                LemmaError::engine(
+                Error::planning(
                     format!("Failed to convert fact '{}' value: {}", name, e),
                     Some(fact_source.clone()),
                     None::<String>,
@@ -493,7 +493,7 @@ impl ExecutionPlan {
             // Check resource limits
             let size = literal_value.byte_size();
             if size > limits.max_fact_value_bytes {
-                return Err(LemmaError::ResourceLimitExceeded {
+                return Err(Error::ResourceLimitExceeded {
                     limit_name: "max_fact_value_bytes".to_string(),
                     limit_value: limits.max_fact_value_bytes.to_string(),
                     actual_value: size.to_string(),
@@ -506,7 +506,7 @@ impl ExecutionPlan {
 
             // Validate constraints
             validate_value_against_type(&expected_type, &literal_value).map_err(|msg| {
-                LemmaError::engine(
+                Error::planning(
                     format!(
                         "Invalid value for fact {} (expected {}): {}",
                         name,
@@ -607,7 +607,7 @@ fn validate_value_against_type(
     }
 }
 
-pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<LemmaError> {
+pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<Error> {
     let mut errors = Vec::new();
 
     for (fact_path, fact_data) in &plan.facts {
@@ -618,7 +618,7 @@ pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<
 
         if let Err(msg) = validate_value_against_type(expected_type, lit) {
             let source = fact_data.source().clone();
-            errors.push(LemmaError::engine(
+            errors.push(Error::planning(
                 format!(
                     "Invalid value for fact {} (expected {}): {}",
                     fact_path,
@@ -662,7 +662,7 @@ mod tests {
             .map_err(|errs| match errs.len() {
                 0 => unreachable!("add_lemma_files returned Err with empty error list"),
                 1 => errs.into_iter().next().unwrap(),
-                _ => crate::LemmaError::MultipleErrors(errs),
+                _ => crate::Error::MultipleErrors(errs),
             })
     }
 

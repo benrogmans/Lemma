@@ -20,7 +20,7 @@ pub use world::World;
 
 use crate::planning::semantics::{Expression, FactPath, LiteralValue, ValueKind};
 use crate::planning::ExecutionPlan;
-use crate::{LemmaError, LemmaResult, OperationResult};
+use crate::{Error, LemmaResult, OperationResult};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::collections::{HashMap, HashSet};
 
@@ -139,7 +139,7 @@ pub fn invert(
     provided_facts: &HashSet<FactPath>,
 ) -> LemmaResult<InversionResponse> {
     let executable_rule = plan.get_rule(rule_name).ok_or_else(|| {
-        LemmaError::engine(
+        Error::planning(
             format!("Rule not found: {}.{}", plan.doc_name, rule_name),
             None,
             None::<String>,
@@ -435,7 +435,7 @@ mod tests {
             .map_err(|errs| match errs.len() {
                 0 => unreachable!("add_lemma_files returned Err with empty error list"),
                 1 => errs.into_iter().next().unwrap(),
-                _ => crate::LemmaError::MultipleErrors(errs),
+                _ => crate::Error::MultipleErrors(errs),
             })
     }
 

@@ -1,4 +1,4 @@
-use crate::{Engine, LemmaError};
+use crate::{Engine, Error};
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ impl WasmEngine {
                     let error = match errs.len() {
                         0 => unreachable!("add_lemma_files returned Err with empty error list"),
                         1 => errs.into_iter().next().unwrap(),
-                        _ => LemmaError::MultipleErrors(errs),
+                        _ => Error::MultipleErrors(errs),
                     };
                     Ok(JsValue::from_str(&to_json_error(&error)))
                 }
@@ -169,7 +169,7 @@ fn to_json_response(data: serde_json::Value) -> String {
     })
 }
 
-fn to_json_error(error: &LemmaError) -> String {
+fn to_json_error(error: &Error) -> String {
     to_json_error_string(&format_error(error))
 }
 
@@ -189,12 +189,12 @@ fn parse_rule_names(rule_names_json: &str) -> Result<Vec<String>, String> {
         .map_err(|e| format!("Invalid rule_names JSON (expected array of strings): {}", e))
 }
 
-fn format_error(error: &LemmaError) -> String {
+fn format_error(error: &Error) -> String {
     match error {
-        LemmaError::Parse(details) => format!("Parse Error: {}", details.message),
-        LemmaError::Inversion(details) => format!("Inversion Error: {}", details.message),
-        LemmaError::Engine(details) => format!("Engine Error: {}", details.message),
-        LemmaError::Registry {
+        Error::Parsing(details) => format!("Parse Error: {}", details.message),
+        Error::Inversion(details) => format!("Inversion Error: {}", details.message),
+        Error::Planning(details) => format!("Planning Error: {}", details.message),
+        Error::Registry {
             details,
             identifier,
             kind,
@@ -204,11 +204,11 @@ fn format_error(error: &LemmaError) -> String {
                 kind, identifier, details.message
             )
         }
-        LemmaError::MissingFact(details) => format!("Missing Fact: {}", details.message),
-        LemmaError::CircularDependency { details, .. } => {
+        Error::MissingFact(details) => format!("Missing Fact: {}", details.message),
+        Error::CircularDependency { details, .. } => {
             format!("Circular Dependency: {}", details.message)
         }
-        LemmaError::ResourceLimitExceeded {
+        Error::ResourceLimitExceeded {
             limit_name,
             limit_value,
             actual_value,
@@ -218,7 +218,7 @@ fn format_error(error: &LemmaError) -> String {
                 "Resource Limit Exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value}). {suggestion}"
             )
         }
-        LemmaError::MultipleErrors(errors) => {
+        Error::MultipleErrors(errors) => {
             let error_messages: Vec<String> = errors.iter().map(format_error).collect();
             format!("Multiple Errors:\n{}", error_messages.join("\n"))
         }

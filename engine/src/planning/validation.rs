@@ -8,7 +8,7 @@ use crate::planning::semantics::{
     Expression, ExpressionKind, FactPath, LemmaType, RulePath, SemanticConversionTarget,
     TypeSpecification,
 };
-use crate::LemmaError;
+use crate::Error;
 use crate::Source;
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
@@ -28,7 +28,7 @@ pub fn validate_type_specifications(
     specs: &TypeSpecification,
     type_name: &str,
     source: &Source,
-) -> Vec<LemmaError> {
+) -> Vec<Error> {
     let mut errors = Vec::new();
 
     match specs {
@@ -44,7 +44,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
@@ -58,7 +58,7 @@ pub fn validate_type_specifications(
             // Validate decimals range (0-28 is rust_decimal limit)
             if let Some(d) = decimals {
                 if *d > 28 {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
@@ -72,7 +72,7 @@ pub fn validate_type_specifications(
             // Validate precision is positive if set
             if let Some(prec) = precision {
                 if *prec <= Decimal::ZERO {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
@@ -87,7 +87,7 @@ pub fn validate_type_specifications(
             if let Some((def_value, def_unit)) = default {
                 // Validate that the default unit exists
                 if !units.iter().any(|u| u.name == *def_unit) {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' default unit '{}' is not a valid unit. Valid units: {}",
                             type_name,
@@ -104,7 +104,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(min) = minimum {
                     if *def_value < *min {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default value {} {} is less than minimum {}",
                                 type_name, def_value, def_unit, min
@@ -116,7 +116,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if *def_value > *max {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default value {} {} is greater than maximum {}",
                                 type_name, def_value, def_unit, max
@@ -130,7 +130,7 @@ pub fn validate_type_specifications(
 
             // Scale types must have at least one unit (required for parsing and conversion)
             if units.is_empty() {
-                errors.push(LemmaError::engine(
+                errors.push(Error::planning(
                     format!(
                         "Type '{}' is a scale type but has no units. Scale types must define at least one unit (e.g. -> unit eur 1).",
                         type_name
@@ -146,7 +146,7 @@ pub fn validate_type_specifications(
                 for unit in units.iter() {
                     // Validate unit name is not empty
                     if unit.name.trim().is_empty() {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
@@ -162,7 +162,7 @@ pub fn validate_type_specifications(
                         .iter()
                         .any(|seen| seen.to_lowercase() == lower_name)
                     {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
                             Some(source.clone()),
                             None::<String>,
@@ -173,7 +173,7 @@ pub fn validate_type_specifications(
 
                     // Validate unit values are positive (conversion factors relative to type base of 1)
                     if unit.value <= Decimal::ZERO {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
                             Some(source.clone()),
                             None::<String>,
@@ -193,7 +193,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
@@ -207,7 +207,7 @@ pub fn validate_type_specifications(
             // Validate decimals range (0-28 is rust_decimal limit)
             if let Some(d) = decimals {
                 if *d > 28 {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
@@ -221,7 +221,7 @@ pub fn validate_type_specifications(
             // Validate precision is positive if set
             if let Some(prec) = precision {
                 if *prec <= Decimal::ZERO {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
@@ -236,7 +236,7 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if *def < *min {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
@@ -248,7 +248,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if *def > *max {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
@@ -273,7 +273,7 @@ pub fn validate_type_specifications(
             // Validate decimals range (0-28 is rust_decimal limit)
             if let Some(d) = decimals {
                 if *d > 28 {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
@@ -287,7 +287,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
@@ -302,7 +302,7 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if *def < *min {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
@@ -314,7 +314,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if *def > *max {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
@@ -334,7 +334,7 @@ pub fn validate_type_specifications(
                 for unit in units.iter() {
                     // Validate unit name is not empty
                     if unit.name.trim().is_empty() {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
@@ -350,7 +350,7 @@ pub fn validate_type_specifications(
                         .iter()
                         .any(|seen| seen.to_lowercase() == lower_name)
                     {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
                             Some(source.clone()),
                             None::<String>,
@@ -361,7 +361,7 @@ pub fn validate_type_specifications(
 
                     // Validate unit values are positive (conversion factors relative to type base of 1)
                     if unit.value <= Decimal::ZERO {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
                             Some(source.clone()),
                             None::<String>,
@@ -382,7 +382,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!("Type '{}' has invalid range: minimum length {} is greater than maximum length {}", type_name, min, max),
                         Some(source.clone()),
                         None::<String>,
@@ -394,7 +394,7 @@ pub fn validate_type_specifications(
             if let Some(len) = length {
                 if let Some(min) = minimum {
                     if *len < *min {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!("Type '{}' has inconsistent length constraint: length {} is less than minimum {}", type_name, len, min),
                             Some(source.clone()),
                             None::<String>,
@@ -403,7 +403,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if *len > *max {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!("Type '{}' has inconsistent length constraint: length {} is greater than maximum {}", type_name, len, max),
                             Some(source.clone()),
                             None::<String>,
@@ -418,7 +418,7 @@ pub fn validate_type_specifications(
 
                 if let Some(min) = minimum {
                     if def_len < *min {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default value length {} is less than minimum {}",
                                 type_name, def_len, min
@@ -430,7 +430,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if def_len > *max {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default value length {} is greater than maximum {}",
                                 type_name, def_len, max
@@ -442,7 +442,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(len) = length {
                     if def_len != *len {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!("Type '{}' default value length {} does not match required length {}", type_name, def_len, len),
                             Some(source.clone()),
                             None::<String>,
@@ -450,7 +450,7 @@ pub fn validate_type_specifications(
                     }
                 }
                 if !options.is_empty() && !options.contains(def) {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' default value '{}' is not in allowed options: {:?}",
                             type_name, def, options
@@ -471,7 +471,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if compare_date_values(min, max) == Ordering::Greater {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' has invalid date range: minimum {} is after maximum {}",
                             type_name, min, max
@@ -486,7 +486,7 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if compare_date_values(def, min) == Ordering::Less {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default date {} is before minimum {}",
                                 type_name, def, min
@@ -498,7 +498,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if compare_date_values(def, max) == Ordering::Greater {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default date {} is after maximum {}",
                                 type_name, def, max
@@ -520,7 +520,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if compare_time_values(min, max) == Ordering::Greater {
-                    errors.push(LemmaError::engine(
+                    errors.push(Error::planning(
                         format!(
                             "Type '{}' has invalid time range: minimum {} is after maximum {}",
                             type_name, min, max
@@ -535,7 +535,7 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if compare_time_values(def, min) == Ordering::Less {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default time {} is before minimum {}",
                                 type_name, def, min
@@ -547,7 +547,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if compare_time_values(def, max) == Ordering::Greater {
-                        errors.push(LemmaError::engine(
+                        errors.push(Error::planning(
                             format!(
                                 "Type '{}' default time {} is after maximum {}",
                                 type_name, def, max
@@ -761,8 +761,8 @@ fn expected_constraint_name(c: ExpectedRuleTypeConstraint) -> &'static str {
     }
 }
 
-fn document_interface_error(source: &Source, message: impl Into<String>) -> LemmaError {
-    LemmaError::engine(message.into(), Some(source.clone()), None::<String>)
+fn document_interface_error(source: &Source, message: impl Into<String>) -> Error {
+    Error::planning(message.into(), Some(source.clone()), None::<String>)
 }
 
 /// Validate that every doc-ref fact path's referenced document has the required rules
@@ -773,7 +773,7 @@ pub fn validate_document_interfaces(
     doc_ref_facts: &[(FactPath, String, Source)],
     rule_entries: &IndexMap<RulePath, RuleEntryForBindingCheck>,
     all_docs: &[LemmaDoc],
-) -> Result<(), Vec<LemmaError>> {
+) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
 
     for (fact_path, doc_name, fact_source) in doc_ref_facts {

@@ -21,7 +21,7 @@ pub use semantics::{
 pub use types::TypeRegistry;
 
 use crate::parsing::ast::LemmaDoc;
-use crate::LemmaError;
+use crate::Error;
 use std::collections::HashMap;
 
 /// Build execution plans for one or more Lemma documents.
@@ -43,9 +43,9 @@ pub fn plan(
     docs_to_plan: &[&LemmaDoc],
     all_docs: &[LemmaDoc],
     sources: HashMap<String, String>,
-) -> (HashMap<String, ExecutionPlan>, Vec<LemmaError>) {
+) -> (HashMap<String, ExecutionPlan>, Vec<Error>) {
     let mut plans = HashMap::new();
-    let mut errors: Vec<LemmaError> = Vec::new();
+    let mut errors: Vec<Error> = Vec::new();
 
     // 1. Prepare types once (registration + named type resolution + spec validation).
     let (prepared, type_errors) = graph::Graph::prepare_types(all_docs);
@@ -83,7 +83,7 @@ mod internal_tests {
     use crate::parsing::source::Source;
     use crate::planning::execution_plan::ExecutionPlan;
     use crate::planning::semantics::{FactPath, PathSegment};
-    use crate::{parse, LemmaError, ResourceLimits};
+    use crate::{parse, Error, ResourceLimits};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -92,14 +92,14 @@ mod internal_tests {
         main_doc: &LemmaDoc,
         all_docs: &[LemmaDoc],
         sources: HashMap<String, String>,
-    ) -> Result<ExecutionPlan, Vec<LemmaError>> {
+    ) -> Result<ExecutionPlan, Vec<Error>> {
         let docs_to_plan: Vec<&LemmaDoc> = vec![main_doc];
         let (mut plans, errors) = plan(&docs_to_plan, all_docs, sources);
         if !errors.is_empty() {
             Err(errors)
         } else {
             plans.remove(&main_doc.name).map(Ok).unwrap_or_else(|| {
-                Err(vec![LemmaError::engine(
+                Err(vec![Error::planning(
                     format!(
                         "No execution plan produced for document '{}'",
                         main_doc.name

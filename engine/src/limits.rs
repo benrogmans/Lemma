@@ -1,4 +1,4 @@
-use crate::error::LemmaError;
+use crate::error::Error;
 
 /// Maximum length of a version tag (the part after `.` in `doc name.tag`).
 /// Prevents abuse via extremely long version strings in sort comparisons.
@@ -11,9 +11,9 @@ pub const MAX_TYPE_NAME_LENGTH: usize = 256;
 
 /// Validate that a name does not exceed the given character limit.
 /// `kind` is a human-readable noun like "document", "fact", "rule", or "type".
-pub fn check_max_length(name: &str, limit: usize, kind: &str) -> Result<(), LemmaError> {
+pub fn check_max_length(name: &str, limit: usize, kind: &str) -> Result<(), Error> {
     if name.len() > limit {
-        return Err(LemmaError::ResourceLimitExceeded {
+        return Err(Error::ResourceLimitExceeded {
             limit_name: format!("max_{kind}_name_length"),
             limit_value: format!("{limit} characters"),
             actual_value: format!("{} characters", name.len()),

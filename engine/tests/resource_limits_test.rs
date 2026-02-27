@@ -1,4 +1,4 @@
-use lemma::{Engine, LemmaError, ResourceLimits};
+use lemma::{Engine, Error, ResourceLimits};
 mod common;
 use common::add_lemma_code_blocking;
 
@@ -17,7 +17,7 @@ fn test_file_size_limit() {
     let result = add_lemma_code_blocking(&mut engine, &large_code, "test.lemma");
 
     match result {
-        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+        Err(Error::ResourceLimitExceeded { limit_name, .. }) => {
             assert_eq!(limit_name, "max_file_size_bytes");
         }
         _ => panic!("Expected ResourceLimitExceeded error"),
@@ -60,7 +60,7 @@ fn test_fact_value_size_limit() {
     let result = engine.evaluate("test", vec![], facts);
 
     match result {
-        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+        Err(Error::ResourceLimitExceeded { limit_name, .. }) => {
             assert_eq!(limit_name, "max_fact_value_bytes");
         }
         _ => panic!("Expected ResourceLimitExceeded error for large fact value"),
@@ -88,7 +88,7 @@ fn doc_name_exceeding_max_length_is_rejected() {
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     match result {
-        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+        Err(Error::ResourceLimitExceeded { limit_name, .. }) => {
             assert_eq!(limit_name, "max_doc_name_length");
         }
         other => panic!("Expected ResourceLimitExceeded for doc name, got: {other:?}"),
@@ -114,7 +114,7 @@ fn fact_name_exceeding_max_length_is_rejected() {
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     match result {
-        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+        Err(Error::ResourceLimitExceeded { limit_name, .. }) => {
             assert_eq!(limit_name, "max_fact_name_length");
         }
         other => panic!("Expected ResourceLimitExceeded for fact name, got: {other:?}"),
@@ -128,7 +128,7 @@ fn fact_binding_name_exceeding_max_length_is_rejected() {
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     match result {
-        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+        Err(Error::ResourceLimitExceeded { limit_name, .. }) => {
             assert_eq!(limit_name, "max_fact_name_length");
         }
         other => panic!("Expected ResourceLimitExceeded for fact binding name, got: {other:?}"),
@@ -154,7 +154,7 @@ fn rule_name_exceeding_max_length_is_rejected() {
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     match result {
-        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+        Err(Error::ResourceLimitExceeded { limit_name, .. }) => {
             assert_eq!(limit_name, "max_rule_name_length");
         }
         other => panic!("Expected ResourceLimitExceeded for rule name, got: {other:?}"),
@@ -180,7 +180,7 @@ fn type_name_exceeding_max_length_is_rejected() {
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     match result {
-        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+        Err(Error::ResourceLimitExceeded { limit_name, .. }) => {
             assert_eq!(limit_name, "max_type_name_length");
         }
         other => panic!("Expected ResourceLimitExceeded for type name, got: {other:?}"),
@@ -194,7 +194,7 @@ fn type_import_name_exceeding_max_length_is_rejected() {
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     match result {
-        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+        Err(Error::ResourceLimitExceeded { limit_name, .. }) => {
             assert_eq!(limit_name, "max_type_name_length");
         }
         other => panic!("Expected ResourceLimitExceeded for type import name, got: {other:?}"),

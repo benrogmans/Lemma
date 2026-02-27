@@ -1,6 +1,6 @@
 use super::ast::{DepthTracker, Span};
 use super::Rule;
-use crate::error::LemmaError;
+use crate::error::Error;
 use crate::parsing::ast::*;
 use crate::Source;
 use pest::iterators::Pair;
@@ -12,7 +12,7 @@ pub(crate) fn parse_rule_definition(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<LemmaRule, LemmaError> {
+) -> Result<LemmaRule, Error> {
     let span = Span::from_pest_span(pair.as_span());
     let mut rule_name = None;
     let mut rule_expression = None;
@@ -51,7 +51,7 @@ fn parse_rule_expression(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<(Expression, Vec<UnlessClause>), LemmaError> {
+) -> Result<(Expression, Vec<UnlessClause>), Error> {
     let mut expression = None;
     let mut unless_clauses = Vec::new();
 
@@ -97,7 +97,7 @@ fn parse_veto_expression(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     let veto_span = Span::from_pest_span(pair.as_span());
     // Pest grammar: ^"veto" ~ (SPACE+ ~ text_literal)?
     // If text_literal child exists, parse it via the existing literal parser (same path as other types).
@@ -117,7 +117,7 @@ fn parse_veto_expression(
                 Value::Text(s) => Some(s),
                 _ => {
                     let span = Span::from_pest_span(string_pair.as_span());
-                    return Err(LemmaError::parse(
+                    return Err(Error::parsing(
                         "veto message must be a text literal",
                         Some(Source::new(attribute, span, doc_name, source_text.clone())),
                         None::<String>,
@@ -140,7 +140,7 @@ fn parse_unless_statement(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<UnlessClause, LemmaError> {
+) -> Result<UnlessClause, Error> {
     let span = Span::from_pest_span(pair.as_span());
     let mut condition = None;
     let mut result = None;

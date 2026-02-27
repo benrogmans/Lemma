@@ -1,5 +1,5 @@
 use crate::engine::Engine;
-use crate::LemmaError;
+use crate::Error;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -14,7 +14,7 @@ fn add_lemma_code(engine: &mut Engine, code: &str, source: &str) -> crate::Lemma
         .map_err(|errs| match errs.len() {
             0 => unreachable!("add_lemma_files returned Err with empty error list"),
             1 => errs.into_iter().next().unwrap(),
-            _ => LemmaError::MultipleErrors(errs),
+            _ => Error::MultipleErrors(errs),
         })
 }
 
@@ -139,7 +139,7 @@ fn test_document_not_found() {
     let err = result.unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Engine error: Document 'nonexistent' not found"
+        "Planning error: Document 'nonexistent' not found"
     );
 }
 

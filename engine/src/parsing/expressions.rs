@@ -1,6 +1,6 @@
 use super::ast::{DepthTracker, Span};
 use super::Rule;
-use crate::error::LemmaError;
+use crate::error::Error;
 use crate::parsing::ast::*;
 use crate::Source;
 use pest::iterators::Pair;
@@ -30,7 +30,7 @@ fn parse_literal_expression(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     let literal_pair = if pair.as_rule() == Rule::literal {
         pair.into_inner()
             .next()
@@ -78,7 +78,7 @@ pub(crate) fn parse_primary(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     let rule = pair.as_rule();
     match rule {
         Rule::literal
@@ -213,7 +213,7 @@ pub(crate) fn parse_expression(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     if let Err(msg) = depth_tracker.push_depth() {
         let actual_depth = msg
             .split_whitespace()
@@ -221,7 +221,7 @@ pub(crate) fn parse_expression(
             .and_then(|s| s.parse::<usize>().ok())
             .map(|d| d.to_string())
             .unwrap_or_else(|| format!("parse error: {}", msg));
-        return Err(LemmaError::ResourceLimitExceeded {
+        return Err(Error::ResourceLimitExceeded {
             limit_name: "max_expression_depth".to_string(),
             limit_value: depth_tracker.max_depth().to_string(),
             actual_value: actual_depth,
@@ -246,7 +246,7 @@ fn parse_expression_impl(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     match pair.as_rule() {
         Rule::expression => {
             let original = pair.clone();
@@ -492,7 +492,7 @@ fn parse_expression_impl(
     }
 
     let span = Span::from_pest_span(pair.as_span());
-    Err(LemmaError::parse(
+    Err(Error::parsing(
         format!(
             "Invalid expression: unable to parse '{}' as any valid expression type",
             pair.as_str()
@@ -502,7 +502,7 @@ fn parse_expression_impl(
     ))
 }
 
-fn parse_rule_reference(pair: Pair<Rule>) -> Result<RuleReference, LemmaError> {
+fn parse_rule_reference(pair: Pair<Rule>) -> Result<RuleReference, Error> {
     let parts: Vec<String> = pair
         .into_inner()
         .filter(|p| p.as_rule() == Rule::rule_reference_segment)
@@ -512,7 +512,7 @@ fn parse_rule_reference(pair: Pair<Rule>) -> Result<RuleReference, LemmaError> {
     Ok(reference)
 }
 
-fn parse_fact_reference(pair: Pair<Rule>) -> Result<FactReference, LemmaError> {
+fn parse_fact_reference(pair: Pair<Rule>) -> Result<FactReference, Error> {
     let parts: Vec<String> = pair
         .into_inner()
         .filter(|p| p.as_rule() == Rule::fact_reference_segment)
@@ -528,7 +528,7 @@ fn parse_and_operand(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     match pair.as_rule() {
         Rule::and_operand => {
             let mut inner = pair.into_inner();
@@ -594,7 +594,7 @@ fn parse_and_expression(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     let original_pair = pair.clone();
     let mut pairs = pair.into_inner();
     let mut left = parse_and_operand(
@@ -636,7 +636,7 @@ fn parse_base_expression(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     let original_pair = pair.clone();
     let mut inner = pair.into_inner();
 
@@ -690,7 +690,7 @@ fn parse_conversion_expression(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     let original_pair = pair.clone();
     let mut base: Option<Expression> = None;
     let mut unit: Option<String> = None;
@@ -753,7 +753,7 @@ fn parse_term(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     let mut pairs = pair.clone().into_inner();
     let mut left = parse_power(
         pairs
@@ -799,7 +799,7 @@ fn parse_power(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     let mut pairs = pair.clone().into_inner();
     let left = parse_factor(
         pairs
@@ -847,7 +847,7 @@ fn parse_factor(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     let mut pairs = pair.clone().into_inner();
     let mut is_negative = false;
 
@@ -913,7 +913,7 @@ fn parse_comparison_expression(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     let mut pairs = pair.clone().into_inner();
     let left = parse_expression(
         pairs
@@ -991,7 +991,7 @@ fn parse_not_expression(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     let original_pair = pair.clone();
     let mut inner = pair.into_inner();
     let operand_pair = inner
@@ -1022,7 +1022,7 @@ fn parse_logical_expression(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Expression, LemmaError> {
+) -> Result<Expression, Error> {
     match pair.as_rule() {
         Rule::sqrt_expr
         | Rule::sin_expr
