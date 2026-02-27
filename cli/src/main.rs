@@ -77,7 +77,7 @@ enum Commands {
         )]
         output: OutputFormat,
         /// Include facts and proof trees (table) or proof objects (json)
-        #[arg(long)]
+        #[arg(short = 'x', long)]
         explain: bool,
         /// Enable interactive mode for document/rule/fact selection
         #[arg(short = 'i', long)]
