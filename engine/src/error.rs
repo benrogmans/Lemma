@@ -1,5 +1,5 @@
 use crate::parsing::source::Source;
-use crate::planning::semantics::{FactPath, RulePath};
+use crate::planning::semantics::FactPath;
 use crate::registry::RegistryErrorKind;
 use std::fmt;
 
@@ -16,9 +16,6 @@ pub struct ErrorDetails {
 pub enum LemmaError {
     /// Parse error with source location
     Parse(Box<ErrorDetails>),
-
-    /// Semantic validation error with source location
-    Semantic(Box<ErrorDetails>),
 
     /// Inversion error (valid Lemma, but unsupported by inversion) with source location
     Inversion(Box<ErrorDetails>),
@@ -81,28 +78,6 @@ impl LemmaError {
         suggestion: impl Into<String>,
     ) -> Self {
         Self::parse(message, source, Some(suggestion))
-    }
-
-    /// Create a semantic error with source information
-    pub fn semantic(
-        message: impl Into<String>,
-        source: Option<Source>,
-        suggestion: Option<impl Into<String>>,
-    ) -> Self {
-        Self::Semantic(Box::new(ErrorDetails {
-            message: message.into(),
-            source,
-            suggestion: suggestion.map(Into::into),
-        }))
-    }
-
-    /// Create a semantic error with suggestion
-    pub fn semantic_with_suggestion(
-        message: impl Into<String>,
-        source: Option<Source>,
-        suggestion: impl Into<String>,
-    ) -> Self {
-        Self::semantic(message, source, Some(suggestion))
     }
 
     /// Create an inversion error with source information
@@ -172,19 +147,6 @@ impl LemmaError {
         }))
     }
 
-    /// Create a missing rule error with source information
-    pub fn missing_rule(
-        rule_path: RulePath,
-        source: Option<Source>,
-        suggestion: Option<impl Into<String>>,
-    ) -> Self {
-        Self::Engine(Box::new(ErrorDetails {
-            message: format!("Missing rule: {}", rule_path),
-            source,
-            suggestion: suggestion.map(Into::into),
-        }))
-    }
-
     /// Create a circular dependency error with source information
     pub fn circular_dependency(
         message: impl Into<String>,
@@ -220,13 +182,6 @@ impl fmt::Display for LemmaError {
         match self {
             LemmaError::Parse(details) => {
                 write!(f, "Parse error: {}", details.message)?;
-                if let Some(suggestion) = &details.suggestion {
-                    write!(f, " (suggestion: {suggestion})")?;
-                }
-                write_source_location(f, &details.source)
-            }
-            LemmaError::Semantic(details) => {
-                write!(f, "Semantic error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
@@ -313,7 +268,6 @@ impl LemmaError {
     pub fn message(&self) -> &str {
         match self {
             LemmaError::Parse(details)
-            | LemmaError::Semantic(details)
             | LemmaError::Inversion(details)
             | LemmaError::Engine(details)
             | LemmaError::MissingFact(details) => &details.message,
@@ -328,7 +282,6 @@ impl LemmaError {
     pub fn location(&self) -> Option<&Source> {
         match self {
             LemmaError::Parse(details)
-            | LemmaError::Semantic(details)
             | LemmaError::Inversion(details)
             | LemmaError::Engine(details)
             | LemmaError::MissingFact(details) => details.source.as_ref(),
@@ -347,7 +300,6 @@ impl LemmaError {
     pub fn suggestion(&self) -> Option<&str> {
         match self {
             LemmaError::Parse(details)
-            | LemmaError::Semantic(details)
             | LemmaError::Inversion(details)
             | LemmaError::Engine(details)
             | LemmaError::MissingFact(details) => details.suggestion.as_deref(),
@@ -387,12 +339,6 @@ mod tests {
         assert!(parse_error_display.contains("Parse error: Invalid currency"));
         assert!(parse_error_display.contains("test.lemma:1:15"));
 
-        let semantic_error =
-            LemmaError::semantic("Invalid currency", Some(test_source()), None::<String>);
-        let semantic_error_display = format!("{semantic_error}");
-        assert!(semantic_error_display.contains("Semantic error: Invalid currency"));
-        assert!(semantic_error_display.contains("test.lemma:1:15"));
-
         let suggestion_source = Source::new(
             "suggestion.lemma",
             Span {
@@ -407,21 +353,12 @@ mod tests {
 
         let parse_error_with_suggestion = LemmaError::parse_with_suggestion(
             "Typo in fact name",
-            Some(suggestion_source.clone()),
+            Some(suggestion_source),
             "Did you mean 'amount'?",
         );
         let parse_error_with_suggestion_display = format!("{parse_error_with_suggestion}");
         assert!(parse_error_with_suggestion_display.contains("Typo in fact name"));
         assert!(parse_error_with_suggestion_display.contains("Did you mean 'amount'?"));
-
-        let semantic_error_with_suggestion = LemmaError::semantic_with_suggestion(
-            "Incompatible types",
-            Some(suggestion_source),
-            "Try converting one of the types.",
-        );
-        let semantic_error_with_suggestion_display = format!("{semantic_error_with_suggestion}");
-        assert!(semantic_error_with_suggestion_display.contains("Incompatible types"));
-        assert!(semantic_error_with_suggestion_display.contains("Try converting one of the types."));
 
         let engine_error = LemmaError::engine("Something went wrong", None, None::<String>);
         assert!(format!("{engine_error}").contains("Engine error: Something went wrong"));
@@ -431,12 +368,10 @@ mod tests {
             LemmaError::circular_dependency("a -> b -> a", None, vec![], None::<String>);
         assert!(format!("{circular_dependency_error}").contains("Circular dependency: a -> b -> a"));
 
-        let multiple_errors =
-            LemmaError::MultipleErrors(vec![parse_error, semantic_error, engine_error]);
+        let multiple_errors = LemmaError::MultipleErrors(vec![parse_error, engine_error]);
         let multiple_errors_display = format!("{multiple_errors}");
         assert!(multiple_errors_display.contains("Multiple errors:"));
         assert!(multiple_errors_display.contains("Parse error: Invalid currency"));
-        assert!(multiple_errors_display.contains("Semantic error: Invalid currency"));
         assert!(multiple_errors_display.contains("Engine error: Something went wrong"));
     }
 }

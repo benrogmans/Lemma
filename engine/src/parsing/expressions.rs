@@ -32,14 +32,9 @@ fn parse_literal_expression(
     source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let literal_pair = if pair.as_rule() == Rule::literal {
-        let span = Span::from_pest_span(pair.as_span());
-        pair.into_inner().next().ok_or_else(|| {
-            LemmaError::engine(
-                "Empty literal wrapper",
-                Some(Source::new(attribute, span, doc_name, source_text.clone())),
-                None::<String>,
-            )
-        })?
+        pair.into_inner()
+            .next()
+            .expect("BUG: grammar guarantees literal has inner value")
     } else {
         pair.clone()
     };
@@ -209,21 +204,7 @@ pub(crate) fn parse_primary(
             _ => {}
         }
     }
-    Err(LemmaError::engine(
-        "Empty primary expression",
-        Some(Source::new(
-            attribute,
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-            doc_name,
-            source_text.clone(),
-        )),
-        None::<String>,
-    ))
+    unreachable!("BUG: grammar guarantees primary expression is non-empty")
 }
 
 pub(crate) fn parse_expression(
@@ -271,15 +252,10 @@ fn parse_expression_impl(
             let original = pair.clone();
             let mut inner = pair.into_inner();
 
-            let span = Span::from_pest_span(original.as_span());
             let mut left = parse_and_expression(
-                inner.next().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Missing left operand in logical OR expression",
-                        Some(Source::new(attribute, span, doc_name, source_text.clone())),
-                        None::<String>,
-                    )
-                })?,
+                inner
+                    .next()
+                    .expect("BUG: grammar guarantees expression has left operand"),
                 depth_tracker,
                 attribute,
                 doc_name,
@@ -516,7 +492,7 @@ fn parse_expression_impl(
     }
 
     let span = Span::from_pest_span(pair.as_span());
-    Err(LemmaError::engine(
+    Err(LemmaError::parse(
         format!(
             "Invalid expression: unable to parse '{}' as any valid expression type",
             pair.as_str()
@@ -555,15 +531,10 @@ fn parse_and_operand(
 ) -> Result<Expression, LemmaError> {
     match pair.as_rule() {
         Rule::and_operand => {
-            let span = Span::from_pest_span(pair.as_span());
             let mut inner = pair.into_inner();
-            let first = inner.next().ok_or_else(|| {
-                LemmaError::engine(
-                    "Empty and_operand",
-                    Some(Source::new(attribute, span, doc_name, source_text.clone())),
-                    None::<String>,
-                )
-            })?;
+            let first = inner
+                .next()
+                .expect("BUG: grammar guarantees and_operand is non-empty");
             parse_and_operand(
                 first,
                 depth_tracker,
@@ -625,16 +596,11 @@ fn parse_and_expression(
     source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let original_pair = pair.clone();
-    let span = Span::from_pest_span(original_pair.as_span());
     let mut pairs = pair.into_inner();
     let mut left = parse_and_operand(
-        pairs.next().ok_or_else(|| {
-            LemmaError::engine(
-                "Missing left operand in logical AND expression",
-                Some(Source::new(attribute, span, doc_name, source_text.clone())),
-                None::<String>,
-            )
-        })?,
+        pairs
+            .next()
+            .expect("BUG: grammar guarantees AND expression has left operand"),
         depth_tracker,
         attribute,
         doc_name,
@@ -672,22 +638,12 @@ fn parse_base_expression(
     source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let original_pair = pair.clone();
-    let span = Span::from_pest_span(original_pair.as_span());
     let mut inner = pair.into_inner();
 
     let mut left = parse_term(
-        inner.next().ok_or_else(|| {
-            LemmaError::engine(
-                "Missing left term in base_expression",
-                Some(Source::new(
-                    attribute,
-                    span.clone(),
-                    doc_name,
-                    source_text.clone(),
-                )),
-                None::<String>,
-            )
-        })?,
+        inner
+            .next()
+            .expect("BUG: grammar guarantees base_expression has left term"),
         depth_tracker,
         attribute,
         doc_name,
@@ -699,27 +655,13 @@ fn parse_base_expression(
             Rule::op_add => ArithmeticComputation::Add,
             Rule::op_sub => ArithmeticComputation::Subtract,
             other => {
-                let span = Span::from_pest_span(op_pair.as_span());
-                return Err(LemmaError::engine(
-                    format!("Unexpected operator in base_expression: {:?}", other),
-                    Some(Source::new(attribute, span, doc_name, source_text.clone())),
-                    None::<String>,
-                ));
+                unreachable!("BUG: unexpected operator in base_expression: {:?}", other)
             }
         };
 
-        let right_term_pair = inner.next().ok_or_else(|| {
-            LemmaError::engine(
-                "Missing right term after + or - in base_expression",
-                Some(Source::new(
-                    attribute,
-                    span.clone(),
-                    doc_name,
-                    source_text.clone(),
-                )),
-                None::<String>,
-            )
-        })?;
+        let right_term_pair = inner
+            .next()
+            .expect("BUG: grammar guarantees right term after + or - in base_expression");
 
         let right = parse_term(
             right_term_pair,
@@ -771,31 +713,9 @@ fn parse_conversion_expression(
         }
     }
 
-    let span = Span::from_pest_span(original_pair.as_span());
-    let base_expr = base.ok_or_else(|| {
-        LemmaError::engine(
-            "Missing base expression in conversion_expression",
-            Some(Source::new(
-                attribute,
-                span.clone(),
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
-    let unit_name = unit.ok_or_else(|| {
-        LemmaError::engine(
-            "Missing unit in conversion_expression",
-            Some(Source::new(
-                attribute,
-                span.clone(),
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
+    let base_expr =
+        base.expect("BUG: grammar guarantees conversion_expression has base expression");
+    let unit_name = unit.expect("BUG: grammar guarantees conversion_expression has unit");
 
     let target = parse_conversion_target(&unit_name);
 
@@ -834,21 +754,11 @@ fn parse_term(
     doc_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
-    let span = Span::from_pest_span(pair.as_span());
     let mut pairs = pair.clone().into_inner();
     let mut left = parse_power(
-        pairs.next().ok_or_else(|| {
-            LemmaError::engine(
-                "Missing left power in term",
-                Some(Source::new(
-                    attribute,
-                    span.clone(),
-                    doc_name,
-                    source_text.clone(),
-                )),
-                None::<String>,
-            )
-        })?,
+        pairs
+            .next()
+            .expect("BUG: grammar guarantees term has left power"),
         depth_tracker,
         attribute,
         doc_name,
@@ -861,28 +771,14 @@ fn parse_term(
             Rule::op_div => ArithmeticComputation::Divide,
             Rule::op_mod => ArithmeticComputation::Modulo,
             _ => {
-                let span = Span::from_pest_span(op_pair.as_span());
-                return Err(LemmaError::engine(
-                    format!("Unexpected operator in term: {:?}", op_pair.as_rule()),
-                    Some(Source::new(attribute, span, doc_name, source_text.clone())),
-                    None::<String>,
-                ));
+                unreachable!("BUG: unexpected operator in term: {:?}", op_pair.as_rule())
             }
         };
 
         let right = parse_power(
-            pairs.next().ok_or_else(|| {
-                LemmaError::engine(
-                    "Missing right power in term",
-                    Some(Source::new(
-                        attribute,
-                        span.clone(),
-                        doc_name,
-                        source_text.clone(),
-                    )),
-                    None::<String>,
-                )
-            })?,
+            pairs
+                .next()
+                .expect("BUG: grammar guarantees right power after operator in term"),
             depth_tracker,
             attribute,
             doc_name,
@@ -904,21 +800,11 @@ fn parse_power(
     doc_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
-    let span = Span::from_pest_span(pair.as_span());
     let mut pairs = pair.clone().into_inner();
     let left = parse_factor(
-        pairs.next().ok_or_else(|| {
-            LemmaError::engine(
-                "Missing factor in power",
-                Some(Source::new(
-                    attribute,
-                    span.clone(),
-                    doc_name,
-                    source_text.clone(),
-                )),
-                None::<String>,
-            )
-        })?,
+        pairs
+            .next()
+            .expect("BUG: grammar guarantees power has factor"),
         depth_tracker,
         attribute,
         doc_name,
@@ -928,18 +814,9 @@ fn parse_power(
     if let Some(op_pair) = pairs.next() {
         if op_pair.as_rule() == Rule::op_pow {
             let right = parse_power(
-                pairs.next().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Missing right power in power expression",
-                        Some(Source::new(
-                            attribute,
-                            span.clone(),
-                            doc_name,
-                            source_text.clone(),
-                        )),
-                        None::<String>,
-                    )
-                })?,
+                pairs
+                    .next()
+                    .expect("BUG: grammar guarantees right operand after ^ in power"),
                 depth_tracker,
                 attribute,
                 doc_name,
@@ -993,7 +870,6 @@ fn parse_factor(
         }
     }
 
-    let span = Span::from_pest_span(pair.as_span());
     let expr = if let Some(expr_pair) = pairs.next() {
         parse_primary(
             expr_pair,
@@ -1003,11 +879,7 @@ fn parse_factor(
             source_text.clone(),
         )?
     } else {
-        return Err(LemmaError::engine(
-            "Missing expression after unary operator",
-            Some(Source::new(attribute, span, doc_name, source_text.clone())),
-            None::<String>,
-        ));
+        unreachable!("BUG: grammar guarantees expression after unary operator");
     };
 
     if is_negative {
@@ -1042,21 +914,11 @@ fn parse_comparison_expression(
     doc_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
-    let span = Span::from_pest_span(pair.as_span());
     let mut pairs = pair.clone().into_inner();
     let left = parse_expression(
-        pairs.next().ok_or_else(|| {
-            LemmaError::engine(
-                "Missing left operand in comparison expression",
-                Some(Source::new(
-                    attribute,
-                    span.clone(),
-                    doc_name,
-                    source_text.clone(),
-                )),
-                None::<String>,
-            )
-        })?,
+        pairs
+            .next()
+            .expect("BUG: grammar guarantees comparison has left operand"),
         depth_tracker,
         attribute,
         doc_name,
@@ -1066,19 +928,10 @@ fn parse_comparison_expression(
     if let Some(op_pair) = pairs.next() {
         let operator = match op_pair.as_rule() {
             Rule::comp_operator => {
-                let inner_span = Span::from_pest_span(op_pair.as_span());
-                let inner_pair = op_pair.into_inner().next().ok_or_else(|| {
-                    LemmaError::engine(
-                        "Empty comparison operator",
-                        Some(Source::new(
-                            attribute,
-                            inner_span,
-                            doc_name,
-                            source_text.clone(),
-                        )),
-                        None::<String>,
-                    )
-                })?;
+                let inner_pair = op_pair
+                    .into_inner()
+                    .next()
+                    .expect("BUG: grammar guarantees comp_operator has inner rule");
                 match inner_pair.as_rule() {
                     Rule::comp_gt => ComparisonComputation::GreaterThan,
                     Rule::comp_lt => ComparisonComputation::LessThan,
@@ -1089,17 +942,10 @@ fn parse_comparison_expression(
                     Rule::comp_is => ComparisonComputation::Is,
                     Rule::comp_is_not => ComparisonComputation::IsNot,
                     _ => {
-                        let inner_span = Span::from_pest_span(inner_pair.as_span());
-                        return Err(LemmaError::engine(
-                            format!("Invalid comparison operator: {:?}", inner_pair.as_rule()),
-                            Some(Source::new(
-                                attribute,
-                                inner_span,
-                                doc_name,
-                                source_text.clone(),
-                            )),
-                            None::<String>,
-                        ));
+                        unreachable!(
+                            "BUG: invalid comparison operator: {:?}",
+                            inner_pair.as_rule()
+                        )
                     }
                 }
             }
@@ -1112,33 +958,14 @@ fn parse_comparison_expression(
             Rule::comp_is => ComparisonComputation::Is,
             Rule::comp_is_not => ComparisonComputation::IsNot,
             _ => {
-                let op_span = Span::from_pest_span(op_pair.as_span());
-                return Err(LemmaError::engine(
-                    format!("Invalid comparison operator: {:?}", op_pair.as_rule()),
-                    Some(Source::new(
-                        attribute,
-                        op_span,
-                        doc_name,
-                        source_text.clone(),
-                    )),
-                    None::<String>,
-                ));
+                unreachable!("BUG: invalid comparison operator: {:?}", op_pair.as_rule())
             }
         };
 
         let right = parse_expression(
-            pairs.next().ok_or_else(|| {
-                LemmaError::engine(
-                    "Missing right operand in comparison expression",
-                    Some(Source::new(
-                        attribute,
-                        span.clone(),
-                        doc_name,
-                        source_text.clone(),
-                    )),
-                    None::<String>,
-                )
-            })?,
+            pairs
+                .next()
+                .expect("BUG: grammar guarantees comparison has right operand"),
             depth_tracker,
             attribute,
             doc_name,
@@ -1166,15 +993,10 @@ fn parse_not_expression(
     source_text: Arc<str>,
 ) -> Result<Expression, LemmaError> {
     let original_pair = pair.clone();
-    let span = Span::from_pest_span(original_pair.as_span());
     let mut inner = pair.into_inner();
-    let operand_pair = inner.next().ok_or_else(|| {
-        LemmaError::engine(
-            "not: missing expression",
-            Some(Source::new(attribute, span, doc_name, source_text.clone())),
-            None::<String>,
-        )
-    })?;
+    let operand_pair = inner
+        .next()
+        .expect("BUG: grammar guarantees not expression has operand");
 
     let operand = parse_expression(
         operand_pair,
@@ -1278,16 +1100,10 @@ fn parse_logical_expression(
                     _ => {}
                 }
             }
-            let span = Span::from_pest_span(pair.as_span());
-            return Err(LemmaError::engine(
-                "Mathematical operator missing operand",
-                Some(Source::new(attribute, span, doc_name, source_text.clone())),
-                None::<String>,
-            ));
+            unreachable!("BUG: grammar guarantees mathematical operator has operand");
         }
         _ => {}
     }
-    let span = Span::from_pest_span(pair.as_span());
     if let Some(node) = pair.into_inner().next() {
         match node.as_rule() {
             Rule::literal => {
@@ -1337,12 +1153,7 @@ fn parse_logical_expression(
                         source_text.clone(),
                     ));
                 }
-                let span = Span::from_pest_span(node.as_span());
-                return Err(LemmaError::engine(
-                    "not: missing expression",
-                    Some(Source::new(attribute, span, doc_name, source_text.clone())),
-                    None::<String>,
-                ));
+                unreachable!("BUG: grammar guarantees not expression has operand");
             }
             Rule::sqrt_expr
             | Rule::sin_expr
@@ -1372,12 +1183,7 @@ fn parse_logical_expression(
                     Rule::ceil_expr => MathematicalComputation::Ceil,
                     Rule::round_expr => MathematicalComputation::Round,
                     _ => {
-                        let span = Span::from_pest_span(node.as_span());
-                        return Err(LemmaError::engine(
-                            "Unknown mathematical operator",
-                            Some(Source::new(attribute, span, doc_name, source_text.clone())),
-                            None::<String>,
-                        ));
+                        unreachable!("BUG: unknown mathematical operator: {:?}", node.as_rule())
                     }
                 };
 
@@ -1426,21 +1232,12 @@ fn parse_logical_expression(
                         _ => {}
                     }
                 }
-                let span = Span::from_pest_span(node.as_span());
-                return Err(LemmaError::engine(
-                    "Mathematical operator missing operand",
-                    Some(Source::new(attribute, span, doc_name, source_text.clone())),
-                    None::<String>,
-                ));
+                unreachable!("BUG: grammar guarantees mathematical operator has operand");
             }
             _ => {}
         }
     }
-    Err(LemmaError::engine(
-        "Empty logical expression",
-        Some(Source::new(attribute, span, doc_name, source_text.clone())),
-        None::<String>,
-    ))
+    unreachable!("BUG: grammar guarantees logical expression is non-empty")
 }
 
 #[cfg(test)]

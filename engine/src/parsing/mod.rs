@@ -155,23 +155,7 @@ fn parse_doc(
         }
     }
 
-    let name = doc_name.ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: doc missing doc_declaration",
-            Some(crate::parsing::source::Source::new(
-                attribute,
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-                "",
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
+    let name = doc_name.expect("BUG: grammar guarantees doc has doc_declaration");
 
     // First pass: collect all named type definitions from doc_body
     for inner_pair in pair.clone().into_inner() {

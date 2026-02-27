@@ -443,9 +443,10 @@ impl ExecutionPlan {
             })?;
             let fact_path = fact_path.clone();
 
-            let fact_data = self.facts.get(&fact_path).ok_or_else(|| {
-                LemmaError::engine(format!("Unknown fact: {}", name), None, None::<String>)
-            })?;
+            let fact_data = self
+                .facts
+                .get(&fact_path)
+                .expect("BUG: fact_path was just resolved from self.facts, must exist");
 
             let fact_source = fact_data.source().clone();
             let expected_type = fact_data.schema_type().cloned().ok_or_else(|| {
