@@ -204,8 +204,8 @@ fn main() {
     };
 
     if let Err(e) = result {
-        // Check if it's a LemmaError and format it nicely, otherwise use default
-        if let Some(lemma_err) = e.downcast_ref::<lemma::LemmaError>() {
+        // Check if it's a Error and format it nicely, otherwise use default
+        if let Some(lemma_err) = e.downcast_ref::<lemma::Error>() {
             eprintln!("{}", error_formatter::format_error(lemma_err));
         } else {
             eprintln!("Error: {}", e);
@@ -428,7 +428,7 @@ fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> 
 
     tokio::runtime::Runtime::new()?
         .block_on(engine.add_lemma_files(files))
-        .map_err(lemma::LemmaError::MultipleErrors)?;
+        .map_err(lemma::Error::MultipleErrors)?;
 
     Ok(())
 }
@@ -452,7 +452,7 @@ async fn load_workspace_async(engine: &mut Engine, workdir: &std::path::Path) ->
     engine
         .add_lemma_files(files)
         .await
-        .map_err(lemma::LemmaError::MultipleErrors)?;
+        .map_err(lemma::Error::MultipleErrors)?;
 
     Ok(())
 }

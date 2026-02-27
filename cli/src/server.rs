@@ -380,10 +380,10 @@ pub mod http {
         Ok(Json(results))
     }
 
-    /// Map a `LemmaError` to an HTTP status code.
+    /// Map a `Error` to an HTTP status code.
     ///
     /// Engine errors mentioning "not found" → 404; everything else → 400.
-    fn lemma_error_to_status(err: &lemma::LemmaError) -> StatusCode {
+    fn lemma_error_to_status(err: &lemma::Error) -> StatusCode {
         let msg = err.to_string();
         if msg.contains("not found") {
             StatusCode::NOT_FOUND
@@ -566,7 +566,7 @@ pub mod http {
         engine
             .add_lemma_files(files)
             .await
-            .map_err(lemma::LemmaError::MultipleErrors)?;
+            .map_err(lemma::Error::MultipleErrors)?;
 
         Ok(engine)
     }

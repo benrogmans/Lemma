@@ -86,7 +86,7 @@ fn propagate_veto_proof(
 
 /// Evaluate a rule to produce its final result and proof.
 /// After planning, evaluation is guaranteed to complete — this function never returns
-/// a LemmaError. It produces an OperationResult (Value or Veto) and a Proof tree.
+/// a Error. It produces an OperationResult (Value or Veto) and a Proof tree.
 pub fn evaluate_rule(
     exec_rule: &ExecutableRule,
     context: &mut crate::evaluation::EvaluationContext,
@@ -300,7 +300,7 @@ fn evaluate_rule_without_unless(
 /// Evaluate an expression iteratively without recursion.
 /// Uses a work list approach: collect all expressions first, then evaluate in dependency order.
 /// After planning, expression evaluation is guaranteed to complete — this function never
-/// returns a LemmaError. It produces an OperationResult (Value or Veto).
+/// returns a Error. It produces an OperationResult (Value or Veto).
 fn evaluate_expression(
     expr: &Expression,
     context: &mut crate::evaluation::EvaluationContext,
@@ -400,7 +400,7 @@ fn evaluate_expression(
 
 /// Evaluate a single expression given its dependencies are already evaluated.
 /// After planning, this function is guaranteed to complete — it produces an OperationResult
-/// (Value or Veto) without ever returning a LemmaError.
+/// (Value or Veto) without ever returning a Error.
 fn evaluate_single_expression(
     current: &Expression,
     results: &HashMap<Expression, OperationResult>,

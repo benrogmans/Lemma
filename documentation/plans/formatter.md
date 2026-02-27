@@ -180,7 +180,7 @@ is done by the `Display` impls on the AST types.
 pub fn format_docs(docs: &[LemmaDoc]) -> String;
 
 /// Parse a source string and format it. Returns Err if the source doesn't parse.
-pub fn format_source(source: &str, attribute: &str) -> Result<String, LemmaError>;
+pub fn format_source(source: &str, attribute: &str) -> Result<String, Error>;
 ```
 
 Wired into `engine/src/lib.rs`:

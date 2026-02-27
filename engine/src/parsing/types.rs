@@ -1,6 +1,6 @@
 use super::ast::Span;
 use super::Rule;
-use crate::error::LemmaError;
+use crate::error::Error;
 use crate::parsing::ast::{CommandArg, TypeDef};
 use pest::iterators::Pair;
 use std::sync::Arc;
@@ -10,7 +10,7 @@ pub(crate) fn parse_type_definition(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<TypeDef, LemmaError> {
+) -> Result<TypeDef, Error> {
     let span = Span::from_pest_span(pair.as_span());
     let source_location =
         crate::Source::new(attribute, span.clone(), doc_name, source_text.clone());
@@ -56,7 +56,7 @@ pub(crate) fn parse_type_import(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<TypeDef, LemmaError> {
+) -> Result<TypeDef, Error> {
     let span = Span::from_pest_span(pair.as_span());
     let source_location =
         crate::Source::new(attribute, span.clone(), doc_name, source_text.clone());
@@ -117,7 +117,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<TypeArrowChainResult, LemmaError> {
+) -> Result<TypeArrowChainResult, Error> {
     let mut inner = pair.into_inner();
     let first = inner
         .next()
@@ -131,7 +131,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
         _attribute: &str,
         _doc_name: &str,
         _source_text: Arc<str>,
-    ) -> Result<String, LemmaError> {
+    ) -> Result<String, Error> {
         let mut inner = pair.clone().into_inner();
         let child = inner
             .next()
@@ -270,7 +270,7 @@ fn parse_command(
     _attribute: &str,
     _doc_name: &str,
     _source_text: Arc<str>,
-) -> Result<(String, Vec<CommandArg>), LemmaError> {
+) -> Result<(String, Vec<CommandArg>), Error> {
     let mut command_name = None;
     let mut command_args = Vec::new();
 

@@ -91,7 +91,7 @@ impl Evaluator {
     /// Rules are already flattened into executable branches with fact prefixes resolved.
     ///
     /// After planning, evaluation is guaranteed to complete. This function never returns
-    /// a LemmaError — runtime issues (division by zero, missing facts, user-defined veto)
+    /// a Error — runtime issues (division by zero, missing facts, user-defined veto)
     /// produce Vetoes, which are valid evaluation outcomes.
     pub fn evaluate(&self, plan: &ExecutionPlan) -> Response {
         let mut context = EvaluationContext::new(plan);

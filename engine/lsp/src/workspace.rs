@@ -1,4 +1,4 @@
-use lemma::{parse, LemmaDoc, LemmaError, ResourceLimits};
+use lemma::{parse, Error, LemmaDoc, ResourceLimits};
 use std::collections::HashMap;
 use tower_lsp::lsp_types::Url;
 
@@ -7,7 +7,7 @@ enum ParseOutcome {
     /// Parsing succeeded, producing one or more LemmaDoc ASTs.
     Success(Vec<LemmaDoc>),
     /// Parsing failed with errors.
-    Failed(Vec<LemmaError>),
+    Failed(Vec<Error>),
 }
 
 /// A single file tracked by the workspace.
@@ -26,10 +26,10 @@ pub struct FileDiagnostics {
     pub url: Url,
     /// The latest text content (for byte-offset to LSP Range conversion).
     pub text: String,
-    /// The source attribute used during parsing (maps to LemmaError source locations).
+    /// The source attribute used during parsing (maps to Error source locations).
     pub attribute: String,
     /// All errors for this file (parse errors + planning errors).
-    pub errors: Vec<LemmaError>,
+    pub errors: Vec<Error>,
 }
 
 /// In-memory workspace model.
@@ -135,7 +135,7 @@ impl WorkspaceModel {
         resolved_docs: &[LemmaDoc],
         sources: &HashMap<String, String>,
     ) -> Vec<FileDiagnostics> {
-        let mut planning_errors_by_attribute: HashMap<String, Vec<LemmaError>> = HashMap::new();
+        let mut planning_errors_by_attribute: HashMap<String, Vec<Error>> = HashMap::new();
 
         // Collect all docs to plan from successfully parsed files.
         let mut docs_to_plan: Vec<&LemmaDoc> = Vec::new();
@@ -198,7 +198,7 @@ impl WorkspaceModel {
     }
 
     /// Get parse errors for a single file (fast path, no planning).
-    pub fn get_parse_errors(&self, url: &Url) -> Vec<LemmaError> {
+    pub fn get_parse_errors(&self, url: &Url) -> Vec<Error> {
         let attribute = Self::attribute_for_url(url);
         match self.files.get(&attribute) {
             Some(tracked) => match &tracked.parse_outcome {

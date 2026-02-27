@@ -12,7 +12,7 @@ use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, FactPath,
     LiteralValue, SemanticConversionTarget, ValueKind,
 };
-use crate::{LemmaError, LemmaResult, OperationResult};
+use crate::{Error, LemmaResult, OperationResult};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::fmt;
 use std::sync::Arc;
@@ -162,7 +162,7 @@ impl Constraint {
                                 }
                             }
                             _ => {
-                                return Err(LemmaError::engine(
+                                return Err(Error::planning(
                                     "Constraint expression must be boolean",
                                     expr_source.clone(),
                                     None::<String>,
@@ -208,7 +208,7 @@ impl Constraint {
                             work_stack.push(WorkItem::Process(inner_idx));
                         }
                         other => {
-                            return Err(LemmaError::engine(
+                            return Err(Error::planning(
                                 format!(
                                     "Cannot convert expression kind to constraint: {:?}",
                                     std::mem::discriminant(&other)
@@ -263,8 +263,8 @@ impl Constraint {
             left: &Expression,
             message: impl Into<String>,
             suggestion: Option<String>,
-        ) -> LemmaError {
-            LemmaError::inversion(message, left.source_location.clone(), suggestion)
+        ) -> Error {
+            Error::inversion(message, left.source_location.clone(), suggestion)
         }
 
         // Case 1: fact op literal (e.g., age > 18)

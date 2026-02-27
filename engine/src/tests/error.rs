@@ -1,4 +1,4 @@
-use crate::error::LemmaError;
+use crate::error::Error;
 use crate::parsing::ast::Span;
 use crate::parsing::source::Source;
 use std::sync::Arc;
@@ -22,7 +22,7 @@ fn test_source() -> Source {
 fn test_error_creation_and_display() {
     let source = test_source();
 
-    let parse_error = LemmaError::parse("Invalid currency", Some(source.clone()), None::<String>);
+    let parse_error = Error::parsing("Invalid currency", Some(source.clone()), None::<String>);
     assert_eq!(
         format!("{parse_error}"),
         "Parse error: Invalid currency at test.lemma:1:15"
@@ -41,7 +41,7 @@ fn test_error_creation_and_display() {
         Arc::from(typo_source_text),
     );
 
-    let parse_error_with_suggestion = LemmaError::parse_with_suggestion(
+    let parse_error_with_suggestion = Error::parsing_with_suggestion(
         "Typo in fact name",
         Some(typo_source),
         "Did you mean 'amount'?",
@@ -52,28 +52,28 @@ fn test_error_creation_and_display() {
     );
 
     let engine_error =
-        LemmaError::engine("Something went wrong", Some(source.clone()), None::<String>);
+        Error::planning("Something went wrong", Some(source.clone()), None::<String>);
     assert_eq!(
         format!("{engine_error}"),
-        "Engine error: Something went wrong at test.lemma:1:15"
+        "Planning error: Something went wrong at test.lemma:1:15"
     );
 
     let circular_dependency_error =
-        LemmaError::circular_dependency("a -> b -> a", Some(source), vec![], None::<String>);
+        Error::circular_dependency("a -> b -> a", Some(source), vec![], None::<String>);
     assert_eq!(
         format!("{circular_dependency_error}"),
         "Circular dependency: a -> b -> a at test.lemma:1:15"
     );
 
-    let engine_error_no_source = LemmaError::engine("No source context", None, None::<String>);
+    let engine_error_no_source = Error::planning("No source context", None, None::<String>);
     assert_eq!(
         format!("{engine_error_no_source}"),
-        "Engine error: No source context"
+        "Planning error: No source context"
     );
 
-    let multiple_errors = LemmaError::MultipleErrors(vec![parse_error, engine_error_no_source]);
+    let multiple_errors = Error::MultipleErrors(vec![parse_error, engine_error_no_source]);
     assert_eq!(
         format!("{multiple_errors}"),
-        "Multiple errors:\n  1. Parse error: Invalid currency at test.lemma:1:15\n  2. Engine error: No source context"
+        "Multiple errors:\n  1. Parse error: Invalid currency at test.lemma:1:15\n  2. Planning error: No source context"
     );
 }

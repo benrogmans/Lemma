@@ -10,7 +10,7 @@
 //! Input to all methods is the identifier **without** the leading `@`
 //! (for example `"user/workspace/somedoc"` for `doc @user/workspace/somedoc`).
 
-use crate::error::LemmaError;
+use crate::error::Error;
 use crate::limits::ResourceLimits;
 use crate::parsing::ast::{FactValue, LemmaDoc, TypeDef};
 use crate::parsing::source::Source;
@@ -359,13 +359,13 @@ impl Registry for LemmaBase {
 /// and an updated sources map (with entries for the Registry-returned source texts).
 ///
 /// Errors are fatal: if the Registry returns an error, or if a `@...` reference
-/// cannot be resolved after calling the Registry, this function returns a `LemmaError`.
+/// cannot be resolved after calling the Registry, this function returns a `Error`.
 pub async fn resolve_registry_references(
     local_docs: Vec<LemmaDoc>,
     sources: &mut HashMap<String, String>,
     registry: &dyn Registry,
     limits: &ResourceLimits,
-) -> Result<Vec<LemmaDoc>, LemmaError> {
+) -> Result<Vec<LemmaDoc>, Error> {
     let mut all_docs = local_docs;
     // Dedup key: (name, version, kind)
     let mut already_requested: HashSet<(String, Option<String>, RegistryReferenceKind)> =
@@ -385,7 +385,7 @@ pub async fn resolve_registry_references(
             break;
         }
 
-        let mut round_errors: Vec<LemmaError> = Vec::new();
+        let mut round_errors: Vec<Error> = Vec::new();
         for reference in &unresolved {
             let dedup = reference.dedup_key();
             if already_requested.contains(&dedup) {
@@ -429,7 +429,7 @@ pub async fn resolve_registry_references(
                         ),
                         RegistryErrorKind::Other => None,
                     };
-                    round_errors.push(LemmaError::registry(
+                    round_errors.push(Error::registry(
                         registry_error.message,
                         Some(reference.source.clone()),
                         display_id,
@@ -451,7 +451,7 @@ pub async fn resolve_registry_references(
         }
 
         if !round_errors.is_empty() {
-            return Err(LemmaError::MultipleErrors(round_errors));
+            return Err(Error::MultipleErrors(round_errors));
         }
     }
 
@@ -794,18 +794,15 @@ fact external = doc @org/project/missing"#;
 
         // May be Registry or MultipleErrors containing Registry (we collect all failures)
         let registry_err = match &error {
-            LemmaError::Registry { .. } => &error,
-            LemmaError::MultipleErrors(inner) => inner
+            Error::Registry { .. } => &error,
+            Error::MultipleErrors(inner) => inner
                 .iter()
-                .find(|e| matches!(e, LemmaError::Registry { .. }))
+                .find(|e| matches!(e, Error::Registry { .. }))
                 .expect("MultipleErrors should contain at least one Registry error"),
-            other => panic!(
-                "Expected LemmaError::Registry or MultipleErrors, got: {}",
-                other
-            ),
+            other => panic!("Expected Error::Registry or MultipleErrors, got: {}", other),
         };
         match registry_err {
-            LemmaError::Registry {
+            Error::Registry {
                 identifier,
                 kind,
                 details,
@@ -851,7 +848,7 @@ type money from @lemma/std/finance"#;
         assert!(result.is_err(), "Should fail when Registry cannot resolve");
         let error = result.unwrap_err();
         let errors = match &error {
-            LemmaError::MultipleErrors(inner) => inner,
+            Error::MultipleErrors(inner) => inner,
             other => panic!(
                 "Expected MultipleErrors (doc + type both fail), got: {}",
                 other
@@ -865,7 +862,7 @@ type money from @lemma/std/finance"#;
         let identifiers: Vec<&str> = errors
             .iter()
             .filter_map(|e| {
-                if let LemmaError::Registry { identifier, .. } = e {
+                if let Error::Registry { identifier, .. } = e {
                     Some(identifier.as_str())
                 } else {
                     None

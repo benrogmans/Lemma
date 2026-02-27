@@ -1,6 +1,6 @@
 mod common;
 use common::add_lemma_code_blocking;
-use lemma::{Engine, LemmaError};
+use lemma::{Engine, Error};
 use std::collections::HashMap;
 
 /// Test suite for error messages as documented in ERROR_MESSAGES_IMPLEMENTATION.md
@@ -25,7 +25,7 @@ fn test_duplicate_fact_definition_error() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(
                 msg.to_lowercase().contains("duplicate") && msg.to_lowercase().contains("fact"),
@@ -59,7 +59,7 @@ fn test_duplicate_rule_definition_error() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(
                 msg.to_lowercase().contains("duplicate") && msg.to_lowercase().contains("rule"),
@@ -93,7 +93,7 @@ fn test_duplicate_fact_shows_name() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(
                 msg.contains("Duplicate"),
@@ -213,7 +213,7 @@ fn test_transpile_error_self_referencing_rule() {
     );
 
     match result {
-        Err(LemmaError::CircularDependency { details, .. }) => {
+        Err(Error::CircularDependency { details, .. }) => {
             let msg = &details.message;
             assert!(
                 msg.to_lowercase().contains("circular") || msg.to_lowercase().contains("itself")
@@ -245,7 +245,7 @@ fn test_validation_error_type_mismatch_text_in_arithmetic() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(
                 msg.contains("Cannot apply"),
@@ -274,7 +274,7 @@ fn test_validation_error_boolean_in_arithmetic() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(
                 msg.contains("Cannot apply"),
@@ -306,7 +306,7 @@ fn test_duplicate_error_contains_fact_name() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("price"), "Error should mention fact name");
@@ -331,7 +331,7 @@ fn test_duplicate_error_is_reported() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("x"), "Error should mention fact name");
@@ -359,7 +359,7 @@ fn test_duplicate_in_second_doc_is_caught() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("b"), "Error should mention fact name");
@@ -388,7 +388,7 @@ fn test_error_display_contains_duplicate_info() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("value"), "Error should mention fact name");
@@ -458,7 +458,7 @@ fn test_circular_dependency_has_helpful_suggestion() {
     );
 
     match result {
-        Err(LemmaError::CircularDependency { details, .. }) => {
+        Err(Error::CircularDependency { details, .. }) => {
             let msg = &details.message;
             assert!(
                 msg.to_lowercase().contains("circular") || msg.to_lowercase().contains("cycle")
@@ -487,7 +487,7 @@ fact line4 = 4"#;
     let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(
@@ -552,7 +552,7 @@ fn test_duplicate_detected_from_database_source() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("amount"), "Error should mention fact name");
@@ -577,7 +577,7 @@ fn test_duplicate_detected_from_api_source() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("rate"), "Error should mention rule name");
@@ -602,7 +602,7 @@ fn test_duplicate_detected_from_runtime_source() {
     );
 
     match result {
-        Err(LemmaError::Engine(details)) => {
+        Err(Error::Planning(details)) => {
             let msg = &details.message;
             assert!(msg.contains("Duplicate"), "Error should mention duplicate");
             assert!(msg.contains("x"), "Error should mention fact name");
@@ -649,7 +649,7 @@ fn test_multiple_error_phases_reported_together() {
     );
 
     match result {
-        Err(LemmaError::MultipleErrors(errors)) => {
+        Err(Error::MultipleErrors(errors)) => {
             let messages: Vec<String> = errors.iter().map(|e| format!("{e}")).collect();
             let has_rule_ref_error = messages
                 .iter()

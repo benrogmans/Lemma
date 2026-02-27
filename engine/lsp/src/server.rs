@@ -70,7 +70,7 @@ impl LemmaLanguageServer {
                 "BUG: parse_errors confirmed non-empty with length 1 but next() returned None",
             )
         } else {
-            lemma::LemmaError::MultipleErrors(parse_errors)
+            lemma::Error::MultipleErrors(parse_errors)
         };
 
         let lsp_diagnostics = diagnostics::parse_error_to_diagnostics(&error_for_conversion, text);
@@ -199,21 +199,21 @@ impl LemmaLanguageServer {
 /// Map a registry error (possibly MultipleErrors) to FileDiagnostics by error location attribute.
 #[cfg(any(not(target_arch = "wasm32"), test))]
 fn attribute_errors_to_files(
-    error: &lemma::LemmaError,
+    error: &lemma::Error,
     attr_map: &std::collections::HashMap<String, (Url, String)>,
 ) -> Vec<crate::workspace::FileDiagnostics> {
     use crate::workspace::FileDiagnostics;
-    use lemma::LemmaError;
+    use lemma::Error;
 
-    let errors: Vec<LemmaError> = match error {
-        LemmaError::MultipleErrors(inner) => inner
+    let errors: Vec<Error> = match error {
+        Error::MultipleErrors(inner) => inner
             .iter()
             .flat_map(attribute_errors_to_files_inner)
             .collect(),
         other => vec![other.clone()],
     };
 
-    let mut by_url: std::collections::HashMap<Url, (String, String, Vec<LemmaError>)> =
+    let mut by_url: std::collections::HashMap<Url, (String, String, Vec<Error>)> =
         std::collections::HashMap::new();
     for err in errors {
         let attribute = err
@@ -240,9 +240,9 @@ fn attribute_errors_to_files(
 }
 
 #[cfg(any(not(target_arch = "wasm32"), test))]
-fn attribute_errors_to_files_inner(error: &lemma::LemmaError) -> Vec<lemma::LemmaError> {
+fn attribute_errors_to_files_inner(error: &lemma::Error) -> Vec<lemma::Error> {
     match error {
-        lemma::LemmaError::MultipleErrors(inner) => inner
+        lemma::Error::MultipleErrors(inner) => inner
             .iter()
             .flat_map(attribute_errors_to_files_inner)
             .collect(),
@@ -471,7 +471,7 @@ fn find_lemma_files_recursive(directory: &Path, results: &mut Vec<std::path::Pat
 mod tests {
     use super::attribute_errors_to_files;
     use crate::workspace::WorkspaceModel;
-    use lemma::{LemmaError, Source, Span};
+    use lemma::{Error, Source, Span};
     use std::sync::Arc;
     use tower_lsp::lsp_types::Url;
 
@@ -506,7 +506,7 @@ mod tests {
             "example",
             Arc::from(content),
         );
-        let registry_error = LemmaError::registry(
+        let registry_error = Error::registry(
             "Document not found: @nonexistent/foo",
             Some(source),
             "nonexistent/foo",
@@ -524,7 +524,7 @@ mod tests {
         assert_eq!(file_diagnostics[0].errors.len(), 1);
         assert!(matches!(
             &file_diagnostics[0].errors[0],
-            LemmaError::Registry { .. }
+            Error::Registry { .. }
         ));
     }
 
@@ -569,21 +569,21 @@ type money from @lemma/std/finance"#;
             "registry_demo",
             Arc::from(text.as_str()),
         );
-        let doc_error = LemmaError::registry(
+        let doc_error = Error::registry(
             "Document not found: @org/example/helper",
             Some(doc_ref_source),
             "org/example/helper",
             lemma::RegistryErrorKind::NotFound,
             None::<String>,
         );
-        let type_error = LemmaError::registry(
+        let type_error = Error::registry(
             "Document not found: @lemma/std/finance",
             Some(type_ref_source),
             "lemma/std/finance",
             lemma::RegistryErrorKind::NotFound,
             None::<String>,
         );
-        let multiple = LemmaError::MultipleErrors(vec![doc_error, type_error]);
+        let multiple = Error::MultipleErrors(vec![doc_error, type_error]);
 
         let file_diagnostics = attribute_errors_to_files(&multiple, &attr_map);
         assert_eq!(file_diagnostics.len(), 1);

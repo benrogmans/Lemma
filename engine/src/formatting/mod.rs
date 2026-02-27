@@ -10,7 +10,7 @@ use crate::parsing::ast::{
     expression_precedence, AsLemmaSource, Expression, ExpressionKind, FactValue, LemmaDoc,
     LemmaFact, LemmaRule, TypeDef,
 };
-use crate::{parse, LemmaError, ResourceLimits};
+use crate::{parse, Error, ResourceLimits};
 
 /// Soft line length limit. Longer lines may be wrapped (unless clauses, expressions).
 /// Facts and other constructs are not broken if they exceed this.
@@ -42,7 +42,7 @@ pub fn format_docs(docs: &[LemmaDoc]) -> String {
 /// Parse a source string and format it to canonical Lemma source.
 ///
 /// Returns an error if the source does not parse.
-pub fn format_source(source: &str, attribute: &str) -> Result<String, LemmaError> {
+pub fn format_source(source: &str, attribute: &str) -> Result<String, Error> {
     let limits = ResourceLimits::default();
     let docs = parse(source, attribute, &limits)?;
     Ok(format_docs(&docs))

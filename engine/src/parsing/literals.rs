@@ -1,5 +1,5 @@
 use super::Rule;
-use crate::error::LemmaError;
+use crate::error::Error;
 use crate::parsing::ast::Span;
 use crate::parsing::ast::*;
 use crate::Source;
@@ -15,7 +15,7 @@ pub(crate) fn parse_literal(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Value, LemmaError> {
+) -> Result<Value, Error> {
     match pair.as_rule() {
         Rule::number_literal => {
             parse_number_literal(pair, attribute, doc_name, source_text.clone())
@@ -48,7 +48,7 @@ pub(crate) fn parse_literal(
             );
             parse_duration_from_string(s, &source)
         }
-        _ => Err(LemmaError::engine(
+        _ => Err(Error::planning(
             format!("Unsupported literal type: {:?}", pair.as_rule()),
             Some(Source::new(
                 attribute,
@@ -66,7 +66,7 @@ fn parse_number_literal(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Value, LemmaError> {
+) -> Result<Value, Error> {
     let pair_str = pair.as_str();
     let span = Span::from_pest_span(pair.as_span());
     let mut inner = pair.into_inner();
@@ -87,7 +87,7 @@ fn parse_number_literal(
                 )?
             }
             _ => {
-                return Err(LemmaError::engine(
+                return Err(Error::planning(
                     "Unexpected number literal structure",
                     Some(Source::new(attribute, span, doc_name, source_text.clone())),
                     None::<String>,
@@ -106,7 +106,7 @@ fn parse_number_literal(
     Ok(Value::Number(number))
 }
 
-fn parse_string_literal(pair: Pair<Rule>) -> Result<Value, LemmaError> {
+fn parse_string_literal(pair: Pair<Rule>) -> Result<Value, Error> {
     let content = pair.as_str();
     let unquoted = &content[1..content.len() - 1];
     Ok(Value::Text(unquoted.to_string()))
@@ -117,7 +117,7 @@ fn parse_boolean_literal(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Value, LemmaError> {
+) -> Result<Value, Error> {
     use crate::BooleanValue;
 
     let boolean_value = match pair.as_str() {
@@ -129,7 +129,7 @@ fn parse_boolean_literal(
         "reject" => BooleanValue::Reject,
         _ => {
             let span = Span::from_pest_span(pair.as_span());
-            return Err(LemmaError::engine(
+            return Err(Error::planning(
                 format!("Invalid boolean: '{}'\n             Expected one of: true, false, yes, no, accept, reject", pair.as_str()),
                 Some(Source::new(attribute, span, doc_name, source_text.clone())),
                 None::<String>,
@@ -145,7 +145,7 @@ fn parse_percent_literal(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Value, LemmaError> {
+) -> Result<Value, Error> {
     let pair_span = Span::from_pest_span(pair.as_span());
     for inner_pair in pair.into_inner() {
         if inner_pair.as_rule() == Rule::number_literal {
@@ -160,7 +160,7 @@ fn parse_percent_literal(
                     return Ok(Value::Ratio(ratio_value, Some("percent".to_string())));
                 }
                 _ => {
-                    return Err(LemmaError::engine(
+                    return Err(Error::planning(
                         "Expected number in percent literal",
                         Some(Source::new(
                             attribute,
@@ -174,7 +174,7 @@ fn parse_percent_literal(
             }
         }
     }
-    Err(LemmaError::engine(
+    Err(Error::planning(
         "Invalid percent literal: missing number",
         Some(Source::new(
             attribute,
@@ -191,7 +191,7 @@ fn parse_permille_literal(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Value, LemmaError> {
+) -> Result<Value, Error> {
     let pair_span = Span::from_pest_span(pair.as_span());
     for inner_pair in pair.into_inner() {
         if inner_pair.as_rule() == Rule::number_literal {
@@ -206,7 +206,7 @@ fn parse_permille_literal(
                     return Ok(Value::Ratio(ratio_value, Some("permille".to_string())));
                 }
                 _ => {
-                    return Err(LemmaError::engine(
+                    return Err(Error::planning(
                         "Expected number in permille literal",
                         Some(Source::new(
                             attribute,
@@ -220,7 +220,7 @@ fn parse_permille_literal(
             }
         }
     }
-    Err(LemmaError::engine(
+    Err(Error::planning(
         "Invalid permille literal: missing number",
         Some(Source::new(
             attribute,
@@ -234,14 +234,11 @@ fn parse_permille_literal(
 
 /// Parse a duration string (e.g. "10 hours", "120 hours") into Value::Duration.
 /// Single implementation for both Lemma source (via parse_literal) and runtime fact values.
-pub(crate) fn parse_duration_from_string(
-    value_str: &str,
-    source: &Source,
-) -> Result<Value, LemmaError> {
+pub(crate) fn parse_duration_from_string(value_str: &str, source: &Source) -> Result<Value, Error> {
     let trimmed = value_str.trim();
     let mut parts: Vec<&str> = trimmed.split_whitespace().collect();
     if parts.len() < 2 {
-        return Err(LemmaError::engine(
+        return Err(Error::planning(
             format!(
                 "Invalid duration: '{}'. Expected format: <number> <unit> (e.g. 10 hours, 2 weeks)",
                 value_str
@@ -253,7 +250,7 @@ pub(crate) fn parse_duration_from_string(
     let unit_str = parts.pop().unwrap();
     let number_str = parts.join(" ").replace(['_', ','], "");
     let n = Decimal::from_str(&number_str).map_err(|_| {
-        LemmaError::engine(
+        Error::planning(
             format!("Invalid duration number: '{}'", number_str),
             Some(source.clone()),
             None::<String>,
@@ -271,7 +268,7 @@ pub(crate) fn parse_duration_from_string(
         "millisecond" | "milliseconds" => DurationUnit::Millisecond,
         "microsecond" | "microseconds" => DurationUnit::Microsecond,
         _ => {
-            return Err(LemmaError::engine(
+            return Err(Error::planning(
                 format!(
                     "Unknown duration unit: '{}'. Expected one of: years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds",
                     unit_str
@@ -319,11 +316,11 @@ pub(crate) fn parse_number_unit_literal(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<(Decimal, String), LemmaError> {
+) -> Result<(Decimal, String), Error> {
     let s = pair.as_str();
     let span = Span::from_pest_span(pair.as_span());
     parse_number_unit_string(s).map_err(|msg| {
-        LemmaError::engine(
+        Error::planning(
             msg,
             Some(Source::new(attribute, span, doc_name, source_text.clone())),
             None::<String>,
@@ -336,7 +333,7 @@ fn parse_datetime_literal(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Value, LemmaError> {
+) -> Result<Value, Error> {
     let datetime_str = pair.as_str();
 
     if let Ok(dt) = datetime_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
@@ -379,7 +376,7 @@ fn parse_datetime_literal(
         }));
     }
 
-    Err(LemmaError::engine(
+    Err(Error::planning(
         format!("Invalid date/time format: '{}'\n         Expected one of:\n         - Date: YYYY-MM-DD (e.g., 2024-01-15)\n         - DateTime: YYYY-MM-DDTHH:MM:SS (e.g., 2024-01-15T14:30:00)\n         - With timezone: YYYY-MM-DDTHH:MM:SSZ or +HH:MM (e.g., 2024-01-15T14:30:00Z)\n         Note: Month must be 1-12, day must be valid for the month (no Feb 30), hours 0-23, minutes/seconds 0-59", datetime_str),
         Some(Source::new(
             attribute,
@@ -396,7 +393,7 @@ fn parse_time_literal(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Value, LemmaError> {
+) -> Result<Value, Error> {
     let time_str = pair.as_str();
 
     if let Ok(t) = time_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
@@ -421,7 +418,7 @@ fn parse_time_literal(
         }));
     }
 
-    Err(LemmaError::engine(
+    Err(Error::planning(
         format!("Invalid time format: '{}'\n         Expected: HH:MM or HH:MM:SS (e.g., 14:30 or 14:30:00)\n         With timezone: HH:MM:SSZ or +HH:MM (e.g., 14:30:00Z or 14:30:00+01:00)\n         Note: Hours must be 0-23, minutes and seconds must be 0-59", time_str),
         Some(Source::new(
             attribute,
@@ -440,12 +437,12 @@ fn parse_scientific_number(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Decimal, LemmaError> {
+) -> Result<Decimal, Error> {
     let span = Span::from_pest_span(pair.as_span());
     let mut inner = pair.into_inner();
 
     let mantissa_pair = inner.next().ok_or_else(|| {
-        LemmaError::engine(
+        Error::planning(
             "Missing mantissa in scientific notation",
             Some(Source::new(
                 attribute,
@@ -457,7 +454,7 @@ fn parse_scientific_number(
         )
     })?;
     let exponent_pair = inner.next().ok_or_else(|| {
-        LemmaError::engine(
+        Error::planning(
             "Missing exponent in scientific notation",
             Some(Source::new(
                 attribute,
@@ -478,7 +475,7 @@ fn parse_scientific_number(
     )?;
     let exponent_span = Span::from_pest_span(exponent_pair.as_span());
     let exponent: i32 = exponent_pair.as_str().parse().map_err(|_| {
-        LemmaError::engine(
+        Error::planning(
             format!(
                 "Invalid exponent: '{}'\n             Expected an integer between -{} and +{}",
                 exponent_pair.as_str(),
@@ -496,7 +493,7 @@ fn parse_scientific_number(
     })?;
 
     let power_of_ten = decimal_pow10(exponent).ok_or_else(|| {
-        LemmaError::engine(
+        Error::planning(
             format!("Exponent {} is out of range\n             Maximum supported exponent is ±{} (values up to ~10^28)", exponent, MAX_DECIMAL_EXPONENT),
             Some(Source::new(
                 attribute,
@@ -510,7 +507,7 @@ fn parse_scientific_number(
 
     if exponent >= 0 {
         mantissa.checked_mul(power_of_ten).ok_or_else(|| {
-            LemmaError::engine(
+            Error::planning(
                 format!(
                     "Number overflow: result of {}e{} exceeds maximum value (~10^28)",
                     mantissa, exponent
@@ -526,7 +523,7 @@ fn parse_scientific_number(
         })
     } else {
         mantissa.checked_div(power_of_ten).ok_or_else(|| {
-            LemmaError::engine(
+            Error::planning(
                 format!(
                     "Precision error: result of {}e{} has too many decimal places (max 28)",
                     mantissa, exponent
@@ -560,10 +557,10 @@ fn parse_decimal_number(
     attribute: &str,
     doc_name: &str,
     source_text: Arc<str>,
-) -> Result<Decimal, LemmaError> {
+) -> Result<Decimal, Error> {
     let clean_number = number_str.replace(['_', ','], "");
     Decimal::from_str(&clean_number).map_err(|_| {
-        LemmaError::engine(
+        Error::planning(
             format!("Invalid number: '{}'\n             Expected a valid decimal number (e.g., 42, 3.14, 1_000_000, 1,000,000)\n             Note: Use underscores or commas as thousand separators if needed", number_str),
             Some(Source::new(attribute, span, doc_name, source_text)),
             None::<String>,
