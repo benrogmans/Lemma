@@ -158,9 +158,7 @@ impl Evaluator {
             response.facts = vec![Facts {
                 fact_path: String::new(),
                 referencing_fact_name: String::new(),
-                document_reference: None,
                 facts: fact_list,
-                referenced_docs: Vec::new(),
             }];
         }
 

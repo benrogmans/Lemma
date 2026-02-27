@@ -89,36 +89,38 @@ impl std::error::Error for RegistryError {}
 /// Implementations must be `Send + Sync` so they can be shared across threads.
 /// Resolution is async so that WASM can use `fetch()` and native can use async HTTP.
 ///
-/// Input to all methods is the identifier **without** the leading `@`.
+/// `name` is the base identifier **without** the leading `@` or version suffix.
+/// `version` is the optional version tag (e.g. `Some("v2")` for `@org/doc.v2`).
 /// On native the future is `Send` (for axum/tokio); on wasm we use `?Send` (gloo_net is !Send).
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait Registry: Send + Sync {
     /// Resolve a `doc @...` reference.
     ///
-    /// The identifier is the part after `@` (for example `"user/workspace/somedoc"`
-    /// for `doc @user/workspace/somedoc`).
-    ///
-    /// The Registry returns a workspace bundle containing the requested document
-    /// and (optionally) all of its dependencies as rewritten Lemma source text.
-    async fn resolve_doc(&self, identifier: &str) -> Result<RegistryBundle, RegistryError>;
+    /// `name` is the base name (e.g. `"user/workspace/somedoc"`).
+    /// `version` is the optional version tag (e.g. `Some("v2")`).
+    async fn resolve_doc(
+        &self,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<RegistryBundle, RegistryError>;
 
     /// Resolve a `type ... from @...` reference.
     ///
-    /// The identifier is the part after `@` (for example `"lemma/std/finance"`
-    /// for `type money from @lemma/std/finance`).
-    ///
-    /// The Registry returns a workspace bundle containing the Lemma doc(s) needed
-    /// to resolve the imported types. Returned content must follow the same rules
-    /// as `resolve_doc`.
-    async fn resolve_type(&self, identifier: &str) -> Result<RegistryBundle, RegistryError>;
+    /// `name` is the base name (e.g. `"lemma/std/finance"`).
+    /// `version` is the optional version tag.
+    async fn resolve_type(
+        &self,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<RegistryBundle, RegistryError>;
 
     /// Map a Registry identifier to a human-facing address for navigation.
     ///
-    /// The identifier is the part after `@`.
+    /// `name` is the base name after `@`.
+    /// `version` is the optional version tag.
     /// Returning `None` means no address is available for this identifier.
-    /// This method is best-effort and is used only for editor navigation (clickable links).
-    fn url_for_id(&self, identifier: &str) -> Option<String>;
+    fn url_for_id(&self, name: &str, version: Option<&str>) -> Option<String>;
 }
 
 // ---------------------------------------------------------------------------
@@ -246,29 +248,37 @@ impl LemmaBase {
         Self { fetcher }
     }
 
-    /// Build the full URL for fetching Lemma source text for the given identifier.
-    ///
-    /// The identifier is the part after `@` (for example `"user/workspace/somedoc"`).
-    /// The resulting URL is `https://lemmabase.com/@{identifier}.lemma`.
-    fn source_url_for_identifier(&self, identifier: &str) -> String {
-        format!("{}/@{}.lemma", Self::BASE_URL, identifier)
+    /// Version is in the path (e.g. `doc.v2.lemma`), not a query param, so the requested version is explicit.
+    fn source_url(&self, name: &str, version: Option<&str>) -> String {
+        match version {
+            None => format!("{}/@{}.lemma", Self::BASE_URL, name),
+            Some(v) => format!("{}/@{}.{}.lemma", Self::BASE_URL, name, v),
+        }
     }
 
-    /// Build the human-facing URL for the given identifier.
-    ///
-    /// The identifier is the part after `@` (for example `"user/workspace/somedoc"`).
-    /// The resulting URL is `https://lemmabase.com/@{identifier}`.
-    fn navigation_url_for_identifier(&self, identifier: &str) -> String {
-        format!("{}/@{}", Self::BASE_URL, identifier)
+    /// Version is in the path (e.g. `doc.v2`), not a query param.
+    fn navigation_url(&self, name: &str, version: Option<&str>) -> String {
+        match version {
+            None => format!("{}/@{}", Self::BASE_URL, name),
+            Some(v) => format!("{}/@{}.{}", Self::BASE_URL, name, v),
+        }
     }
 
-    /// Fetch Lemma source text from LemmaBase.com for the given identifier.
-    ///
-    /// Delegates to the internal HTTP fetcher and maps its errors to `RegistryError`
-    /// with an appropriate `RegistryErrorKind` based on the HTTP status code or
-    /// transport failure.
-    async fn fetch_source(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
-        let url = self.source_url_for_identifier(identifier);
+    /// Format a display identifier for error messages, e.g. `"@owner/repo/doc.v2"`.
+    fn display_id(name: &str, version: Option<&str>) -> String {
+        match version {
+            None => format!("@{}", name),
+            Some(v) => format!("@{}.{}", name, v),
+        }
+    }
+
+    async fn fetch_source(
+        &self,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<RegistryBundle, RegistryError> {
+        let url = self.source_url(name, version);
+        let display = Self::display_id(name, version);
 
         let lemma_source = self.fetcher.get(&url).await.map_err(|error| {
             if let Some(code) = error.status_code {
@@ -279,14 +289,14 @@ impl LemmaBase {
                     _ => RegistryErrorKind::Other,
                 };
                 RegistryError {
-                    message: format!("LemmaBase returned HTTP {} for '@{}'", code, identifier),
+                    message: format!("LemmaBase returned HTTP {} for '{}'", code, display),
                     kind,
                 }
             } else {
                 RegistryError {
                     message: format!(
-                        "Failed to reach LemmaBase for '@{}': {}",
-                        identifier, error.message
+                        "Failed to reach LemmaBase for '{}': {}",
+                        display, error.message
                     ),
                     kind: RegistryErrorKind::NetworkError,
                 }
@@ -295,7 +305,7 @@ impl LemmaBase {
 
         Ok(RegistryBundle {
             lemma_source,
-            attribute: format!("@{}", identifier),
+            attribute: display,
         })
     }
 }
@@ -311,16 +321,24 @@ impl Default for LemmaBase {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl Registry for LemmaBase {
-    async fn resolve_doc(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
-        self.fetch_source(identifier).await
+    async fn resolve_doc(
+        &self,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<RegistryBundle, RegistryError> {
+        self.fetch_source(name, version).await
     }
 
-    async fn resolve_type(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
-        self.fetch_source(identifier).await
+    async fn resolve_type(
+        &self,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<RegistryBundle, RegistryError> {
+        self.fetch_source(name, version).await
     }
 
-    fn url_for_id(&self, identifier: &str) -> Option<String> {
-        Some(self.navigation_url_for_identifier(identifier))
+    fn url_for_id(&self, name: &str, version: Option<&str>) -> Option<String> {
+        Some(self.navigation_url(name, version))
     }
 }
 
@@ -349,16 +367,17 @@ pub async fn resolve_registry_references(
     limits: &ResourceLimits,
 ) -> Result<Vec<LemmaDoc>, LemmaError> {
     let mut all_docs = local_docs;
-    let mut already_requested: HashSet<String> = HashSet::new();
+    // Dedup key: (name, version, kind)
+    let mut already_requested: HashSet<(String, Option<String>, RegistryReferenceKind)> =
+        HashSet::new();
 
-    // Collect the names of all docs we already have (local docs).
-    let mut known_document_names: HashSet<String> =
-        all_docs.iter().map(|doc| doc.name.clone()).collect();
+    let mut known_document_ids: HashSet<String> =
+        all_docs.iter().map(|doc| doc.full_id()).collect();
 
     loop {
         let unresolved = collect_unresolved_registry_references(
             &all_docs,
-            &known_document_names,
+            &known_document_ids,
             &already_requested,
         );
 
@@ -368,18 +387,28 @@ pub async fn resolve_registry_references(
 
         let mut round_errors: Vec<LemmaError> = Vec::new();
         for reference in &unresolved {
-            if already_requested.contains(&reference.identifier) {
+            let dedup = reference.dedup_key();
+            if already_requested.contains(&dedup) {
                 continue;
             }
-            already_requested.insert(reference.identifier.clone());
+            already_requested.insert(dedup);
 
             let bundle_result = match reference.kind {
                 RegistryReferenceKind::Document => {
-                    registry.resolve_doc(&reference.identifier).await
+                    registry
+                        .resolve_doc(&reference.name, reference.version.as_deref())
+                        .await
                 }
                 RegistryReferenceKind::TypeImport => {
-                    registry.resolve_type(&reference.identifier).await
+                    registry
+                        .resolve_type(&reference.name, reference.version.as_deref())
+                        .await
                 }
+            };
+
+            let display_id = match &reference.version {
+                None => reference.name.clone(),
+                Some(v) => format!("{}:{}", reference.name, v),
             };
 
             let bundle = match bundle_result {
@@ -403,7 +432,7 @@ pub async fn resolve_registry_references(
                     round_errors.push(LemmaError::registry(
                         registry_error.message,
                         Some(reference.source.clone()),
-                        reference.identifier.clone(),
+                        display_id,
                         registry_error.kind,
                         suggestion,
                     ));
@@ -416,7 +445,7 @@ pub async fn resolve_registry_references(
             let new_docs = crate::parsing::parse(&bundle.lemma_source, &bundle.attribute, limits)?;
 
             for doc in new_docs {
-                known_document_names.insert(doc.name.clone());
+                known_document_ids.insert(doc.full_id());
                 all_docs.push(doc);
             }
         }
@@ -436,29 +465,38 @@ enum RegistryReferenceKind {
     TypeImport,
 }
 
-/// A collected `@...` reference: one identifier, one kind, one source (passed through).
+/// A collected `@...` reference with separate name and version fields.
 #[derive(Debug, Clone)]
 struct RegistryReference {
-    identifier: String,
+    name: String,
+    version: Option<String>,
     kind: RegistryReferenceKind,
     source: Source,
+}
+
+impl RegistryReference {
+    /// Deduplication key: `(name, version, kind)`.
+    fn dedup_key(&self) -> (String, Option<String>, RegistryReferenceKind) {
+        (self.name.clone(), self.version.clone(), self.kind.clone())
+    }
 }
 
 /// Collect all unresolved `@...` references from the given docs.
 ///
 /// An `@...` reference is "unresolved" if:
-/// - Its identifier (without `@`) does not match any document name in `known_document_names`.
-/// - Its identifier has not already been requested from the Registry.
+/// - Its full identifier does not match any known document.
+/// - Its `(name, version, kind)` has not already been requested from the Registry.
 ///
 /// When a doc has no `attribute`, refs from that doc are skipped (with a panic for
 /// the invariant violation).
 fn collect_unresolved_registry_references(
     docs: &[LemmaDoc],
-    known_document_names: &HashSet<String>,
-    already_requested: &HashSet<String>,
+    known_document_ids: &HashSet<String>,
+    already_requested: &HashSet<(String, Option<String>, RegistryReferenceKind)>,
 ) -> Vec<RegistryReference> {
     let mut unresolved: Vec<RegistryReference> = Vec::new();
-    let mut seen_in_this_round: HashSet<(String, RegistryReferenceKind)> = HashSet::new();
+    let mut seen_in_this_round: HashSet<(String, Option<String>, RegistryReferenceKind)> =
+        HashSet::new();
 
     for doc in docs {
         if doc.attribute.is_none() {
@@ -478,21 +516,24 @@ fn collect_unresolved_registry_references(
             continue;
         }
 
-        // Check fact values for `doc @...` references. Only registry refs are relevant;
-        // local doc refs (e.g. `fact x = doc other_doc`) are skipped.
         for fact in &doc.facts {
             if let FactValue::DocumentReference(doc_ref) = &fact.value {
                 if !doc_ref.is_registry {
                     continue;
                 }
-                let identifier = &doc_ref.name;
-                if !known_document_names.contains(identifier.as_str())
-                    && !already_requested.contains(identifier.as_str())
-                    && seen_in_this_round
-                        .insert((identifier.clone(), RegistryReferenceKind::Document))
+                let full_id = doc_ref.full_id();
+                let dedup = (
+                    doc_ref.name.clone(),
+                    doc_ref.version.clone(),
+                    RegistryReferenceKind::Document,
+                );
+                if !known_document_ids.contains(&full_id)
+                    && !already_requested.contains(&dedup)
+                    && seen_in_this_round.insert(dedup)
                 {
                     unresolved.push(RegistryReference {
-                        identifier: identifier.clone(),
+                        name: doc_ref.name.clone(),
+                        version: doc_ref.version.clone(),
                         kind: RegistryReferenceKind::Document,
                         source: fact.source_location.clone(),
                     });
@@ -500,8 +541,6 @@ fn collect_unresolved_registry_references(
             }
         }
 
-        // Check type imports for `type ... from @...`. Only refs that start with @
-        // are registry refs; local type imports are skipped.
         for type_def in &doc.types {
             if let TypeDef::Import {
                 from,
@@ -512,14 +551,19 @@ fn collect_unresolved_registry_references(
                 if !from.is_registry {
                     continue;
                 }
-                let identifier = &from.name;
-                if !known_document_names.contains(identifier.as_str())
-                    && !already_requested.contains(identifier.as_str())
-                    && seen_in_this_round
-                        .insert((identifier.clone(), RegistryReferenceKind::TypeImport))
+                let full_id = from.full_id();
+                let dedup = (
+                    from.name.clone(),
+                    from.version.clone(),
+                    RegistryReferenceKind::TypeImport,
+                );
+                if !known_document_ids.contains(&full_id)
+                    && !already_requested.contains(&dedup)
+                    && seen_in_this_round.insert(dedup)
                 {
                     unresolved.push(RegistryReference {
-                        identifier: identifier.clone(),
+                        name: from.name.clone(),
+                        version: from.version.clone(),
                         kind: RegistryReferenceKind::TypeImport,
                         source: source_location.clone(),
                     });
@@ -565,28 +609,36 @@ mod tests {
     #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
     #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
     impl Registry for TestRegistry {
-        async fn resolve_doc(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
+        async fn resolve_doc(
+            &self,
+            name: &str,
+            _version: Option<&str>,
+        ) -> Result<RegistryBundle, RegistryError> {
             self.bundles
-                .get(identifier)
+                .get(name)
                 .cloned()
                 .ok_or_else(|| RegistryError {
-                    message: format!("Document '{}' not found in test registry", identifier),
+                    message: format!("Document '{}' not found in test registry", name),
                     kind: RegistryErrorKind::NotFound,
                 })
         }
 
-        async fn resolve_type(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
+        async fn resolve_type(
+            &self,
+            name: &str,
+            _version: Option<&str>,
+        ) -> Result<RegistryBundle, RegistryError> {
             self.bundles
-                .get(identifier)
+                .get(name)
                 .cloned()
                 .ok_or_else(|| RegistryError {
-                    message: format!("Type source '{}' not found in test registry", identifier),
+                    message: format!("Type source '{}' not found in test registry", name),
                     kind: RegistryErrorKind::NotFound,
                 })
         }
 
-        fn url_for_id(&self, identifier: &str) -> Option<String> {
-            Some(format!("https://test.registry/{}", identifier))
+        fn url_for_id(&self, name: &str, _version: Option<&str>) -> Option<String> {
+            Some(format!("https://test.registry/{}", name))
         }
     }
 
@@ -971,16 +1023,26 @@ type money = scale
         // -------------------------------------------------------------------
 
         #[test]
-        fn source_url_for_simple_identifier() {
+        fn source_url_without_version() {
             let registry = LemmaBase::new();
-            let url = registry.source_url_for_identifier("user/workspace/somedoc");
+            let url = registry.source_url("user/workspace/somedoc", None);
             assert_eq!(url, "https://lemmabase.com/@user/workspace/somedoc.lemma");
+        }
+
+        #[test]
+        fn source_url_with_version() {
+            let registry = LemmaBase::new();
+            let url = registry.source_url("user/workspace/somedoc", Some("v2"));
+            assert_eq!(
+                url,
+                "https://lemmabase.com/@user/workspace/somedoc.v2.lemma"
+            );
         }
 
         #[test]
         fn source_url_for_deeply_nested_identifier() {
             let registry = LemmaBase::new();
-            let url = registry.source_url_for_identifier("org/team/project/subdir/doc");
+            let url = registry.source_url("org/team/project/subdir/doc", None);
             assert_eq!(
                 url,
                 "https://lemmabase.com/@org/team/project/subdir/doc.lemma"
@@ -988,23 +1050,30 @@ type money = scale
         }
 
         #[test]
-        fn navigation_url_for_simple_identifier() {
+        fn navigation_url_without_version() {
             let registry = LemmaBase::new();
-            let url = registry.navigation_url_for_identifier("user/workspace/somedoc");
+            let url = registry.navigation_url("user/workspace/somedoc", None);
             assert_eq!(url, "https://lemmabase.com/@user/workspace/somedoc");
+        }
+
+        #[test]
+        fn navigation_url_with_version() {
+            let registry = LemmaBase::new();
+            let url = registry.navigation_url("user/workspace/somedoc", Some("v2"));
+            assert_eq!(url, "https://lemmabase.com/@user/workspace/somedoc.v2");
         }
 
         #[test]
         fn navigation_url_for_deeply_nested_identifier() {
             let registry = LemmaBase::new();
-            let url = registry.navigation_url_for_identifier("org/team/project/subdir/doc");
+            let url = registry.navigation_url("org/team/project/subdir/doc", None);
             assert_eq!(url, "https://lemmabase.com/@org/team/project/subdir/doc");
         }
 
         #[test]
         fn url_for_id_returns_navigation_url() {
             let registry = LemmaBase::new();
-            let url = registry.url_for_id("user/workspace/somedoc");
+            let url = registry.url_for_id("user/workspace/somedoc", None);
             assert_eq!(
                 url,
                 Some("https://lemmabase.com/@user/workspace/somedoc".to_string())
@@ -1012,9 +1081,19 @@ type money = scale
         }
 
         #[test]
+        fn url_for_id_with_version() {
+            let registry = LemmaBase::new();
+            let url = registry.url_for_id("owner/repo/doc", Some("v2"));
+            assert_eq!(
+                url,
+                Some("https://lemmabase.com/@owner/repo/doc.v2".to_string())
+            );
+        }
+
+        #[test]
         fn url_for_id_returns_navigation_url_for_nested_path() {
             let registry = LemmaBase::new();
-            let url = registry.url_for_id("lemma/std/finance");
+            let url = registry.url_for_id("lemma/std/finance", None);
             assert_eq!(
                 url,
                 Some("https://lemmabase.com/@lemma/std/finance".to_string())
@@ -1025,10 +1104,9 @@ type money = scale
         fn default_trait_creates_same_instance_as_new() {
             let from_new = LemmaBase::new();
             let from_default = LemmaBase::default();
-            // Both should produce the same URLs.
             assert_eq!(
-                from_new.url_for_id("test/doc"),
-                from_default.url_for_id("test/doc")
+                from_new.url_for_id("test/doc", None),
+                from_default.url_for_id("test/doc", None)
             );
         }
 
@@ -1042,7 +1120,7 @@ type money = scale
                 "doc org/my_doc\nfact x = 1",
             )));
 
-            let bundle = registry.fetch_source("org/my_doc").await.unwrap();
+            let bundle = registry.fetch_source("org/my_doc", None).await.unwrap();
 
             assert_eq!(bundle.lemma_source, "doc org/my_doc\nfact x = 1");
             assert_eq!(bundle.attribute, "@org/my_doc");
@@ -1058,7 +1136,7 @@ type money = scale
             });
             let registry = LemmaBase::with_fetcher(Box::new(mock));
 
-            let _ = registry.fetch_source("user/workspace/somedoc").await;
+            let _ = registry.fetch_source("user/workspace/somedoc", None).await;
 
             assert_eq!(
                 *captured_url.lock().unwrap(),
@@ -1071,7 +1149,10 @@ type money = scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
 
-            let err = registry.fetch_source("org/missing").await.unwrap_err();
+            let err = registry
+                .fetch_source("org/missing", None)
+                .await
+                .unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::NotFound);
             assert!(
@@ -1091,7 +1172,7 @@ type money = scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(500)));
 
-            let err = registry.fetch_source("org/broken").await.unwrap_err();
+            let err = registry.fetch_source("org/broken", None).await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::ServerError);
             assert!(
@@ -1106,7 +1187,7 @@ type money = scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(502)));
 
-            let err = registry.fetch_source("org/broken").await.unwrap_err();
+            let err = registry.fetch_source("org/broken", None).await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::ServerError);
         }
@@ -1116,7 +1197,7 @@ type money = scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(401)));
 
-            let err = registry.fetch_source("org/secret").await.unwrap_err();
+            let err = registry.fetch_source("org/secret", None).await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::Unauthorized);
             assert!(err.message.contains("HTTP 401"));
@@ -1127,7 +1208,10 @@ type money = scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(403)));
 
-            let err = registry.fetch_source("org/private").await.unwrap_err();
+            let err = registry
+                .fetch_source("org/private", None)
+                .await
+                .unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::Unauthorized);
             assert!(
@@ -1142,7 +1226,7 @@ type money = scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(418)));
 
-            let err = registry.fetch_source("org/teapot").await.unwrap_err();
+            let err = registry.fetch_source("org/teapot", None).await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::Other);
             assert!(err.message.contains("HTTP 418"));
@@ -1154,7 +1238,10 @@ type money = scale
                 MockHttpFetcher::always_failing_with_network_error("connection refused"),
             ));
 
-            let err = registry.fetch_source("org/unreachable").await.unwrap_err();
+            let err = registry
+                .fetch_source("org/unreachable", None)
+                .await
+                .unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::NetworkError);
             assert!(
@@ -1177,7 +1264,7 @@ type money = scale
                 ),
             ));
 
-            let err = registry.fetch_source("org/doc").await.unwrap_err();
+            let err = registry.fetch_source("org/doc", None).await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::NetworkError);
             assert!(
@@ -1202,7 +1289,7 @@ type money = scale
                 "doc org/resolved\nfact a = 1",
             )));
 
-            let bundle = registry.resolve_doc("org/resolved").await.unwrap();
+            let bundle = registry.resolve_doc("org/resolved", None).await.unwrap();
 
             assert_eq!(bundle.lemma_source, "doc org/resolved\nfact a = 1");
             assert_eq!(bundle.attribute, "@org/resolved");
@@ -1214,7 +1301,10 @@ type money = scale
                 "doc lemma/std/finance\ntype money = scale\n -> unit eur 1.00",
             )));
 
-            let bundle = registry.resolve_type("lemma/std/finance").await.unwrap();
+            let bundle = registry
+                .resolve_type("lemma/std/finance", None)
+                .await
+                .unwrap();
 
             assert_eq!(bundle.attribute, "@lemma/std/finance");
             assert!(
@@ -1229,7 +1319,7 @@ type money = scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
 
-            let err = registry.resolve_doc("org/missing").await.unwrap_err();
+            let err = registry.resolve_doc("org/missing", None).await.unwrap_err();
 
             assert!(err.message.contains("HTTP 404"));
         }
@@ -1240,7 +1330,10 @@ type money = scale
                 MockHttpFetcher::always_failing_with_network_error("timeout"),
             ));
 
-            let err = registry.resolve_type("lemma/std/types").await.unwrap_err();
+            let err = registry
+                .resolve_type("lemma/std/types", None)
+                .await
+                .unwrap_err();
 
             assert!(err.message.contains("timeout"));
         }
@@ -1249,7 +1342,7 @@ type money = scale
         async fn fetch_source_returns_empty_body_as_valid_bundle() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning("")));
 
-            let bundle = registry.fetch_source("org/empty").await.unwrap();
+            let bundle = registry.fetch_source("org/empty", None).await.unwrap();
 
             assert_eq!(bundle.lemma_source, "");
             assert_eq!(bundle.attribute, "@org/empty");

@@ -108,6 +108,7 @@ Lemma has **no inline comments** (`//` and `#` do not exist in the language). Us
 
 ```lemma
 doc pricing
+doc pricing.v2
 
 doc shipping_policy
 """
@@ -115,6 +116,8 @@ Shipping rules and fees.
 Optional description in triple quotes only.
 """
 ```
+
+Document names may carry an optional `.version_tag` suffix (e.g. `doc pricing.v1`). Base names cannot contain a period. `pricing.v1` and `pricing.v2` are distinct documents. An unversioned reference resolves to the latest loaded version by natural sort. A document cannot reference any version of itself (same base name).
 
 ### Facts
 

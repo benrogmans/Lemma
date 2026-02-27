@@ -105,15 +105,16 @@ impl Engine {
                 Ok(new_docs) => {
                     let source_text: Arc<str> = Arc::from(code.as_str());
                     for doc in new_docs {
-                        let attribute = doc.attribute.clone().unwrap_or_else(|| doc.name.clone());
+                        let doc_id = doc.full_id();
+                        let attribute = doc.attribute.clone().unwrap_or_else(|| doc_id.clone());
 
-                        if let Some(existing) = self.documents.get(&doc.name) {
+                        if let Some(existing) = self.documents.get(&doc_id) {
                             let earlier_attr =
                                 existing.attribute.as_deref().unwrap_or(&existing.name);
                             errors.push(LemmaError::semantic(
                                 format!(
                                     "Duplicate document name '{}' (previously declared in '{}')",
-                                    doc.name, earlier_attr
+                                    doc_id, earlier_attr
                                 ),
                                 Some(crate::Source::new(
                                     &attribute,
@@ -123,14 +124,14 @@ impl Engine {
                                         line: doc.start_line,
                                         col: 0,
                                     },
-                                    &doc.name,
+                                    &doc_id,
                                     source_text.clone(),
                                 )),
                                 None::<String>,
                             ));
                         } else {
                             self.sources.insert(attribute, code.clone());
-                            self.documents.insert(doc.name.clone(), doc.clone());
+                            self.documents.insert(doc_id, doc.clone());
                         }
 
                         all_new_docs.push(doc);
@@ -154,7 +155,7 @@ impl Engine {
                 Ok(resolved_docs) => {
                     self.documents.clear();
                     for doc in resolved_docs {
-                        self.documents.insert(doc.name.clone(), doc);
+                        self.documents.insert(doc.full_id(), doc);
                     }
                 }
                 Err(e) => match e {
@@ -232,7 +233,7 @@ impl Engine {
             )
         })?;
 
-        let values = crate::serialization::from_json(json, base_plan)?;
+        let values = crate::serialization::from_json(json)?;
         let plan = base_plan.clone().with_fact_values(values, &self.limits)?;
 
         self.evaluate_plan(plan, rule_names)
@@ -281,15 +282,7 @@ impl Engine {
         target: crate::inversion::Target,
         json: &[u8],
     ) -> LemmaResult<crate::InversionResponse> {
-        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
-            LemmaError::engine(
-                format!("Document '{}' not found", doc_name),
-                None,
-                None::<String>,
-            )
-        })?;
-
-        let values = crate::serialization::from_json(json, base_plan)?;
+        let values = crate::serialization::from_json(json)?;
         self.invert(doc_name, rule_name, target, values)
     }
 
@@ -682,22 +675,30 @@ mod tests {
     #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
     #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
     impl Registry for EngineTestRegistry {
-        async fn resolve_doc(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
-            self.bundles.get(identifier).cloned().ok_or(RegistryError {
-                message: format!("not found: {}", identifier),
+        async fn resolve_doc(
+            &self,
+            name: &str,
+            _version: Option<&str>,
+        ) -> Result<RegistryBundle, RegistryError> {
+            self.bundles.get(name).cloned().ok_or(RegistryError {
+                message: format!("not found: {}", name),
                 kind: crate::registry::RegistryErrorKind::NotFound,
             })
         }
 
-        async fn resolve_type(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
-            self.bundles.get(identifier).cloned().ok_or(RegistryError {
-                message: format!("not found: {}", identifier),
+        async fn resolve_type(
+            &self,
+            name: &str,
+            _version: Option<&str>,
+        ) -> Result<RegistryBundle, RegistryError> {
+            self.bundles.get(name).cloned().ok_or(RegistryError {
+                message: format!("not found: {}", name),
                 kind: crate::registry::RegistryErrorKind::NotFound,
             })
         }
 
-        fn url_for_id(&self, identifier: &str) -> Option<String> {
-            Some(format!("https://test/{}", identifier))
+        fn url_for_id(&self, name: &str, _version: Option<&str>) -> Option<String> {
+            Some(format!("https://test/{}", name))
         }
     }
 

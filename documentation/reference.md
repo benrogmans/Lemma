@@ -74,6 +74,60 @@ fact workweek = 40 hours
 rule workweek_days = workweek in days  // Converts to ~1.67 days
 ```
 
+## Document References
+
+Reference other documents with `fact name = doc other_doc`. A document name may
+carry an optional `.version_tag` suffix (document base names cannot contain a period).
+
+### Versioned names
+
+```lemma
+doc pricing.v1
+fact base_price = 100 eur
+
+doc pricing.v2
+fact base_price = 120 eur
+
+doc order
+fact pricing = doc pricing.v1
+rule total = pricing.base_price?
+```
+
+`doc pricing.v1` and `doc pricing.v2` are distinct documents; they do not share
+facts, rules, or state.
+
+### Version resolution
+
+- A **versioned** reference (`doc pricing.v1`) resolves by exact match.
+- An **unversioned** reference (`doc pricing`) resolves to the document with the
+  highest version tag among all loaded documents with that base name, using
+  natural sort order (numeric segments compared numerically, so `v10` > `v2`).
+  If only an unversioned document exists, it resolves to that.
+
+### Self-reference restriction
+
+A document cannot reference any version of itself (same base name). This is a
+semantic error caught during planning:
+
+```lemma
+doc pricing.v2
+fact old = doc pricing.v1
+```
+
+### Version tag syntax
+
+Version tags follow the period and may contain alphanumeric characters, `_`, `-`,
+and `.` — for example `v1`, `v2`, `1.2.3`, `rc.1`, `2024-01`. Document base names cannot contain a period.
+
+### Registry references
+
+Registry references use the `@` prefix and also support version tags:
+
+```lemma
+fact finance = doc @lemma/std/finance.v2
+type money from @lemma/std/finance.v2
+```
+
 ## Primitive types
 
 Lemma provides these primitive types:

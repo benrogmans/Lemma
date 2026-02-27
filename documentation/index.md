@@ -211,7 +211,13 @@ fact employee.salary = 8000
 rule manager_bonus = employee.salary * 0.15
 ```
 
-See: [examples/03_document_references.lemma](examples/03_document_references.lemma)
+Document names may include a `.version_tag` suffix (e.g. `doc pricing.v1`). Base names cannot contain a period.
+Versioned and unversioned documents with the same base name are distinct.
+An unversioned reference resolves to the latest loaded version by natural sort.
+A document cannot reference any version of itself.
+
+See: [reference.md - Document References](reference.md#document-references) and
+[examples/03_document_references.lemma](examples/03_document_references.lemma)
 
 ## Expressions
 

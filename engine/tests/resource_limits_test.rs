@@ -67,31 +67,136 @@ fn test_fact_value_size_limit() {
     }
 }
 
-// #[test]
-// fn test_expression_depth_limit() {
-//     let limits = lemma::ResourceLimits {
-//         max_expression_depth: 5, // Very shallow depth
-//         ..lemma::ResourceLimits::default()
-//     };
+// --- Name length limits ---
 
-//     let mut engine = lemma::Engine::with_limits(limits);
+#[test]
+fn doc_name_at_max_length_is_accepted() {
+    let name = "a".repeat(lemma::limits::MAX_DOC_NAME_LENGTH);
+    let code = format!("doc {name}\nfact x = 1");
+    let mut engine = Engine::default();
+    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    assert!(
+        result.is_ok(),
+        "Doc name at max length should be accepted: {result:?}"
+    );
+}
 
-//     // Create deeply nested expression: ((((((x))))))
-//     let mut code = String::from("doc test\nfact x = 1\nrule result = ");
-//     for _ in 0..10 {
-//         code.push('(');
-//     }
-//     code.push('x');
-//     for _ in 0..10 {
-//         code.push(')');
-//     }
+#[test]
+fn doc_name_exceeding_max_length_is_rejected() {
+    let name = "a".repeat(lemma::limits::MAX_DOC_NAME_LENGTH + 1);
+    let code = format!("doc {name}\nfact x = 1");
+    let mut engine = Engine::default();
+    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    match result {
+        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+            assert_eq!(limit_name, "max_doc_name_length");
+        }
+        other => panic!("Expected ResourceLimitExceeded for doc name, got: {other:?}"),
+    }
+}
 
-//     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+#[test]
+fn fact_name_at_max_length_is_accepted() {
+    let name = "a".repeat(lemma::limits::MAX_FACT_NAME_LENGTH);
+    let code = format!("doc test\nfact {name} = 1");
+    let mut engine = Engine::default();
+    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    assert!(
+        result.is_ok(),
+        "Fact name at max length should be accepted: {result:?}"
+    );
+}
 
-//     match result {
-//         Err(lemma::LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
-//             assert_eq!(limit_name, "max_expression_depth");
-//         }
-//         _ => panic!("Expected ResourceLimitExceeded error for deep nesting"),
-//     }
-// }
+#[test]
+fn fact_name_exceeding_max_length_is_rejected() {
+    let name = "a".repeat(lemma::limits::MAX_FACT_NAME_LENGTH + 1);
+    let code = format!("doc test\nfact {name} = 1");
+    let mut engine = Engine::default();
+    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    match result {
+        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+            assert_eq!(limit_name, "max_fact_name_length");
+        }
+        other => panic!("Expected ResourceLimitExceeded for fact name, got: {other:?}"),
+    }
+}
+
+#[test]
+fn fact_binding_name_exceeding_max_length_is_rejected() {
+    let name = "a".repeat(lemma::limits::MAX_FACT_NAME_LENGTH + 1);
+    let code = format!("doc test\nfact other.{name} = 1");
+    let mut engine = Engine::default();
+    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    match result {
+        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+            assert_eq!(limit_name, "max_fact_name_length");
+        }
+        other => panic!("Expected ResourceLimitExceeded for fact binding name, got: {other:?}"),
+    }
+}
+
+#[test]
+fn rule_name_at_max_length_is_accepted() {
+    let name = "a".repeat(lemma::limits::MAX_RULE_NAME_LENGTH);
+    let code = format!("doc test\nrule {name} = 1");
+    let mut engine = Engine::default();
+    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    assert!(
+        result.is_ok(),
+        "Rule name at max length should be accepted: {result:?}"
+    );
+}
+
+#[test]
+fn rule_name_exceeding_max_length_is_rejected() {
+    let name = "a".repeat(lemma::limits::MAX_RULE_NAME_LENGTH + 1);
+    let code = format!("doc test\nrule {name} = 1");
+    let mut engine = Engine::default();
+    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    match result {
+        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+            assert_eq!(limit_name, "max_rule_name_length");
+        }
+        other => panic!("Expected ResourceLimitExceeded for rule name, got: {other:?}"),
+    }
+}
+
+#[test]
+fn type_name_at_max_length_is_accepted() {
+    let name = "a".repeat(lemma::limits::MAX_TYPE_NAME_LENGTH);
+    let code = format!("doc test\ntype {name} = number\nfact x = 1");
+    let mut engine = Engine::default();
+    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    assert!(
+        result.is_ok(),
+        "Type name at max length should be accepted: {result:?}"
+    );
+}
+
+#[test]
+fn type_name_exceeding_max_length_is_rejected() {
+    let name = "a".repeat(lemma::limits::MAX_TYPE_NAME_LENGTH + 1);
+    let code = format!("doc test\ntype {name} = number\nfact x = 1");
+    let mut engine = Engine::default();
+    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    match result {
+        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+            assert_eq!(limit_name, "max_type_name_length");
+        }
+        other => panic!("Expected ResourceLimitExceeded for type name, got: {other:?}"),
+    }
+}
+
+#[test]
+fn type_import_name_exceeding_max_length_is_rejected() {
+    let name = "a".repeat(lemma::limits::MAX_TYPE_NAME_LENGTH + 1);
+    let code = format!("doc test\ntype {name} from other\nfact x = 1");
+    let mut engine = Engine::default();
+    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    match result {
+        Err(LemmaError::ResourceLimitExceeded { limit_name, .. }) => {
+            assert_eq!(limit_name, "max_type_name_length");
+        }
+        other => panic!("Expected ResourceLimitExceeded for type import name, got: {other:?}"),
+    }
+}

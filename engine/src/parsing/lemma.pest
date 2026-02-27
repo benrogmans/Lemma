@@ -101,7 +101,10 @@ doc_body = {
 }
 
 doc_declaration = { ^"doc" ~ SPACE+ ~ doc_name }
-doc_name        = { "@"? ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_" | "-" | "/" | "." )* }
+doc_name_at     = { "@" }
+doc_name_base   = { ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_" | "-" | "/" )* }
+doc_version_tag = { ASCII_ALPHANUMERIC ~ (ASCII_ALPHANUMERIC | "_" | "-" | ".")* }
+doc_name        = { doc_name_at? ~ doc_name_base ~ ("." ~ doc_version_tag)? }
 
 triple_quote = _{ "\"\"\"" }
 commentary_block = { triple_quote ~ commentary ~ triple_quote }
