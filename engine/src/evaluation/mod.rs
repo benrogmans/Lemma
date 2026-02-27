@@ -132,6 +132,14 @@ impl Evaluator {
                 }
             }
 
+            // Only include local rules (no cross-document segments) in the
+            // response. Dependency rules from referenced documents are still
+            // evaluated above and stored in context.rule_results so proof
+            // traces can reference them, but they are not top-level results.
+            if !exec_rule.path.segments.is_empty() {
+                continue;
+            }
+
             let unless_branches: Vec<(Option<Expression>, Expression)> = exec_rule.branches[1..]
                 .iter()
                 .map(|b| (b.condition.clone(), b.result.clone()))

@@ -384,6 +384,56 @@ rule total = p.base_price
 }
 
 #[test]
+fn cross_doc_dependency_rules_excluded_from_results() {
+    let mut engine = Engine::new();
+
+    let base_doc = r#"
+doc base_employee
+fact monthly_salary = 5000
+fact employment_duration = 3 years
+rule annual_salary = monthly_salary * 12
+rule is_eligible_for_bonus = false
+  unless employment_duration >= 1 years then true
+"#;
+
+    let derived_doc = r#"
+doc specific_employee
+fact employee = doc base_employee
+rule salary_with_bonus = employee.annual_salary?
+  unless employee.is_eligible_for_bonus? then employee.annual_salary? * 1.1
+rule employee_summary = employee.monthly_salary
+"#;
+
+    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
+
+    let response = engine
+        .evaluate("specific_employee", vec![], HashMap::new())
+        .unwrap();
+
+    let mut result_names: Vec<&str> = response.results.keys().map(|k| k.as_str()).collect();
+    result_names.sort();
+    assert_eq!(
+        result_names,
+        vec!["employee_summary", "salary_with_bonus"],
+        "Only local rules should appear in results; cross-doc dependencies \
+         (annual_salary, is_eligible_for_bonus) must be excluded"
+    );
+
+    assert_eq!(
+        response
+            .results
+            .get("salary_with_bonus")
+            .unwrap()
+            .result
+            .value()
+            .unwrap()
+            .to_string(),
+        "66000"
+    );
+}
+
+#[test]
 fn versioned_ref_evaluates_exact_version() {
     let mut engine = Engine::new();
 

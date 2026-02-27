@@ -23,9 +23,6 @@ pub enum LemmaError {
     /// Inversion error (valid Lemma, but unsupported by inversion) with source location
     Inversion(Box<ErrorDetails>),
 
-    /// Runtime error during evaluation with source location
-    Runtime(Box<ErrorDetails>),
-
     /// Engine error with source location
     Engine(Box<ErrorDetails>),
 
@@ -242,13 +239,6 @@ impl fmt::Display for LemmaError {
                 }
                 write_source_location(f, &details.source)
             }
-            LemmaError::Runtime(details) => {
-                write!(f, "Runtime error: {}", details.message)?;
-                if let Some(suggestion) = &details.suggestion {
-                    write!(f, " (suggestion: {suggestion})")?;
-                }
-                write_source_location(f, &details.source)
-            }
             LemmaError::Engine(details) => {
                 write!(f, "Engine error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
@@ -325,7 +315,6 @@ impl LemmaError {
             LemmaError::Parse(details)
             | LemmaError::Semantic(details)
             | LemmaError::Inversion(details)
-            | LemmaError::Runtime(details)
             | LemmaError::Engine(details)
             | LemmaError::MissingFact(details) => &details.message,
             LemmaError::Registry { details, .. } => &details.message,
@@ -341,7 +330,6 @@ impl LemmaError {
             LemmaError::Parse(details)
             | LemmaError::Semantic(details)
             | LemmaError::Inversion(details)
-            | LemmaError::Runtime(details)
             | LemmaError::Engine(details)
             | LemmaError::MissingFact(details) => details.source.as_ref(),
             LemmaError::Registry { details, .. } => details.source.as_ref(),
@@ -361,7 +349,6 @@ impl LemmaError {
             LemmaError::Parse(details)
             | LemmaError::Semantic(details)
             | LemmaError::Inversion(details)
-            | LemmaError::Runtime(details)
             | LemmaError::Engine(details)
             | LemmaError::MissingFact(details) => details.suggestion.as_deref(),
             LemmaError::Registry { details, .. } => details.suggestion.as_deref(),
