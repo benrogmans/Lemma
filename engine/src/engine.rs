@@ -357,10 +357,10 @@ mod tests {
             &mut engine,
             r#"
         doc test
-        fact x = 10
-        fact y = 5
-        rule sum = x + y
-        rule product = x * y
+        fact x: 10
+        fact y: 5
+        rule sum: x + y
+        rule product: x * y
     "#,
             "test.lemma",
         )
@@ -401,8 +401,8 @@ mod tests {
             &mut engine,
             r#"
         doc test
-        fact price = 100
-        rule total = price * 2
+        fact price: 100
+        rule total: price * 2
     "#,
             "test.lemma",
         )
@@ -425,8 +425,8 @@ mod tests {
             &mut engine,
             r#"
         doc test
-        fact age = 25
-        rule is_adult = age >= 18
+        fact age: 25
+        rule is_adult: age >= 18
     "#,
             "test.lemma",
         )
@@ -446,8 +446,8 @@ mod tests {
             &mut engine,
             r#"
         doc test
-        fact quantity = 15
-        rule discount = 0
+        fact quantity: 15
+        rule discount: 0
           unless quantity >= 10 then 10
     "#,
             "test.lemma",
@@ -478,8 +478,8 @@ mod tests {
             &mut engine,
             r#"
         doc doc1
-        fact x = 10
-        rule result = x * 2
+        fact x: 10
+        rule result: x * 2
     "#,
             "doc1.lemma",
         )
@@ -489,8 +489,8 @@ mod tests {
             &mut engine,
             r#"
         doc doc2
-        fact y = 5
-        rule result = y * 3
+        fact y: 5
+        rule result: y * 3
     "#,
             "doc2.lemma",
         )
@@ -520,9 +520,9 @@ mod tests {
             &mut engine,
             r#"
         doc test
-        fact numerator = 10
-        fact denominator = 0
-        rule division = numerator / denominator
+        fact numerator: 10
+        fact denominator: 0
+        rule division: numerator / denominator
     "#,
             "test.lemma",
         )
@@ -562,11 +562,11 @@ mod tests {
             &mut engine,
             r#"
         doc test
-        fact a = 1
-        fact b = 2
-        rule z = a + b
-        rule y = a * b
-        rule x = a - b
+        fact a: 1
+        fact b: 2
+        rule z: a + b
+        rule y: a * b
+        rule x: a - b
     "#,
             "test.lemma",
         )
@@ -615,10 +615,10 @@ mod tests {
             &mut engine,
             r#"
         doc test
-        fact base = 100
-        rule subtotal = base * 2
-        rule tax = subtotal? * 10%
-        rule total = subtotal? + tax?
+        fact base: 100
+        rule subtotal: base * 2
+        rule tax: subtotal? * 10%
+        rule total: subtotal? + tax?
     "#,
             "test.lemma",
         )
@@ -719,7 +719,7 @@ mod tests {
         let mut registry = EngineTestRegistry::new();
         registry.add(
             "org/project/helper",
-            "doc org/project/helper\nfact quantity = 42",
+            "doc org/project/helper\nfact quantity: 42",
         );
 
         let mut engine = engine_without_registry().with_registry(Arc::new(registry));
@@ -727,8 +727,8 @@ mod tests {
         add_lemma_code_blocking(
             &mut engine,
             r#"doc main_doc
-fact external = doc @org/project/helper
-rule value = external.quantity"#,
+fact external: doc @org/project/helper
+rule value: external.quantity"#,
             "main.lemma",
         )
         .expect("add_lemma_files should succeed with registry resolving the external doc");
@@ -756,8 +756,8 @@ rule value = external.quantity"#,
         add_lemma_code_blocking(
             &mut engine,
             r#"doc local_only
-fact price = 100
-rule doubled = price * 2"#,
+fact price: 100
+rule doubled: price * 2"#,
             "local.lemma",
         )
         .expect(
@@ -778,8 +778,8 @@ rule doubled = price * 2"#,
         let result = add_lemma_code_blocking(
             &mut engine,
             r#"doc main_doc
-fact external = doc @org/project/missing
-rule value = external.quantity"#,
+fact external: doc @org/project/missing
+rule value: external.quantity"#,
             "main.lemma",
         );
 
@@ -799,8 +799,8 @@ rule value = external.quantity"#,
         let result = add_lemma_code_blocking(
             &mut engine,
             r#"doc main_doc
-fact external = doc @org/project/missing
-rule value = external.quantity"#,
+fact external: doc @org/project/missing
+rule value: external.quantity"#,
             "main.lemma",
         );
 
@@ -843,15 +843,15 @@ rule value = external.quantity"#,
     #[test]
     fn with_registry_replaces_default_registry() {
         let mut registry = EngineTestRegistry::new();
-        registry.add("custom/doc", "doc custom/doc\nfact x = 99");
+        registry.add("custom/doc", "doc custom/doc\nfact x: 99");
 
         let mut engine = Engine::new().with_registry(Arc::new(registry));
 
         add_lemma_code_blocking(
             &mut engine,
             r#"doc main_doc
-fact ext = doc @custom/doc
-rule val = ext.x"#,
+fact ext: doc @custom/doc
+rule val: ext.x"#,
             "main.lemma",
         )
         .expect("with_registry should replace the default registry");
@@ -883,9 +883,9 @@ rule val = ext.x"#,
             &mut engine,
             r#"doc demo
 type money from nonexistent_type_source
-fact helper = doc nonexistent_doc
-fact price = 10
-rule total = helper.value + price"#,
+fact helper: doc nonexistent_doc
+fact price: 10
+rule total: helper.value + price"#,
             "test.lemma",
         );
 
@@ -925,7 +925,7 @@ rule total = helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x = [number -> default \"10 $$\"]\nrule r = x",
+            "doc t\nfact x: [number -> default \"10 $$\"]\nrule r: x",
             "t.lemma",
         );
         assert!(
@@ -943,7 +943,7 @@ rule total = helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x = [number -> default \"10\"]\nrule r = x",
+            "doc t\nfact x: [number -> default \"10\"]\nrule r: x",
             "t.lemma",
         );
         assert!(
@@ -957,7 +957,7 @@ rule total = helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x = [boolean -> default \"maybe\"]\nrule r = x",
+            "doc t\nfact x: [boolean -> default \"maybe\"]\nrule r: x",
             "t.lemma",
         );
         assert!(
@@ -972,7 +972,7 @@ rule total = helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\ntype custom = number -> minimum 0\nfact x = [custom -> default \"abc\"]\nrule r = x",
+            "doc t\ntype custom: number -> minimum 0\nfact x: [custom -> default \"abc\"]\nrule r: x",
             "t.lemma",
         );
         assert!(
@@ -986,7 +986,7 @@ rule total = helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x = [number -> default 10]\nrule r = x",
+            "doc t\nfact x: [number -> default 10]\nrule r: x",
             "t.lemma",
         );
         assert!(result.is_ok(), "must accept valid number default");
@@ -997,7 +997,7 @@ rule total = helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x = [boolean -> default true]\nrule r = x",
+            "doc t\nfact x: [boolean -> default true]\nrule r: x",
             "t.lemma",
         );
         assert!(result.is_ok(), "must accept valid boolean default");
@@ -1008,7 +1008,7 @@ rule total = helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x = [text -> default \"hello\"]\nrule r = x",
+            "doc t\nfact x: [text -> default \"hello\"]\nrule r: x",
             "t.lemma",
         );
         assert!(result.is_ok(), "must accept valid text default");

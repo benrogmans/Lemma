@@ -6,9 +6,9 @@ use common::add_lemma_code_blocking;
 fn veto_query_specific_message() {
     let code = r#"
         doc shipping
-        fact weight = [number]
+        fact weight: [number]
 
-        rule shipping_cost = 5
+        rule shipping_cost: 5
              unless weight < 0 then veto "invalid"
              unless weight > 100 then veto "too heavy"
     "#;
@@ -40,9 +40,9 @@ fn veto_query_specific_message() {
 fn veto_query_any_veto() {
     let code = r#"
         doc shipping
-        fact weight = [number]
+        fact weight: [number]
 
-        rule shipping_cost = 5
+        rule shipping_cost: 5
              unless weight < 0 then veto "invalid"
              unless weight > 100 then veto "too heavy"
     "#;
@@ -76,9 +76,9 @@ fn veto_query_any_veto() {
 fn veto_query_with_value_branches_filters_correctly() {
     let code = r#"
         doc pricing
-        fact discount = [percent]
+        fact discount: [percent]
 
-        rule final_price = 100
+        rule final_price: 100
             unless discount >= 10%  then 90
             unless discount >= 25%  then 75
             unless discount >= 50%  then veto "discount too high"
@@ -169,9 +169,9 @@ fn veto_query_with_value_branches_filters_correctly() {
 fn veto_non_veto_value_queries_exclude_vetoes() {
     let code = r#"
         doc pricing
-        fact discount = [percent]
+        fact discount: [percent]
 
-        rule final_price = 100
+        rule final_price: 100
             unless discount >= 10%  then 90
             unless discount >= 25%  then 75
             unless discount >= 50%  then veto "discount too high"
@@ -205,10 +205,10 @@ fn veto_non_veto_value_queries_exclude_vetoes() {
 fn veto_multiple_facts_multiple_vetoes() {
     let code = r#"
         doc shipping
-        fact weight = [number]
-        fact distance = [number]
+        fact weight: [number]
+        fact distance: [number]
 
-        rule can_ship = true
+        rule can_ship: true
             unless weight > 50 then veto "too heavy"
             unless distance > 1000 then veto "too far"
             unless weight < 0 then veto "invalid weight"

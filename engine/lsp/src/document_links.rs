@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn finds_doc_reference_with_at_prefix() {
-        let text = "doc example\nfact ext = doc @user/workspace/somedoc";
+        let text = "doc example\nfact ext: doc @user/workspace/somedoc";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 1);
@@ -201,7 +201,7 @@ mod tests {
     fn finds_multiple_at_references() {
         // Doc declarations don't use @, so only the two references produce links.
         let text =
-            "doc org/proj/main\nfact other = doc @org/proj/helper\ntype t from @org/proj/types";
+            "doc org/proj/main\nfact other: doc @org/proj/helper\ntype t from @org/proj/types";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 2);
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn no_links_when_no_at_references() {
-        let text = "doc example\nfact x = 10\nrule y = x + 1";
+        let text = "doc example\nfact x: 10\nrule y: x + 1";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert!(links.is_empty());
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn at_sign_without_valid_identifier_is_ignored() {
-        let text = "doc example\nfact x = @123invalid";
+        let text = "doc example\nfact x: @123invalid";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert!(
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn at_sign_at_end_of_text_is_ignored() {
-        let text = "doc example\nfact x = @";
+        let text = "doc example\nfact x: @";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert!(links.is_empty());
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn versioned_doc_reference_produces_link_with_version() {
-        let text = "fact x = doc @owner/repo/doc.v2";
+        let text = "fact x: doc @owner/repo/doc.v2";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 1);
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn trailing_dot_without_version_excludes_dot_from_link() {
-        let text = "fact x = doc @owner/repo/doc.";
+        let text = "fact x: doc @owner/repo/doc.";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 1);
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn unversioned_doc_reference_has_no_version_param() {
-        let text = "fact x = doc @owner/repo/doc";
+        let text = "fact x: doc @owner/repo/doc";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 1);

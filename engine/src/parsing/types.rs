@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn type_definition_parsing_produces_regular_typedef_with_constraints() {
         let code = r#"doc test
-type dice = number -> minimum 0 -> maximum 6"#;
+type dice: number -> minimum 0 -> maximum 6"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(docs.len(), 1);
@@ -338,7 +338,7 @@ type dice = number -> minimum 0 -> maximum 6"#;
 
     #[test]
     fn parser_produces_command_arg_number_for_number_literals() {
-        let code = "doc test\nfact x = [number -> minimum 5 -> maximum 100 -> default 42]";
+        let code = "doc test\nfact x: [number -> minimum 5 -> maximum 100 -> default 42]";
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let fact = &docs[0].facts[0];
         match &fact.value {
@@ -361,7 +361,7 @@ type dice = number -> minimum 0 -> maximum 6"#;
     #[test]
     fn parser_produces_command_arg_text_for_text_literals() {
         let code = r#"doc test
-fact x = [text -> help "Enter your name" -> default "Alice"]"#;
+fact x: [text -> help "Enter your name" -> default "Alice"]"#;
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let fact = &docs[0].facts[0];
         match &fact.value {
@@ -384,7 +384,7 @@ fact x = [text -> help "Enter your name" -> default "Alice"]"#;
 
     #[test]
     fn parser_produces_command_arg_boolean_for_boolean_literals() {
-        let code = "doc test\nfact x = [boolean -> default true]";
+        let code = "doc test\nfact x: [boolean -> default true]";
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let fact = &docs[0].facts[0];
         match &fact.value {
@@ -402,7 +402,7 @@ fact x = [text -> help "Enter your name" -> default "Alice"]"#;
 
     #[test]
     fn parser_produces_command_arg_label_for_unit_names() {
-        let code = "doc test\ntype money = scale -> unit eur 1.00 -> unit usd 1.10";
+        let code = "doc test\ntype money: scale -> unit eur 1.00 -> unit usd 1.10";
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let type_def = &docs[0].types[0];
         match type_def {
@@ -432,7 +432,7 @@ fact x = [text -> help "Enter your name" -> default "Alice"]"#;
     #[test]
     fn parser_produces_command_arg_text_for_option_values() {
         let code = r#"doc test
-type status = text -> option "active" -> option "inactive""#;
+type status: text -> option "active" -> option "inactive""#;
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let type_def = &docs[0].types[0];
         match type_def {
@@ -458,7 +458,7 @@ type status = text -> option "active" -> option "inactive""#;
         // "10" is a text_literal; 10 is a number_literal.
         // The parser must produce different CommandArg variants.
         let code_text = r#"doc test
-fact x = [number -> default "10"]"#;
+fact x: [number -> default "10"]"#;
         let docs_text = parse(code_text, "test.lemma", &ResourceLimits::default()).unwrap();
         let fact_text = &docs_text[0].facts[0];
         match &fact_text.value {
@@ -469,7 +469,7 @@ fact x = [number -> default "10"]"#;
             other => panic!("Expected TypeDeclaration, got {:?}", other),
         }
 
-        let code_number = "doc test\nfact x = [number -> default 10]";
+        let code_number = "doc test\nfact x: [number -> default 10]";
         let docs_number = parse(code_number, "test.lemma", &ResourceLimits::default()).unwrap();
         let fact_number = &docs_number[0].facts[0];
         match &fact_number.value {

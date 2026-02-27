@@ -22,8 +22,8 @@ fn test_get_document_route_returns_200() {
     std::fs::write(
         &lemma_file,
         r#"doc single_doc
-fact x = [number]
-rule result = x
+fact x: [number]
+rule result: x
 "#,
     )
     .unwrap();
@@ -110,8 +110,8 @@ fn test_get_with_x_proofs_header_returns_proof_when_proofs_enabled() {
     std::fs::write(
         &lemma_file,
         r#"doc single_doc
-fact x = [number]
-rule result = x
+fact x: [number]
+rule result: x
 "#,
     )
     .unwrap();

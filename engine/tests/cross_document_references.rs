@@ -10,14 +10,14 @@ fn test_cross_doc_fact_reference() {
 
     let base_doc = r#"
 doc base
-fact price = 100
-fact quantity = 5
+fact price: 100
+fact quantity: 5
 "#;
 
     let derived_doc = r#"
 doc derived
-fact base_data = doc base
-rule total = base_data.price * base_data.quantity
+fact base_data: doc base
+rule total: base_data.price * base_data.quantity
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -40,14 +40,14 @@ fn test_cross_doc_rule_reference() {
 
     let base_doc = r#"
 doc base
-fact value = 50
-rule doubled = value * 2
+fact value: 50
+rule doubled: value * 2
 "#;
 
     let derived_doc = r#"
 doc derived
-fact base_data = doc base
-rule derived_value = base_data.doubled? + 10
+fact base_data: doc base
+rule derived_value: base_data.doubled? + 10
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -70,15 +70,15 @@ fn test_cross_doc_rule_reference_with_dependencies() {
 
     let base_doc = r#"
 doc base_employee
-fact monthly_salary = 5000
-rule annual_salary = monthly_salary * 12
-rule with_bonus = annual_salary? * 1.1
+fact monthly_salary: 5000
+rule annual_salary: monthly_salary * 12
+rule with_bonus: annual_salary? * 1.1
 "#;
 
     let derived_doc = r#"
 doc manager
-fact employee = doc base_employee
-rule manager_bonus = employee.annual_salary? * 0.15
+fact employee: doc base_employee
+rule manager_bonus: employee.annual_salary? * 0.15
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -101,17 +101,17 @@ fn test_cross_doc_fact_binding_with_rule_reference() {
 
     let base_doc = r#"
 doc base
-fact price = 100
-fact quantity = 5
-rule total = price * quantity
+fact price: 100
+fact quantity: 5
+rule total: price * quantity
 "#;
 
     let derived_doc = r#"
 doc derived
-fact config = doc base
-fact config.price = 200
-fact config.quantity = 3
-rule derived_total = config.total?
+fact config: doc base
+fact config.price: 200
+fact config.quantity: 3
+rule derived_total: config.total?
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -134,22 +134,22 @@ fn test_nested_cross_doc_rule_reference() {
 
     let config_doc = r#"
 doc config
-fact base_days = 3
-rule standard_processing_days = base_days
-rule express_processing_days = 1
+fact base_days: 3
+rule standard_processing_days: base_days
+rule express_processing_days: 1
 "#;
 
     let order_doc = r#"
 doc order
-fact is_express = false
-rule processing_days = 5
+fact is_express: false
+rule processing_days: 5
 "#;
 
     let derived_doc = r#"
 doc derived
-fact settings = doc config
-fact order_info = doc order
-rule total_days = settings.standard_processing_days? + order_info.processing_days?
+fact settings: doc config
+fact order_info: doc order
+rule total_days: settings.standard_processing_days? + order_info.processing_days?
 "#;
 
     add_lemma_code_blocking(&mut engine, config_doc, "test.lemma").unwrap();
@@ -173,15 +173,15 @@ fn test_cross_doc_rule_reference_in_unless_clause() {
 
     let base_doc = r#"
 doc base
-fact threshold = 100
-fact value = 150
-rule is_valid = value >= threshold
+fact threshold: 100
+fact value: 150
+rule is_valid: value >= threshold
 "#;
 
     let derived_doc = r#"
 doc derived
-fact base_data = doc base
-rule status = "invalid"
+fact base_data: doc base
+rule status: "invalid"
   unless base_data.is_valid? then "valid"
 "#;
 
@@ -205,14 +205,14 @@ fn test_cross_doc_mixed_fact_and_rule_references() {
 
     let base_doc = r#"
 doc base
-fact input = 50
-rule calculated = input * 2
+fact input: 50
+rule calculated: input * 2
 "#;
 
     let derived_doc = r#"
 doc derived
-fact base_data = doc base
-rule combined = base_data.input + base_data.calculated?
+fact base_data: doc base
+rule combined: base_data.input + base_data.calculated?
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -235,17 +235,17 @@ fn test_multi_level_fact_binding() {
 
     let base_doc = r#"
 doc base
-fact x = 10
-fact y = 20
-fact z = 30
+fact x: 10
+fact y: 20
+fact z: 30
 "#;
 
     let derived_doc = r#"
 doc derived
-fact data = doc base
-fact data.x = 100
-fact data.y = 200
-rule sum = data.x + data.y + data.z
+fact data: doc base
+fact data.x: 100
+fact data.y: 200
+rule sum: data.x + data.y + data.z
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -270,16 +270,16 @@ fn test_simple_fact_binding() {
 
     let base_doc = r#"
 doc base
-fact price = 100
-fact quantity = 5
+fact price: 100
+fact quantity: 5
 "#;
 
     let derived_doc = r#"
 doc derived
-fact config = doc base
-fact config.price = 200
-fact config.quantity = 3
-rule total = config.price * config.quantity
+fact config: doc base
+fact config.price: 200
+fact config.quantity: 3
+rule total: config.price * config.quantity
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -304,23 +304,23 @@ fn test_different_fact_paths_produce_different_results() {
 
     let example1_doc = r#"
 doc example1
-fact price = 99
-rule total = price * 1.21
+fact price: 99
+rule total: price * 1.21
 "#;
 
     let example2_doc = r#"
 doc example2
-fact base = doc example1
+fact base: doc example1
 "#;
 
     let example3_doc = r#"
 doc example3
-fact base = doc example2
-rule total1 = base.base.total?
+fact base: doc example2
+rule total1: base.base.total?
 
-fact base2 = doc example2
-fact base2.base.price = 79
-rule total2 = base2.base.total?
+fact base2: doc example2
+fact base2.base.price: 79
+rule total2: base2.base.total?
 "#;
 
     add_lemma_code_blocking(&mut engine, example1_doc, "test.lemma").unwrap();
@@ -354,17 +354,17 @@ fn unversioned_ref_evaluates_latest_version() {
 
     let code = r#"
 doc pricing.v1
-fact base_price = 100
+fact base_price: 100
 
 doc pricing.v2
-fact base_price = 150
+fact base_price: 150
 
 doc pricing.v10
-fact base_price = 200
+fact base_price: 200
 
 doc order
-fact p = doc pricing
-rule total = p.base_price
+fact p: doc pricing
+rule total: p.base_price
 "#;
 
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
@@ -389,19 +389,19 @@ fn cross_doc_dependency_rules_excluded_from_results() {
 
     let base_doc = r#"
 doc base_employee
-fact monthly_salary = 5000
-fact employment_duration = 3 years
-rule annual_salary = monthly_salary * 12
-rule is_eligible_for_bonus = false
+fact monthly_salary: 5000
+fact employment_duration: 3 years
+rule annual_salary: monthly_salary * 12
+rule is_eligible_for_bonus: false
   unless employment_duration >= 1 years then true
 "#;
 
     let derived_doc = r#"
 doc specific_employee
-fact employee = doc base_employee
-rule salary_with_bonus = employee.annual_salary?
+fact employee: doc base_employee
+rule salary_with_bonus: employee.annual_salary?
   unless employee.is_eligible_for_bonus? then employee.annual_salary? * 1.1
-rule employee_summary = employee.monthly_salary
+rule employee_summary: employee.monthly_salary
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -439,17 +439,17 @@ fn versioned_ref_evaluates_exact_version() {
 
     let code = r#"
 doc pricing.v1
-fact base_price = 100
+fact base_price: 100
 
 doc pricing.v2
-fact base_price = 150
+fact base_price: 150
 
 doc pricing.v10
-fact base_price = 200
+fact base_price: 200
 
 doc order
-fact p = doc pricing.v2
-rule total = p.base_price
+fact p: doc pricing.v2
+rule total: p.base_price
 "#;
 
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();

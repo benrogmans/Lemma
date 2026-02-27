@@ -84,13 +84,13 @@ Commentary text (if present).
 Standalone type definitions use **multi-line arrow chains** (2-space indent):
 
 ```
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.10
   -> decimals 2
   -> minimum 0 eur
 
-type status = text
+type status: text
   -> option "active"
   -> option "inactive"
 ```
@@ -108,7 +108,7 @@ Blank line between type definitions.
 
 Arrow chains (`->`) appear in three contexts. The formatting rule:
 
-- **Standalone type definitions** (`type X = Y`): each `->` on its own line, indented 2 spaces
+- **Standalone type definitions** (`type X: Y`): each `->` on its own line, indented 2 spaces
 - **Type imports** (`type X from doc`): arrows stay inline on the same line
 - **Inline type annotations** (`[Y -> ...]`): arrows stay inline within the brackets
 
@@ -118,32 +118,32 @@ annotations and imports get inline arrows.**
 ### Facts
 
 ```
-fact name = "Alice"
-fact age = 32
-fact price = [money]
-fact pending = [number -> minimum 0 -> maximum 100]
-fact employee = doc base_employee
-fact employee.name = "Alice Smith"
+fact name: "Alice"
+fact age: 32
+fact price: [money]
+fact pending: [number -> minimum 0 -> maximum 100]
+fact employee: doc base_employee
+fact employee.name: "Alice Smith"
 ```
 
-- `fact reference = value` on a single line
+- `fact reference: value` on a single line
 - No alignment of `=` signs (canonical form is unaligned for diff-friendliness)
 
 ### Rules
 
 ```
-rule total = subtotal? - discount?
+rule total: subtotal? - discount?
 
-rule discount = 0%
+rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
 
-rule tax = (bracket_2_limit? - bracket_1_limit?) * tax_bracket_2?
+rule tax: (bracket_2_limit? - bracket_1_limit?) * tax_bracket_2?
   unless taxable_income? < bracket_2_limit?
     then (taxable_income? - bracket_1_limit?) * tax_bracket_2?
 ```
 
-- `rule name = expression` on one line (or wrapped at arithmetic operators when over max_cols)
+- `rule name: expression` on one line (or wrapped at arithmetic operators when over max_cols)
 - Each `unless condition then result` on its own line, indented 2 spaces; when the full line would exceed max_cols, the `then` clause goes on the next line with two extra spaces (4 spaces total)
 - Blank line between rule definitions
 
@@ -294,7 +294,7 @@ ExpressionKind::Arithmetic(left, op, right) => {
 
 ```rust
 fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    write!(f, "rule {} = {}", self.name, self.expression)?;
+    write!(f, "rule {}: {}", self.name, self.expression)?;
     for unless in &self.unless_clauses {
         write!(f, "\n  unless {} then {}", unless.condition, unless.result)?;
     }
@@ -356,7 +356,7 @@ impl fmt::Display for TypeDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TypeDef::Regular { name, parent, constraints, .. } => {
-                write!(f, "type {} = {}", name, parent)?;
+                write!(f, "type {}: {}", name, parent)?;
                 if let Some(cs) = constraints {
                     for (cmd, args) in cs {
                         write!(f, "\n  -> {}", cmd)?;

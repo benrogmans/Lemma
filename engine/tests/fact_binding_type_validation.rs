@@ -11,8 +11,8 @@ use std::collections::HashMap;
 fn test_number_type_validation_rejects_text() {
     let code = r#"
 doc test
-fact age = [number]
-rule doubled = age * 2
+fact age: [number]
+rule doubled: age * 2
 "#;
 
     let mut engine = Engine::new();
@@ -36,10 +36,10 @@ rule doubled = age * 2
 fn test_multiple_type_validations() {
     let code = r#"
 doc test
-fact price = [number]
-fact quantity = [number]
-fact active = [boolean]
-rule total = price * quantity
+fact price: [number]
+fact quantity: [number]
+fact active: [boolean]
+rule total: price * quantity
 "#;
 
     let mut engine = Engine::new();
@@ -94,8 +94,8 @@ rule total = price * quantity
 fn test_literal_fact_type_validation() {
     let code = r#"
 doc test
-fact base_price = 50
-rule total = base_price * 1.2
+fact base_price: 50
+rule total: base_price * 1.2
 "#;
 
     let mut engine = Engine::new();
@@ -122,8 +122,8 @@ rule total = base_price * 1.2
 fn test_unknown_fact_binding_rejected() {
     let code = r#"
 doc test
-fact price = [number]
-rule total = price * 1.1
+fact price: [number]
+rule total: price * 1.1
 "#;
 
     let mut engine = Engine::new();
@@ -142,13 +142,13 @@ rule total = price * 1.1
 fn test_fact_binding_with_type_definition_should_fail() {
     let code = r#"
 doc base
-fact quantity = [number -> minimum 0 -> default 10]
-rule total = quantity * 2
+fact quantity: [number -> minimum 0 -> default 10]
+rule total: quantity * 2
 
 doc test
-fact line = doc base
-fact line.quantity = [number -> minimum 0 -> default 5]
-rule result = line.total?
+fact line: doc base
+fact line.quantity: [number -> minimum 0 -> default 5]
+rule result: line.total?
 "#;
 
     let mut engine = Engine::new();

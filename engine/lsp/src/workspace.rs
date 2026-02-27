@@ -231,7 +231,7 @@ mod tests {
         let url = url_from_path("/tmp/test.lemma");
         workspace.update_file(
             url.clone(),
-            "doc test\nfact x = 10\nrule y = x + 1".to_string(),
+            "doc test\nfact x: 10\nrule y: x + 1".to_string(),
         );
 
         let results = workspace.validate_workspace();
@@ -265,11 +265,11 @@ mod tests {
 
         workspace.update_file(
             url_a.clone(),
-            "doc person\nfact name = \"Alice\"\nfact age = 30".to_string(),
+            "doc person\nfact name: \"Alice\"\nfact age: 30".to_string(),
         );
         workspace.update_file(
             url_b.clone(),
-            "doc company\nfact employee = doc person\nfact employee.name = \"Bob\"".to_string(),
+            "doc company\nfact employee: doc person\nfact employee.name: \"Bob\"".to_string(),
         );
 
         let results = workspace.validate_workspace();
@@ -289,7 +289,7 @@ mod tests {
         let url = url_from_path("/tmp/orphan.lemma");
         workspace.update_file(
             url.clone(),
-            "doc orphan\nfact other = doc nonexistent".to_string(),
+            "doc orphan\nfact other: doc nonexistent".to_string(),
         );
 
         let results = workspace.validate_workspace();
@@ -304,7 +304,7 @@ mod tests {
     fn remove_file_clears_it_from_workspace() {
         let mut workspace = WorkspaceModel::new();
         let url = url_from_path("/tmp/remove_me.lemma");
-        workspace.update_file(url.clone(), "doc test\nfact x = 10".to_string());
+        workspace.update_file(url.clone(), "doc test\nfact x: 10".to_string());
         assert!(workspace.contains_file(&url));
 
         workspace.remove_file(&url);
@@ -318,7 +318,7 @@ mod tests {
     fn get_parse_errors_returns_empty_for_valid_file() {
         let mut workspace = WorkspaceModel::new();
         let url = url_from_path("/tmp/valid.lemma");
-        workspace.update_file(url.clone(), "doc test\nfact x = 10".to_string());
+        workspace.update_file(url.clone(), "doc test\nfact x: 10".to_string());
 
         let errors = workspace.get_parse_errors(&url);
         assert!(errors.is_empty());
@@ -339,8 +339,8 @@ mod tests {
         let mut workspace = WorkspaceModel::new();
         let url1 = url_from_path("/tmp/test.lemma");
         let url2 = url_from_path("/tmp/test.lemma");
-        workspace.update_file(url1, "doc test\nfact x = 10".to_string());
-        workspace.update_file(url2, "doc test\nfact x = 20".to_string());
+        workspace.update_file(url1, "doc test\nfact x: 10".to_string());
+        workspace.update_file(url2, "doc test\nfact x: 20".to_string());
 
         let results = workspace.validate_workspace();
         assert_eq!(

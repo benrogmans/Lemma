@@ -11,9 +11,9 @@ fn test_proof_generated_during_evaluation() {
     let doc = r#"
 doc test_proof
 
-fact base_value = 100
+fact base_value: 100
 
-rule doubled = base_value * 2
+rule doubled: base_value * 2
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
@@ -61,10 +61,10 @@ fn test_proof_with_rule_reference() {
     let doc = r#"
 doc test_proof_ref
 
-fact base_value = 50
+fact base_value: 50
 
-rule doubled = base_value * 2
-rule quadruple = doubled? * 2
+rule doubled: base_value * 2
+rule quadruple: doubled? * 2
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
@@ -128,10 +128,10 @@ fn test_proof_with_unless_clauses() {
     let doc = r#"
 doc test_unless
 
-fact quantity = 5
-fact is_premium = false
+fact quantity: 5
+fact is_premium: false
 
-rule discount_percentage = 0%
+rule discount_percentage: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 20 then 20%
   unless is_premium then 15%
@@ -198,9 +198,9 @@ fn test_proof_with_veto_result() {
     let doc = r#"
 doc test_veto
 
-fact age = 17
+fact age: 17
 
-rule age_validation = accept
+rule age_validation: accept
   unless age < 18 then veto "Must be 18 or older"
 "#;
 
@@ -240,14 +240,14 @@ fn test_proof_with_cross_document_rule_reference() {
 
     let base_doc = r#"
 doc base
-fact value = 100
-rule doubled = value * 2
+fact value: 100
+rule doubled: value * 2
 "#;
 
     let main_doc = r#"
 doc main
-fact base_ref = doc base
-rule result = base_ref.doubled? + 50
+fact base_ref: doc base
+rule result: base_ref.doubled? + 50
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
@@ -313,14 +313,14 @@ fn test_cross_document_proof_has_correct_path() {
 
     let base_doc = r#"
 doc base
-fact value = 100
-rule doubled = value * 2
+fact value: 100
+rule doubled: value * 2
 "#;
 
     let main_doc = r#"
 doc main
-fact base_ref = doc base
-rule use_cross_doc = base_ref.doubled? + 1
+fact base_ref: doc base
+rule use_cross_doc: base_ref.doubled? + 1
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
@@ -378,14 +378,14 @@ fn test_proof_serialization_preserves_cross_document_paths() {
 
     let base_doc = r#"
 doc base
-fact value = 50
-rule doubled = value * 2
+fact value: 50
+rule doubled: value * 2
 "#;
 
     let main_doc = r#"
 doc main
-fact base_ref = doc base
-rule use_doubled = base_ref.doubled? + 10
+fact base_ref: doc base
+rule use_doubled: base_ref.doubled? + 10
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();

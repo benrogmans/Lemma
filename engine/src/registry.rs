@@ -645,7 +645,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_with_no_registry_references_returns_local_docs_unchanged() {
         let source = r#"doc example
-fact price = 100"#;
+fact price: 100"#;
         let local_docs = crate::parse(source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), source.to_string());
@@ -667,8 +667,8 @@ fact price = 100"#;
     #[tokio::test]
     async fn resolve_fetches_single_doc_from_registry() {
         let local_source = r#"doc main_doc
-fact external = doc @org/project/helper
-rule value = external.quantity"#;
+fact external: doc @org/project/helper
+rule value: external.quantity"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
@@ -678,7 +678,7 @@ rule value = external.quantity"#;
         registry.add_doc_bundle(
             "org/project/helper",
             r#"doc org/project/helper
-fact quantity = 42"#,
+fact quantity: 42"#,
         );
 
         let result = resolve_registry_references(
@@ -699,7 +699,7 @@ fact quantity = 42"#,
     #[tokio::test]
     async fn resolve_fetches_transitive_dependencies() {
         let local_source = r#"doc main_doc
-fact a = doc @org/project/doc_a"#;
+fact a: doc @org/project/doc_a"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
@@ -710,12 +710,12 @@ fact a = doc @org/project/doc_a"#;
         registry.add_doc_bundle(
             "org/project/doc_a",
             r#"doc org/project/doc_a
-fact b = doc @org/project/doc_b"#,
+fact b: doc @org/project/doc_b"#,
         );
         registry.add_doc_bundle(
             "org/project/doc_b",
             r#"doc org/project/doc_b
-fact value = 99"#,
+fact value: 99"#,
         );
 
         let result = resolve_registry_references(
@@ -737,7 +737,7 @@ fact value = 99"#,
     #[tokio::test]
     async fn resolve_handles_bundle_with_multiple_docs() {
         let local_source = r#"doc main_doc
-fact a = doc @org/project/doc_a"#;
+fact a: doc @org/project/doc_a"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
@@ -748,10 +748,10 @@ fact a = doc @org/project/doc_a"#;
         registry.add_doc_bundle(
             "org/project/doc_a",
             r#"doc org/project/doc_a
-fact b = doc @org/project/doc_b
+fact b: doc @org/project/doc_b
 
 doc org/project/doc_b
-fact value = 99"#,
+fact value: 99"#,
         );
 
         let result = resolve_registry_references(
@@ -773,7 +773,7 @@ fact value = 99"#,
     #[tokio::test]
     async fn resolve_returns_registry_error_when_registry_fails() {
         let local_source = r#"doc main_doc
-fact external = doc @org/project/missing"#;
+fact external: doc @org/project/missing"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
@@ -828,7 +828,7 @@ fact external = doc @org/project/missing"#;
     #[tokio::test]
     async fn resolve_returns_all_registry_errors_when_multiple_refs_fail() {
         let local_source = r#"doc main_doc
-fact helper = doc @org/example/helper
+fact helper: doc @org/example/helper
 type money from @lemma/std/finance"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
@@ -884,10 +884,10 @@ type money from @lemma/std/finance"#;
     #[tokio::test]
     async fn resolve_does_not_request_same_identifier_twice() {
         let local_source = r#"doc doc_one
-fact a = doc @org/shared
+fact a: doc @org/shared
 
 doc doc_two
-fact b = doc @org/shared"#;
+fact b: doc @org/shared"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
@@ -897,7 +897,7 @@ fact b = doc @org/shared"#;
         registry.add_doc_bundle(
             "org/shared",
             r#"doc org/shared
-fact value = 1"#,
+fact value: 1"#,
         );
 
         let result = resolve_registry_references(
@@ -919,7 +919,7 @@ fact value = 1"#,
     async fn resolve_handles_type_import_from_registry() {
         let local_source = r#"doc main_doc
 type money from @lemma/std/finance
-fact price = [money]"#;
+fact price: [money]"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
@@ -929,7 +929,7 @@ fact price = [money]"#;
         registry.add_doc_bundle(
             "lemma/std/finance",
             r#"doc lemma/std/finance
-type money = scale
+type money: scale
  -> unit eur 1.00
  -> unit usd 1.10
  -> decimals 2"#,
@@ -1114,12 +1114,12 @@ type money = scale
         #[tokio::test]
         async fn fetch_source_returns_bundle_on_success() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
-                "doc org/my_doc\nfact x = 1",
+                "doc org/my_doc\nfact x: 1",
             )));
 
             let bundle = registry.fetch_source("org/my_doc", None).await.unwrap();
 
-            assert_eq!(bundle.lemma_source, "doc org/my_doc\nfact x = 1");
+            assert_eq!(bundle.lemma_source, "doc org/my_doc\nfact x: 1");
             assert_eq!(bundle.attribute, "@org/my_doc");
         }
 
@@ -1129,7 +1129,7 @@ type money = scale
             let captured = captured_url.clone();
             let mock = MockHttpFetcher::with_handler(move |url| {
                 *captured.lock().unwrap() = url.to_string();
-                Ok("doc test/doc\nfact x = 1".to_string())
+                Ok("doc test/doc\nfact x: 1".to_string())
             });
             let registry = LemmaBase::with_fetcher(Box::new(mock));
 
@@ -1283,19 +1283,19 @@ type money = scale
         #[tokio::test]
         async fn resolve_doc_delegates_to_fetch_source() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
-                "doc org/resolved\nfact a = 1",
+                "doc org/resolved\nfact a: 1",
             )));
 
             let bundle = registry.resolve_doc("org/resolved", None).await.unwrap();
 
-            assert_eq!(bundle.lemma_source, "doc org/resolved\nfact a = 1");
+            assert_eq!(bundle.lemma_source, "doc org/resolved\nfact a: 1");
             assert_eq!(bundle.attribute, "@org/resolved");
         }
 
         #[tokio::test]
         async fn resolve_type_delegates_to_fetch_source() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
-                "doc lemma/std/finance\ntype money = scale\n -> unit eur 1.00",
+                "doc lemma/std/finance\ntype money: scale\n -> unit eur 1.00",
             )));
 
             let bundle = registry
@@ -1305,8 +1305,8 @@ type money = scale
 
             assert_eq!(bundle.attribute, "@lemma/std/finance");
             assert!(
-                bundle.lemma_source.contains("type money = scale"),
-                "Expected source to contain 'type money = scale': {}",
+                bundle.lemma_source.contains("type money: scale"),
+                "Expected source to contain 'type money: scale': {}",
                 bundle.lemma_source
             );
         }

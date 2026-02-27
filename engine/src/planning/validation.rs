@@ -327,7 +327,7 @@ pub fn validate_type_specifications(
             }
 
             // Validate units (if present)
-            // Types can have zero units (e.g., type ratio = number -> ratio) - this is valid
+            // Types can have zero units (e.g., type ratio: number -> ratio) - this is valid
             // Only validate if units are defined
             if !units.is_empty() {
                 let mut seen_names: Vec<String> = Vec::new();
@@ -879,7 +879,7 @@ mod tests {
                 col: 0,
             },
             doc_name,
-            Arc::from("doc test\nfact x = 1"),
+            Arc::from("doc test\nfact x: 1"),
         )
     }
 
@@ -1131,7 +1131,7 @@ mod tests {
                     col: 0,
                 },
                 "test",
-                Arc::from("doc test\nfact x = 1"),
+                Arc::from("doc test\nfact x: 1"),
             ),
             name: "invalid_money".to_string(),
             parent: "number".to_string(),

@@ -673,7 +673,7 @@ mod tests {
             &mut engine,
             r#"
                 doc test
-                fact age = [number -> default 25]
+                fact age: [number -> default 25]
                 "#,
             "test.lemma",
         )
@@ -702,7 +702,7 @@ mod tests {
             &mut engine,
             r#"
                 doc test
-                fact age = [number]
+                fact age: [number]
                 "#,
             "test.lemma",
         )
@@ -723,7 +723,7 @@ mod tests {
             &mut engine,
             r#"
                 doc test
-                fact known = [number]
+                fact known: [number]
                 "#,
             "test.lemma",
         )
@@ -744,10 +744,10 @@ mod tests {
             &mut engine,
             r#"
                 doc private
-                fact base_price = [number]
+                fact base_price: [number]
 
                 doc test
-                fact rules = doc private
+                fact rules: doc private
                 "#,
             "test.lemma",
         )
@@ -786,7 +786,7 @@ mod tests {
                 col: 0,
             },
             doc_name: "<test>".to_string(),
-            source_text: Arc::from("doc test\nfact x = 1\nrule result = x"),
+            source_text: Arc::from("doc test\nfact x: 1\nrule result: x"),
         }
     }
 
@@ -841,7 +841,7 @@ mod tests {
                 col: 0,
             },
             "test",
-            Arc::from("doc test\nfact x = 1\nrule result = x"),
+            Arc::from("doc test\nfact x: 1\nrule result: x"),
         );
         let mut facts = HashMap::new();
         facts.insert(
@@ -895,7 +895,7 @@ mod tests {
                 col: 0,
             },
             "test",
-            Arc::from("doc test\nfact x = 1\nrule result = x"),
+            Arc::from("doc test\nfact x: 1\nrule result: x"),
         );
         let mut facts = HashMap::new();
         facts.insert(
@@ -956,7 +956,7 @@ mod tests {
                 col: 0,
             },
             "test",
-            Arc::from("doc test\nfact x = 1\nrule result = x"),
+            Arc::from("doc test\nfact x: 1\nrule result: x"),
         );
         let mut facts = HashMap::new();
         facts.insert(

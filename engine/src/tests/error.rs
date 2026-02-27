@@ -4,7 +4,7 @@ use crate::parsing::source::Source;
 use std::sync::Arc;
 
 fn test_source() -> Source {
-    let source_text = "fact amount = 100";
+    let source_text = "fact amount: 100";
     Source::new(
         "test.lemma",
         Span {
@@ -28,7 +28,7 @@ fn test_error_creation_and_display() {
         "Parse error: Invalid currency at test.lemma:1:15"
     );
 
-    let typo_source_text = "fact amont = 100";
+    let typo_source_text = "fact amont: 100";
     let typo_source = Source::new(
         "suggestion.lemma",
         Span {

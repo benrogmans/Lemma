@@ -8,9 +8,9 @@ use std::collections::HashMap;
 fn premium_greater_than_or_equal() {
     let code = r#"
         doc insurance
-        fact age = [number]
+        fact age: [number]
 
-        rule premium = 100
+        rule premium: 100
           unless age < 25 then veto "too young"
           unless age > 65 then veto "too old"
           unless (age >= 30 and age <= 40) then 80
@@ -55,9 +55,9 @@ fn premium_greater_than_or_equal() {
 fn discount_greater_than_threshold() {
     let code = r#"
         doc pricing
-        fact quantity = [number]
+        fact quantity: [number]
 
-        rule discount = 0%
+        rule discount: 0%
           unless quantity >= 10 then 5%
           unless quantity >= 50 then 10%
           unless quantity >= 100 then 15%
@@ -105,10 +105,10 @@ fn discount_greater_than_threshold() {
 fn price_less_than_budget() {
     let code = r#"
         doc shopping
-        fact base_price = [number]
-        fact quantity = [number]
+        fact base_price: [number]
+        fact quantity: [number]
 
-        rule total = base_price * quantity
+        rule total: base_price * quantity
           unless quantity < 1 then veto "invalid quantity"
     "#;
 
@@ -144,9 +144,9 @@ fn price_less_than_budget() {
 fn temperature_in_comfortable_range() {
     let code = r#"
         doc climate
-        fact temp = [number]
+        fact temp: [number]
 
-        rule comfort_level = 0
+        rule comfort_level: 0
           unless temp >= 18 then 1
           unless temp >= 22 then 2
           unless temp >= 26 then 1
@@ -189,9 +189,9 @@ fn get_valid_domain_with_threshold() {
     // Use case: "What order sizes are eligible for free shipping?"
     let code = r#"
         doc shipping
-        fact order_total = [number]
+        fact order_total: [number]
 
-        rule shipping_cost = 5
+        rule shipping_cost: 5
           unless order_total >= 50 then 0
           unless order_total < 0 then veto "invalid"
     "#;
@@ -231,9 +231,9 @@ fn get_valid_domain_with_threshold() {
 fn all_comparison_operators() {
     let code = r#"
         doc test
-        fact x = [number]
+        fact x: [number]
 
-        rule result = x * 2
+        rule result: x * 2
           unless x < 0 then veto "negative"
     "#;
 

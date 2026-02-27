@@ -10,10 +10,10 @@ fn test_money_plus_number_preserves_money() {
     // Money + Number → Money
     let code = r#"
     doc test
-    type money = number
-    fact a = [money]
-    fact b = 100
-    rule total = a + b
+    type money: number
+    fact a: [money]
+    fact b: 100
+    rule total: a + b
     "#;
 
     let mut engine = Engine::new();
@@ -29,10 +29,10 @@ fn test_number_plus_money_preserves_money() {
     // Number + Money → Money
     let code = r#"
     doc test
-    type money = number
-    fact a = 100
-    fact b = [money]
-    rule total = a + b
+    type money: number
+    fact a: 100
+    fact b: [money]
+    rule total: a + b
     "#;
 
     let mut engine = Engine::new();
@@ -47,10 +47,10 @@ fn test_money_plus_money_preserves_money() {
     // Money + Money → Money
     let code = r#"
     doc test
-    type money = number
-    fact a = [money]
-    fact b = [money]
-    rule total = a + b
+    type money: number
+    fact a: [money]
+    fact b: [money]
+    rule total: a + b
     "#;
 
     let mut engine = Engine::new();
@@ -66,11 +66,11 @@ fn test_different_custom_types_same_base() {
     // Both extend number (dimensionless), so they're compatible and should succeed
     let code = r#"
     doc test
-    type money = number
-    type price = number
-    fact a = [money]
-    fact b = [price]
-    rule total = a + b
+    type money: number
+    type price: number
+    fact a: [money]
+    fact b: [price]
+    rule total: a + b
     "#;
 
     let mut engine = Engine::new();
@@ -91,10 +91,10 @@ fn test_incompatible_types_error() {
     // For example: number + text should error during planning/validation
     let code = r#"
     doc test
-    type money = number
-    fact a = [money]
-    fact b = "hello"
-    rule total = a + b
+    type money: number
+    fact a: [money]
+    fact b: "hello"
+    rule total: a + b
     "#;
 
     let mut engine = Engine::new();
@@ -120,13 +120,13 @@ fn test_different_scale_types_are_incompatible() {
     // They should be rejected (validation fails) because different Scale types are incompatible
     let code = r#"
     doc test
-    type eur = scale
+    type eur: scale
       -> unit EUR 1.00
-    type kilogram = scale
+    type kilogram: scale
       -> unit KG 1.00
-    fact a = [eur]
-    fact b = [kilogram]
-    rule total = a + b
+    fact a: [eur]
+    fact b: [kilogram]
+    rule total: a + b
     "#;
 
     let mut engine = Engine::new();

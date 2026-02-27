@@ -10,13 +10,13 @@ fn test_money_minus_percentage() {
     let code = r#"
 doc test_money_minus_percentage
 
-fact base_price = 200
-fact discount_rate = 25%
+fact base_price: 200
+fact discount_rate: 25%
 
-rule price_after_discount = base_price - discount_rate
-rule expected = 150
+rule price_after_discount: base_price - discount_rate
+rule expected: 150
 
-rule test_passes = price_after_discount? == expected?
+rule test_passes: price_after_discount? == expected?
 "#;
 
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
@@ -41,13 +41,13 @@ fn test_money_plus_percentage() {
     let code = r#"
 doc test_money_plus_percentage
 
-fact base = 100
-fact markup = 10%
+fact base: 100
+fact markup: 10%
 
-rule price_with_markup = base + markup
-rule expected = 110
+rule price_with_markup: base + markup
+rule expected: 110
 
-rule test_passes = price_with_markup? == expected?
+rule test_passes: price_with_markup? == expected?
 "#;
 
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
@@ -69,13 +69,13 @@ fn test_number_times_percentage() {
     let code = r#"
 doc test_number_times_percentage
 
-fact amount = 1000
-fact rate = 15%
+fact amount: 1000
+fact rate: 15%
 
-rule result = amount * rate
-rule expected = 150
+rule result: amount * rate
+rule expected: 150
 
-rule test_passes = result? == expected?
+rule test_passes: result? == expected?
 "#;
 
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
@@ -97,14 +97,14 @@ fn test_money_minus_percentage_with_rule_reference() {
     let code = r#"
 doc test_with_rule_reference
 
-fact base_price = 200
-fact discount_rate = 25%
+fact base_price: 200
+fact discount_rate: 25%
 
-rule discount_amount = base_price * discount_rate
-rule final_price = base_price - discount_amount?
-rule expected = 150
+rule discount_amount: base_price * discount_rate
+rule final_price: base_price - discount_amount?
+rule expected: 150
 
-rule test_passes = final_price? == expected?
+rule test_passes: final_price? == expected?
 "#;
 
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
@@ -126,16 +126,16 @@ fn test_chained_percentage_operations() {
     let code = r#"
 doc test_chained_percentages
 
-fact original_price = 100
-fact first_discount = 20%
-fact second_discount = 10%
+fact original_price: 100
+fact first_discount: 20%
+fact second_discount: 10%
 
-rule after_first = original_price - first_discount
-rule after_second = after_first? - second_discount
+rule after_first: original_price - first_discount
+rule after_second: after_first? - second_discount
 
-rule expected = 72
+rule expected: 72
 
-rule test_passes = after_second? == expected?
+rule test_passes: after_second? == expected?
 "#;
 
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();

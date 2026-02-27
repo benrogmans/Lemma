@@ -10,14 +10,14 @@ fn test_inline_type_import() -> LemmaResult<()> {
     // Define a type in one document
     let age_doc = r#"
 doc age
-type age = number -> minimum 0 -> maximum 150
+type age: number -> minimum 0 -> maximum 150
 "#;
 
     // Use that type inline in another document (without commands)
     let test_doc = r#"
 doc test
-fact user_age = [age from age]
-rule is_adult = user_age >= 18
+fact user_age: [age from age]
+rule is_adult: user_age >= 18
 "#;
 
     add_lemma_code_blocking(&mut engine, age_doc, "age.lemma")?;
@@ -58,14 +58,14 @@ fn test_inline_type_import_with_constraints() -> LemmaResult<()> {
     // Define a type in one document
     let age_doc = r#"
 doc age
-type age = number -> minimum 0 -> maximum 150
+type age: number -> minimum 0 -> maximum 150
 "#;
 
     // Use that type inline with additional constraints
     let test_doc = r#"
 doc test
-fact user_age = [age from age -> maximum 120]
-rule is_senior = user_age >= 65
+fact user_age: [age from age -> maximum 120]
+rule is_senior: user_age >= 65
 "#;
 
     add_lemma_code_blocking(&mut engine, age_doc, "age.lemma")?;

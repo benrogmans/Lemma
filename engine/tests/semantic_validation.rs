@@ -9,11 +9,11 @@ fn test_rule_reference_without_question_mark_fails() {
     let lemma_code = r#"
 doc test_validation
 
-fact base = 100
+fact base: 100
 
-rule calculated = base * 2
+rule calculated: base * 2
 
-rule buggy_usage = calculated + 50
+rule buggy_usage: calculated + 50
 "#;
 
     let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
@@ -37,10 +37,10 @@ fn test_fact_reference_with_question_mark_fails() {
     let lemma_code = r#"
 doc test_validation
 
-fact base = 100
-fact multiplier = 2
+fact base: 100
+fact multiplier: 2
 
-rule buggy_usage = base? * multiplier?
+rule buggy_usage: base? * multiplier?
 "#;
 
     let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
@@ -64,11 +64,11 @@ fn test_correct_rule_reference_with_question_mark_succeeds() {
     let lemma_code = r#"
 doc test_validation
 
-fact base = 100
+fact base: 100
 
-rule calculated = base * 2
+rule calculated: base * 2
 
-rule correct_usage = calculated? + 50
+rule correct_usage: calculated? + 50
 "#;
 
     let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
@@ -86,10 +86,10 @@ fn test_correct_fact_reference_without_question_mark_succeeds() {
     let lemma_code = r#"
 doc test_validation
 
-fact base = 100
-fact multiplier = 2
+fact base: 100
+fact multiplier: 2
 
-rule correct_usage = base * multiplier
+rule correct_usage: base * multiplier
 "#;
 
     let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
@@ -107,11 +107,11 @@ fn test_rule_reference_in_unless_clause_without_question_mark_fails() {
     let lemma_code = r#"
 doc test_validation
 
-fact amount = 100
+fact amount: 100
 
-rule is_valid = amount > 50
+rule is_valid: amount > 50
 
-rule discount = 0%
+rule discount: 0%
   unless is_valid then 10%
 "#;
 
@@ -135,12 +135,12 @@ fn test_document_field_rule_reference_without_question_mark_fails() {
 
     let lemma_code = r#"
 doc base_doc
-fact salary = 5000
-rule annual = salary * 12
+fact salary: 5000
+rule annual: salary * 12
 
 doc main_doc
-fact employee = doc base_doc
-rule buggy = employee.annual + 1000
+fact employee: doc base_doc
+rule buggy: employee.annual + 1000
 "#;
 
     let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
@@ -163,11 +163,11 @@ fn test_document_field_fact_reference_with_question_mark_fails() {
 
     let lemma_code = r#"
 doc base_doc
-fact salary = 5000
+fact salary: 5000
 
 doc main_doc
-fact employee = doc base_doc
-rule buggy = employee.salary? * 2
+fact employee: doc base_doc
+rule buggy: employee.salary? * 2
 "#;
 
     let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");

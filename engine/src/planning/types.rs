@@ -758,7 +758,7 @@ mod tests {
                     col: 0,
                 },
                 "test_doc",
-                Arc::from("doc test\nfact x = 1"),
+                Arc::from("doc test\nfact x: 1"),
             ),
             name: "money".to_string(),
             parent: "number".to_string(),
@@ -784,7 +784,7 @@ mod tests {
                     col: 0,
                 },
                 "test_doc",
-                Arc::from("doc test\nfact x = 1"),
+                Arc::from("doc test\nfact x: 1"),
             ),
             parent: "number".to_string(),
             constraints: Some(vec![
@@ -825,7 +825,7 @@ mod tests {
                     col: 0,
                 },
                 "test_doc",
-                Arc::from("doc test\nfact x = 1"),
+                Arc::from("doc test\nfact x: 1"),
             ),
             name: "money".to_string(),
             parent: "number".to_string(),
@@ -852,7 +852,7 @@ mod tests {
                     col: 0,
                 },
                 "test_doc",
-                Arc::from("doc test\nfact x = 1"),
+                Arc::from("doc test\nfact x: 1"),
             ),
             name: "money".to_string(),
             parent: "number".to_string(),
@@ -870,7 +870,7 @@ mod tests {
     #[test]
     fn test_type_definition_resolution() {
         let code = r#"doc test
-type dice = number -> minimum 0 -> maximum 6"#;
+type dice: number -> minimum 0 -> maximum 6"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
@@ -899,7 +899,7 @@ type dice = number -> minimum 0 -> maximum 6"#;
     #[test]
     fn test_type_definition_with_multiple_commands() {
         let code = r#"doc test
-type money = scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#;
+type money: scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
@@ -928,7 +928,7 @@ type money = scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#;
     #[test]
     fn test_number_type_with_decimals() {
         let code = r#"doc test
-type price = number -> decimals 2 -> minimum 0"#;
+type price: number -> decimals 2 -> minimum 0"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
@@ -957,7 +957,7 @@ type price = number -> decimals 2 -> minimum 0"#;
     #[test]
     fn test_number_type_decimals_only() {
         let code = r#"doc test
-type precise_number = number -> decimals 4"#;
+type precise_number: number -> decimals 4"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
@@ -981,7 +981,7 @@ type precise_number = number -> decimals 4"#;
     #[test]
     fn test_scale_type_decimals_only() {
         let code = r#"doc test
-type weight = scale -> unit kg 1 -> decimals 3"#;
+type weight: scale -> unit kg 1 -> decimals 3"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
@@ -1005,7 +1005,7 @@ type weight = scale -> unit kg 1 -> decimals 3"#;
     #[test]
     fn test_ratio_type_accepts_optional_decimals_command() {
         let code = r#"doc test
-type ratio_type = ratio -> decimals 2"#;
+type ratio_type: ratio -> decimals 2"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
@@ -1033,7 +1033,7 @@ type ratio_type = ratio -> decimals 2"#;
     #[test]
     fn test_ratio_type_with_default_command() {
         let code = r#"doc test
-type percentage = ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
+type percentage: ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
@@ -1076,8 +1076,8 @@ type percentage = ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
     #[test]
     fn test_scale_extension_chain_same_family_units_allowed() {
         let code = r#"doc test
-type money = scale -> unit eur 1
-type money2 = money -> unit usd 1.24"#;
+type money: scale -> unit eur 1
+type money2: money -> unit usd 1.24"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
@@ -1116,7 +1116,7 @@ type money2 = money -> unit usd 1.24"#;
     #[test]
     fn test_invalid_parent_type_in_named_type_should_error() {
         let code = r#"doc test
-type invalid = nonexistent_type -> minimum 0"#;
+type invalid: nonexistent_type -> minimum 0"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
@@ -1141,7 +1141,7 @@ type invalid = nonexistent_type -> minimum 0"#;
     fn test_invalid_primitive_type_name_should_error() {
         // "choice" is not a primitive type; this should fail resolution.
         let code = r#"doc test
-type invalid = choice -> option "a""#;
+type invalid: choice -> option "a""#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
         let doc = &docs[0];
@@ -1166,11 +1166,11 @@ type invalid = choice -> option "a""#;
     fn test_unit_constraint_validation_errors_are_reported() {
         // Regression guard: overriding existing units should not silently succeed.
         let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.19
 
-type money2 = money
+type money2: money
   -> unit eur 1.20
   -> unit usd 1.21
   -> unit gbp 1.30"#;
@@ -1201,18 +1201,18 @@ type money2 = money
     fn test_document_level_unit_ambiguity_errors_are_reported() {
         // Regression guard: the same unit name must not be defined by multiple types in one doc.
         let code = r#"doc test
-type money_a = scale
+type money_a: scale
   -> unit eur 1.00
   -> unit usd 1.19
 
-type money_b = scale
+type money_b: scale
   -> unit eur 1.00
   -> unit usd 1.20
 
-type length_a = scale
+type length_a: scale
   -> unit meter 1.0
 
-type length_b = scale
+type length_b: scale
   -> unit meter 1.0"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
@@ -1240,7 +1240,7 @@ type length_b = scale
     #[test]
     fn test_number_type_cannot_have_units() {
         let code = r#"doc test
-type price = number
+type price: number
   -> unit eur 1.00"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
@@ -1265,7 +1265,7 @@ type price = number
     #[test]
     fn test_scale_type_can_have_units() {
         let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.19"#;
 
@@ -1293,11 +1293,11 @@ type money = scale
     #[test]
     fn test_extending_type_inherits_units() {
         let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.19
 
-type my_money = money
+type my_money: money
   -> unit gbp 1.30"#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
@@ -1325,7 +1325,7 @@ type my_money = money
     #[test]
     fn test_duplicate_unit_in_same_type_is_rejected() {
         let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit eur 1.19"#;
 

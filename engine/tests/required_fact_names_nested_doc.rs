@@ -6,25 +6,25 @@ use common::add_lemma_code_blocking;
 fn necessary_facts_include_nested_doc_facts_for_local_rule_deps() {
     let code = r#"
 doc money
-type money = scale
+type money: scale
   -> unit eur 1
   -> unit usd 1.19
 
 doc pricing
 type money from money
-fact quantity = 10
-fact is_member = false
-fact price = [money]
-rule discount = 0%
+fact quantity: 10
+fact is_member: false
+fact price: [money]
+rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
   unless is_member then 15%
-rule total = price - discount?
+rule total: price - discount?
   unless price < 50 eur then price
 
 doc cashier
-fact calc = doc pricing
-rule total = calc.total?
+fact calc: doc pricing
+rule total: calc.total?
 "#;
 
     let mut engine = Engine::new();
@@ -59,12 +59,7 @@ rule total = calc.total?
 #[test]
 fn schema_errors_on_unknown_rule() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        "doc test\nfact x = 1\nrule y = x",
-        "test.lemma",
-    )
-    .unwrap();
+    add_lemma_code_blocking(&mut engine, "doc test\nfact x: 1\nrule y: x", "test.lemma").unwrap();
 
     let plan = engine.get_execution_plan("test").unwrap();
     let result = plan.schema_for_rules(&["nonexistent".to_string()]);

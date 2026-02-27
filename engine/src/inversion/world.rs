@@ -920,7 +920,7 @@ fn is_arithmetic_expression(expr: &Expression) -> bool {
 /// For boolean expressions that can't be evaluated to a literal (e.g., `age > 18`),
 /// create two solutions: one where the expression is true, one where it's false.
 ///
-/// This allows inversion to work with rules like `rule of_age = age > 18`
+/// This allows inversion to work with rules like `rule of_age: age > 18`
 fn create_boolean_expression_solutions(
     world: World,
     base_constraint: Constraint,

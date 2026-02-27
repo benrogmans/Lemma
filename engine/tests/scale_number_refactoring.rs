@@ -11,17 +11,17 @@ use std::collections::HashMap;
 fn test_scale_op_scale_same_type_allowed() {
     // Test that Scale op Scale with same type is allowed
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.19
 
-fact price1 = [money]
-fact price2 = [money]
+fact price1: [money]
+fact price2: [money]
 
-rule total = price1 + price2
-rule difference = price1 - price2
-rule product = price1 * price2
-rule quotient = price1 / price2"#;
+rule total: price1 + price2
+rule difference: price1 - price2
+rule product: price1 * price2
+rule quotient: price1 / price2"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -45,16 +45,16 @@ rule quotient = price1 / price2"#;
 fn test_scale_op_scale_different_types_rejected() {
     // Test that Scale op Scale with different types is rejected
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-type length = scale
+type length: scale
   -> unit meter 1.0
 
-fact price = [money]
-fact distance = [length]
+fact price: [money]
+fact distance: [length]
 
-rule invalid = price + distance"#;
+rule invalid: price + distance"#;
 
     let mut engine = Engine::new();
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
@@ -77,14 +77,14 @@ rule invalid = price + distance"#;
 fn test_scale_op_number_allowed() {
     // Test that Scale op Number is allowed
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-fact price = [money]
-fact multiplier = [number]
+fact price: [money]
+fact multiplier: [number]
 
-rule scaled = price * multiplier
-rule divided = price / multiplier"#;
+rule scaled: price * multiplier
+rule divided: price / multiplier"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -105,14 +105,14 @@ rule divided = price / multiplier"#;
 fn test_number_op_scale_allowed() {
     // Test that Number op Scale is allowed
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-fact multiplier = [number]
-fact price = [money]
+fact multiplier: [number]
+fact price: [money]
 
-rule scaled = multiplier * price
-rule divided = multiplier / price"#;
+rule scaled: multiplier * price
+rule divided: multiplier / price"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -133,10 +133,10 @@ rule divided = multiplier / price"#;
 fn test_ratio_op_number_allowed() {
     // Test that Ratio op Number is allowed (result is Number)
     let code = r#"doc test
-fact ratio_value = [ratio]
-fact multiplier = [number]
+fact ratio_value: [ratio]
+fact multiplier: [number]
 
-rule result = ratio_value * multiplier"#;
+rule result: ratio_value * multiplier"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -156,11 +156,11 @@ rule result = ratio_value * multiplier"#;
 fn test_ratio_op_ratio_allowed() {
     // Test that Ratio op Ratio is allowed (result is Ratio)
     let code = r#"doc test
-fact ratio1 = [ratio]
-fact ratio2 = [ratio]
+fact ratio1: [ratio]
+fact ratio2: [ratio]
 
-rule product = ratio1 * ratio2
-rule quotient = ratio1 / ratio2"#;
+rule product: ratio1 * ratio2
+rule quotient: ratio1 / ratio2"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -181,13 +181,13 @@ rule quotient = ratio1 / ratio2"#;
 fn test_ratio_op_scale_allowed() {
     // Test that Ratio op Scale is allowed (result is Scale)
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-fact ratio_value = [ratio]
-fact price = [money]
+fact ratio_value: [ratio]
+fact price: [money]
 
-rule result = ratio_value * price"#;
+rule result: ratio_value * price"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -207,13 +207,13 @@ rule result = ratio_value * price"#;
 fn test_scale_op_ratio_allowed() {
     // Test that Scale op Ratio is allowed (result is Scale)
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-fact price = [money]
-fact ratio_value = [ratio]
+fact price: [money]
+fact ratio_value: [ratio]
 
-rule result = price * ratio_value"#;
+rule result: price * ratio_value"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -233,14 +233,14 @@ rule result = price * ratio_value"#;
 fn test_scale_comparison_same_type_allowed() {
     // Test that comparing same Scale types is allowed
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-fact price1 = [money]
-fact price2 = [money]
+fact price1: [money]
+fact price2: [money]
 
-rule is_greater = price1 > price2
-rule is_equal = price1 == price2"#;
+rule is_greater: price1 > price2
+rule is_equal: price1 == price2"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -261,16 +261,16 @@ rule is_equal = price1 == price2"#;
 fn test_scale_comparison_different_types_rejected() {
     // Test that comparing different Scale types is rejected
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-type length = scale
+type length: scale
   -> unit meter 1.0
 
-fact price = [money]
-fact distance = [length]
+fact price: [money]
+fact distance: [length]
 
-rule invalid = price > distance"#;
+rule invalid: price > distance"#;
 
     let mut engine = Engine::new();
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
@@ -292,13 +292,13 @@ rule invalid = price > distance"#;
 fn test_scale_comparison_with_number_rejected() {
     // Comparing Scale with Number is ambiguous (Number has no unit) and must be rejected.
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-fact price = [money]
-fact threshold = [number]
+fact price: [money]
+fact threshold: [number]
 
-rule is_above = price > threshold"#;
+rule is_above: price > threshold"#;
 
     let mut engine = Engine::new();
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
@@ -310,20 +310,20 @@ fn test_all_arithmetic_operators_scale_same_type() {
     // Test all arithmetic operators with same Scale type
     // Note: Modulo requires Number divisor, so we test it separately
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-fact a = [money]
-fact b = [money]
-fact divisor = [number]
-fact exponent = [number]
+fact a: [money]
+fact b: [money]
+fact divisor: [number]
+fact exponent: [number]
 
-rule add = a + b
-rule subtract = a - b
-rule multiply = a * b
-rule divide = a / b
-rule modulo = a % divisor
-rule power = a ^ exponent"#;
+rule add: a + b
+rule subtract: a - b
+rule multiply: a * b
+rule divide: a / b
+rule modulo: a % divisor
+rule power: a ^ exponent"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -351,18 +351,18 @@ rule power = a ^ exponent"#;
 fn test_all_arithmetic_operators_scale_different_types_rejected() {
     // Test that all arithmetic operators reject different Scale types
     let code = r#"doc test
-type money = scale -> unit eur 1.00
-type length = scale -> unit meter 1.0
+type money: scale -> unit eur 1.00
+type length: scale -> unit meter 1.0
 
-fact price = [money]
-fact distance = [length]
+fact price: [money]
+fact distance: [length]
 
-rule add = price + distance
-rule subtract = price - distance
-rule multiply = price * distance
-rule divide = price / distance
-rule modulo = price % distance
-rule power = price ^ distance"#;
+rule add: price + distance
+rule subtract: price - distance
+rule multiply: price * distance
+rule divide: price / distance
+rule modulo: price % distance
+rule power: price ^ distance"#;
 
     let mut engine = Engine::new();
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
@@ -385,15 +385,15 @@ rule power = price ^ distance"#;
 fn test_number_operations_all_operators() {
     // Test all arithmetic operators with Number types
     let code = r#"doc test
-fact a = [number]
-fact b = [number]
+fact a: [number]
+fact b: [number]
 
-rule add = a + b
-rule subtract = a - b
-rule multiply = a * b
-rule divide = a / b
-rule modulo = a % b
-rule power = a ^ b"#;
+rule add: a + b
+rule subtract: a - b
+rule multiply: a * b
+rule divide: a / b
+rule modulo: a % b
+rule power: a ^ b"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -419,13 +419,13 @@ rule power = a ^ b"#;
 fn test_scale_result_type_preservation() {
     // Test that Scale op Scale (same type) preserves the Scale type
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-fact price1 = [money]
-fact price2 = [money]
+fact price1: [money]
+fact price2: [money]
 
-rule total = price1 + price2"#;
+rule total: price1 + price2"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -461,13 +461,13 @@ rule total = price1 + price2"#;
 fn test_scale_number_result_inherits_scale() {
     // Test that Scale op Number results in Scale type
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-fact price = [money]
-fact multiplier = [number]
+fact price: [money]
+fact multiplier: [number]
 
-rule result = price * multiplier"#;
+rule result: price * multiplier"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -492,10 +492,10 @@ rule result = price * multiplier"#;
 fn test_ratio_number_result_is_number() {
     // Test that Ratio op Number results in Number type
     let code = r#"doc test
-fact ratio_value = [ratio]
-fact multiplier = [number]
+fact ratio_value: [ratio]
+fact multiplier: [number]
 
-rule result = ratio_value * multiplier"#;
+rule result: ratio_value * multiplier"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -528,10 +528,10 @@ rule result = ratio_value * multiplier"#;
 fn test_ratio_ratio_result_is_ratio() {
     // Test that Ratio op Ratio results in Ratio type
     let code = r#"doc test
-fact ratio1 = [ratio]
-fact ratio2 = [ratio]
+fact ratio1: [ratio]
+fact ratio2: [ratio]
 
-rule result = ratio1 * ratio2"#;
+rule result: ratio1 * ratio2"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -564,13 +564,13 @@ rule result = ratio1 * ratio2"#;
 fn test_ratio_scale_result_is_scale() {
     // Test that Ratio op Scale results in Scale type
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-fact ratio_value = [ratio]
-fact price = [money]
+fact ratio_value: [ratio]
+fact price: [money]
 
-rule result = ratio_value * price"#;
+rule result: ratio_value * price"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -595,17 +595,17 @@ rule result = ratio_value * price"#;
 fn test_complex_mixed_operations() {
     // Test complex expressions with mixed types
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
 
-fact base_price = [money]
-fact discount_ratio = [ratio]
-fact tax_multiplier = [number]
-fact quantity = [number]
+fact base_price: [money]
+fact discount_ratio: [ratio]
+fact tax_multiplier: [number]
+fact quantity: [number]
 
-rule discounted = base_price * discount_ratio
-rule with_tax = discounted? * tax_multiplier
-rule total = with_tax? * quantity"#;
+rule discounted: base_price * discount_ratio
+rule with_tax: discounted? * tax_multiplier
+rule total: with_tax? * quantity"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
@@ -630,14 +630,14 @@ fn test_primitive_scale_and_number_types() {
     // Scale types must declare at least one unit; scale values are unitful.
     // This test uses a proper scale type (money) and unitful fact value.
     let code = r#"doc test
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> minimum 0 eur
 
-fact scale_value = [money]
-fact number_value = [number]
+fact scale_value: [money]
+fact number_value: [number]
 
-rule result = scale_value * number_value"#;
+rule result: scale_value * number_value"#;
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");

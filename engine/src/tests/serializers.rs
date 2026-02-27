@@ -18,7 +18,7 @@ fn dummy_source() -> Source {
             col: 1,
         },
         "test_doc",
-        Arc::from("doc test_doc\nrule dummy = true"),
+        Arc::from("doc test_doc\nrule dummy: true"),
     )
 }
 

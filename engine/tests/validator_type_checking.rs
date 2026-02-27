@@ -6,7 +6,7 @@ use common::add_lemma_code_blocking;
 fn test_logical_and_requires_boolean_operands() {
     let code = r#"
 doc test
-rule result = 5 and true
+rule result: 5 and true
 "#;
 
     let mut engine = Engine::new();
@@ -19,7 +19,7 @@ rule result = 5 and true
 fn test_logical_or_requires_boolean_operands() {
     let code = r#"
 doc test
-rule result = "hello" or false
+rule result: "hello" or false
 "#;
 
     let mut engine = Engine::new();
@@ -32,7 +32,7 @@ rule result = "hello" or false
 fn test_unless_condition_must_be_boolean() {
     let code = r#"
 doc test
-rule result = 10
+rule result: 10
   unless 5 then 20
 "#;
 
@@ -45,8 +45,8 @@ rule result = 10
 fn test_percentage_literal_type() {
     let code = r#"
 doc test
-fact rate = 15%
-rule doubled = rate
+fact rate: 15%
+rule doubled: rate
   unless rate > 10% then 20%
 "#;
 
@@ -63,9 +63,9 @@ rule doubled = rate
 fn test_text_number_comparison_allowed() {
     let code = r#"
 doc test
-fact name = "Alice"
-fact age = 30
-rule check = name == "Bob" and age > 25
+fact name: "Alice"
+fact age: 30
+rule check: name == "Bob" and age > 25
 "#;
 
     let mut engine = Engine::new();
@@ -81,9 +81,9 @@ rule check = name == "Bob" and age > 25
 fn test_date_comparison() {
     let code = r#"
 doc test
-fact start = 2024-01-01
-fact end = 2024-12-31
-rule is_valid_range = end > start
+fact start: 2024-01-01
+fact end: 2024-12-31
+rule is_valid_range: end > start
 "#;
 
     let mut engine = Engine::new();
@@ -100,8 +100,8 @@ fn test_duration_conversion() {
     // Duration is the only remaining built-in unit type
     let code = r#"
 doc test
-fact value = 60
-rule converted = (value * 60) in seconds
+fact value: 60
+rule converted: (value * 60) in seconds
 "#;
 
     let mut engine = Engine::new();
@@ -117,8 +117,8 @@ rule converted = (value * 60) in seconds
 fn test_percentage_conversion_from_number() {
     let code = r#"
 doc test
-fact ratio = 0.25
-rule as_percentage = ratio in percent
+fact ratio: 0.25
+rule as_percentage: ratio in percent
 "#;
 
     let mut engine = Engine::new();
@@ -134,8 +134,8 @@ rule as_percentage = ratio in percent
 fn test_veto_type_is_compatible_with_other_types() {
     let code = r#"
 doc test
-fact age = 15
-rule result = 100
+fact age: 15
+rule result: 100
   unless age < 18 then veto "Too young"
   unless age > 65 then 50
 "#;
@@ -153,8 +153,8 @@ rule result = 100
 fn test_mixed_text_and_number_not_allowed() {
     let code = r#"
 doc test
-fact flag = true
-rule value = "default"
+fact flag: true
+rule value: "default"
   unless flag then 42
 "#;
 
@@ -176,8 +176,8 @@ rule value = "default"
 fn test_mixed_date_and_number_not_allowed() {
     let code = r#"
 doc test
-fact use_date = true
-rule value = 2024-01-01
+fact use_date: true
+rule value: 2024-01-01
   unless use_date then 100
 "#;
 
@@ -199,9 +199,9 @@ rule value = 2024-01-01
 fn test_boolean_consistency() {
     let code = r#"
 doc test
-fact x = 5
-fact y = 10
-rule check = x < y
+fact x: 5
+fact y: 10
+rule check: x < y
   unless x == 0 then y > 0
 "#;
 
@@ -218,9 +218,9 @@ rule check = x < y
 fn test_arithmetic_result_type_inference() {
     let code = r#"
 doc test
-fact a = 10
-fact b = 20
-rule sum = a + b
+fact a: 10
+fact b: 20
+rule sum: a + b
   unless a == 0 then 0
 "#;
 
@@ -237,8 +237,8 @@ rule sum = a + b
 fn test_multiple_unless_clauses_type_consistency() {
     let code = r#"
 doc test
-fact x = 5
-rule value = 10
+fact x: 5
+rule value: 10
   unless x < 0 then 0
   unless x > 100 then 100
   unless x == 5 then 5
@@ -257,8 +257,8 @@ rule value = 10
 fn test_multiple_unless_clauses_type_inconsistency() {
     let code = r#"
 doc test
-fact x = 5
-rule value = 10
+fact x: 5
+rule value: 10
   unless x < 0 then 0
   unless x > 100 then "overflow"
 "#;
@@ -278,9 +278,9 @@ rule value = 10
 fn test_rule_reference_type_propagation() {
     let code = r#"
 doc test
-fact base = 100
-rule derived = base * 2
-rule another = derived?
+fact base: 100
+rule derived: base * 2
+rule another: derived?
   unless derived? > 150 then 0
 "#;
 
@@ -297,8 +297,8 @@ rule another = derived?
 fn test_time_type_validation() {
     let code = r#"
 doc test
-fact meeting_time = 14:30:00
-rule is_afternoon = meeting_time > 12:00:00
+fact meeting_time: 14:30:00
+rule is_afternoon: meeting_time > 12:00:00
 "#;
 
     let mut engine = Engine::new();
@@ -314,9 +314,9 @@ rule is_afternoon = meeting_time > 12:00:00
 fn test_time_cannot_use_in_logical_operators() {
     let code = r#"
 doc test
-fact time1 = 14:30:00
-fact time2 = 15:00:00
-rule result = time1 and time2
+fact time1: 14:30:00
+fact time2: 15:00:00
+rule result: time1 and time2
 "#;
 
     let mut engine = Engine::new();
@@ -332,8 +332,8 @@ rule result = time1 and time2
 fn test_mixed_time_and_number_not_allowed() {
     let code = r#"
 doc test
-fact use_time = true
-rule value = 14:30:00
+fact use_time: true
+rule value: 14:30:00
   unless use_time then 100
 "#;
 

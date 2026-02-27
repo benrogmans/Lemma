@@ -326,15 +326,15 @@ fn test_expression_get_source_text_with_location() {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    let source = "fact value = 42";
+    let source = "fact value: 42";
     let mut sources = HashMap::new();
     sources.insert("test.lemma".to_string(), source.to_string());
 
     let span = Span {
-        start: 13,
-        end: 15,
+        start: 12,
+        end: 14,
         line: 1,
-        col: 13,
+        col: 12,
     };
     let source_location = Source::new("test.lemma", span, "test", Arc::from(source));
     let expr = Expression::new(
@@ -350,7 +350,7 @@ fn test_expression_get_source_text_no_location() {
     use std::collections::HashMap;
 
     let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), "fact value = 42".to_string());
+    sources.insert("test.lemma".to_string(), "fact value: 42".to_string());
 
     let expr = Expression {
         kind: ExpressionKind::Literal(Value::Number(Decimal::new(42, 0))),
@@ -373,7 +373,7 @@ fn test_expression_get_source_text_source_not_found() {
         line: 1,
         col: 0,
     };
-    let source_location = Source::new("missing.lemma", span, "test", Arc::from("fact value = 42"));
+    let source_location = Source::new("missing.lemma", span, "test", Arc::from("fact value: 42"));
     let expr = Expression::new(
         ExpressionKind::Literal(Value::Number(Decimal::new(42, 0))),
         source_location,

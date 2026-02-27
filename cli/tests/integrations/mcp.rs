@@ -79,7 +79,7 @@ fn test_mcp_list_documents_includes_schema() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("pricing.lemma"),
-        "doc pricing\nfact quantity = [number]\nfact base_price = 10\nrule total = quantity * base_price\n",
+        "doc pricing\nfact quantity: [number]\nfact base_price: 10\nrule total: quantity * base_price\n",
     )
     .unwrap();
 
@@ -130,7 +130,7 @@ fn test_mcp_evaluate_includes_reasoning() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("discount.lemma"),
-        "doc discount\nfact quantity = [number]\nrule rate = 0 percent\n unless quantity >= 10 then 10 percent\n unless quantity >= 50 then 20 percent\n",
+        "doc discount\nfact quantity: [number]\nrule rate: 0 percent\n unless quantity >= 10 then 10 percent\n unless quantity >= 50 then 20 percent\n",
     )
     .unwrap();
 
@@ -168,7 +168,7 @@ fn test_mcp_evaluate_includes_reasoning() {
         "Should contain reasoning section, got: {text}"
     );
     assert!(
-        text.contains("quantity = 25"),
+        text.contains("quantity: 25"),
         "Should show fact value in reasoning, got: {text}"
     );
 }
@@ -189,7 +189,7 @@ fn test_mcp_read_only_by_default() {
                 serde_json::json!({
                     "name": "add_document",
                     "arguments": {
-                        "code": "doc test\nfact x = 5\nrule y = x"
+                        "code": "doc test\nfact x: 5\nrule y: x"
                     }
                 }),
             ),
@@ -249,7 +249,7 @@ fn test_mcp_admin_enables_add_document() {
                 serde_json::json!({
                     "name": "add_document",
                     "arguments": {
-                        "code": "doc test_doc\nfact x = 5\nrule y = x * 2"
+                        "code": "doc test_doc\nfact x: 5\nrule y: x * 2"
                     }
                 }),
             ),
@@ -301,7 +301,7 @@ fn test_mcp_get_document_source() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("pricing.lemma"),
-        "doc pricing\nfact quantity = [number]\nfact base_price = 10\nrule total = quantity * base_price\n",
+        "doc pricing\nfact quantity: [number]\nfact base_price: 10\nrule total: quantity * base_price\n",
     )
     .unwrap();
 
@@ -349,7 +349,7 @@ fn test_mcp_get_document_source_blocked_without_admin() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("pricing.lemma"),
-        "doc pricing\nfact x = 5\nrule y = x\n",
+        "doc pricing\nfact x: 5\nrule y: x\n",
     )
     .unwrap();
 

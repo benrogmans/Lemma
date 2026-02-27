@@ -11,12 +11,12 @@ fn test_equal_operator_numbers() {
         r#"
 doc test_equal_numbers
 
-fact a = 42
-fact b = 42
-fact c = 100
+fact a: 42
+fact b: 42
+fact c: 100
 
-rule equal_true = a == b
-rule equal_false = a == c
+rule equal_true: a == b
+rule equal_false: a == c
 "#,
         "test.lemma",
     )
@@ -41,11 +41,11 @@ fn test_equal_operator_text() {
         r#"
 doc test_equal_text
 
-fact greeting = "hello"
-fact other = "world"
+fact greeting: "hello"
+fact other: "world"
 
-rule same_greeting = greeting == "hello"
-rule different_greeting = greeting == other
+rule same_greeting: greeting == "hello"
+rule different_greeting: greeting == other
 "#,
         "test.lemma",
     )
@@ -70,12 +70,12 @@ fn test_equal_operator_money() {
         r#"
 doc test_equal_money
 
-fact price_a = 100
-fact price_b = 100
-fact price_c = 50
+fact price_a: 100
+fact price_b: 100
+fact price_c: 50
 
-rule same_price = price_a == price_b
-rule different_price = price_a == price_c
+rule same_price: price_a == price_b
+rule different_price: price_a == price_c
 "#,
         "test.lemma",
     )
@@ -100,12 +100,12 @@ fn test_equal_operator_booleans() {
         r#"
 doc test_equal_booleans
 
-fact flag_a = true
-fact flag_b = true
-fact flag_c = false
+fact flag_a: true
+fact flag_b: true
+fact flag_c: false
 
-rule both_true = flag_a == flag_b
-rule mixed = flag_a == flag_c
+rule both_true: flag_a == flag_b
+rule mixed: flag_a == flag_c
 "#,
         "test.lemma",
     )
@@ -130,10 +130,10 @@ fn test_equal_operator_in_conditions() {
         r#"
 doc test_equal_conditions
 
-fact status = "active"
-fact count = 10
+fact status: "active"
+fact count: 10
 
-rule message = "inactive"
+rule message: "inactive"
   unless status == "active" then "active"
   unless count == 10 then "count is 10"
 "#,
