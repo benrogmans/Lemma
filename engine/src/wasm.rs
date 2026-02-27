@@ -194,7 +194,6 @@ fn format_error(error: &LemmaError) -> String {
         LemmaError::Parse(details) => format!("Parse Error: {}", details.message),
         LemmaError::Semantic(details) => format!("Semantic Error: {}", details.message),
         LemmaError::Inversion(details) => format!("Inversion Error: {}", details.message),
-        LemmaError::Runtime(details) => format!("Runtime Error: {}", details.message),
         LemmaError::Engine(details) => format!("Engine Error: {}", details.message),
         LemmaError::Registry {
             details,
