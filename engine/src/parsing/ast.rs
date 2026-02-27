@@ -103,11 +103,41 @@ pub struct LemmaDoc {
     pub types: Vec<TypeDef>,
     pub facts: Vec<LemmaFact>,
     pub rules: Vec<LemmaRule>,
+    pub meta_fields: Vec<MetaField>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MetaField {
+    pub key: String,
+    pub value: MetaValue,
+    pub source_location: Source,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetaValue {
+    Literal(Value),
+    Unquoted(String),
+}
+
+impl fmt::Display for MetaValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MetaValue::Literal(v) => write!(f, "{}", v),
+            MetaValue::Unquoted(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+impl fmt::Display for MetaField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "meta {}: {}", self.key, self.value)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LemmaFact {
-    pub reference: FactReference,
+    pub reference: Reference,
     pub value: FactValue,
     pub source_location: Source,
 }
@@ -183,12 +213,11 @@ impl Eq for Expression {}
 pub enum ExpressionKind {
     /// Parse-time literal value (type will be resolved during planning)
     Literal(Value),
-    /// Fact reference (identifier or dot path); resolved to FactPath during planning
-    FactReference(FactReference),
+    /// Unresolved reference (identifier or dot path). Resolved during planning to FactPath or RulePath.
+    Reference(Reference),
     /// Unresolved unit literal from parser (resolved during planning)
     /// Contains (number, unit_name) - the unit name will be resolved to its type during semantic analysis
     UnresolvedUnitLiteral(Decimal, String),
-    RuleReference(RuleReference),
     LogicalAnd(Arc<Expression>, Arc<Expression>),
     LogicalOr(Arc<Expression>, Arc<Expression>),
     Arithmetic(Arc<Expression>, ArithmeticComputation, Arc<Expression>),
@@ -201,47 +230,62 @@ pub enum ExpressionKind {
 
 /// Unresolved reference from parser
 ///
-/// Reference to a fact (identifier or dot path).
+/// Reference to a fact or rule (identifier or dot path).
 ///
-/// Used in expressions and in LemmaFact. During planning, fact references
-/// are resolved to FactPath (semantics layer).
+/// Used in expressions and in LemmaFact. During planning, references
+/// are resolved to FactPath or RulePath (semantics layer).
 /// Examples:
-/// - Local "age": segments=[], fact="age"
-/// - Cross-document "employee.salary": segments=["employee"], fact="salary"
+/// - Local "age": segments=[], name="age"
+/// - Cross-document "employee.salary": segments=["employee"], name="salary"
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct FactReference {
+pub struct Reference {
     pub segments: Vec<String>,
-    pub fact: String,
+    pub name: String,
 }
 
-/// Reference to a rule
-///
-/// Rule references use a question mark suffix to distinguish them from fact references.
-/// Examples:
-/// - Local rule "has_license?": segments=[], rule="has_license"
-/// - Cross-document "employee.is_eligible?": segments=["employee"], rule="is_eligible"
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct RuleReference {
-    pub segments: Vec<String>,
-    pub rule: String,
-}
-
-impl RuleReference {
-    /// Create from a full path (last element becomes rule)
-    pub fn from_path(mut full_path: Vec<String>) -> Self {
-        let rule = full_path.pop().unwrap_or_default();
+impl Reference {
+    #[must_use]
+    pub fn local(name: String) -> Self {
         Self {
-            segments: full_path,
-            rule,
+            segments: Vec::new(),
+            name,
         }
     }
 
-    /// Get all path segments including the rule name
+    #[must_use]
+    pub fn from_path(path: Vec<String>) -> Self {
+        if path.is_empty() {
+            Self {
+                segments: Vec::new(),
+                name: String::new(),
+            }
+        } else {
+            // Safe: path is non-empty.
+            let name = path[path.len() - 1].clone();
+            let segments = path[..path.len() - 1].to_vec();
+            Self { segments, name }
+        }
+    }
+
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        self.segments.is_empty()
+    }
+
     #[must_use]
     pub fn full_path(&self) -> Vec<String> {
         let mut path = self.segments.clone();
-        path.push(self.rule.clone());
+        path.push(self.name.clone());
         path
+    }
+}
+
+impl fmt::Display for Reference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for segment in &self.segments {
+            write!(f, "{}.", segment)?;
+        }
+        write!(f, "{}", self.name)
     }
 }
 
@@ -770,46 +814,11 @@ impl fmt::Display for DurationUnit {
     }
 }
 
-impl FactReference {
-    #[must_use]
-    pub fn local(fact: String) -> Self {
-        Self {
-            segments: Vec::new(),
-            fact,
-        }
-    }
-
-    #[must_use]
-    pub fn from_path(path: Vec<String>) -> Self {
-        if path.is_empty() {
-            Self {
-                segments: Vec::new(),
-                fact: String::new(),
-            }
-        } else {
-            // Safe: path is non-empty.
-            let fact = path[path.len() - 1].clone();
-            let segments = path[..path.len() - 1].to_vec();
-            Self { segments, fact }
-        }
-    }
-
-    #[must_use]
-    pub fn is_local(&self) -> bool {
-        self.segments.is_empty()
-    }
-
-    #[must_use]
-    pub fn full_path(&self) -> Vec<String> {
-        let mut path = self.segments.clone();
-        path.push(self.fact.clone());
-        path
-    }
-}
+//
 
 impl LemmaFact {
     #[must_use]
-    pub fn new(reference: FactReference, value: FactValue, source_location: Source) -> Self {
+    pub fn new(reference: Reference, value: FactValue, source_location: Source) -> Self {
         Self {
             reference,
             value,
@@ -830,6 +839,7 @@ impl LemmaDoc {
             types: Vec::new(),
             facts: Vec::new(),
             rules: Vec::new(),
+            meta_fields: Vec::new(),
         }
     }
 
@@ -883,6 +893,12 @@ impl LemmaDoc {
         self.types.push(type_def);
         self
     }
+
+    #[must_use]
+    pub fn add_meta_field(mut self, meta: MetaField) -> Self {
+        self.meta_fields.push(meta);
+        self
+    }
 }
 
 impl fmt::Display for LemmaDoc {
@@ -932,16 +948,14 @@ impl fmt::Display for LemmaDoc {
             }
         }
 
-        Ok(())
-    }
-}
-
-impl fmt::Display for FactReference {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for segment in &self.segments {
-            write!(f, "{}.", segment)?;
+        if !self.meta_fields.is_empty() {
+            writeln!(f)?;
+            for meta in &self.meta_fields {
+                writeln!(f, "{}", meta)?;
+            }
         }
-        write!(f, "{}", self.fact)
+
+        Ok(())
     }
 }
 
@@ -986,8 +1000,7 @@ pub fn expression_precedence(kind: &ExpressionKind) -> u8 {
         },
         ExpressionKind::MathematicalComputation(..) => 8,
         ExpressionKind::Literal(..)
-        | ExpressionKind::FactReference(..)
-        | ExpressionKind::RuleReference(..)
+        | ExpressionKind::Reference(..)
         | ExpressionKind::UnresolvedUnitLiteral(..)
         | ExpressionKind::Veto(..) => 10,
     }
@@ -1010,8 +1023,7 @@ impl fmt::Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             ExpressionKind::Literal(lit) => write!(f, "{}", lit),
-            ExpressionKind::FactReference(r) => write!(f, "{}", r),
-            ExpressionKind::RuleReference(rule_ref) => write!(f, "{}", rule_ref),
+            ExpressionKind::Reference(r) => write!(f, "{}", r),
             ExpressionKind::Arithmetic(left, op, right) => {
                 let my_prec = expression_precedence(&self.kind);
                 write_expression_child(f, left, my_prec)?;
@@ -1157,15 +1169,7 @@ impl fmt::Display for DateTimeValue {
     }
 }
 
-impl fmt::Display for RuleReference {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.segments.is_empty() {
-            write!(f, "{}?", self.rule)
-        } else {
-            write!(f, "{}.{}?", self.segments.join("."), self.rule)
-        }
-    }
-}
+//
 
 /// Type definition (named, import, or inline).
 /// Applying constraints to produce TypeSpecification is done in planning (semantics).
@@ -1188,7 +1192,7 @@ pub enum TypeDef {
         source_location: Source,
         parent: String,
         constraints: Option<Vec<Constraint>>,
-        fact_ref: FactReference,
+        fact_ref: Reference,
         from: Option<DocRef>,
     },
 }
@@ -1407,6 +1411,17 @@ impl<'a> fmt::Display for AsLemmaSource<'a, Value> {
                 Some(unit_name) => write!(f, "{} {}", format_decimal_source(n), unit_name),
                 None => write!(f, "{}", format_decimal_source(n)),
             },
+        }
+    }
+}
+
+// -- Display for AsLemmaSource<MetaValue> ------------------------------------
+
+impl<'a> fmt::Display for AsLemmaSource<'a, MetaValue> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            MetaValue::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
+            MetaValue::Unquoted(s) => write!(f, "{}", s),
         }
     }
 }

@@ -280,8 +280,8 @@ fn test_rule_reference_type_propagation() {
 doc test
 fact base: 100
 rule derived: base * 2
-rule another: derived?
-  unless derived? > 150 then 0
+rule another: derived
+  unless derived > 150 then 0
 "#;
 
     let mut engine = Engine::new();

@@ -12,14 +12,12 @@ rule discount_percentage: 0%
   unless quantity >= 20 then 15%
   unless is_premium then 20%
 
-rule total_after_discount: total_before_discount? - discount_percentage?
-
+rule total_after_discount: total_before_discount - discount_percentage
 rule shipping_cost: 15
-  unless total_after_discount? >= 100 then 10
-  unless total_after_discount? >= 200 then 0
+  unless total_after_discount >= 100 then 10
+  unless total_after_discount >= 200 then 0
 
-rule final_total: total_after_discount? + shipping_cost?
-
+rule final_total: total_after_discount + shipping_cost
 rule age_validation: true
   unless customer_age < 18
     then veto "Customer must be 18 or older"
@@ -29,11 +27,11 @@ rule can_process: yes
   unless customer_age < 18 then no
 
 rule priority_processing: no
-  unless total_after_discount? > 500 then yes
+  unless total_after_discount > 500 then yes
   unless is_premium then yes
 
 rule message: "Standard order"
-  unless final_total? > 1000
+  unless final_total > 1000
     then "High-value order - manager approval required"
   unless is_premium
     then "Premium order - expedited processing"

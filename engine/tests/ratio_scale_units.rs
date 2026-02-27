@@ -21,8 +21,8 @@ fact savings_amount: 75
 fact total_amount: 300
 
 rule savings_ratio: (savings_amount / total_amount) in percent
-rule is_above_20: savings_ratio? > 20%
-rule is_above_30: savings_ratio? > 30%
+rule is_above_20: savings_ratio > 20%
+rule is_above_30: savings_ratio > 30%
 "#;
 
     let mut engine = Engine::new();
@@ -68,8 +68,8 @@ fact whole: 60
 
 rule pct: (part / whole) in percent
 rule tier: "low"
-    unless pct? > 25% then "mid"
-    unless pct? > 50% then "high"
+    unless pct > 25% then "mid"
+    unless pct > 50% then "high"
 "#;
 
     let mut engine = Engine::new();
@@ -92,7 +92,7 @@ doc permille_doc
 fact value: 0.025
 
 rule as_permille: value in permille
-rule above_20_permille: as_permille? > 20 permille
+rule above_20_permille: as_permille > 20 permille
 "#;
 
     let mut engine = Engine::new();
@@ -233,8 +233,8 @@ fact a: 10
 fact b: 40
 
 rule pct: (a / b) in percent
-rule plus_five: pct? + 5%
-rule compared: plus_five? > 25%
+rule plus_five: pct + 5%
+rule compared: plus_five > 25%
 "#;
 
     let mut engine = Engine::new();
@@ -279,7 +279,7 @@ fact part: 50
 
 rule as_eur: amount in eur
 rule share_pct: (part / amount) in percent
-rule share_above_20: share_pct? > 20%
+rule share_above_20: share_pct > 20%
 "#;
 
     let mut engine = Engine::new();

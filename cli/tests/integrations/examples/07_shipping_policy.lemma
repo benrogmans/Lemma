@@ -60,14 +60,9 @@ rule customer_discount: 0%
 
 rule free_shipping_eligible: order_total >= 100 and destination_country is "NL"
 
-rule shipping_before_discount: base_shipping_rate? + weight_surcharge? + po_box_fee?
-  + expedited_fee?
-  + hazardous_fee?
-
-rule shipping_discount_amount: shipping_before_discount? * customer_discount?
-
-rule final_shipping: shipping_before_discount? - shipping_discount_amount?
-  unless free_shipping_eligible? then 0
+rule shipping_before_discount: base_shipping_rate + weight_surcharge + po_box_fee  + expedited_fee  + hazardous_fee
+rule shipping_discount_amount: shipping_before_discount * customer_discount
+rule final_shipping: shipping_before_discount - shipping_discount_amount  unless free_shipping_eligible then 0
 
 rule estimated_delivery_days: 14 days
   unless destination_country is "NL" then 2 days
@@ -82,9 +77,7 @@ rule ships_to_location: true
   unless destination_region == "Svalbard"
     then veto "Shipping not available to Svalbard"
 
-rule total_with_shipping: order_total + final_shipping?
-
+rule total_with_shipping: order_total + final_shipping
 rule Summary: "Standard shipping"
-  unless free_shipping_eligible?
-    then "Free shipping (order over €100)"
+  unless free_shipping_eligible    then "Free shipping (order over €100)"
   unless is_expedited then "Expedited shipping"

@@ -21,4 +21,4 @@ rule helper_value: helper.value
 
 rule line_total: unit_price * 2
 
-rule formatted: helper_value? + 0
+rule formatted: helper_value + 0

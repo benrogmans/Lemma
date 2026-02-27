@@ -30,14 +30,14 @@ fact is_member: false
 rule price_with_vat: base_price + 21%
 
 rule bulk_discount
-  : quantity >= 100 and price_with_vat? > 500
+  : quantity >= 100 and price_with_vat > 500
 
 rule discount: 0%
   unless quantity >= 10	then 10%
-  unless bulk_discount? then 15%
+  unless bulk_discount then 15%
   unless is_member		then 20%
 
-rule price_with_discount: base_price - discount?
+rule price_with_discount: base_price - discount
 ```
 
 Format for clarity - all examples below show formatting styles, not requirements.
@@ -164,7 +164,7 @@ When a veto applies, the rule produces **no valid result** - it's blocked comple
 rule validated_score: score
   unless score < 0 then veto "Invalid score"
 
-rule result: validated_score?
+rule result: validated_score
   unless use_default then 50
 ```
 
@@ -176,7 +176,7 @@ See: [examples/02_rules_and_unless.lemma](examples/02_rules_and_unless.lemma), [
 
 ### Rule References
 
-Reference other rules using `?` suffix:
+Reference other rules by name (the engine resolves whether a name is a fact or a rule):
 
 ```lemma
 rule is_adult
@@ -186,11 +186,9 @@ rule has_license
   : license_status == "valid"
 
 rule can_drive
-  : is_adult? and has_license?
-  unless license_suspended? then veto "License suspended"
+  : is_adult and has_license
+  unless license_suspended then veto "License suspended"
 ```
-
-Note: Facts don't use `?`, only rule references do.
 
 See: [examples/08_rule_references.lemma](examples/08_rule_references.lemma)
 
@@ -258,8 +256,8 @@ See: [reference.md - Comparison](reference.md#comparison)
 ```lemma
 rule can_approve_loan
   : credit_score >= 650
-    and income_verified?
-    and not has_bankruptcy?
+    and income_verified
+    and not has_bankruptcy
 
 rule needs_manager_review
   : loan_amount > 100000
@@ -423,7 +421,7 @@ Browse [examples/](examples/) directory:
 5. **[05_date_handling.lemma](examples/05_date_handling.lemma)** - Date arithmetic and comparisons
 6. **[06_tax_calculation.lemma](examples/06_tax_calculation.lemma)** - Real-world progressive tax rules
 7. **[07_shipping_policy.lemma](examples/07_shipping_policy.lemma)** - Complex business logic
-8. **[08_rule_references.lemma](examples/08_rule_references.lemma)** - Rule composition with `?` syntax
+8. **[08_rule_references.lemma](examples/08_rule_references.lemma)** - Rule composition and references
 
 ## Implementation
 

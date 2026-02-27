@@ -23,23 +23,21 @@ rule contract_duration: contract_end - contract_start
 
 rule probation_end_date: hire_date + probation_period
 
-rule is_probation_complete: current_date > probation_end_date?
-
+rule is_probation_complete: current_date > probation_end_date
 rule employee_age: current_date - employee_birth_date in years
 
-rule is_adult: employee_age? >= 18
+rule is_adult: employee_age >= 18
 
 rule days_until_deadline: project_deadline - current_date
 
-rule is_overdue: days_until_deadline? < 0 days
+rule is_overdue: days_until_deadline < 0 days
 
-rule is_urgent: days_until_deadline? < 7 days and not is_overdue?
-
+rule is_urgent: days_until_deadline < 7 days and not is_overdue
 rule meeting_end_time: meeting_time + meeting_duration
 
 rule contract_active: current_date >= contract_start and current_date <= contract_end
-  unless is_overdue? then false
+  unless is_overdue then false
 
 rule time_employed: current_date - hire_date
 
-rule years_employed: time_employed? in years
+rule years_employed: time_employed in years

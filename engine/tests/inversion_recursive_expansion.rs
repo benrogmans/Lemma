@@ -10,8 +10,8 @@ fn test_recursive_rule_reference_expansion_enables_solving() {
         fact base_price: [number]
 
         rule rate_a: 0.21
-        rule rate_b: rate_a? + 0.01
-        rule total: base_price * (1 + rate_b?)
+        rule rate_b: rate_a + 0.01
+        rule total: base_price * (1 + rate_b)
     "#;
 
     let mut engine = Engine::new();

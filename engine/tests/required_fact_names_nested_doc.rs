@@ -19,12 +19,12 @@ rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
   unless is_member then 15%
-rule total: price - discount?
+rule total: price - discount
   unless price < 50 eur then price
 
 doc cashier
 fact calc: doc pricing
-rule total: calc.total?
+rule total: calc.total
 "#;
 
     let mut engine = Engine::new();
@@ -32,7 +32,7 @@ rule total: calc.total?
 
     let plan = engine.get_execution_plan("cashier").unwrap();
 
-    // Schema for all rules: cashier.total depends on pricing.total (via calc.total?),
+    // Schema for all rules: cashier.total depends on pricing.total (via calc.total),
     // so cashier's schema must include nested facts like calc.price.
     let schema_all = plan.schema();
     assert!(

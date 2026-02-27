@@ -7,7 +7,7 @@
 //! - Applying constraints to create final type specifications
 
 use crate::error::Error;
-use crate::parsing::ast::{CommandArg, FactReference, TypeDef};
+use crate::parsing::ast::{CommandArg, Reference, TypeDef};
 use crate::planning::semantics::{self, LemmaType, TypeExtends, TypeSpecification};
 
 use std::collections::{HashMap, HashSet};
@@ -20,7 +20,7 @@ pub struct ResolvedDocumentTypes {
     pub named_types: HashMap<String, LemmaType>,
 
     /// Inline type definitions: fact reference -> fully resolved type
-    pub inline_type_definitions: HashMap<FactReference, LemmaType>,
+    pub inline_type_definitions: HashMap<Reference, LemmaType>,
 
     /// Unit index: unit_name -> type that defines it
     /// Built during resolution - if unit appears in multiple types, resolution fails
@@ -38,7 +38,7 @@ pub struct TypeRegistry {
     named_types: HashMap<String, HashMap<String, TypeDef>>,
     /// Inline type definitions per document: doc_name -> (fact_reference -> TypeDef)
     /// Stores inline type definitions keyed by their fact reference
-    inline_type_definitions: HashMap<String, HashMap<FactReference, TypeDef>>,
+    inline_type_definitions: HashMap<String, HashMap<Reference, TypeDef>>,
 }
 
 impl TypeRegistry {
@@ -81,7 +81,7 @@ impl TypeRegistry {
                     return Err(Error::planning(
                         format!(
                             "Inline type definition for fact '{}' is already defined in document '{}'",
-                            fact_ref.fact, doc
+                            fact_ref.name, doc
                         ),
                         Some(def_loc.clone()),
                         None::<String>,
@@ -149,7 +149,7 @@ impl TypeRegistry {
         // Extend the unit index with units from inline type definitions
         for (fact_ref, resolved_type) in &existing.inline_type_definitions {
             let inline_type_name = format!("{}::{}", doc, fact_ref);
-            let e = if resolved_type.is_scale() {
+            let e: Result<(), Error> = if resolved_type.is_scale() {
                 self.add_scale_units_to_index(
                     &mut existing.unit_index,
                     resolved_type,
@@ -242,7 +242,7 @@ impl TypeRegistry {
         // Add units from named types (collect all errors)
         for resolved_type in named_types.values() {
             let type_name = resolved_type.name.as_deref().unwrap_or("inline");
-            let e = if resolved_type.is_scale() {
+            let e: Result<(), Error> = if resolved_type.is_scale() {
                 self.add_scale_units_to_index(&mut unit_index, resolved_type, doc, type_name)
             } else if resolved_type.is_ratio() {
                 self.add_ratio_units_to_index(&mut unit_index, resolved_type, doc, type_name)
@@ -257,7 +257,7 @@ impl TypeRegistry {
         // Add units from inline type definitions (collect all errors)
         for (fact_ref, resolved_type) in &inline_type_definitions {
             let inline_type_name = format!("{}::{}", doc, fact_ref);
-            let e = if resolved_type.is_scale() {
+            let e: Result<(), Error> = if resolved_type.is_scale() {
                 self.add_scale_units_to_index(
                     &mut unit_index,
                     resolved_type,
@@ -771,9 +771,9 @@ mod tests {
 
     #[test]
     fn test_register_inline_type_definition() {
-        use crate::parsing::ast::FactReference;
+        use crate::parsing::ast::Reference;
         let mut registry = test_registry();
-        let fact_ref = FactReference::local("age".to_string());
+        let fact_ref = Reference::local("age".to_string());
         let type_def = TypeDef::Inline {
             source_location: crate::Source::new(
                 "<test>",

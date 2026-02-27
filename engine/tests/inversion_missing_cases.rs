@@ -171,7 +171,7 @@ fn cross_document_simple() {
         fact order_total: [number]
 
         rule discount: order_total * base.discount_rate
-        rule final_total: order_total - discount?
+        rule final_total: order_total - discount
     "#;
 
     let mut engine = Engine::new();
@@ -215,7 +215,7 @@ fn cross_document_rule_references() {
         fact settings: doc config
         fact customer_lifetime_value: [number]
 
-        rule is_vip: customer_lifetime_value >= settings.eligibility_threshold?
+        rule is_vip: customer_lifetime_value >= settings.eligibility_threshold
     "#;
 
     let mut engine = Engine::new();
@@ -264,7 +264,7 @@ fn cross_document_multi_level() {
         fact regional: doc regional
         fact amount: [number]
 
-        rule fee: amount * regional.effective_rate?
+        rule fee: amount * regional.effective_rate
     "#;
 
     let mut engine = Engine::new();
@@ -322,8 +322,8 @@ fn cross_document_piecewise() {
         fact customer: doc base
         fact subtotal: [number]
 
-        rule discount: subtotal * customer.discount_rate?
-        rule total: subtotal - discount?
+        rule discount: subtotal * customer.discount_rate
+        rule total: subtotal - discount
     "#;
 
     let mut engine = Engine::new();

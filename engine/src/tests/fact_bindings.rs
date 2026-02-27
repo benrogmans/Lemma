@@ -33,7 +33,7 @@ fact contract.base.rate: 100"#;
 
     assert_eq!(
         result[0].facts[0].reference,
-        crate::parsing::ast::FactReference::from_path(vec!["contract".to_string()])
+        crate::parsing::ast::Reference::from_path(vec!["contract".to_string()])
     );
     if let FactValue::DocumentReference(doc_ref) = &result[0].facts[0].value {
         assert_eq!(doc_ref.name, "employment_contract");
@@ -44,7 +44,7 @@ fact contract.base.rate: 100"#;
 
     assert_eq!(
         result[0].facts[1].reference,
-        crate::parsing::ast::FactReference::from_path(vec![
+        crate::parsing::ast::Reference::from_path(vec![
             "contract".to_string(),
             "start_date".to_string()
         ])
@@ -61,7 +61,7 @@ fact contract.base.rate: 100"#;
 
     assert_eq!(
         result[0].facts[2].reference,
-        crate::parsing::ast::FactReference::from_path(vec![
+        crate::parsing::ast::Reference::from_path(vec![
             "contract".to_string(),
             "end_date".to_string()
         ])
@@ -73,7 +73,7 @@ fact contract.base.rate: 100"#;
 
     assert_eq!(
         result[0].facts[3].reference,
-        crate::parsing::ast::FactReference::from_path(vec![
+        crate::parsing::ast::Reference::from_path(vec![
             "contract".to_string(),
             "employment_type".to_string()
         ])
@@ -90,10 +90,7 @@ fact contract.base.rate: 100"#;
 
     assert_eq!(
         result[0].facts[4].reference,
-        crate::parsing::ast::FactReference::from_path(vec![
-            "contract".to_string(),
-            "base".to_string()
-        ])
+        crate::parsing::ast::Reference::from_path(vec!["contract".to_string(), "base".to_string()])
     );
     if let FactValue::DocumentReference(doc_ref) = &result[0].facts[4].value {
         assert_eq!(doc_ref.name, "base_contract");
@@ -104,7 +101,7 @@ fact contract.base.rate: 100"#;
 
     assert_eq!(
         result[0].facts[5].reference,
-        crate::parsing::ast::FactReference::from_path(vec![
+        crate::parsing::ast::Reference::from_path(vec![
             "contract".to_string(),
             "base".to_string(),
             "rate".to_string()

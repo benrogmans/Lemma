@@ -41,8 +41,7 @@ that parses input and calls `Display` on the resulting AST.
 
 ### Display impls that are already correct (no changes needed)
 
-- `FactReference` — correct dot-path output
-- `RuleReference` — correct `name?` and `path.name?` output
+- `Reference` — correct dot-path output (no `?`; fact vs rule resolved in planning)
 - `DocRef` — correct `@` handling
 - `ArithmeticComputation` — correct operator symbols
 - `ComparisonComputation` — correct operator symbols
@@ -132,15 +131,15 @@ fact employee.name: "Alice Smith"
 ### Rules
 
 ```
-rule total: subtotal? - discount?
+rule total: subtotal - discount
 
 rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
 
-rule tax: (bracket_2_limit? - bracket_1_limit?) * tax_bracket_2?
-  unless taxable_income? < bracket_2_limit?
-    then (taxable_income? - bracket_1_limit?) * tax_bracket_2?
+rule tax: (bracket_2_limit - bracket_1_limit) * tax_bracket_2
+  unless taxable_income < bracket_2_limit
+    then (taxable_income - bracket_1_limit) * tax_bracket_2
 ```
 
 - `rule name: expression` on one line (or wrapped at arithmetic operators when over max_cols)
@@ -257,8 +256,7 @@ fn precedence(kind: &ExpressionKind) -> u8 {
         ExpressionKind::MathematicalComputation(..)  => 8,
         // Primary — never needs parens
         ExpressionKind::Literal(..)
-        | ExpressionKind::FactReference(..)
-        | ExpressionKind::RuleReference(..)
+        | ExpressionKind::Reference(..)
         | ExpressionKind::UnresolvedUnitLiteral(..)
         | ExpressionKind::Veto(..)                   => 10,
     }

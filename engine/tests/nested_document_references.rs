@@ -21,7 +21,7 @@ rule final_price: base_price * (1 + tax_rate)
 doc line_item
 fact pricing: doc pricing
 fact quantity: 10
-rule line_total: pricing.final_price? * quantity
+rule line_total: pricing.final_price * quantity
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "pricing.lemma").unwrap();
@@ -62,13 +62,13 @@ rule doubled: value * 2
     let middle_doc = r#"
 doc middle
 fact base_ref: doc base
-rule middle_calc: base_ref.doubled? + 50
+rule middle_calc: base_ref.doubled + 50
 "#;
 
     let top_doc = r#"
 doc top
 fact middle_ref: doc middle
-rule top_calc: middle_ref.middle_calc?
+rule top_calc: middle_ref.middle_calc
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -115,7 +115,7 @@ rule final_price: base_price * 1.1
 doc line_item
 fact pricing: doc pricing
 fact quantity: 10
-rule line_total: pricing.final_price? * quantity
+rule line_total: pricing.final_price * quantity
 "#;
 
     let order_doc = r#"
@@ -123,7 +123,7 @@ doc order
 fact line: doc line_item
 fact line.pricing: doc wholesale_pricing
 fact line.quantity: 100
-rule order_total: line.line_total?
+rule order_total: line.line_total
 "#;
 
     add_lemma_code_blocking(&mut engine, pricing_doc, "test.lemma").unwrap();
@@ -208,7 +208,7 @@ rule final_price: base_price * (1 + tax_rate)
 doc line_item
 fact pricing: doc pricing
 fact quantity: 10
-rule line_total: pricing.final_price? * quantity
+rule line_total: pricing.final_price * quantity
 "#;
 
     let order_doc = r#"
@@ -216,7 +216,7 @@ doc order
 fact line: doc line_item
 fact line.pricing.tax_rate: 10%
 fact line.quantity: 5
-rule order_total: line.line_total?
+rule order_total: line.line_total
 "#;
 
     add_lemma_code_blocking(&mut engine, pricing_doc, "test.lemma").unwrap();
@@ -265,9 +265,9 @@ doc comparison
 fact path1: doc wrapper
 fact path2: doc wrapper
 fact path2.base.price: 75
-rule total1: path1.base.total?
-rule total2: path2.base.total?
-rule difference: total2? - total1?
+rule total1: path1.base.total
+rule total2: path2.base.total
+rule difference: total2 - total1
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -342,7 +342,7 @@ rule tripled: value * 3
 doc combined
 fact c1: doc config1
 fact c2: doc config2
-rule sum: c1.doubled? + c2.tripled?
+rule sum: c1.doubled + c2.tripled
 rule product: c1.value * c2.value
 "#;
 
@@ -397,13 +397,13 @@ rule x_squared: x * x
 doc middle
 fact base_config: doc base
 fact base_config.x: 20
-rule x_squared_plus_ten: base_config.x_squared? + 10
+rule x_squared_plus_ten: base_config.x_squared + 10
 "#;
 
     let top_doc = r#"
 doc top
 fact middle_config: doc middle
-rule final_result: middle_config.x_squared_plus_ten? * 2
+rule final_result: middle_config.x_squared_plus_ten * 2
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
@@ -450,9 +450,9 @@ fact wholesale: doc pricing
 fact wholesale.discount: 15%
 fact wholesale.price: 80
 
-rule retail_final: retail.final_price?
-rule wholesale_final: wholesale.final_price?
-rule price_difference: retail_final? - wholesale_final?
+rule retail_final: retail.final_price
+rule wholesale_final: wholesale.final_price
+rule price_difference: retail_final - wholesale_final
 "#;
 
     add_lemma_code_blocking(&mut engine, pricing_doc, "test.lemma").unwrap();
@@ -523,14 +523,14 @@ rule x: true
     let doc_c = r#"
 doc c
 fact aa: doc a
-rule y: aa.x? > 1
+rule y: aa.x > 1
 "#;
 
     let doc_d = r#"
 doc d
 fact cc: doc c
 fact cc.aa: doc b
-rule yy: cc.y?
+rule yy: cc.y
 "#;
 
     add_lemma_code_blocking(&mut engine, doc_a, "test.lemma").unwrap();

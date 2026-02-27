@@ -10,7 +10,7 @@ fn test_rule_reference_expansion_simple_constant() {
         fact base_price: [number]
 
         rule tax_rate: 0.21
-        rule total_price: base_price * (1 + tax_rate?)
+        rule total_price: base_price * (1 + tax_rate)
     "#;
 
     let mut engine = Engine::new();
