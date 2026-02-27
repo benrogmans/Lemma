@@ -215,8 +215,24 @@ fn prompt_facts(
             .map(|v| v.display_value().to_string())
             .or_else(|| default_value_from_type(&lemma_type));
 
-        let input_value = prompt_value_for_type(&fact_name, &lemma_type, default_value.as_deref())?;
-        facts.insert(fact_name, input_value);
+        loop {
+            let input_value =
+                prompt_value_for_type(&fact_name, &lemma_type, default_value.as_deref())?;
+
+            let mut trial_facts = provided_facts.clone();
+            trial_facts.extend(facts.clone());
+            trial_facts.insert(fact_name.clone(), input_value.clone());
+
+            match engine.evaluate(doc_name, selected_rules.clone(), trial_facts) {
+                Ok(_) => {
+                    facts.insert(fact_name.clone(), input_value);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("  {}\n", e);
+                }
+            }
+        }
     }
 
     Ok(facts)
