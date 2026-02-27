@@ -303,18 +303,31 @@ impl Graph {
     ///
     /// Call this once and pass the result to [`Graph::build`] for each
     /// document being planned.
-    pub(crate) fn prepare_types(
-        all_docs: &[LemmaDoc],
-        sources: &HashMap<String, String>,
-    ) -> (PreparedTypes, Vec<LemmaError>) {
-        let mut type_registry = TypeRegistry::new(sources.clone());
+    pub(crate) fn prepare_types(all_docs: &[LemmaDoc]) -> (PreparedTypes, Vec<LemmaError>) {
+        let mut type_registry = TypeRegistry::new();
         let mut errors: Vec<LemmaError> = Vec::new();
         let mut resolved_types: HashMap<String, ResolvedDocumentTypes> = HashMap::new();
 
         // Register all named type definitions from every document.
         for doc in all_docs {
             for type_def in &doc.types {
-                if let Err(e) = type_registry.register_type(&doc.name, type_def.clone()) {
+                let type_name = match type_def {
+                    ast::TypeDef::Regular { name, .. } | ast::TypeDef::Import { name, .. } => {
+                        Some(name.as_str())
+                    }
+                    ast::TypeDef::Inline { .. } => None,
+                };
+                if let Some(name) = type_name {
+                    if let Err(e) = crate::limits::check_max_length(
+                        name,
+                        crate::limits::MAX_TYPE_NAME_LENGTH,
+                        "type",
+                    ) {
+                        errors.push(e);
+                        continue;
+                    }
+                }
+                if let Err(e) = type_registry.register_type(&doc.full_id(), type_def.clone()) {
                     errors.push(e);
                 }
             }
@@ -328,11 +341,10 @@ impl Graph {
         // We only resolve *named* types here because inline type definitions are registered while
         // traversing facts during graph building and must be resolved afterwards per document.
         for doc in all_docs {
-            match type_registry.resolve_named_types(&doc.name) {
+            let doc_id = doc.full_id();
+            match type_registry.resolve_named_types(&doc_id) {
                 Ok(document_types) => {
-                    // Validate type specifications for all resolved named types
                     for (type_name, lemma_type) in &document_types.named_types {
-                        // Find the original TypeDef to get its real source location
                         let source = doc
                             .types
                             .iter()
@@ -345,7 +357,7 @@ impl Graph {
                             .unwrap_or_else(|| {
                                 unreachable!(
                                     "BUG: resolved named type '{}' has no corresponding TypeDef in document '{}'",
-                                    type_name, doc.name
+                                    type_name, doc_id
                                 )
                             });
                         let mut spec_errors = validate_type_specifications(
@@ -355,7 +367,7 @@ impl Graph {
                         );
                         errors.append(&mut spec_errors);
                     }
-                    resolved_types.insert(doc.name.clone(), document_types);
+                    resolved_types.insert(doc_id, document_types);
                 }
                 Err(e) => errors.push(e),
             }
@@ -388,7 +400,7 @@ impl Graph {
             facts: IndexMap::new(),
             rules: IndexMap::new(),
             sources,
-            all_docs: all_docs.iter().map(|doc| (doc.name.clone(), doc)).collect(),
+            all_docs: all_docs.iter().map(|doc| (doc.full_id(), doc)).collect(),
             resolved_types: prepared.resolved_types.clone(),
             errors: Vec::new(),
         };
@@ -492,13 +504,9 @@ impl Graph {
                 )
             })
             .collect();
-        if let Err(interface_errors) = validate_document_interfaces(
-            &referenced_rules,
-            &doc_ref_facts,
-            &rule_entries,
-            all_docs,
-            self.sources(),
-        ) {
+        if let Err(interface_errors) =
+            validate_document_interfaces(&referenced_rules, &doc_ref_facts, &rule_entries, all_docs)
+        {
             errors.extend(interface_errors);
         }
 
@@ -516,6 +524,41 @@ impl Graph {
 impl<'a> GraphBuilder<'a> {
     fn engine_error(&self, message: impl Into<String>, source: &Source) -> LemmaError {
         LemmaError::engine(message.into(), Some(source.clone()), None::<String>)
+    }
+
+    /// Resolve a `DocRef` to a concrete document's `full_id` key in `all_docs`.
+    ///
+    /// - **Versioned** (`version` is `Some`): exact match on `full_id()`.
+    /// - **Unversioned** (`version` is `None`): collect all docs with the same base
+    ///   name, sort by version using natural sort (`None` first), resolve to the last.
+    fn resolve_doc_ref_to_id(&self, doc_ref: &ast::DocRef) -> Option<String> {
+        if doc_ref.version.is_some() {
+            let id = doc_ref.full_id();
+            if self.all_docs.contains_key(&id) {
+                Some(id)
+            } else {
+                None
+            }
+        } else {
+            let mut candidates: Vec<(&String, &Option<String>)> = self
+                .all_docs
+                .values()
+                .filter(|d| d.name == doc_ref.name)
+                .map(|d| (&d.name, &d.version))
+                .collect();
+
+            candidates.sort_by(|(_, va), (_, vb)| {
+                let va_owned = va.as_ref().cloned();
+                let vb_owned = vb.as_ref().cloned();
+                crate::planning::version_sort::compare_versions(&va_owned, &vb_owned)
+            });
+
+            match candidates.last() {
+                Some((name, Some(v))) => Some(format!("{}.{}", name, v)),
+                Some((name, None)) => Some((*name).clone()),
+                None => None,
+            }
+        }
     }
 
     /// Resolve a TypeDeclaration ParsedFactValue into a LemmaType
@@ -544,11 +587,14 @@ impl<'a> GraphBuilder<'a> {
 
         // Get resolved types for the source document.
         // If 'from' is specified, resolve from that document; otherwise use context_doc.
-        // DocRef.name is already the clean name (@ stripped by parser).
-        let source_doc = from
-            .as_ref()
-            .map(|r| r.name.as_str())
-            .unwrap_or(context_doc);
+        let source_doc_owned;
+        let source_doc = match from.as_ref() {
+            Some(r) => {
+                source_doc_owned = r.full_id();
+                source_doc_owned.as_str()
+            }
+            None => context_doc,
+        };
 
         // Try to resolve as a primitive type first (number, boolean, etc.)
         let (base_lemma_type, extends) = if let Some(specs) = Graph::resolve_primitive_type(base) {
@@ -667,7 +713,20 @@ impl<'a> GraphBuilder<'a> {
 
                 match seg_fact {
                     Some(f) => match &f.value {
-                        ParsedFactValue::DocumentReference(doc_ref) => doc_ref.name.clone(),
+                        ParsedFactValue::DocumentReference(doc_ref) => {
+                            match self.resolve_doc_ref_to_id(doc_ref) {
+                                Some(id) => id,
+                                None => {
+                                    return Err(vec![self.engine_error(
+                                        format!(
+                                            "Invalid fact binding path '{}': document '{}' not found",
+                                            binding_path_display, doc_ref
+                                        ),
+                                        fact_source,
+                                    )]);
+                                }
+                            }
+                        }
                         _ => {
                             return Err(vec![self.engine_error(
                                 format!(
@@ -722,6 +781,29 @@ impl<'a> GraphBuilder<'a> {
         for fact in &doc.facts {
             if fact.reference.segments.is_empty() {
                 continue; // Local facts are not bindings
+            }
+
+            let mut name_too_long = false;
+            for segment in &fact.reference.segments {
+                if let Err(e) = crate::limits::check_max_length(
+                    segment,
+                    crate::limits::MAX_FACT_NAME_LENGTH,
+                    "fact",
+                ) {
+                    errors.push(e);
+                    name_too_long = true;
+                }
+            }
+            if let Err(e) = crate::limits::check_max_length(
+                &fact.reference.fact,
+                crate::limits::MAX_FACT_NAME_LENGTH,
+                "fact",
+            ) {
+                errors.push(e);
+                name_too_long = true;
+            }
+            if name_too_long {
+                continue;
             }
 
             // Reject TypeDeclaration as binding value (single enforcement point)
@@ -785,6 +867,25 @@ impl<'a> GraphBuilder<'a> {
         current_doc: &'a LemmaDoc,
         used_binding_keys: &mut HashSet<Vec<String>>,
     ) {
+        if let Err(e) = crate::limits::check_max_length(
+            &fact.reference.fact,
+            crate::limits::MAX_FACT_NAME_LENGTH,
+            "fact",
+        ) {
+            self.errors.push(e);
+            return;
+        }
+        for segment in &fact.reference.segments {
+            if let Err(e) = crate::limits::check_max_length(
+                segment,
+                crate::limits::MAX_FACT_NAME_LENGTH,
+                "fact",
+            ) {
+                self.errors.push(e);
+                return;
+            }
+        }
+
         let fact_path = FactPath {
             segments: current_segments.to_vec(),
             fact: fact.reference.fact.clone(),
@@ -823,7 +924,7 @@ impl<'a> GraphBuilder<'a> {
             match self.resolve_type_declaration(
                 &fact.value,
                 &fact.source_location,
-                current_doc.name.as_str(),
+                &current_doc.full_id(),
             ) {
                 Ok(t) => Some(t),
                 Err(errs) => {
@@ -880,7 +981,7 @@ impl<'a> GraphBuilder<'a> {
                     match self.resolve_type_declaration(
                         &effective_value,
                         &effective_source,
-                        current_doc.name.as_str(),
+                        &current_doc.full_id(),
                     ) {
                         Ok(t) => t,
                         Err(_) => {
@@ -904,20 +1005,28 @@ impl<'a> GraphBuilder<'a> {
                 );
             }
             ParsedFactValue::DocumentReference(_) => {
-                // Use effective_doc_refs for the actual doc name (accounts for bound doc refs).
-                // DocRef.name is already clean (@ stripped by parser).
-                let effective_doc_name = effective_doc_refs
-                    .get(&fact.reference.fact)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        if let ParsedFactValue::DocumentReference(doc_ref) = &effective_value {
-                            doc_ref.name.clone()
-                        } else {
+                // Use effective_doc_refs for the actual doc id (accounts for bound doc refs).
+                // Values in effective_doc_refs are already resolved full_ids.
+                let effective_doc_name =
+                    if let Some(name) = effective_doc_refs.get(&fact.reference.fact).cloned() {
+                        name
+                    } else {
+                        let ParsedFactValue::DocumentReference(doc_ref) = &effective_value else {
                             unreachable!(
-                                "BUG: effective_value is DocumentReference but pattern didn't match"
-                            )
+                            "BUG: effective_value is DocumentReference but pattern didn't match"
+                        )
+                        };
+                        match self.resolve_doc_ref_to_id(doc_ref) {
+                            Some(id) => id,
+                            None => {
+                                self.errors.push(self.engine_error(
+                                    format!("Document '{}' not found", doc_ref),
+                                    &effective_source,
+                                ));
+                                return;
+                            }
                         }
-                    });
+                    };
 
                 if !self.all_docs.contains_key(effective_doc_name.as_str()) {
                     self.errors.push(self.engine_error(
@@ -961,15 +1070,25 @@ impl<'a> GraphBuilder<'a> {
 
             if let ParsedFactValue::DocumentReference(original_doc_ref) = &fact_ref.value {
                 // Only use effective_doc_refs for the FIRST segment.
-                // Subsequent segments use the actual document references from traversed documents.
-                // DocRef.name is already the clean name (@ stripped by parser).
-                let doc_name = if index == 0 {
+                // Subsequent segments resolve from the actual document reference.
+                let resolved = if index == 0 {
                     effective_doc_refs
                         .get(segment)
-                        .map(|s| s.as_str())
-                        .unwrap_or(&original_doc_ref.name)
+                        .cloned()
+                        .or_else(|| self.resolve_doc_ref_to_id(original_doc_ref))
                 } else {
-                    &original_doc_ref.name
+                    self.resolve_doc_ref_to_id(original_doc_ref)
+                };
+
+                let doc_name = match &resolved {
+                    Some(id) => id.as_str(),
+                    None => {
+                        self.errors.push(self.engine_error(
+                            format!("Document '{}' not found", original_doc_ref),
+                            reference_source,
+                        ));
+                        return None;
+                    }
                 };
 
                 let next_doc = match self.all_docs.get(doc_name) {
@@ -1009,19 +1128,66 @@ impl<'a> GraphBuilder<'a> {
         fact_bindings: FactBindings,
         type_registry: &mut TypeRegistry,
     ) -> Result<(), Vec<LemmaError>> {
+        if let Err(e) =
+            crate::limits::check_max_length(&doc.name, crate::limits::MAX_DOC_NAME_LENGTH, "doc")
+        {
+            self.errors.push(e);
+        }
+
+        // Step 0: Cross-version self-reference check.
+        // A document must not reference any version of itself (same base name).
+        for fact in doc.facts.iter() {
+            if let ParsedFactValue::DocumentReference(doc_ref) = &fact.value {
+                if doc_ref.name == doc.name {
+                    self.errors.push(self.engine_error(
+                        format!(
+                            "document '{}' cannot reference '{}' (same base name)",
+                            doc.full_id(),
+                            doc_ref
+                        ),
+                        &fact.source_location,
+                    ));
+                }
+            }
+        }
+        for type_def in &doc.types {
+            if let ast::TypeDef::Import {
+                from,
+                source_location,
+                ..
+            } = type_def
+            {
+                if from.name == doc.name {
+                    self.errors.push(self.engine_error(
+                        format!(
+                            "document '{}' cannot reference '{}' (same base name)",
+                            doc.full_id(),
+                            from
+                        ),
+                        source_location,
+                    ));
+                }
+            }
+        }
+
         // Step 1: Initial effective_doc_refs from this document's local facts.
-        // DocRef.name is already the clean name (@ stripped by the parser).
+        // Values are resolved full_ids (name:version or just name).
+        // Skip self-references (same base name) — already reported as errors above.
         let mut effective_doc_refs: HashMap<String, String> = HashMap::new();
         for fact in doc.facts.iter() {
             if fact.reference.segments.is_empty() {
                 if let ParsedFactValue::DocumentReference(doc_ref) = &fact.value {
-                    effective_doc_refs.insert(fact.reference.fact.clone(), doc_ref.name.clone());
+                    if doc_ref.name == doc.name {
+                        continue;
+                    }
+                    if let Some(resolved_id) = self.resolve_doc_ref_to_id(doc_ref) {
+                        effective_doc_refs.insert(fact.reference.fact.clone(), resolved_id);
+                    }
                 }
             }
         }
 
         // Step 1b: Update effective_doc_refs with caller's doc ref bindings.
-        // If the caller bound a local DocumentReference fact to a different document, use that.
         let current_segment_names: Vec<String> =
             current_segments.iter().map(|s| s.fact.clone()).collect();
         for fact in doc.facts.iter() {
@@ -1032,8 +1198,12 @@ impl<'a> GraphBuilder<'a> {
                     if let Some((ParsedFactValue::DocumentReference(bound_doc_ref), _)) =
                         fact_bindings.get(&binding_key)
                     {
-                        effective_doc_refs
-                            .insert(fact.reference.fact.clone(), bound_doc_ref.name.clone());
+                        if bound_doc_ref.name == doc.name {
+                            continue;
+                        }
+                        if let Some(resolved_id) = self.resolve_doc_ref_to_id(bound_doc_ref) {
+                            effective_doc_refs.insert(fact.reference.fact.clone(), resolved_id);
+                        }
                     }
                 }
             }
@@ -1100,8 +1270,9 @@ impl<'a> GraphBuilder<'a> {
         //
         // If prepare_types failed for this document, there is no entry in resolved_types.
         // That failure was already reported — skip inline resolution entirely.
-        if let Some(existing_types) = self.resolved_types.remove(&doc.name) {
-            match type_registry.resolve_inline_types(&doc.name, existing_types) {
+        let doc_full_id = doc.full_id();
+        if let Some(existing_types) = self.resolved_types.remove(&doc_full_id) {
+            match type_registry.resolve_inline_types(&doc_full_id, existing_types) {
                 Ok(document_types) => {
                     for (fact_ref, lemma_type) in &document_types.inline_type_definitions {
                         let type_name = format!("{} (inline)", fact_ref.fact);
@@ -1123,7 +1294,8 @@ impl<'a> GraphBuilder<'a> {
                         );
                         self.errors.append(&mut spec_errors);
                     }
-                    self.resolved_types.insert(doc.name.clone(), document_types);
+                    self.resolved_types
+                        .insert(doc_full_id.clone(), document_types);
                 }
                 Err(e) => {
                     self.errors.push(e);
@@ -1136,6 +1308,11 @@ impl<'a> GraphBuilder<'a> {
         for fact in &doc.facts {
             if !fact.reference.segments.is_empty() {
                 continue; // Skip binding facts (processed in step 2)
+            }
+            if let ParsedFactValue::DocumentReference(doc_ref) = &fact.value {
+                if doc_ref.name == doc.name {
+                    continue; // Self-reference — error already reported in step 0
+                }
             }
             self.add_fact(
                 fact,
@@ -1253,6 +1430,13 @@ impl<'a> GraphBuilder<'a> {
         current_segments: &[PathSegment],
         effective_doc_refs: &HashMap<String, String>,
     ) {
+        if let Err(e) =
+            crate::limits::check_max_length(&rule.name, crate::limits::MAX_RULE_NAME_LENGTH, "rule")
+        {
+            self.errors.push(e);
+            return;
+        }
+
         let rule_path = RulePath {
             segments: current_segments.to_vec(),
             rule: rule.name.clone(),
@@ -1412,11 +1596,12 @@ impl<'a> GraphBuilder<'a> {
             ast::ExpressionKind::UnresolvedUnitLiteral(_number, unit_name) => {
                 let expr_source = expr_src;
 
-                let Some(document_types) = self.resolved_types.get(&current_doc.name) else {
+                let current_doc_id = current_doc.full_id();
+                let Some(document_types) = self.resolved_types.get(&current_doc_id) else {
                     self.errors.push(self.engine_error(
                         format!(
                             "Cannot resolve unit '{}': types were not resolved for document '{}'",
-                            unit_name, current_doc.name
+                            unit_name, current_doc_id
                         ),
                         expr_source,
                     ));
@@ -1429,7 +1614,7 @@ impl<'a> GraphBuilder<'a> {
                         self.errors.push(self.engine_error(
                             format!(
                                 "Unknown unit '{}' in document '{}'",
-                                unit_name, current_doc.name
+                                unit_name, current_doc_id
                             ),
                             expr_source,
                         ));
@@ -1440,7 +1625,7 @@ impl<'a> GraphBuilder<'a> {
                 let source_text = self.sources.get(&expr_src.attribute).unwrap_or_else(|| {
                     unreachable!(
                         "BUG: missing sources entry for attribute '{}' (doc '{}')",
-                        expr_src.attribute, current_doc.name
+                        expr_src.attribute, current_doc_id
                     )
                 });
                 let literal_str = match expr_src.extract_text(source_text) {
@@ -1863,12 +2048,12 @@ fn infer_fact_type(fact_path: &FactPath, graph: &Graph) -> LemmaType {
 // =============================================================================
 
 /// Construct a LemmaError::engine with source context.
-fn engine_error_at(_graph: &Graph, source: &Source, message: impl Into<String>) -> LemmaError {
+fn engine_error_at(source: &Source, message: impl Into<String>) -> LemmaError {
     LemmaError::engine(message.into(), Some(source.clone()), None::<String>)
 }
 
 /// Construct a LemmaError::semantic with source context.
-fn semantic_error_at(_graph: &Graph, source: &Source, message: impl Into<String>) -> LemmaError {
+fn semantic_error_at(source: &Source, message: impl Into<String>) -> LemmaError {
     LemmaError::semantic(message.into(), Some(source.clone()), None::<String>)
 }
 
@@ -1876,13 +2061,11 @@ fn semantic_error_at(_graph: &Graph, source: &Source, message: impl Into<String>
 fn check_logical_operands(
     left_type: &LemmaType,
     right_type: &LemmaType,
-    graph: &Graph,
     source: &Source,
 ) -> Result<(), Vec<LemmaError>> {
     let mut errors = Vec::new();
     if !left_type.is_boolean() {
         errors.push(engine_error_at(
-            graph,
             source,
             format!(
                 "Logical operation requires boolean operands, got {:?} for left operand",
@@ -1892,7 +2075,6 @@ fn check_logical_operands(
     }
     if !right_type.is_boolean() {
         errors.push(engine_error_at(
-            graph,
             source,
             format!(
                 "Logical operation requires boolean operands, got {:?} for right operand",
@@ -1908,14 +2090,9 @@ fn check_logical_operands(
 }
 
 /// Check that the operand of a logical negation is boolean.
-fn check_logical_operand(
-    operand_type: &LemmaType,
-    graph: &Graph,
-    source: &Source,
-) -> Result<(), Vec<LemmaError>> {
+fn check_logical_operand(operand_type: &LemmaType, source: &Source) -> Result<(), Vec<LemmaError>> {
     if !operand_type.is_boolean() {
         Err(vec![engine_error_at(
-            graph,
             source,
             format!(
                 "Logical negation requires boolean operand, got {:?}",
@@ -1932,7 +2109,6 @@ fn check_comparison_types(
     left_type: &LemmaType,
     op: &crate::ComparisonComputation,
     right_type: &LemmaType,
-    graph: &Graph,
     source: &Source,
 ) -> Result<(), Vec<LemmaError>> {
     let is_equality_only = matches!(
@@ -1946,7 +2122,6 @@ fn check_comparison_types(
     if left_type.is_boolean() && right_type.is_boolean() {
         if !is_equality_only {
             return Err(vec![engine_error_at(
-                graph,
                 source,
                 format!("Can only use == and != with booleans (got {})", op),
             )]);
@@ -1957,7 +2132,6 @@ fn check_comparison_types(
     if left_type.is_text() && right_type.is_text() {
         if !is_equality_only {
             return Err(vec![engine_error_at(
-                graph,
                 source,
                 format!("Can only use == and != with text (got {})", op),
             )]);
@@ -1984,7 +2158,6 @@ fn check_comparison_types(
     if left_type.is_scale() && right_type.is_scale() {
         if !left_type.same_scale_family(right_type) {
             return Err(vec![engine_error_at(
-                graph,
                 source,
                 format!(
                     "Cannot compare different scale types: {} and {}",
@@ -2007,7 +2180,6 @@ fn check_comparison_types(
     }
 
     Err(vec![engine_error_at(
-        graph,
         source,
         format!("Cannot compare {:?} with {:?}", left_type, right_type),
     )])
@@ -2019,7 +2191,6 @@ fn check_arithmetic_types(
     left_type: &LemmaType,
     right_type: &LemmaType,
     operator: &ArithmeticComputation,
-    graph: &Graph,
     source: &Source,
 ) -> Result<(), Vec<LemmaError>> {
     // Date/Time: only Add and Subtract with Duration (or Date/Time - Date/Time)
@@ -2033,7 +2204,6 @@ fn check_arithmetic_types(
         ) && (both_temporal || one_is_duration);
         if !valid {
             return Err(vec![engine_error_at(
-                graph,
                 source,
                 format!(
                     "Cannot apply '{}' to {} and {}.",
@@ -2049,7 +2219,6 @@ fn check_arithmetic_types(
     // Different scale families: reject all operators
     if left_type.is_scale() && right_type.is_scale() && !left_type.same_scale_family(right_type) {
         return Err(vec![engine_error_at(
-            graph,
             source,
             format!(
                 "Cannot {} different scale types: {} and {}. Operations between different scale types produce ambiguous result units.",
@@ -2079,7 +2248,6 @@ fn check_arithmetic_types(
 
     if !left_valid || !right_valid {
         return Err(vec![engine_error_at(
-            graph,
             source,
             format!(
                 "Cannot apply '{}' to {} and {}.",
@@ -2135,7 +2303,6 @@ fn check_arithmetic_types(
 
     if !allowed {
         return Err(vec![engine_error_at(
-            graph,
             source,
             format!(
                 "Cannot apply '{}' to {} and {}.",
@@ -2183,7 +2350,6 @@ fn check_unit_conversion_types(
             match unit_check {
                 Some((true, _)) => Ok(()),
                 Some((false, valid)) => Err(vec![engine_error_at(
-                    graph,
                     source,
                     format!(
                         "Unknown unit '{}' for type {}. Valid units: {}",
@@ -2200,7 +2366,6 @@ fn check_unit_conversion_types(
                         .is_none()
                     {
                         Err(vec![engine_error_at(
-                            graph,
                             source,
                             format!(
                                 "Unknown unit '{}' in document '{}'.",
@@ -2212,7 +2377,6 @@ fn check_unit_conversion_types(
                     }
                 }
                 None => Err(vec![engine_error_at(
-                    graph,
                     source,
                     format!(
                         "Cannot convert {} to unit '{}'.",
@@ -2225,7 +2389,6 @@ fn check_unit_conversion_types(
         SemanticConversionTarget::Duration(_) => {
             if !source_type.is_duration() && !source_type.is_numeric() {
                 Err(vec![engine_error_at(
-                    graph,
                     source,
                     format!("Cannot convert {} to duration.", source_type.name()),
                 )])
@@ -2239,12 +2402,10 @@ fn check_unit_conversion_types(
 /// Check that the operand of a mathematical function (sqrt, sin, etc.) is numeric.
 fn check_mathematical_operand(
     operand_type: &LemmaType,
-    graph: &Graph,
     source: &Source,
 ) -> Result<(), Vec<LemmaError>> {
     if !operand_type.is_scale() && !operand_type.is_number() {
         Err(vec![engine_error_at(
-            graph,
             source,
             format!(
                 "Mathematical function requires numeric operand (scale or number), got {:?}",
@@ -2264,7 +2425,6 @@ fn check_all_rule_references_exist(graph: &Graph) -> Result<(), Vec<LemmaError>>
         for dependency in &rule_node.depends_on_rules {
             if !existing_rules.contains(dependency) {
                 errors.push(engine_error_at(
-                    graph,
                     &rule_node.source,
                     format!(
                         "Rule '{}' references non-existent rule '{}'",
@@ -2294,7 +2454,6 @@ fn check_fact_and_rule_name_collisions(graph: &Graph) -> Result<(), Vec<LemmaErr
                 )
             });
             errors.push(engine_error_at(
-                graph,
                 &rule_node.source,
                 format!(
                     "Name collision: '{}' is defined as both a fact and a rule",
@@ -2327,7 +2486,6 @@ fn check_fact_reference(
 
             if graph.rules().contains_key(&maybe_rule_path) {
                 return Err(vec![semantic_error_at(
-                    graph,
                     fact_source,
                     format!(
                         "Rule reference '{}' must use '?' (did you mean '{}?')",
@@ -2336,7 +2494,6 @@ fn check_fact_reference(
                 )]);
             } else {
                 return Err(vec![semantic_error_at(
-                    graph,
                     fact_source,
                     format!("Unknown fact reference '{}'", fact_path),
                 )]);
@@ -2346,7 +2503,6 @@ fn check_fact_reference(
     match entry {
         FactData::Value { .. } | FactData::TypeDeclaration { .. } => Ok(()),
         FactData::DocumentRef { .. } => Err(vec![engine_error_at(
-            graph,
             entry.source(),
             format!(
                 "Cannot compute type for document reference fact '{}'",
@@ -2400,7 +2556,7 @@ fn check_expression(
                     .as_ref()
                     .expect("BUG: expression missing source in check_expression");
                 collect(
-                    check_logical_operands(&left_type, &right_type, graph, expr_source),
+                    check_logical_operands(&left_type, &right_type, expr_source),
                     &mut errors,
                 );
             }
@@ -2419,7 +2575,7 @@ fn check_expression(
                     .as_ref()
                     .expect("BUG: expression missing source in check_expression");
                 collect(
-                    check_logical_operand(&operand_type, graph, expr_source),
+                    check_logical_operand(&operand_type, expr_source),
                     &mut errors,
                 );
             }
@@ -2437,7 +2593,7 @@ fn check_expression(
                     .as_ref()
                     .expect("BUG: expression missing source in check_expression");
                 collect(
-                    check_comparison_types(&left_type, op, &right_type, graph, expr_source),
+                    check_comparison_types(&left_type, op, &right_type, expr_source),
                     &mut errors,
                 );
             }
@@ -2455,7 +2611,7 @@ fn check_expression(
                     .as_ref()
                     .expect("BUG: expression missing source in check_expression");
                 collect(
-                    check_arithmetic_types(&left_type, &right_type, operator, graph, expr_source),
+                    check_arithmetic_types(&left_type, &right_type, operator, expr_source),
                     &mut errors,
                 );
             }
@@ -2490,7 +2646,6 @@ fn check_expression(
                                 .is_none()
                             {
                                 errors.push(engine_error_at(
-                                    graph,
                                     expr_source,
                                     format!(
                                         "Cannot resolve unit '{}' for document '{}' (types may not have been resolved)",
@@ -2519,7 +2674,7 @@ fn check_expression(
                     .as_ref()
                     .expect("BUG: expression missing source in check_expression");
                 collect(
-                    check_mathematical_operand(&operand_type, graph, expr_source),
+                    check_mathematical_operand(&operand_type, expr_source),
                     &mut errors,
                 );
             }
@@ -2592,7 +2747,6 @@ fn check_rule_types(
                         .as_ref()
                         .expect("BUG: condition expression missing source in check_rule_types");
                     errors.push(engine_error_at(
-                        graph,
                         condition_source,
                         format!(
                             "Unless clause condition in rule '{}' must be boolean, got {:?}",
@@ -2774,7 +2928,7 @@ mod tests {
         all_docs: &[LemmaDoc],
         sources: HashMap<String, String>,
     ) -> Result<Graph, Vec<LemmaError>> {
-        let (prepared, type_errors) = Graph::prepare_types(all_docs, &sources);
+        let (prepared, type_errors) = Graph::prepare_types(all_docs);
         match Graph::build(main_doc, all_docs, sources, &prepared) {
             Ok(graph) => {
                 if type_errors.is_empty() {
@@ -3233,6 +3387,210 @@ mod tests {
                 .any(|e| e.to_string().contains("Type 'length' is already defined")),
             "Should report duplicate 'length' in doc_b: {:?}",
             errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    // =================================================================
+    // Versioned document identifiers: latest-resolution (section 6.3)
+    // =================================================================
+
+    #[test]
+    fn versioned_ref_resolves_by_exact_match() {
+        let code = r#"doc mydoc
+fact x = 10
+
+doc mydoc.v1
+fact x = 11
+
+doc mydoc.v10
+fact x = 12
+
+doc consumer
+fact m = doc mydoc.v1
+rule result = m.x"#;
+        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+        let result = build_graph(consumer, &docs, sources);
+        assert!(
+            result.is_ok(),
+            "versioned ref should resolve: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn unversioned_ref_resolves_to_latest_version() {
+        let code = r#"doc mydoc
+fact x = 10
+
+doc mydoc.v1
+fact x = 11
+
+doc mydoc.v2
+fact x = 12
+
+doc mydoc.v10
+fact x = 13
+
+doc consumer
+fact m = doc mydoc
+rule result = m.x"#;
+        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+
+        let graph = build_graph(consumer, &docs, sources).unwrap();
+        let fact_path = FactPath {
+            segments: vec![PathSegment {
+                fact: "m".to_string(),
+                doc: "mydoc.v10".to_string(),
+            }],
+            fact: "x".to_string(),
+        };
+        assert!(
+            graph.facts.contains_key(&fact_path),
+            "Unversioned ref should resolve to mydoc.v10 (latest by natural sort). Facts: {:?}",
+            graph.facts.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn versioned_ref_not_found_is_error() {
+        let code = r#"doc mydoc
+fact x = 10
+
+doc consumer
+fact m = doc mydoc.v99
+rule result = m.x"#;
+        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+        let result = build_graph(consumer, &docs, sources);
+        assert!(result.is_err(), "Should fail for non-existent version");
+    }
+
+    #[test]
+    fn unversioned_ref_resolves_to_only_unversioned_doc() {
+        let code = r#"doc mydoc
+fact x = 10
+
+doc consumer
+fact m = doc mydoc
+rule result = m.x"#;
+        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+        let result = build_graph(consumer, &docs, sources);
+        assert!(
+            result.is_ok(),
+            "Should resolve to unversioned mydoc: {:?}",
+            result.err()
+        );
+    }
+
+    // =================================================================
+    // Versioned document identifiers: self-reference check (section 6.4)
+    // =================================================================
+
+    #[test]
+    fn self_reference_same_version_is_error() {
+        let code = "doc mydoc.v1\nfact m = doc mydoc.v1";
+        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+        let result = build_graph(&docs[0], &docs, sources);
+        assert!(result.is_err(), "Self-reference should be an error");
+        let errors = result.unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.to_string().contains("same base name")),
+            "Error should mention same base name: {:?}",
+            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn cross_version_self_reference_is_error() {
+        let code = "doc mydoc.v1\nfact m = doc mydoc.v2";
+        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+        let result = build_graph(&docs[0], &docs, sources);
+        assert!(
+            result.is_err(),
+            "Cross-version self-reference should be an error"
+        );
+    }
+
+    #[test]
+    fn unversioned_self_reference_from_versioned_doc_is_error() {
+        let code = "doc mydoc.v1\nfact m = doc mydoc";
+        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+        let result = build_graph(&docs[0], &docs, sources);
+        assert!(
+            result.is_err(),
+            "Unversioned self-reference should be an error"
+        );
+    }
+
+    #[test]
+    fn versioned_self_reference_from_unversioned_doc_is_error() {
+        let code = "doc mydoc\nfact m = doc mydoc.v1";
+        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+        let result = build_graph(&docs[0], &docs, sources);
+        assert!(
+            result.is_err(),
+            "Versioned self-reference from unversioned doc should be an error"
+        );
+    }
+
+    #[test]
+    fn reference_to_different_doc_is_allowed() {
+        let code = r#"doc mydoc.v1
+fact x = 10
+
+doc otherdoc
+fact m = doc mydoc.v1
+rule result = m.x"#;
+        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let otherdoc = docs.iter().find(|d| d.name == "otherdoc").unwrap();
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+        let result = build_graph(otherdoc, &docs, sources);
+        assert!(
+            result.is_ok(),
+            "Reference to different doc should be allowed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn reference_to_different_doc_same_version_is_allowed() {
+        let code = r#"doc mydoc.v1
+fact x = 10
+
+doc otherdoc.v1
+fact m = doc mydoc.v1
+rule result = m.x"#;
+        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let otherdoc = docs.iter().find(|d| d.name == "otherdoc").unwrap();
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+        let result = build_graph(otherdoc, &docs, sources);
+        assert!(
+            result.is_ok(),
+            "Reference to different doc same version should be allowed: {:?}",
+            result.err()
         );
     }
 }

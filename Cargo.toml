@@ -10,7 +10,7 @@ default-members = ["cli"]
 exclude = ["engine/fuzz"]
 
 [workspace.package]
-version = "0.7.5"
+version = "0.7.6"
 edition = "2021"
 authors = ["benrogmans <ben@amrai.nl>"]
 description = "A language that means business."

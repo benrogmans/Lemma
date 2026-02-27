@@ -10,6 +10,7 @@ pub mod graph;
 pub mod semantics;
 pub mod types;
 pub mod validation;
+pub mod version_sort;
 
 pub use execution_plan::{Branch, DocumentSchema, ExecutableRule, ExecutionPlan};
 pub use semantics::{
@@ -47,18 +48,19 @@ pub fn plan(
     let mut errors: Vec<LemmaError> = Vec::new();
 
     // 1. Prepare types once (registration + named type resolution + spec validation).
-    let (prepared, type_errors) = graph::Graph::prepare_types(all_docs, &sources);
+    let (prepared, type_errors) = graph::Graph::prepare_types(all_docs);
     errors.extend(type_errors);
 
     // 2. Per-doc: build graph + execution plan.
     for doc in docs_to_plan {
         match graph::Graph::build(doc, all_docs, sources.clone(), &prepared) {
             Ok(graph) => {
-                let execution_plan = execution_plan::build_execution_plan(&graph, &doc.name);
+                let doc_id = doc.full_id();
+                let execution_plan = execution_plan::build_execution_plan(&graph, &doc_id);
                 let value_errors =
                     execution_plan::validate_literal_facts_against_types(&execution_plan);
                 if value_errors.is_empty() {
-                    plans.insert(doc.name.clone(), execution_plan);
+                    plans.insert(doc_id, execution_plan);
                 } else {
                     errors.extend(value_errors);
                 }

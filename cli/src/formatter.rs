@@ -233,7 +233,7 @@ impl Formatter {
         let mut output = String::new();
 
         for group in facts_groups {
-            if group.facts.is_empty() && group.referenced_docs.is_empty() {
+            if group.facts.is_empty() {
                 continue;
             }
 
@@ -248,28 +248,7 @@ impl Formatter {
                 Cell::new("").set_alignment(CellAlignment::Left),
             ]);
 
-            let (name_content, type_content, value_content) =
-                if let Some(doc_ref) = &group.document_reference {
-                    let mut name_lines = vec![group.referencing_fact_name.clone()];
-                    let mut type_lines = vec!["doc".to_string()];
-                    let mut value_lines = vec![format!("{}", doc_ref)];
-
-                    let (nested_name, nested_type, nested_value) =
-                        self.build_facts_content_for_referenced_doc(group);
-                    if !nested_name.is_empty() {
-                        name_lines.push(nested_name);
-                        type_lines.push(nested_type);
-                        value_lines.push(nested_value);
-                    }
-
-                    (
-                        name_lines.join("\n"),
-                        type_lines.join("\n"),
-                        value_lines.join("\n"),
-                    )
-                } else {
-                    self.build_facts_content(group, "")
-                };
+            let (name_content, type_content, value_content) = self.build_facts_content(group);
 
             table.add_row(vec![
                 Cell::new(name_content).set_alignment(CellAlignment::Left),
@@ -284,10 +263,7 @@ impl Formatter {
         output
     }
 
-    fn build_facts_content_for_referenced_doc(
-        &self,
-        group: &lemma::Facts,
-    ) -> (String, String, String) {
+    fn build_facts_content(&self, group: &lemma::Facts) -> (String, String, String) {
         let mut name_lines = Vec::new();
         let mut type_lines = Vec::new();
         let mut value_lines = Vec::new();
@@ -299,54 +275,6 @@ impl Formatter {
                 FactValue::TypeDeclaration { .. } => String::new(),
             };
             name_lines.push(fact.path.to_string());
-            type_lines.push(Self::fact_type_str(&fact.value));
-            value_lines.push(value_str);
-        }
-
-        (
-            name_lines.join("\n"),
-            type_lines.join("\n"),
-            value_lines.join("\n"),
-        )
-    }
-
-    fn build_facts_content(&self, group: &lemma::Facts, prefix: &str) -> (String, String, String) {
-        let mut name_lines = Vec::new();
-        let mut type_lines = Vec::new();
-        let mut value_lines = Vec::new();
-
-        let next_prefix = if prefix.is_empty() {
-            String::new()
-        } else {
-            format!("{}  ", prefix)
-        };
-
-        for child_group in &group.referenced_docs {
-            let doc_name_str = child_group
-                .document_reference
-                .as_ref()
-                .map(|d| format!("doc {}", d))
-                .unwrap_or_default();
-
-            name_lines.push(child_group.referencing_fact_name.clone());
-            type_lines.push("doc".to_string());
-            value_lines.push(doc_name_str);
-
-            let (child_name, child_type, child_value) = self.build_facts_content(child_group, "  ");
-            if !child_name.is_empty() {
-                name_lines.push(child_name);
-                type_lines.push(child_type);
-                value_lines.push(child_value);
-            }
-        }
-
-        for fact in &group.facts {
-            let value_str = match &fact.value {
-                FactValue::Literal(lit) => self.format_literal(lit),
-                FactValue::DocumentReference(doc_name) => format!("doc {}", doc_name),
-                FactValue::TypeDeclaration { .. } => String::new(),
-            };
-            name_lines.push(format!("{}{}", next_prefix, fact.path));
             type_lines.push(Self::fact_type_str(&fact.value));
             value_lines.push(value_str);
         }

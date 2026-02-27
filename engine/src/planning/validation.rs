@@ -761,11 +761,7 @@ fn expected_constraint_name(c: ExpectedRuleTypeConstraint) -> &'static str {
     }
 }
 
-fn document_interface_error(
-    source: &Source,
-    message: impl Into<String>,
-    _sources: &HashMap<String, String>,
-) -> LemmaError {
+fn document_interface_error(source: &Source, message: impl Into<String>) -> LemmaError {
     LemmaError::engine(message.into(), Some(source.clone()), None::<String>)
 }
 
@@ -777,7 +773,6 @@ pub fn validate_document_interfaces(
     doc_ref_facts: &[(FactPath, String, Source)],
     rule_entries: &IndexMap<RulePath, RuleEntryForBindingCheck>,
     all_docs: &[LemmaDoc],
-    sources: &HashMap<String, String>,
 ) -> Result<(), Vec<LemmaError>> {
     let mut errors = Vec::new();
 
@@ -790,7 +785,7 @@ pub fn validate_document_interfaces(
             continue;
         };
 
-        let doc = match all_docs.iter().find(|d| d.name == *doc_name) {
+        let doc = match all_docs.iter().find(|d| d.full_id() == *doc_name) {
             Some(d) => d,
             None => continue,
         };
@@ -804,7 +799,6 @@ pub fn validate_document_interfaces(
                         "Document '{}' referenced by '{}' is missing required rule '{}'",
                         doc_name, fact_path, required_rule
                     ),
-                    sources,
                 ));
                 continue;
             }
@@ -852,7 +846,6 @@ pub fn validate_document_interfaces(
                                     ref_rule_type.name(),
                                     expected_constraint_name(constraint),
                                 ),
-                                sources,
                             ));
                         }
                     }
@@ -1157,7 +1150,7 @@ mod tests {
         // Register and resolve the type to get its specifications
         let mut sources = HashMap::new();
         sources.insert("<test>".to_string(), String::new());
-        let mut type_registry = TypeRegistry::new(sources);
+        let mut type_registry = TypeRegistry::new();
         type_registry
             .register_type("test", type_def)
             .expect("Should register type");

@@ -1198,6 +1198,18 @@ impl FactPath {
             fact,
         }
     }
+
+    /// Dot-separated key used for matching user-provided fact values (e.g. `"order.payment_method"`).
+    /// Unlike `Display`, this omits the resolved document name.
+    pub fn input_key(&self) -> String {
+        let mut s = String::new();
+        for segment in &self.segments {
+            s.push_str(&segment.fact);
+            s.push('.');
+        }
+        s.push_str(&self.fact);
+        s
+    }
 }
 
 /// Resolved path to a rule (created during planning from RuleReference)
@@ -2027,10 +2039,16 @@ pub fn primitive_ratio() -> &'static LemmaType {
 // Display implementations
 // -----------------------------------------------------------------------------
 
+impl fmt::Display for PathSegment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} → {}", self.fact, self.doc)
+    }
+}
+
 impl fmt::Display for FactPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for segment in &self.segments {
-            write!(f, "{}.", segment.fact)?;
+            write!(f, "{}.", segment)?;
         }
         write!(f, "{}", self.fact)
     }
@@ -2039,7 +2057,7 @@ impl fmt::Display for FactPath {
 impl fmt::Display for RulePath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for segment in &self.segments {
-            write!(f, "{}.", segment.fact)?;
+            write!(f, "{}.", segment)?;
         }
         write!(f, "{}?", self.rule)
     }

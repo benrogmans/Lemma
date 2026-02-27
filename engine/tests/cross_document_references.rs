@@ -347,3 +347,73 @@ rule total2 = base2.base.total?
     // total2 uses overridden price: 79 * 1.21 = 95.59
     assert_eq!(total2.result.value().unwrap().to_string(), "95.59");
 }
+
+#[test]
+fn unversioned_ref_evaluates_latest_version() {
+    let mut engine = Engine::new();
+
+    let code = r#"
+doc pricing.v1
+fact base_price = 100
+
+doc pricing.v2
+fact base_price = 150
+
+doc pricing.v10
+fact base_price = 200
+
+doc order
+fact p = doc pricing
+rule total = p.base_price
+"#;
+
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+
+    let response = engine.evaluate("order", vec![], HashMap::new()).unwrap();
+    let total = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "total")
+        .unwrap();
+
+    assert_eq!(
+        total.result.value().unwrap().to_string(),
+        "200",
+        "Unversioned ref should evaluate against pricing.v10 (latest by natural sort)"
+    );
+}
+
+#[test]
+fn versioned_ref_evaluates_exact_version() {
+    let mut engine = Engine::new();
+
+    let code = r#"
+doc pricing.v1
+fact base_price = 100
+
+doc pricing.v2
+fact base_price = 150
+
+doc pricing.v10
+fact base_price = 200
+
+doc order
+fact p = doc pricing.v2
+rule total = p.base_price
+"#;
+
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+
+    let response = engine.evaluate("order", vec![], HashMap::new()).unwrap();
+    let total = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "total")
+        .unwrap();
+
+    assert_eq!(
+        total.result.value().unwrap().to_string(),
+        "150",
+        "Versioned ref should evaluate against pricing.v2 exactly"
+    );
+}

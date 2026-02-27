@@ -331,7 +331,7 @@ impl ExecutionPlan {
             .map(|(path, data)| {
                 let lemma_type = data.schema_type().unwrap().clone();
                 let default = data.value().cloned();
-                (path.to_string(), (lemma_type, default))
+                (path.input_key(), (lemma_type, default))
             })
             .collect();
         fact_entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -386,7 +386,7 @@ impl ExecutionPlan {
             .map(|(path, data)| {
                 let lemma_type = data.schema_type().unwrap().clone();
                 let default = data.value().cloned();
-                (path.to_string(), (lemma_type, default))
+                (path.input_key(), (lemma_type, default))
             })
             .collect();
         fact_entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -398,9 +398,9 @@ impl ExecutionPlan {
         })
     }
 
-    /// Look up a fact by its path string (e.g., "age" or "rules.base_price").
+    /// Look up a fact by its input key (e.g., "age" or "rules.base_price").
     pub fn get_fact_path_by_str(&self, name: &str) -> Option<&FactPath> {
-        self.facts.keys().find(|path| path.to_string() == name)
+        self.facts.keys().find(|path| path.input_key() == name)
     }
 
     /// Look up a local rule by its name (rule in the main document).
@@ -430,7 +430,7 @@ impl ExecutionPlan {
     ) -> Result<Self, LemmaError> {
         for (name, raw_value) in values {
             let fact_path = self.get_fact_path_by_str(&name).ok_or_else(|| {
-                let available: Vec<String> = self.facts.keys().map(|p| p.to_string()).collect();
+                let available: Vec<String> = self.facts.keys().map(|p| p.input_key()).collect();
                 LemmaError::engine(
                     format!(
                         "Fact '{}' not found. Available facts: {}",
