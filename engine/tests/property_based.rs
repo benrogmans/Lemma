@@ -315,7 +315,7 @@ doc test
 fact a: {}
 fact b: {}
 rule product: a * b
-rule back: product? / b
+rule back: product / b
 "#, a, b);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -685,9 +685,9 @@ doc test
 fact a: {}
 fact b: {}
 rule sum: a + b
-rule back_sub: sum? - b
+rule back_sub: sum - b
 rule product: a * b
-rule back_div: product? / b
+rule back_div: product / b
 "#,
             a, b
         );

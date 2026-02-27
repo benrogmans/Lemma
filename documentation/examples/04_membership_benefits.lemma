@@ -31,16 +31,11 @@ fact monthly_spend: [number -> minimum 0 -> default 150]
 
 fact membership: doc premium_membership
 
-rule discount: monthly_spend * membership.discount_rate?
-
+rule discount: monthly_spend * membership.discount_rate
 rule shipping_cost: 10
-  unless monthly_spend >= membership.free_shipping_threshold?
-    then 0
+  unless monthly_spend >= membership.free_shipping_threshold    then 0
 
-rule base_points: monthly_spend * membership.points_multiplier?
-
-rule bonus_points: membership.monthly_bonus_points?
-
-rule total_points: base_points? + bonus_points?
-
-rule total_savings: discount? + shipping_cost?
+rule base_points: monthly_spend * membership.points_multiplier
+rule bonus_points: membership.monthly_bonus_points
+rule total_points: base_points + bonus_points
+rule total_savings: discount + shipping_cost

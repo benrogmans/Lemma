@@ -30,9 +30,7 @@ fact employee.employment_duration: 3 years
 fact employee.monthly_salary     : 7500
 fact employee.name               : "Alice Smith"
 
-rule salary_with_bonus: employee.annual_salary?
-  unless employee.is_eligible_for_bonus?
-    then employee.annual_salary? * 1.1
+rule salary_with_bonus: employee.annual_salary  unless employee.is_eligible_for_bonus    then employee.annual_salary * 1.1
 
 rule employee_summary: employee.name
 
@@ -58,4 +56,4 @@ rule total_payment: hourly_rate * hours_worked
 rule annual_hours: hours_worked * 12
 
 rule benefits_eligible: false
-  unless annual_hours? > 1000 hours then true
+  unless annual_hours > 1000 hours then true

@@ -1098,6 +1098,7 @@ mod tests {
             facts: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
+            meta: HashMap::new(),
         }
     }
 

@@ -11,7 +11,7 @@ Lemma is a **declarative, strictly typed, pure language without functions**. It 
 - **Documents** (`doc`) contain **facts** (named values) and **rules** (expressions that may have `unless` clauses).
 - There are **no functions, no side effects, no mutable state** during evaluation.
 - **Types** include primitives (`boolean`, `number`, `scale`, `text`, `date`, `time`, `duration`, `ratio`) and user-defined types (e.g. `scale` with units like `eur`, `kilogram`).
-- **Rule references** use `rule_name?` to refer to another rule’s result; **last matching `unless` wins**.
+- **References** (facts and rules) are written by name; the engine resolves whether each name is a fact or a rule during planning (e.g. `rule_name` or `doc_ref.rule_name`). **Last matching `unless` wins**.
 
 Lemma aims to be reliable enough for critical domains (e.g. aerospace, global regulations). That implies strict validation, deterministic execution, and a clear split between “invalid document” (errors) and “valid but rule doesn’t yield a value” (Veto).
 
@@ -180,7 +180,7 @@ rule daily_fee: 0 eur
   unless book_type is "regular" then 0.25 eur
   unless book_type is "reference" then 0.50 eur
 
-rule total: quantity * price? - discount?
+rule total: quantity * price - discount
 ```
 
 ### Veto (user-defined “no value”)
@@ -189,24 +189,24 @@ rule total: quantity * price? - discount?
 rule validated_price: price
   unless price < 0 then veto "Price cannot be negative"
 
-rule can_drive: is_adult? and has_license?
+rule can_drive: is_adult and has_license
   unless license_suspended then veto "License suspended"
 ```
 
 ### Rule references and cross-document
 
 ```lemma
-rule price_per_cup: base_price? * size_multiplier?
-rule subtotal: price_per_cup? * number_of_cups
-rule total: subtotal? - discount_amount?
+rule price_per_cup: base_price * size_multiplier
+rule subtotal: price_per_cup * number_of_cups
+rule total: subtotal - discount_amount
 
 fact membership: doc premium_membership
-rule discount: monthly_spend * membership.discount_rate?
+rule discount: monthly_spend * membership.discount_rate
 rule shipping_cost: 10
-  unless monthly_spend >= membership.free_shipping_threshold? then 0
+  unless monthly_spend >= membership.free_shipping_threshold then 0
 ```
 
-Use `rule_name?` in the same doc; use `doc_name.rule_name?` when the rule lives in another document (referenced via a `fact x: doc other_doc`).
+Reference rules by name in the same doc; use `doc_ref.rule_name` when the rule lives in another document (referenced via a `fact x: doc other_doc`). The engine resolves each reference to a fact or rule during planning.
 
 ### Literals
 

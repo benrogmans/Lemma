@@ -1192,7 +1192,7 @@
                         '  unless quantity >= 50 then 20%',
                         '  unless is_member then 15%',
                         '',
-                        'rule total: price * quantity - discount?',
+                        'rule total: price * quantity - discount',
                         '  unless price > 100 usd then veto "This price is too high."',
                         '',
                     ].join('\n'),

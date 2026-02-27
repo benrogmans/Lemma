@@ -617,8 +617,8 @@ mod tests {
         doc test
         fact base: 100
         rule subtotal: base * 2
-        rule tax: subtotal? * 10%
-        rule total: subtotal? + tax?
+        rule tax: subtotal * 10%
+        rule total: subtotal + tax
     "#,
             "test.lemma",
         )

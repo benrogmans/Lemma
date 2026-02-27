@@ -151,13 +151,13 @@ async function calculatePricing() {
       unless promo_code == "SAVE10" then 10%
       unless promo_code == "SAVE20" then 20%
 
-    rule best_discount: bulk_discount?
-      unless member_discount? >= bulk_discount?  then member_discount?
-      unless promo_discount? >= bulk_discount?   then promo_discount?
-      unless member_discount? >= promo_discount? then member_discount?
-      unless promo_discount? >= member_discount? then promo_discount?
+    rule best_discount: bulk_discount
+      unless member_discount >= bulk_discount  then member_discount
+      unless promo_discount >= bulk_discount   then promo_discount
+      unless member_discount >= promo_discount then member_discount
+      unless promo_discount >= member_discount then promo_discount
 
-    rule final_price: base_price * quantity * (1 - best_discount?)
+    rule final_price: base_price * quantity * (1 - best_discount)
   `;
 
   // Load the document

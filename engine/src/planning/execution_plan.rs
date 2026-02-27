@@ -4,6 +4,7 @@
 //! The plan contains all facts, rules flattened into executable branches,
 //! and execution order - no document structure needed during evaluation.
 
+use crate::parsing::ast::MetaValue;
 use crate::planning::graph::Graph;
 use crate::planning::semantics;
 use crate::planning::semantics::{
@@ -34,6 +35,9 @@ pub struct ExecutionPlan {
 
     /// Source code for error messages
     pub sources: HashMap<String, String>,
+
+    /// Document metadata
+    pub meta: HashMap<String, MetaValue>,
 }
 
 /// An executable rule with flattened branches
@@ -118,6 +122,7 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
         facts,
         rules: executable_rules,
         sources: graph.sources().clone(),
+        meta: graph.meta().clone(),
     }
 }
 
@@ -194,11 +199,23 @@ pub struct DocumentSchema {
     pub facts: indexmap::IndexMap<String, (LemmaType, Option<LiteralValue>)>,
     /// Rules (outputs) keyed by name, with their computed result types
     pub rules: indexmap::IndexMap<String, LemmaType>,
+    /// Document metadata
+    pub meta: HashMap<String, MetaValue>,
 }
 
 impl std::fmt::Display for DocumentSchema {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Document: {}", self.doc)?;
+
+        if !self.meta.is_empty() {
+            write!(f, "\n\nMeta:")?;
+            // Sort keys for deterministic output
+            let mut keys: Vec<&String> = self.meta.keys().collect();
+            keys.sort();
+            for key in keys {
+                write!(f, "\n  {}: {}", key, self.meta.get(key).unwrap())?;
+            }
+        }
 
         if !self.facts.is_empty() {
             write!(f, "\n\nFacts:")?;
@@ -348,6 +365,7 @@ impl ExecutionPlan {
             doc: self.doc_name.clone(),
             facts: fact_entries.into_iter().collect(),
             rules: rule_entries.into_iter().collect(),
+            meta: self.meta.clone(),
         }
     }
 
@@ -395,6 +413,7 @@ impl ExecutionPlan {
             doc: self.doc_name.clone(),
             facts: fact_entries.into_iter().collect(),
             rules: rule_entries.into_iter().collect(),
+            meta: self.meta.clone(),
         })
     }
 
@@ -860,6 +879,7 @@ mod tests {
             facts,
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
+            meta: HashMap::new(),
         };
 
         let mut values = HashMap::new();
@@ -914,6 +934,7 @@ mod tests {
             facts,
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
+            meta: HashMap::new(),
         };
 
         let mut values = HashMap::new();
@@ -976,6 +997,7 @@ mod tests {
             facts,
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
+            meta: HashMap::new(),
         };
 
         let mut values = HashMap::new();
@@ -1010,6 +1032,7 @@ mod tests {
                 s.insert("test.lemma".to_string(), "fact age: number".to_string());
                 s
             },
+            meta: HashMap::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1039,6 +1062,7 @@ mod tests {
             facts,
             rules: Vec::new(),
             sources: HashMap::new(),
+            meta: HashMap::new(),
         };
 
         let rule = ExecutableRule {
@@ -1102,6 +1126,7 @@ mod tests {
             facts,
             rules: Vec::new(),
             sources: HashMap::new(),
+            meta: HashMap::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1148,6 +1173,7 @@ mod tests {
             facts,
             rules: Vec::new(),
             sources: HashMap::new(),
+            meta: HashMap::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1187,6 +1213,7 @@ mod tests {
             facts,
             rules: Vec::new(),
             sources: HashMap::new(),
+            meta: HashMap::new(),
         };
 
         let rule = ExecutableRule {
@@ -1251,6 +1278,7 @@ mod tests {
             facts: HashMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
+            meta: HashMap::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1280,6 +1308,7 @@ mod tests {
             facts,
             rules: Vec::new(),
             sources: HashMap::new(),
+            meta: HashMap::new(),
         };
 
         let rule = ExecutableRule {
@@ -1350,6 +1379,7 @@ mod tests {
                 s.insert("test.lemma".to_string(), "fact age: number".to_string());
                 s
             },
+            meta: HashMap::new(),
         };
 
         let rule = ExecutableRule {

@@ -148,7 +148,7 @@ rule total: quantity * 2
 doc test
 fact line: doc base
 fact line.quantity: [number -> minimum 0 -> default 5]
-rule result: line.total?
+rule result: line.total
 "#;
 
     let mut engine = Engine::new();

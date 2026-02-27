@@ -230,7 +230,7 @@ pub struct LemmaBase {
 #[cfg(feature = "registry")]
 impl LemmaBase {
     /// The base URL for the LemmaBase.com registry.
-    const BASE_URL: &'static str = "https://lemmabase.com";
+    pub const BASE_URL: &'static str = "http://localhost:4222";
 
     /// Create a new LemmaBase registry backed by the real HTTP client (reqwest on native, fetch on WASM).
     pub fn new() -> Self {
@@ -279,6 +279,7 @@ impl LemmaBase {
     ) -> Result<RegistryBundle, RegistryError> {
         let url = self.source_url(name, version);
         let display = Self::display_id(name, version);
+        let source_url = self.source_url(name, version);
 
         let lemma_source = self.fetcher.get(&url).await.map_err(|error| {
             if let Some(code) = error.status_code {
@@ -289,7 +290,10 @@ impl LemmaBase {
                     _ => RegistryErrorKind::Other,
                 };
                 RegistryError {
-                    message: format!("LemmaBase returned HTTP {} for '{}'", code, display),
+                    message: format!(
+                        "LemmaBase returned HTTP {} {} for '{}'",
+                        code, source_url, display
+                    ),
                     kind,
                 }
             } else {
@@ -1023,7 +1027,10 @@ type money: scale
         fn source_url_without_version() {
             let registry = LemmaBase::new();
             let url = registry.source_url("user/workspace/somedoc", None);
-            assert_eq!(url, "https://lemmabase.com/@user/workspace/somedoc.lemma");
+            assert_eq!(
+                url,
+                format!("{}/@user/workspace/somedoc.lemma", LemmaBase::BASE_URL)
+            );
         }
 
         #[test]
@@ -1032,7 +1039,7 @@ type money: scale
             let url = registry.source_url("user/workspace/somedoc", Some("v2"));
             assert_eq!(
                 url,
-                "https://lemmabase.com/@user/workspace/somedoc.v2.lemma"
+                format!("{}/@user/workspace/somedoc.v2.lemma", LemmaBase::BASE_URL)
             );
         }
 
@@ -1042,7 +1049,7 @@ type money: scale
             let url = registry.source_url("org/team/project/subdir/doc", None);
             assert_eq!(
                 url,
-                "https://lemmabase.com/@org/team/project/subdir/doc.lemma"
+                format!("{}/@org/team/project/subdir/doc.lemma", LemmaBase::BASE_URL)
             );
         }
 
@@ -1050,21 +1057,30 @@ type money: scale
         fn navigation_url_without_version() {
             let registry = LemmaBase::new();
             let url = registry.navigation_url("user/workspace/somedoc", None);
-            assert_eq!(url, "https://lemmabase.com/@user/workspace/somedoc");
+            assert_eq!(
+                url,
+                format!("{}/@user/workspace/somedoc", LemmaBase::BASE_URL)
+            );
         }
 
         #[test]
         fn navigation_url_with_version() {
             let registry = LemmaBase::new();
             let url = registry.navigation_url("user/workspace/somedoc", Some("v2"));
-            assert_eq!(url, "https://lemmabase.com/@user/workspace/somedoc.v2");
+            assert_eq!(
+                url,
+                format!("{}/@user/workspace/somedoc.v2", LemmaBase::BASE_URL)
+            );
         }
 
         #[test]
         fn navigation_url_for_deeply_nested_identifier() {
             let registry = LemmaBase::new();
             let url = registry.navigation_url("org/team/project/subdir/doc", None);
-            assert_eq!(url, "https://lemmabase.com/@org/team/project/subdir/doc");
+            assert_eq!(
+                url,
+                format!("{}/@org/team/project/subdir/doc", LemmaBase::BASE_URL)
+            );
         }
 
         #[test]
@@ -1073,7 +1089,7 @@ type money: scale
             let url = registry.url_for_id("user/workspace/somedoc", None);
             assert_eq!(
                 url,
-                Some("https://lemmabase.com/@user/workspace/somedoc".to_string())
+                Some(format!("{}/@user/workspace/somedoc", LemmaBase::BASE_URL))
             );
         }
 
@@ -1083,7 +1099,7 @@ type money: scale
             let url = registry.url_for_id("owner/repo/doc", Some("v2"));
             assert_eq!(
                 url,
-                Some("https://lemmabase.com/@owner/repo/doc.v2".to_string())
+                Some(format!("{}/@owner/repo/doc.v2", LemmaBase::BASE_URL))
             );
         }
 
@@ -1093,7 +1109,7 @@ type money: scale
             let url = registry.url_for_id("lemma/std/finance", None);
             assert_eq!(
                 url,
-                Some("https://lemmabase.com/@lemma/std/finance".to_string())
+                Some(format!("{}/@lemma/std/finance", LemmaBase::BASE_URL))
             );
         }
 
@@ -1137,7 +1153,7 @@ type money: scale
 
             assert_eq!(
                 *captured_url.lock().unwrap(),
-                "https://lemmabase.com/@user/workspace/somedoc.lemma"
+                format!("{}/@user/workspace/somedoc.lemma", LemmaBase::BASE_URL)
             );
         }
 

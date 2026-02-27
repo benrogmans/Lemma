@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn parse_document_with_unless_clause_records_unless_clause() {
         let input = r#"doc person
-rule is_active: service_started? and not service_ended?
+rule is_active: service_started and not service_ended
 unless maintenance_mode then false"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);

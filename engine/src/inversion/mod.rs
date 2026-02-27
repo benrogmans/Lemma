@@ -529,7 +529,7 @@ rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
 
-rule another: base?
+rule another: base
   unless x > 5 then veto "way too much"
 "#;
 
@@ -570,7 +570,7 @@ rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
 
-rule another: base?
+rule another: base
   unless x > 5 then veto "way too much"
 "#;
 
@@ -601,7 +601,7 @@ rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
 
-rule another: base?
+rule another: base
   unless x > 5 then veto "way too much"
 "#;
 
@@ -669,7 +669,7 @@ rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
 
-rule another: base?
+rule another: base
   unless x > 5 then veto "way too much"
 "#;
 

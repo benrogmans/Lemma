@@ -122,7 +122,7 @@ fact quantity: 25
 rule discount: 0
   unless quantity >= 10 then 10
 
-rule final_price: 100 - discount?
+rule final_price: 100 - discount
 "#;
 
     let mut engine = Engine::new();

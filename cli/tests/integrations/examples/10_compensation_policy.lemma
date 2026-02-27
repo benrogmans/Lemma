@@ -51,28 +51,21 @@ rule tenure_bonus: 0
   unless years_of_service >= 5 then 10000
   unless years_of_service >= 10 then 25000
 
-rule stock_value: base_for_level? * policy.stock_grant_percentage
+rule stock_value: base_for_level * policy.stock_grant_percentage
 
-rule annual_bonus_target: base_for_level? * policy.bonus_pool_percentage
+rule annual_bonus_target: base_for_level * policy.bonus_pool_percentage
 
-rule performance_bonus: annual_bonus_target? * performance_bonus_rate?
+rule performance_bonus: annual_bonus_target * performance_bonus_rate
+rule total_cash_comp: base_for_level + performance_bonus + tenure_bonus
+rule total_comp_with_stock: total_cash_comp + stock_value
+rule retirement_contribution_employee: base_for_level * 0.05
 
-rule total_cash_comp: base_for_level? + performance_bonus? + tenure_bonus?
+rule retirement_match: retirement_contribution_employee  unless retirement_contribution_employee > base_for_level * policy.retirement_match_cap
+    then base_for_level * policy.retirement_match_cap
 
-rule total_comp_with_stock: total_cash_comp? + stock_value?
-
-rule retirement_contribution_employee: base_for_level? * 0.05
-
-rule retirement_match: retirement_contribution_employee?
-  unless retirement_contribution_employee? > base_for_level? * policy.retirement_match_cap
-    then base_for_level? * policy.retirement_match_cap
-
-rule total_retirement: retirement_contribution_employee? + retirement_match?
-
-rule benefits_value: policy.annual_health_cost? + retirement_match?
-
-rule total_package: total_comp_with_stock? + benefits_value?
-
+rule total_retirement: retirement_contribution_employee + retirement_match
+rule benefits_value: policy.annual_health_cost + retirement_match
+rule total_package: total_comp_with_stock + benefits_value
 
 doc compensation/senior_engineer
 """
@@ -89,40 +82,35 @@ fact eng_policy.level_multiplier  : 2.5
 fact eng_policy.performance_rating: 4.2
 fact eng_policy.years_of_service  : 7
 
-rule effective_base: eng_policy.base_for_level? * (1 + location_cola)
+rule effective_base: eng_policy.base_for_level * (1 + location_cola)
 
-rule location_adjusted_stock: eng_policy.stock_value? * (1 + location_cola)
+rule location_adjusted_stock: eng_policy.stock_value * (1 + location_cola)
 
-rule location_adjusted_bonus: eng_policy.performance_bonus? * (1 + location_cola)
+rule location_adjusted_bonus: eng_policy.performance_bonus * (1 + location_cola)
 
-rule total_location_adjusted: effective_base? + location_adjusted_bonus?
-  + eng_policy.tenure_bonus?
-
-rule final_total_comp: total_location_adjusted? + location_adjusted_stock?
-  + eng_policy.benefits_value?
-
-rule monthly_take_home_estimate: final_total_comp? / 12
+rule total_location_adjusted: effective_base + location_adjusted_bonus  + eng_policy.tenure_bonus
+rule final_total_comp: total_location_adjusted + location_adjusted_stock  + eng_policy.benefits_value
+rule monthly_take_home_estimate: final_total_comp / 12
 
 rule base_salary_ref: eng_policy.policy.base_salary_min
 
-rule compensation_ratio: final_total_comp? / base_salary_ref?
-
+rule compensation_ratio: final_total_comp / base_salary_ref
 rule is_highly_compensated: false
-  unless final_total_comp? > 200000 then true
+  unless final_total_comp > 200000 then true
 
 rule compensation_tier: "Standard"
-  unless final_total_comp? > 150000 then "Above Average"
-  unless final_total_comp? > 250000
+  unless final_total_comp > 150000 then "Above Average"
+  unless final_total_comp > 250000
     then "Highly Compensated"
-  unless final_total_comp? > 400000 then "Executive Level"
+  unless final_total_comp > 400000 then "Executive Level"
 
 rule perf_rating: eng_policy.performance_rating
 
 rule performance_category: "Needs Improvement"
-  unless perf_rating? >= 2.5 then "Meets Expectations"
-  unless perf_rating? >= 3.5 then "Exceeds Expectations"
-  unless perf_rating? >= 4 then "Outstanding"
-  unless perf_rating? >= 4.5 then "Exceptional"
+  unless perf_rating >= 2.5 then "Meets Expectations"
+  unless perf_rating >= 3.5 then "Exceeds Expectations"
+  unless perf_rating >= 4 then "Outstanding"
+  unless perf_rating >= 4.5 then "Exceptional"
 
 
 doc compensation/principal_engineer
@@ -157,46 +145,37 @@ rule management_bonus: 0
 rule on_call_stipend: 0
   unless on_call_rotation then 6000
 
-rule effective_base: eng_policy.base_for_level? * (1 + location_cola)
+rule effective_base: eng_policy.base_for_level * (1 + location_cola)
 
-rule all_bonuses: eng_policy.performance_bonus? + eng_policy.tenure_bonus?
-  + critical_skill_bonus?
-  + management_bonus?
-  + on_call_stipend?
+rule all_bonuses: eng_policy.performance_bonus + eng_policy.tenure_bonus  + critical_skill_bonus  + management_bonus  + on_call_stipend
+rule base_plus_bonuses: effective_base + all_bonuses
+rule adjusted_stock: eng_policy.stock_value * (1 + location_cola)
 
-rule base_plus_bonuses: effective_base? + all_bonuses?
-
-rule adjusted_stock: eng_policy.stock_value? * (1 + location_cola)
-
-rule total_cash: base_plus_bonuses? + adjusted_stock?
-
-rule total_with_benefits: total_cash? + eng_policy.benefits_value?
-
-rule monthly_gross: total_with_benefits? / 12
+rule total_cash: base_plus_bonuses + adjusted_stock
+rule total_with_benefits: total_cash + eng_policy.benefits_value
+rule monthly_gross: total_with_benefits / 12
 
 rule tax_rate: 0.22
-  unless total_with_benefits? > 200000 then 0.28
-  unless total_with_benefits? > 400000 then 0.32
-  unless total_with_benefits? > 600000 then 0.35
+  unless total_with_benefits > 200000 then 0.28
+  unless total_with_benefits > 400000 then 0.32
+  unless total_with_benefits > 600000 then 0.35
 
-rule estimated_tax: total_with_benefits? * tax_rate?
+rule estimated_tax: total_with_benefits * tax_rate
+rule net_compensation: total_with_benefits - estimated_tax
+rule monthly_net: net_compensation / 12
 
-rule net_compensation: total_with_benefits? - estimated_tax?
-
-rule monthly_net: net_compensation? / 12
-
-rule pay_vs_base_multiple: total_with_benefits? / eng_policy.policy.base_salary_min
+rule pay_vs_base_multiple: total_with_benefits / eng_policy.policy.base_salary_min
 
 rule is_top_tier: false
-  unless total_with_benefits? > 500000 then true
+  unless total_with_benefits > 500000 then true
 
 rule compensation_percentile: "75th"
-  unless total_with_benefits? > 300000 then "90th"
-  unless total_with_benefits? > 500000 then "95th"
-  unless total_with_benefits? > 700000 then "99th"
+  unless total_with_benefits > 300000 then "90th"
+  unless total_with_benefits > 500000 then "95th"
+  unless total_with_benefits > 700000 then "99th"
 
 rule retention_risk: "Low"
-  unless pay_vs_base_multiple? < 8 then "Medium"
-  unless pay_vs_base_multiple? < 6 then "High"
+  unless pay_vs_base_multiple < 8 then "Medium"
+  unless pay_vs_base_multiple < 6 then "High"
 
 rule summary: "Principal Engineer - Exceptional compensation package"

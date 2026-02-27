@@ -38,7 +38,7 @@ engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
     fact base_salary: 60000
     fact bonus_rate: 10%
     rule bonus: base_salary * bonus_rate
-    rule total: base_salary + bonus?
+    rule total: base_salary + bonus
 "#.into())]))?;
 
 let response = engine.evaluate("compensation", vec![], HashMap::new())?;

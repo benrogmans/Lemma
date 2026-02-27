@@ -173,7 +173,7 @@ fn format_sorted_facts(facts: &[LemmaFact], out: &mut String) {
             if i > 0 {
                 out.push('\n');
             }
-            let ref_name = &doc_fact.reference.fact;
+            let ref_name = &doc_fact.reference.name;
             let mut sub_group: Vec<&LemmaFact> = vec![doc_fact];
             for ovr in &overrides {
                 if ovr.reference.segments.first().map(|s| s.as_str()) == Some(ref_name.as_str()) {
@@ -185,7 +185,7 @@ fn format_sorted_facts(facts: &[LemmaFact], out: &mut String) {
     }
 
     // Any overrides that didn't match a doc ref (shouldn't happen in valid Lemma, but be safe)
-    let matched_prefixes: Vec<&str> = doc_refs.iter().map(|f| f.reference.fact.as_str()).collect();
+    let matched_prefixes: Vec<&str> = doc_refs.iter().map(|f| f.reference.name.as_str()).collect();
     let unmatched: Vec<&LemmaFact> = overrides
         .iter()
         .filter(|o| {
@@ -254,8 +254,7 @@ fn format_expr(expr: &Expression, parent_prec: u8) -> String {
 
     let inner = match &expr.kind {
         ExpressionKind::Literal(lit) => format!("{}", AsLemmaSource(lit)),
-        ExpressionKind::FactReference(r) => format!("{}", r),
-        ExpressionKind::RuleReference(rr) => format!("{}", rr),
+        ExpressionKind::Reference(r) => format!("{}", r),
         ExpressionKind::UnresolvedUnitLiteral(..) => {
             // Expression::Display already normalizes the decimal.
             format!("{}", expr)

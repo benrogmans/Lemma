@@ -5,7 +5,7 @@
 SPACE = _{ WHITE_SPACE | NEWLINE }
 
 reserved_keyword = _{
-    (^"doc" | ^"fact" | ^"rule" | ^"then" | ^"unless" | ^"not" | ^"in" | ^"and" | ^"or" | ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" | ^"abs" | ^"floor" | ^"ceil" | ^"round" | ^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject" | ^"veto" | ^"scale" | ^"number" | ^"text" | ^"date" | ^"time" | ^"duration" | ^"type" | ^"from" | ^"with") ~ !(ASCII_ALPHANUMERIC | "_")
+    (^"doc" | ^"fact" | ^"rule" | ^"then" | ^"unless" | ^"not" | ^"in" | ^"and" | ^"or" | ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" | ^"abs" | ^"floor" | ^"ceil" | ^"round" | ^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject" | ^"veto" | ^"scale" | ^"number" | ^"text" | ^"date" | ^"time" | ^"duration" | ^"type" | ^"from" | ^"with" | ^"meta") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 // Low-level identifier used by public rules; kept silent so only higher-level
@@ -98,8 +98,14 @@ doc = {
     doc_declaration ~ SPACE* ~ commentary_block? ~ SPACE* ~ doc_body
 }
 
+meta_definition = { ^"meta" ~ SPACE+ ~ meta_key ~ SPACE* ~ assignment_symbol ~ SPACE* ~ meta_value }
+meta_key        = { meta_key_identifier }
+meta_key_identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+meta_value      = { literal | meta_identifier }
+meta_identifier = @{ (ASCII_ALPHANUMERIC | "_" | "-" | "." | "/")+ }
+
 doc_body = {
-    (type_import | type_definition | fact_definition | fact_binding | rule_definition | SPACE)*
+    (type_import | type_definition | fact_definition | fact_binding | rule_definition | meta_definition | SPACE)*
 }
 
 doc_declaration = { ^"doc" ~ SPACE+ ~ doc_name }
@@ -116,11 +122,11 @@ commentary = { (!triple_quote ~ ANY)* }
 // FACT DEFINITIONS
 // ================================================================================================
 
-fact_reference_segment = { type_custom | type_standard }
-fact_reference = { fact_reference_segment ~ ("." ~ fact_reference_segment)* }
+reference_segment = { type_custom | type_standard }
+reference = { reference_segment ~ ("." ~ reference_segment)* }
 
-fact_definition = { ^"fact" ~ SPACE+ ~ fact_reference_segment ~ SPACE* ~ assignment_symbol ~ SPACE* ~ fact_value }
-fact_binding    = { ^"fact" ~ SPACE+ ~ fact_reference ~ SPACE* ~ assignment_symbol ~ SPACE* ~ fact_value }
+fact_definition = { ^"fact" ~ SPACE+ ~ reference_segment ~ SPACE* ~ assignment_symbol ~ SPACE* ~ fact_value }
+fact_binding    = { ^"fact" ~ SPACE+ ~ reference ~ SPACE* ~ assignment_symbol ~ SPACE* ~ fact_value }
 
 fact_value = {
     inline_type_definition
@@ -154,9 +160,6 @@ veto_expression = {
     ^"veto" ~ (SPACE+ ~ text_literal)?
 }
 
-rule_reference_segment = { label }
-rule_reference         = { rule_reference_segment ~ ("." ~ rule_reference_segment)* ~ "?" }
-
 // ================================================================================================
 // EXPRESSIONS
 // ================================================================================================
@@ -183,8 +186,7 @@ and_operand = {
 // Primary - the ONLY place where parentheses appear
 primary = {
     literal
-  | rule_reference
-  | fact_reference
+  | reference
   | "(" ~ SPACE* ~ expression ~ SPACE* ~ ")"
 }
 

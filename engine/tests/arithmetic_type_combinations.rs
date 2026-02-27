@@ -469,7 +469,7 @@ fact a: 4 eur
 fact b: 5 eur
 fact threshold: 8 eur
 rule total: a + b
-rule over_threshold: total? > threshold"#;
+rule over_threshold: total > threshold"#;
     assert_eq!(
         eval_rule(code, "t", "over_threshold", HashMap::new()),
         "true"
@@ -484,7 +484,7 @@ fact a: 10 eur
 fact b: 20 eur
 fact c: 5 eur
 rule subtotal: a + b
-rule total: subtotal? + c"#;
+rule total: subtotal + c"#;
     let val = eval_rule(code, "t", "total", HashMap::new());
     assert!(
         val.contains("35") && val.contains("eur"),
@@ -525,7 +525,7 @@ fact base_rate: 10%
 fact surcharge: 5%
 fact price: 200 eur
 rule combined_rate: base_rate + surcharge
-rule discount: price * combined_rate?"#;
+rule discount: price * combined_rate"#;
     let val = eval_rule(code, "t", "discount", HashMap::new());
     assert!(
         val.contains("30"),
@@ -545,7 +545,7 @@ fact start: 2024-01-01
 fact end: 2024-01-10
 fact limit: 5 days
 rule elapsed: end - start
-rule over_limit: elapsed? > limit"#;
+rule over_limit: elapsed > limit"#;
     assert_eq!(eval_rule(code, "t", "over_limit", HashMap::new()), "true");
 }
 
@@ -679,7 +679,7 @@ fact price: 4 eur
 fact fee: 5 eur
 fact limit: 8 eur
 rule total: price + fee
-rule over_budget: total? > limit"#;
+rule over_budget: total > limit"#;
     assert_eq!(eval_rule(code, "t", "over_budget", HashMap::new()), "true");
 }
 
