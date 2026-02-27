@@ -6,9 +6,9 @@ use common::add_lemma_code_blocking;
 fn piecewise_value_guard_pruning_equality() {
     let code = r#"
         doc shipping
-        fact weight = [number]
+        fact weight: [number]
 
-        rule shipping_cost = 5
+        rule shipping_cost: 5
              unless weight >= 10 then 10
              unless weight >= 50 then 25
     "#;
@@ -36,9 +36,9 @@ fn piecewise_value_guard_pruning_equality() {
 fn piecewise_value_guard_pruning_inequality() {
     let code = r#"
         doc shipping
-        fact weight = [number]
+        fact weight: [number]
 
-        rule shipping_cost = 5
+        rule shipping_cost: 5
              unless weight >= 10 then 10
              unless weight >= 50 then 25
     "#;

@@ -16,13 +16,13 @@ fn load_coffee_order() -> Engine {
     let examples = r#"
 doc examples
 
-type money = scale
+type money: scale
   -> decimals 2
   -> unit eur 1.00
   -> unit gbp 1.17
   -> minimum 0 eur
 
-type priority = text
+type priority: text
   -> option "low"
   -> option "medium"
   -> option "high"
@@ -31,50 +31,50 @@ type priority = text
     let coffee_order = r#"
 doc coffee_order
 
-type coffee = text
+type coffee: text
   -> option "espresso"
   -> option "latte"
   -> option "cappuccino"
   -> option "mocha"
 
-type size = text
+type size: text
   -> option "small"
   -> option "medium"
   -> option "large"
 
-fact price            = [money from examples]
-fact priority         = [priority from examples]
-fact product          = [coffee]
-fact size             = [size -> option "extra large"]
-fact number_of_cups   = [number -> maximum 10]
-fact has_loyalty_card = [boolean]
+fact price           : [money from examples]
+fact priority        : [priority from examples]
+fact product         : [coffee]
+fact size            : [size -> option "extra large"]
+fact number_of_cups  : [number -> maximum 10]
+fact has_loyalty_card: [boolean]
 
-rule ordered_priority = veto "Unknown priority"
+rule ordered_priority: veto "Unknown priority"
   unless priority is "low"    then 1
   unless priority is "medium" then 2
   unless priority is "high"   then 3
 
-rule base_price = veto "Unknown type of coffee"
+rule base_price: veto "Unknown type of coffee"
   unless product is "espresso"   then 2.50 eur
   unless product is "latte"      then 3.50 eur
   unless product is "cappuccino" then 3.50 eur
   unless product is "mocha"      then 4.00 eur
 
-rule size_multiplier = veto "Unknown size of coffee"
+rule size_multiplier: veto "Unknown size of coffee"
   unless size is "small"  then 0.80
   unless size is "medium" then 1.00
   unless size is "large"  then 1.20
 
-rule price_per_cup = base_price? * size_multiplier?
+rule price_per_cup: base_price? * size_multiplier?
 
-rule subtotal = price_per_cup? * number_of_cups
+rule subtotal: price_per_cup? * number_of_cups
 
-rule loyalty_discount = 0.0
+rule loyalty_discount: 0.0
   unless has_loyalty_card then 0.10
 
-rule discount_amount = subtotal? * loyalty_discount?
+rule discount_amount: subtotal? * loyalty_discount?
 
-rule total = subtotal? - discount_amount?
+rule total: subtotal? - discount_amount?
 "#;
 
     add_lemma_code_blocking(&mut engine, examples, "examples.lemma")

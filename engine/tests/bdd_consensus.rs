@@ -11,11 +11,11 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
     // (A & B) | (!A & C) | (B & C) => (A & B) | (!A & C)
     let code = r#"
         doc shop_consensus
-        fact discount_code = [text]
-        fact member_level = [text]
-        fact solution = [text]
+        fact discount_code: [text]
+        fact member_level: [text]
+        fact solution: [text]
 
-        rule target = 0
+        rule target: 0
         unless (discount_code is "SAVE30" and member_level is "platinum") then 1
         unless (not (discount_code is "SAVE30") and solution is "EU") then 1
         unless (member_level is "platinum" and solution is "EU") then 1

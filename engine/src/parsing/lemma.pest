@@ -27,6 +27,8 @@ exponent_part = {
     ("+" | "-")? ~ ASCII_DIGIT+
 }
 
+assignment_symbol = _{ ":" }
+
 // ================================================================================================
 // TYPE DEFINITIONS
 // ================================================================================================
@@ -45,7 +47,7 @@ type_standard = {
 
 // Type definition statement
 type_definition = {
-    ^"type" ~ SPACE+ ~ type_name_def ~ SPACE* ~ "=" ~ SPACE* ~ type_arrow_chain
+    ^"type" ~ SPACE+ ~ type_name_def ~ SPACE* ~ assignment_symbol ~ SPACE* ~ type_arrow_chain
 }
 
 // Type import statement
@@ -117,8 +119,8 @@ commentary = { (!triple_quote ~ ANY)* }
 fact_reference_segment = { type_custom | type_standard }
 fact_reference = { fact_reference_segment ~ ("." ~ fact_reference_segment)* }
 
-fact_definition = { ^"fact" ~ SPACE+ ~ fact_reference_segment ~ SPACE* ~ "=" ~ SPACE* ~ fact_value }
-fact_binding    = { ^"fact" ~ SPACE+ ~ fact_reference ~ SPACE* ~ "=" ~ SPACE* ~ fact_value }
+fact_definition = { ^"fact" ~ SPACE+ ~ fact_reference_segment ~ SPACE* ~ assignment_symbol ~ SPACE* ~ fact_value }
+fact_binding    = { ^"fact" ~ SPACE+ ~ fact_reference ~ SPACE* ~ assignment_symbol ~ SPACE* ~ fact_value }
 
 fact_value = {
     inline_type_definition
@@ -138,7 +140,7 @@ doc_reference = { ^"doc" ~ SPACE+ ~ doc_name }
 
 rule_name = { label }
 
-rule_definition = { ^"rule" ~ SPACE+ ~ rule_name ~ SPACE* ~ "=" ~ SPACE* ~ rule_expression }
+rule_definition = { ^"rule" ~ SPACE+ ~ rule_name ~ SPACE* ~ assignment_symbol ~ SPACE* ~ rule_expression }
 
 rule_expression = {
     (expression | veto_expression) ~ (SPACE* ~ unless_statement)*

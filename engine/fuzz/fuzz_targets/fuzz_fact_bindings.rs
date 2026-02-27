@@ -10,8 +10,8 @@ fuzz_target!(|data: &[u8]| {
         
         let code = r#"
 doc fuzz_test
-fact x = [number]
-rule doubled = x * 2
+fact x: [number]
+rule doubled: x * 2
 "#;
         
         let files: HashMap<String, String> =

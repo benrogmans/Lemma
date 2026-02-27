@@ -10,9 +10,9 @@ fn test_end_to_end_simple_rule() {
     let code = r#"
 doc test
 
-fact quantity = 25
+fact quantity: 25
 
-rule discount = 0
+rule discount: 0
   unless quantity >= 10 then 10
 "#;
 
@@ -47,10 +47,10 @@ fn test_end_to_end_boolean_rule() {
     let code = r#"
 doc test
 
-fact age = 25
-fact has_license = true
+fact age: 25
+fact has_license: true
 
-rule can_drive = age >= 18 and has_license
+rule can_drive: age >= 18 and has_license
 "#;
 
     let mut engine = Engine::new();
@@ -82,10 +82,10 @@ fn test_end_to_end_arithmetic() {
     let code = r#"
 doc test
 
-fact base = 100
-fact multiplier = 2
+fact base: 100
+fact multiplier: 2
 
-rule result = base * multiplier
+rule result: base * multiplier
 "#;
 
     let mut engine = Engine::new();
@@ -117,12 +117,12 @@ fn test_end_to_end_rule_reference() {
     let code = r#"
 doc test
 
-fact quantity = 25
+fact quantity: 25
 
-rule discount = 0
+rule discount: 0
   unless quantity >= 10 then 10
 
-rule final_price = 100 - discount?
+rule final_price: 100 - discount?
 "#;
 
     let mut engine = Engine::new();

@@ -157,7 +157,7 @@ fn parse_fact_value(
 
 /// Parse a type declaration: `[type_name]` - a reference to a named type
 ///
-/// This handles cases like `fact price = [money]` where `money` is a named type.
+/// This handles cases like `fact price: [money]` where `money` is a named type.
 /// No resolution happens during parsing - that's deferred to the planning phase.
 fn parse_type_declaration(
     pair: Pair<Rule>,
@@ -181,7 +181,7 @@ fn parse_type_declaration(
 
 /// Parse an inline type definition: `[type_arrow_chain]` - an inline type with commands
 ///
-/// This handles cases like `fact price = [number -> minimum 0]` or `fact buyin = [money -> minimal 100]`.
+/// This handles cases like `fact price: [number -> minimum 0]` or `fact buyin: [money -> minimal 100]`.
 /// No resolution happens during parsing - that's deferred to the planning phase.
 fn parse_inline_type_definition(
     pair: Pair<Rule>,
@@ -293,8 +293,8 @@ mod tests {
     #[test]
     fn test_parse_simple_document_reference() {
         let input = r#"doc person
-fact name = "John"
-fact contract = doc employment_contract"#;
+fact name: "John"
+fact contract: doc employment_contract"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].facts.len(), 2);
@@ -310,12 +310,12 @@ fact contract = doc employment_contract"#;
     #[test]
     fn test_parse_fact_bindings() {
         let input = r#"doc person
-fact contract = doc employment_contract
-fact contract.start_date = 2024-02-01
-fact contract.end_date = [date]
-fact contract.employment_type = "contractor"
-fact contract.base = doc base_contract
-fact contract.base.rate = 100"#;
+fact contract: doc employment_contract
+fact contract.start_date: 2024-02-01
+fact contract.end_date: [date]
+fact contract.employment_type: "contractor"
+fact contract.base: doc base_contract
+fact contract.base.rate: 100"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].facts.len(), 6);
@@ -404,12 +404,12 @@ fact contract.base.rate = 100"#;
     #[test]
     fn parse_type_annotations_in_facts_collects_all_facts() {
         let input = r#"doc test
-fact name = [text]
-fact age = [number]
-fact birth_date = [date]
-fact is_active = [boolean]
-fact discount = [percent]
-fact duration = [duration]"#;
+fact name: [text]
+fact age: [number]
+fact birth_date: [date]
+fact is_active: [boolean]
+fact discount: [percent]
+fact duration: [duration]"#;
 
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
@@ -419,12 +419,12 @@ fact duration = [duration]"#;
     #[test]
     fn parse_primitive_type_annotations_in_facts_collects_all_facts() {
         let input = r#"doc test
-fact duration = [duration]
-fact number = [number]
-fact text = [text]
-fact date = [date]
-fact boolean = [boolean]
-fact percentage = [percent]"#;
+fact duration: [duration]
+fact number: [number]
+fact text: [text]
+fact date: [date]
+fact boolean: [boolean]
+fact percentage: [percent]"#;
 
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
@@ -435,11 +435,11 @@ fact percentage = [percent]"#;
     #[test]
     fn parse_fact_with_number_unit_literal_resolves_unit() {
         let input = r#"doc pricing
-type money = scale
+type money: scale
   -> unit eur 1
   -> unit usd 1.19
 
-fact zz = 1 eur"#;
+fact zz: 1 eur"#;
 
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);

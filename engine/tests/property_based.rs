@@ -30,8 +30,8 @@ proptest! {
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact x = {}
-rule result = x * 0
+fact x: {}
+rule result: x * 0
 "#, n);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -50,8 +50,8 @@ rule result = x * 0
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact x = {}
-rule result = x * 1
+fact x: {}
+rule result: x * 1
 "#, n);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -72,8 +72,8 @@ rule result = x * 1
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact x = {}
-rule result = x + 0
+fact x: {}
+rule result: x + 0
 "#, n);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -94,9 +94,9 @@ rule result = x + 0
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact x = {}
-rule eq_self = x == x
-rule lte_self = x <= x
+fact x: {}
+rule eq_self: x == x
+rule lte_self: x <= x
 "#, n);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -118,8 +118,8 @@ rule lte_self = x <= x
         let mut engine = Engine::new();
         let code = r#"
 doc test
-fact x = [number]
-rule doubled = x * 2
+fact x: [number]
+rule doubled: x * 2
 "#;
         add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
@@ -148,10 +148,10 @@ rule doubled = x * 2
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact a = {}
-fact b = {}
-rule sum1 = a + b
-rule sum2 = b + a
+fact a: {}
+fact b: {}
+rule sum1: a + b
+rule sum2: b + a
 "#, a, b);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -171,10 +171,10 @@ rule sum2 = b + a
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact a = {}
-fact b = {}
-rule prod1 = a * b
-rule prod2 = b * a
+fact a: {}
+fact b: {}
+rule prod1: a * b
+rule prod2: b * a
 "#, a, b);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -194,11 +194,11 @@ rule prod2 = b * a
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact a = {}
-fact b = {}
-fact c = {}
-rule sum1 = (a + b) + c
-rule sum2 = a + (b + c)
+fact a: {}
+fact b: {}
+fact c: {}
+rule sum1: (a + b) + c
+rule sum2: a + (b + c)
 "#, a, b, c);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -218,11 +218,11 @@ rule sum2 = a + (b + c)
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact a = {}
-fact b = {}
-fact c = {}
-rule prod1 = (a * b) * c
-rule prod2 = a * (b * c)
+fact a: {}
+fact b: {}
+fact c: {}
+rule prod1: (a * b) * c
+rule prod2: a * (b * c)
 "#, a, b, c);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -242,11 +242,11 @@ rule prod2 = a * (b * c)
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact a = {}
-fact b = {}
-fact c = {}
-rule dist1 = a * (b + c)
-rule dist2 = (a * b) + (a * c)
+fact a: {}
+fact b: {}
+fact c: {}
+rule dist1: a * (b + c)
+rule dist2: (a * b) + (a * c)
 "#, a, b, c);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -266,8 +266,8 @@ rule dist2 = (a * b) + (a * c)
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact x = {}
-rule double_neg = -(-x)
+fact x: {}
+rule double_neg: -(-x)
 "#, n);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -289,10 +289,10 @@ rule double_neg = -(-x)
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact a = {}
-fact b = {}
-rule sub = a - b
-rule add_neg = a + (-b)
+fact a: {}
+fact b: {}
+rule sub: a - b
+rule add_neg: a + (-b)
 "#, a, b);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -312,10 +312,10 @@ rule add_neg = a + (-b)
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact a = {}
-fact b = {}
-rule product = a * b
-rule back = product? / b
+fact a: {}
+fact b: {}
+rule product: a * b
+rule back: product? / b
 "#, a, b);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -337,8 +337,8 @@ rule back = product? / b
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact b = {}
-rule double_not = not (not b)
+fact b: {}
+rule double_not: not (not b)
 "#, b);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -358,10 +358,10 @@ rule double_not = not (not b)
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact a = {}
-fact b = {}
-rule and1 = a and b
-rule and2 = b and a
+fact a: {}
+fact b: {}
+rule and1: a and b
+rule and2: b and a
 "#, a, b);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -380,10 +380,10 @@ rule and2 = b and a
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact a = {}
-fact b = {}
-rule or1 = a or b
-rule or2 = b or a
+fact a: {}
+fact b: {}
+rule or1: a or b
+rule or2: b or a
 "#, a, b);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -405,12 +405,12 @@ rule or2 = b or a
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact a = {}
-fact b = {}
-fact c = {}
-rule ab = a < b
-rule bc = b < c
-rule ac = a < c
+fact a: {}
+fact b: {}
+fact c: {}
+rule ab: a < b
+rule bc: b < c
+rule ac: a < c
 "#, min, mid, max);
         add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
 
@@ -433,8 +433,8 @@ rule ac = a < c
         let mut engine = Engine::new();
         let code = format!(r#"
 doc test
-fact x = {}
-rule discount = 0
+fact x: {}
+rule discount: 0
   unless x > 10 then 10
   unless x > 20 then 20
   unless x > 50 then 50
@@ -471,12 +471,12 @@ fn test_arithmetic_properties() {
         let code = format!(
             r#"
 doc test
-fact x = {}
-rule zero = x * 0
-rule identity_mul = x * 1
-rule identity_add = x + 0
-rule commutative1 = x + 5
-rule commutative2 = 5 + x
+fact x: {}
+rule zero: x * 0
+rule identity_mul: x * 1
+rule identity_add: x + 0
+rule commutative1: x + 5
+rule commutative2: 5 + x
 "#,
             n
         );
@@ -555,15 +555,15 @@ fn test_comparison_properties() {
     let mut engine = Engine::new();
     let code = r#"
 doc test
-fact a = 10
-fact b = 20
-fact c = 30
-rule a_lt_b = a < b
-rule b_lt_c = b < c
-rule a_lt_c = a < c
-rule a_eq_a = a == a
-rule a_lte_a = a <= a
-rule a_gte_a = a >= a
+fact a: 10
+fact b: 20
+fact c: 30
+rule a_lt_b: a < b
+rule b_lt_c: b < c
+rule a_lt_c: a < c
+rule a_eq_a: a == a
+rule a_lte_a: a <= a
+rule a_gte_a: a >= a
 "#;
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
@@ -619,8 +619,8 @@ fn test_duration_conversion_properties() {
     let mut engine = Engine::new();
     let code = r#"
 doc test
-fact duration = 60 minutes
-rule to_hours = duration in hours
+fact duration: 60 minutes
+rule to_hours: duration in hours
 "#;
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
@@ -652,9 +652,9 @@ fn test_percentage_properties() {
     let mut engine = Engine::new();
     let code = r#"
 doc test
-fact base = 200
-fact rate = 10%
-rule result = base * rate
+fact base: 200
+fact rate: 10%
+rule result: base * rate
 "#;
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
@@ -682,12 +682,12 @@ fn test_inverse_operations() {
         let code = format!(
             r#"
 doc test
-fact a = {}
-fact b = {}
-rule sum = a + b
-rule back_sub = sum? - b
-rule product = a * b
-rule back_div = product? / b
+fact a: {}
+fact b: {}
+rule sum: a + b
+rule back_sub: sum? - b
+rule product: a * b
+rule back_div: product? / b
 "#,
             a, b
         );

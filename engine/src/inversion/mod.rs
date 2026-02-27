@@ -524,12 +524,12 @@ mod tests {
         // and veto conditions should constrain the domains.
         let code = r#"
 doc example
-fact x = [number]
-rule base = x
+fact x: [number]
+rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
 
-rule another = base?
+rule another: base?
   unless x > 5 then veto "way too much"
 "#;
 
@@ -565,12 +565,12 @@ rule another = base?
     fn test_invert_strict_no_solution_when_value_is_blocked_by_veto() {
         let code = r#"
 doc example
-fact x = [number]
-rule base = x
+fact x: [number]
+rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
 
-rule another = base?
+rule another: base?
   unless x > 5 then veto "way too much"
 "#;
 
@@ -596,12 +596,12 @@ rule another = base?
     fn test_invert_strict_veto_target_constrains_domain() {
         let code = r#"
 doc example
-fact x = [number]
-rule base = x
+fact x: [number]
+rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
 
-rule another = base?
+rule another: base?
   unless x > 5 then veto "way too much"
 "#;
 
@@ -664,12 +664,12 @@ rule another = base?
     fn test_invert_strict_any_veto_target_matches_all_veto_ranges() {
         let code = r#"
 doc example
-fact x = [number]
-rule base = x
+fact x: [number]
+rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
 
-rule another = base?
+rule another: base?
   unless x > 5 then veto "way too much"
 "#;
 

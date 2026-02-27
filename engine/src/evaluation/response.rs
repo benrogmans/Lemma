@@ -76,7 +76,7 @@ mod tests {
                 col: 1,
             },
             "test_doc",
-            std::sync::Arc::from("doc test_doc\nfact x = 1\nrule result = x"),
+            std::sync::Arc::from("doc test_doc\nfact x: 1\nrule result: x"),
         )
     }
 

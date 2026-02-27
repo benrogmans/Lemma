@@ -81,9 +81,9 @@ Default output shows a table with evaluation steps:
 ├───────────┼─────────────────────────────────────────┤
 │ total     │ 242.00                              │
 │           │                                         │
-│           │   0. fact base_price = 200.00       │
-│           │   1. rule subtotal = 200.00         │
-│           │   2. rule tax = 42.00               │
+│           │   0. fact base_price: 200.00       │
+│           │   1. rule subtotal: 200.00         │
+│           │   2. rule tax: 42.00               │
 │           │   3. add(200.00, 42.00) → 242.00        │
 │           │   4. result = 242.00                │
 └───────────┴─────────────────────────────────────────┘
@@ -153,7 +153,7 @@ GET /evaluate/{document}?fact1=value1&fact2=value2
 POST /evaluate
 Content-Type: application/json
 {
-  "code": "doc example\nfact x = 5\nrule y = x * 2",
+  "code": "doc example\nfact x: 5\nrule y: x * 2",
   "facts": {
     "x": 100
   }
@@ -215,9 +215,9 @@ cd policies
 # 2. Create a Lemma file
 cat > pricing.lemma << 'EOF'
 doc pricing
-fact base_price = 100
-fact quantity = 1
-rule total = base_price * quantity * 1.1
+fact base_price: 100
+fact quantity: 1
+rule total: base_price * quantity * 1.1
 EOF
 
 # 3. Evaluate it
@@ -243,7 +243,7 @@ lemma server --workdir ./policies &
 curl -X POST http://localhost:8012/evaluate \
   -H "Content-Type: application/json" \
   -d '{
-    "code": "doc calc\nfact x = 10\nrule double = x * 2",
+    "code": "doc calc\nfact x: 10\nrule double: x * 2",
     "facts": {"x": 25}
   }'
 
@@ -290,4 +290,3 @@ Check your Lemma syntax. Use `lemma show` to verify the document loads correctly
 - [Language Reference](index.md)
 - [Examples](examples/)
 - [API Documentation](servers.md)
-

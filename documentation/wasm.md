@@ -25,8 +25,8 @@ const engine = new WasmEngine();
 // Load a document
 const result = engine.addLemmaCode(`
   doc example
-  fact price = 100
-  rule total = price * 2
+  fact price: 100
+  rule total: price * 2
 `, 'example.lemma');
 
 const addResult = JSON.parse(result);

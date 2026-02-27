@@ -17,9 +17,9 @@
 //! let mut files = HashMap::new();
 //! files.insert("example.lemma".to_string(), r#"
 //!     doc example
-//!     fact price = 100
-//!     fact quantity = 5
-//!     rule total = price * quantity
+//!     fact price: 100
+//!     fact quantity: 5
+//!     rule total: price * quantity
 //! "#.to_string());
 //!
 //! tokio::runtime::Runtime::new().unwrap()

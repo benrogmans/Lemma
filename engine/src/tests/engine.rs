@@ -25,10 +25,10 @@ fn test_evaluate_document_all_rules() {
         &mut engine,
         r#"
         doc test
-        fact x = 10
-        fact y = 5
-        rule sum = x + y
-        rule product = x * y
+        fact x: 10
+        fact y: 5
+        rule sum: x + y
+        rule product: x * y
     "#,
         "test.lemma",
     )
@@ -69,8 +69,8 @@ fn test_evaluate_empty_facts() {
         &mut engine,
         r#"
         doc test
-        fact price = 100
-        rule total = price * 2
+        fact price: 100
+        rule total: price * 2
     "#,
         "test.lemma",
     )
@@ -93,8 +93,8 @@ fn test_evaluate_boolean_rule() {
         &mut engine,
         r#"
         doc test
-        fact age = 25
-        rule is_adult = age >= 18
+        fact age: 25
+        rule is_adult: age >= 18
     "#,
         "test.lemma",
     )
@@ -114,8 +114,8 @@ fn test_evaluate_with_unless_clause() {
         &mut engine,
         r#"
         doc test
-        fact quantity = 15
-        rule discount = 0
+        fact quantity: 15
+        rule discount: 0
           unless quantity >= 10 then 10
     "#,
         "test.lemma",
@@ -150,8 +150,8 @@ fn test_multiple_documents() {
         &mut engine,
         r#"
         doc doc1
-        fact x = 10
-        rule result = x * 2
+        fact x: 10
+        rule result: x * 2
     "#,
         "doc1.lemma",
     )
@@ -161,8 +161,8 @@ fn test_multiple_documents() {
         &mut engine,
         r#"
         doc doc2
-        fact y = 5
-        rule result = y * 3
+        fact y: 5
+        rule result: y * 3
     "#,
         "doc2.lemma",
     )
@@ -192,9 +192,9 @@ fn test_runtime_error_mapping() {
         &mut engine,
         r#"
         doc test
-        fact numerator = 10
-        fact denominator = 0
-        rule division = numerator / denominator
+        fact numerator: 10
+        fact denominator: 0
+        rule division: numerator / denominator
     "#,
         "test.lemma",
     )
@@ -234,11 +234,11 @@ fn test_rules_sorted_by_source_order() {
         &mut engine,
         r#"
         doc test
-        fact a = 1
-        fact b = 2
-        rule z = a + b
-        rule y = a * b
-        rule x = a - b
+        fact a: 1
+        fact b: 2
+        rule z: a + b
+        rule y: a * b
+        rule x: a - b
     "#,
         "test.lemma",
     )
@@ -289,9 +289,9 @@ fn invalid_parent_type_in_type_definition_should_be_rejected() {
     let mut engine = Engine::new();
     let code = r#"
 doc test
-type invalid = nonexistent -> minimum 0
-fact value = [invalid]
-rule result = value
+type invalid: nonexistent -> minimum 0
+fact value: [invalid]
+rule result: value
 "#;
 
     let result = add_lemma_code(&mut engine, code, "test.lemma");
@@ -310,8 +310,8 @@ fn unknown_type_used_in_fact_type_declaration_should_be_rejected() {
     let mut engine = Engine::new();
     let code = r#"
 doc test
-fact value = [invalid_parent_type]
-rule result = value
+fact value: [invalid_parent_type]
+rule result: value
 "#;
 
     let result = add_lemma_code(&mut engine, code, "test.lemma");
@@ -335,10 +335,10 @@ fn test_rule_filtering_evaluates_dependencies() {
         &mut engine,
         r#"
         doc test
-        fact base = 100
-        rule subtotal = base * 2
-        rule tax = subtotal? * 10%
-        rule total = subtotal? + tax?
+        fact base: 100
+        rule subtotal: base * 2
+        rule tax: subtotal? * 10%
+        rule total: subtotal? + tax?
     "#,
         "test.lemma",
     )
@@ -391,10 +391,10 @@ fn duplicate_document_names_should_be_rejected() {
     let mut engine = Engine::new();
     let code = r#"
 doc test
-fact x = 1
+fact x: 1
 
 doc test
-fact x = 2
+fact x: 2
 "#;
 
     let result = add_lemma_code(&mut engine, code, "test.lemma");

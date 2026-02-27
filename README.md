@@ -12,15 +12,15 @@ Lemma is a declarative language designed specifically for expressing business lo
 ```lemma
 doc pricing
 
-fact quantity = [number]
-fact is_vip   = false
+fact quantity: [number]
+fact is_vip  : false
 
-rule discount = 0%
+rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
   unless is_vip         then 25%
 
-rule price = quantity * 20 - discount?
+rule price: quantity * 20 - discount?
 ```
 
 Note how Lemma automatically deducts the discount percentage in the expression `quantity * 20 - discount?`.
@@ -53,21 +53,21 @@ Create `shipping.lemma`:
 ```lemma
 doc shipping
 
-type weight = scale
+type weight: scale
   -> unit kilogram 1.0
   -> unit gram 0.001
 
-fact is_express = true
-fact package_weight = 2.5 kilograms
+fact is_express: true
+fact package_weight: 2.5 kilograms
 
-rule express_fee = 0
+rule express_fee: 0
   unless is_express then 4.99
 
-rule base_shipping = 5.99
+rule base_shipping: 5.99
   unless package_weight > 1 kilogram  then  8.99
   unless package_weight > 5 kilograms then 15.99
 
-rule total_cost = base_shipping? + express_fee?
+rule total_cost: base_shipping? + express_fee?
 ```
 
 Use spaces and tabs in `unless` expressions to align it like a table, making scanning the rule at a glance really easy.
@@ -89,24 +89,24 @@ lemma run shipping
 # ╞═══════════════╪══════════════════════════════════════════════════════╡
 # │ express_fee   ┆ 4.99                                             │
 # │               ┆                                                      │
-# │               ┆    0. fact is_express = true                         │
+# │               ┆    0. fact is_express: true                         │
 # │               ┆    1. unless clause 0 matched → 4.99             │
 # │               ┆    2. result = 4.99                              │
 # ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
 # │ base_shipping ┆ 8.99                                             │
 # │               ┆                                                      │
-# │               ┆    0. fact package_weight = 2.5 kilograms             │
+# │               ┆    0. fact package_weight: 2.5 kilograms             │
 # │               ┆    1. greater_than(2.5 kilograms, 5 kilograms) → false │
 # │               ┆    2. unless clause 1 skipped                        │
-# │               ┆    3. fact package_weight = 2.5 kilograms             │
+# │               ┆    3. fact package_weight: 2.5 kilograms             │
 # │               ┆    4. greater_than(2.5 kilograms, 1 kilogram) → true  │
 # │               ┆    5. unless clause 0 matched → 8.99             │
 # │               ┆    6. result = 8.99                              │
 # ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
 # │ total_cost    ┆ 13.98                                            │
 # │               ┆                                                      │
-# │               ┆    0. rule base_shipping = 8.99                  │
-# │               ┆    1. rule express_fee = 4.99                    │
+# │               ┆    0. rule base_shipping: 8.99                  │
+# │               ┆    1. rule express_fee: 4.99                    │
 # │               ┆    2. add(8.99, 4.99) → 13.98            │
 # │               ┆    3. result = 13.98                             │
 # └───────────────┴──────────────────────────────────────────────────────┘
@@ -122,15 +122,15 @@ Rules start with a default value, then conditions override:
 ```lemma
 doc pricing
 
-fact quantity = [number]
-fact is_vip   = false
+fact quantity: [number]
+fact is_vip  : false
 
-rule discount = 0%
+rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
   unless is_vip         then 25%
 
-rule price = 20 * quantity - discount?
+rule price: 20 * quantity - discount?
 ```
 
 **The last matching condition wins** - mirroring how business rules, legal documents, and standard operating procedures are written: "In principle X applies, unless [more specific condition] Y, unless [even more specific] Z..."
@@ -142,23 +142,23 @@ Define custom types with units and constraints:
 ```lemma
 doc type_examples
 
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.18
   -> decimals 2
   -> minimum 0
 
-type mass = scale
+type mass: scale
   -> unit gram 1
   -> unit kilogram 1000
   -> unit pound 453.592
 
-fact salary = 50_000 eur
-fact workweek = 40 hours
-fact vacation = 3 weeks
-fact weight = 75 kilogram
-fact tax_rate = 22%
-fact deadline = 2024-12-31
+fact salary: 50_000 eur
+fact workweek: 40 hours
+fact vacation: 3 weeks
+fact weight: 75 kilogram
+fact tax_rate: 22%
+fact deadline: 2024-12-31
 ```
 
 **Primitive types:**
@@ -177,16 +177,16 @@ Define custom types with units, constraints, and validation:
 ```lemma
 doc unit_conversions
 
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.18
 
-type length = scale
+type length: scale
   -> unit meter 1.0
   -> unit kilometer 1000.0
   -> unit centimeter 0.01
 
-type discount = ratio
+type discount: ratio
   -> minimum 0
   -> maximum 1
 ```
@@ -196,13 +196,13 @@ Unit conversions work within the same type:
 ```lemma
 doc unit_conversions
 
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.18
 
-fact price = 100 eur
+fact price: 100 eur
 
-rule price_usd = price in usd
+rule price_usd: price in usd
 ```
 
 ### Rule references
@@ -212,20 +212,20 @@ Compose complex logic from simple rules:
 ```lemma
 doc driving_eligibility
 
-type license_status = text
+type license_status: text
   -> option "valid"
   -> option "suspended"
   -> option "expired"
 
-fact age               = [number]
-fact license_status    = [license_status]
-fact license_suspended = [boolean]
+fact age              : [number]
+fact license_status   : [license_status]
+fact license_suspended: [boolean]
 
-rule is_adult = age >= 18
+rule is_adult: age >= 18
 
-rule has_license = license_status is "valid"
+rule has_license: license_status is "valid"
 
-rule can_drive = is_adult? and has_license?
+rule can_drive: is_adult? and has_license?
   unless license_suspended then veto "License suspended"
 ```
 
@@ -234,19 +234,19 @@ rule can_drive = is_adult? and has_license?
 
 ```lemma
 doc employee
-fact years_service = 8
+fact years_service: 8
 
 doc leave_policy
-fact senior_threshold = 5
-fact base_leave_days  = 25
-fact bonus_leave_days = 5
+fact senior_threshold: 5
+fact base_leave_days : 25
+fact bonus_leave_days: 5
 
 doc leave_entitlement
-fact employee     = doc employee
-fact leave_policy = doc leave_policy
+fact employee    : doc employee
+fact leave_policy: doc leave_policy
 
-rule is_senior         = employee.years_service >= leave_policy.senior_threshold
-rule annual_leave_days = leave_policy.base_leave_days
+rule is_senior        : employee.years_service >= leave_policy.senior_threshold
+rule annual_leave_days: leave_policy.base_leave_days
   unless is_senior? then leave_policy.base_leave_days + leave_policy.bonus_leave_days
 ```
 
@@ -257,11 +257,11 @@ You should use types to constrain facts whenever possible. Sometimes though, you
 ```lemma
 doc performance_review
 
-fact start_date        = [date]
-fact review_date       = [date]
-fact performance_score = [number -> minimum 0 -> maximum 100]
+fact start_date       : [date]
+fact review_date      : [date]
+fact performance_score: [number -> minimum 0 -> maximum 100]
 
-rule bonus_percentage = 0%
+rule bonus_percentage: 0%
   unless performance_score >= 70    then 5%
   unless performance_score >= 90    then 10%
   unless review_date < start_date then veto "Review date must be after start date"

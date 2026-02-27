@@ -7,9 +7,9 @@ use std::collections::HashMap;
 fn test_better_error_for_invalid_value() {
     let code = r#"
         doc shipping
-        fact weight = [number]
+        fact weight: [number]
 
-        rule shipping_cost = 5
+        rule shipping_cost: 5
           unless weight >= 10 then 10
           unless weight >= 50 then 25
     "#;
@@ -37,9 +37,9 @@ fn test_better_error_for_invalid_value() {
 fn test_better_error_for_veto_mismatch() {
     let code = r#"
         doc validation
-        fact age = [number]
+        fact age: [number]
 
-        rule eligibility = true
+        rule eligibility: true
           unless age < 18 then veto "too young"
           unless age > 100 then veto "invalid age"
     "#;
@@ -67,10 +67,10 @@ fn test_better_error_for_veto_mismatch() {
 fn test_error_with_no_satisfiable_branches() {
     let code = r#"
         doc test
-        fact x = [number]
-        fact y = [number]
+        fact x: [number]
+        fact y: [number]
 
-        rule result = 100
+        rule result: 100
           unless x > 10 then 200
     "#;
 

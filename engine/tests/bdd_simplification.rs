@@ -11,10 +11,10 @@ fn bdd_unification_simplifies_to_single_atom() {
     // After last-wins and unification, condition should simplify to A.
     let code = r#"
         doc shop_bdd
-        fact discount_code = [text]
-        fact member_level = [text]
+        fact discount_code: [text]
+        fact member_level: [text]
 
-        rule target = 0
+        rule target: 0
         unless (discount_code is "SAVE30" and member_level is "platinum") then 1
         unless (discount_code is "SAVE30" and not (member_level is "platinum")) then 1
     "#;

@@ -13,9 +13,9 @@ fn setup_engine(code: &str) -> Engine {
 fn test_inversion_simple_arithmetic() {
     let code = r#"
         doc pricing
-        fact price = [number]
-        fact quantity = [number]
-        rule total = price * quantity
+        fact price: [number]
+        fact quantity: [number]
+        rule total: price * quantity
     "#;
     let engine = setup_engine(code);
 
@@ -46,8 +46,8 @@ fn test_inversion_simple_arithmetic() {
 fn test_inversion_veto_query() {
     let code = r#"
         doc shipping
-        fact weight = [number]
-        rule shipping_cost = 5
+        fact weight: [number]
+        rule shipping_cost: 5
           unless weight >= 10 then 10
           unless weight >= 50 then 25
           unless weight < 0 then veto "invalid"

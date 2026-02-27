@@ -12,9 +12,9 @@ fn test_modulo_simple() {
         &mut engine,
         r#"
 doc test
-fact a = 10
-fact b = 3
-rule remainder = a % b
+fact a: 10
+fact b: 3
+rule remainder: a % b
 "#,
         "test",
     )
@@ -42,9 +42,9 @@ fn test_power_simple() {
         &mut engine,
         r#"
 doc test
-fact base = 2
-fact exponent = 3
-rule result = base ^ exponent
+fact base: 2
+fact exponent: 3
+rule result: base ^ exponent
 "#,
         "test",
     )
@@ -72,9 +72,9 @@ fn test_modulo_in_expression() {
         &mut engine,
         r#"
 doc test
-fact value = 17
-rule is_even = (value % 2) == 0
-rule is_odd = (value % 2) == 1
+fact value: 17
+rule is_even: (value % 2) == 0
+rule is_odd: (value % 2) == 1
 "#,
         "test",
     )
@@ -102,8 +102,8 @@ fn test_power_with_fractions() {
         &mut engine,
         r#"
 doc test
-fact base = 4
-rule square_root = base ^ 0.5
+fact base: 4
+rule square_root: base ^ 0.5
 "#,
         "test",
     )
@@ -131,9 +131,9 @@ fn test_combined_operations() {
         &mut engine,
         r#"
 doc test
-fact x = 10
-fact y = 3
-rule calculation = (x % y) + (2 ^ 3)
+fact x: 10
+fact y: 3
+rule calculation: (x % y) + (2 ^ 3)
 "#,
         "test",
     )

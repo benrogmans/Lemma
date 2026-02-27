@@ -54,12 +54,12 @@ Adds a Lemma document to the engine.
 const result = engine.addLemmaFile(`
   doc employee_contract
 
-  fact salary = 5000 eur
-  fact start_date = 2024-01-15
-  fact vacation_days = 25
+  fact salary: 5000 eur
+  fact start_date: 2024-01-15
+  fact vacation_days: 25
 
-  rule annual_salary = salary * 12
-  rule daily_rate = salary / 21
+  rule annual_salary: salary * 12
+  rule daily_rate: salary / 21
 `, 'employee.lemma');
 
 const response = JSON.parse(result);
@@ -134,30 +134,30 @@ async function calculatePricing() {
   const pricingDoc = `
     doc product_pricing
 
-    fact base_price = 100 usd
-    fact quantity = 1
-    fact is_member = false
-    fact promo_code = ""
+    fact base_price: 100 usd
+    fact quantity: 1
+    fact is_member: false
+    fact promo_code: ""
 
-    rule bulk_discount = 0%
+    rule bulk_discount: 0%
       unless quantity >= 10 then 5%
       unless quantity >= 50 then 10%
       unless quantity >= 100 then 15%
 
-    rule member_discount = 0%
+    rule member_discount: 0%
       unless is_member then 10%
 
-    rule promo_discount = 0%
+    rule promo_discount: 0%
       unless promo_code == "SAVE10" then 10%
       unless promo_code == "SAVE20" then 20%
 
-    rule best_discount = bulk_discount?
+    rule best_discount: bulk_discount?
       unless member_discount? >= bulk_discount?  then member_discount?
       unless promo_discount? >= bulk_discount?   then promo_discount?
       unless member_discount? >= promo_discount? then member_discount?
       unless promo_discount? >= member_discount? then promo_discount?
 
-    rule final_price = base_price * quantity * (1 - best_discount?)
+    rule final_price: base_price * quantity * (1 - best_discount?)
   `;
 
   // Load the document

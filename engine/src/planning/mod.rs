@@ -113,7 +113,7 @@ mod internal_tests {
                             col: 0,
                         },
                         main_doc.name.clone(),
-                        std::sync::Arc::from("doc test\nfact x = 1"),
+                        std::sync::Arc::from("doc test\nfact x: 1"),
                     )),
                     None::<String>,
                 )])
@@ -124,9 +124,9 @@ mod internal_tests {
     #[test]
     fn test_basic_validation() {
         let input = r#"doc person
-fact name = "John"
-fact age = 25
-rule is_adult = age >= 18"#;
+fact name: "John"
+fact age: 25
+rule is_adult: age >= 18"#;
 
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
@@ -146,8 +146,8 @@ rule is_adult = age >= 18"#;
     #[test]
     fn test_duplicate_facts() {
         let input = r#"doc person
-fact name = "John"
-fact name = "Jane""#;
+fact name: "John"
+fact name: "Jane""#;
 
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
@@ -177,9 +177,9 @@ fact name = "Jane""#;
     #[test]
     fn test_duplicate_rules() {
         let input = r#"doc person
-fact age = 25
-rule is_adult = age >= 18
-rule is_adult = age >= 21"#;
+fact age: 25
+rule is_adult: age >= 18
+rule is_adult: age >= 21"#;
 
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
@@ -209,8 +209,8 @@ rule is_adult = age >= 21"#;
     #[test]
     fn test_circular_dependency() {
         let input = r#"doc test
-rule a = b?
-rule b = a?"#;
+rule a: b?
+rule b: a?"#;
 
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
@@ -235,10 +235,10 @@ rule b = a?"#;
     #[test]
     fn test_reference_type_errors() {
         let input = r#"doc test
-fact age = 25
-rule is_adult = age >= 18
-rule test1 = age?
-rule test2 = is_adult"#;
+fact age: 25
+rule is_adult: age >= 18
+rule test1: age?
+rule test2: is_adult"#;
 
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
@@ -267,12 +267,12 @@ rule test2 = is_adult"#;
     #[test]
     fn test_multiple_documents() {
         let input = r#"doc person
-fact name = "John"
-fact age = 25
+fact name: "John"
+fact age: 25
 
 doc company
-fact name = "Acme Corp"
-fact employee = doc person"#;
+fact name: "Acme Corp"
+fact employee: doc person"#;
 
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
@@ -291,8 +291,8 @@ fact employee = doc person"#;
     #[test]
     fn test_invalid_document_reference() {
         let input = r#"doc person
-fact name = "John"
-fact contract = doc nonexistent"#;
+fact name: "John"
+fact contract: doc nonexistent"#;
 
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
@@ -331,7 +331,7 @@ fact contract = doc nonexistent"#;
                 col: 0,
             },
             "test",
-            Arc::from("fact x = []"),
+            Arc::from("fact x: []"),
         );
         doc.facts.push(LemmaFact::new(
             FactReference {
@@ -348,10 +348,7 @@ fact contract = doc nonexistent"#;
 
         let docs = vec![doc.clone()];
         let mut sources = HashMap::new();
-        sources.insert(
-            "test.lemma".to_string(),
-            "doc test\nfact x = []".to_string(),
-        );
+        sources.insert("test.lemma".to_string(), "doc test\nfact x: []".to_string());
 
         let result = plan_single(&doc, &docs, sources);
         assert!(
@@ -377,21 +374,21 @@ fact contract = doc nonexistent"#;
         // when the type is defined in a different document than the binding.
         //
         // doc one:
-        //   type money = number
-        //   fact x = [money]
+        //   type money: number
+        //   fact x: [money]
         // doc two:
-        //   fact one = doc one
-        //   fact one.x = 7
-        //   rule getx = one.x
+        //   fact one: doc one
+        //   fact one.x: 7
+        //   rule getx: one.x
         let code = r#"
 doc one
-type money = number
-fact x = [money]
+type money: number
+fact x: [money]
 
 doc two
-fact one = doc one
-fact one.x = 7
-rule getx = one.x
+fact one: doc one
+fact one.x: 7
+rule getx: one.x
 "#;
 
         let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
@@ -428,11 +425,11 @@ rule getx = one.x
     #[test]
     fn test_plan_with_registry_style_doc_names() {
         let source = r#"doc user/workspace/somedoc
-fact quantity = 10
+fact quantity: 10
 
 doc user/workspace/example
-fact inventory = doc @user/workspace/somedoc
-rule total_quantity = inventory.quantity"#;
+fact inventory: doc @user/workspace/somedoc
+rule total_quantity: inventory.quantity"#;
 
         let docs = parse(source, "registry_bundle.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(docs.len(), 2);
@@ -459,9 +456,9 @@ rule total_quantity = inventory.quantity"#;
         // document should report errors for BOTH, not just stop at the first.
         let source = r#"doc demo
 type money from nonexistent_type_source
-fact helper = doc nonexistent_doc
-fact price = 10
-rule total = helper.value + price"#;
+fact helper: doc nonexistent_doc
+fact price: 10
+rule total: helper.value + price"#;
 
         let docs = parse(source, "test.lemma", &ResourceLimits::default()).unwrap();
 
@@ -505,8 +502,8 @@ rule total = helper.value + price"#;
         // must still be reported.
         let source = r#"doc demo
 type currency from missing_doc
-fact ext = doc also_missing
-rule val = ext.some_fact"#;
+fact ext: doc also_missing
+rule val: ext.some_fact"#;
 
         let docs = parse(source, "test.lemma", &ResourceLimits::default()).unwrap();
 

@@ -5,9 +5,9 @@
 Expressing date logic relative to evaluation time currently requires a `today` fact:
 
 ```lemma
-fact today = [date]
-rule delivered_recently = delivered >= today - 7 days and delivered <= today
-rule months_employed    = (today - hire_date) in months
+fact today: [date]
+rule delivered_recently: delivered >= today - 7 days and delivered <= today
+rule months_employed   : (today - hire_date) in months
 ```
 
 This forces every document that needs "relative to now" logic to declare and wire up a fact for what is a universal operational concept.
@@ -19,10 +19,10 @@ This forces every document that needs "relative to now" logic to declare and wir
 `now` is a reserved keyword that resolves to the current datetime, injected by the engine at the start of evaluation. It behaves as a `date` value and can be used anywhere a date expression is valid:
 
 ```lemma
-rule delivered_recently = delivered >= now - 7 days and delivered <= now
-rule months_employed    = (now - hire_date) in months
-rule contract_active    = contract_end > now
-rule days_to_launch     = (launch - now) in days
+rule delivered_recently: delivered >= now - 7 days and delivered <= now
+rule months_employed   : (now - hire_date) in months
+rule contract_active   : contract_end > now
+rule days_to_launch    : (launch - now) in days
 ```
 
 `now` always has `Microsecond` granularity (a full datetime from the system clock).
@@ -69,26 +69,26 @@ Each form serves a distinct pattern that arises naturally in legal agreements, r
 ```lemma
 doc eligibility
 
-fact birth_date     = [date]
-fact hire_date      = [date]
-fact incident_date  = [date]
-fact purchase_date  = [date]
-fact termination_date = [date]
-fact filing_deadline  = [date]
-fact expiry_date      = [date]
-fact notice_period    = [duration]
+fact birth_date    : [date]
+fact hire_date     : [date]
+fact incident_date : [date]
+fact purchase_date : [date]
+fact termination_date: [date]
+fact filing_deadline : [date]
+fact expiry_date     : [date]
+fact notice_period   : [duration]
 
-rule is_adult               = now - birth_date >= 18 years
-rule senior_discount        = now - birth_date >= 65 years
-rule probation_complete     = now - hire_date >= 6 months
-rule warranty_expired       = now - purchase_date > 24 months
-rule statute_expired        = now - incident_date >= 3 years
-rule months_employed        = (now - hire_date) in months
-rule days_to_launch         = (launch - now) in days
-rule notice_adequate        = termination_date - now >= 90 days
-rule renewal_window_open    = termination_date - now <= 60 days
-rule deadline_critical      = filing_deadline - now <= 14 days
-rule termination_permitted  = termination_date - now >= notice_period
+rule is_adult              : now - birth_date >= 18 years
+rule senior_discount       : now - birth_date >= 65 years
+rule probation_complete    : now - hire_date >= 6 months
+rule warranty_expired      : now - purchase_date > 24 months
+rule statute_expired       : now - incident_date >= 3 years
+rule months_employed       : (now - hire_date) in months
+rule days_to_launch        : (launch - now) in days
+rule notice_adequate       : termination_date - now >= 90 days
+rule renewal_window_open   : termination_date - now <= 60 days
+rule deadline_critical     : filing_deadline - now <= 14 days
+rule termination_permitted : termination_date - now >= notice_period
 ```
 
 **`in past` / `in future` — window checks.** Common in consumer rights, SLAs, and SOPs where a date either falls within a defined period or it does not. Boundaries are always inclusive.
@@ -96,14 +96,14 @@ rule termination_permitted  = termination_date - now >= notice_period
 ```lemma
 doc consumer_rights
 
-fact delivery_date    = [date]
-fact payment_due_date = [date]
-fact amendment_date   = [date]
-fact notice_period    = [duration]
+fact delivery_date   : [date]
+fact payment_due_date: [date]
+fact amendment_date  : [date]
+fact notice_period   : [duration]
 
-rule cancellation_eligible = delivery_date in past 30 days
-rule grace_period_active   = payment_due_date in future 5 days
-rule termination_in_window = termination_date in future notice_period
+rule cancellation_eligible: delivery_date in past 30 days
+rule grace_period_active  : payment_due_date in future 5 days
+rule termination_in_window: termination_date in future notice_period
 ```
 
 **Calendar operators — fiscal and reporting periods.** Regulations and financial SOPs refer to calendar-aligned periods, not rolling windows.
@@ -111,14 +111,14 @@ rule termination_in_window = termination_date in future notice_period
 ```lemma
 doc reporting
 
-fact invoice_date    = [date]
-fact transaction_date = [date]
-fact signing_date    = [date]
+fact invoice_date   : [date]
+fact transaction_date: [date]
+fact signing_date   : [date]
 
-rule this_year_invoice     = invoice_date in calendar year
-rule last_year_transaction = transaction_date in past calendar year
-rule signed_this_month     = signing_date in calendar month
-rule not_this_year         = invoice_date not in calendar year
+rule this_year_invoice    : invoice_date in calendar year
+rule last_year_transaction: transaction_date in past calendar year
+rule signed_this_month    : signing_date in calendar month
+rule not_this_year        : invoice_date not in calendar year
 ```
 
 ---
@@ -405,20 +405,20 @@ invoice_date in past calendar year
 ```lemma
 doc relative_dates
 
-fact delivered     = [date]
-fact hire_date     = [date]
-fact launch        = [date]
-fact invoice_date  = [date]
-fact notice_period = [duration]
+fact delivered    : [date]
+fact hire_date    : [date]
+fact launch       : [date]
+fact invoice_date : [date]
+fact notice_period: [duration]
 
-rule days_to_launch      = (launch - now) in days
-rule months_employed     = (now - hire_date) in months
-rule delivered_recently  = delivered in past 7 days
-rule contract_active     = launch in future
-rule renewal_imminent    = launch in future notice_period
-rule this_year_invoice   = invoice_date in calendar year
-rule last_year_invoice   = invoice_date in past calendar year
-rule raw_now_comparison  = hire_date <= now
+rule days_to_launch     : (launch - now) in days
+rule months_employed    : (now - hire_date) in months
+rule delivered_recently : delivered in past 7 days
+rule contract_active    : launch in future
+rule renewal_imminent   : launch in future notice_period
+rule this_year_invoice  : invoice_date in calendar year
+rule last_year_invoice  : invoice_date in past calendar year
+rule raw_now_comparison : hire_date <= now
 ```
 
 - `now = 2026-02-26T00:00:00Z`, `delivered = 2026-02-22` → `delivered_recently = true`

@@ -65,32 +65,32 @@ The `in` operator converts between units:
 - **Number to ratio**: `0.5 in percent` converts to `50 percent`
 
 ```lemma
-type money = scale -> unit eur 1.00 -> unit usd 1.10
+type money: scale -> unit eur 1.00 -> unit usd 1.10
 
-fact price = 100 eur
-rule price_usd = price in usd  // Converts to 110 usd
+fact price: 100 eur
+rule price_usd: price in usd  // Converts to 110 usd
 
-fact workweek = 40 hours
-rule workweek_days = workweek in days  // Converts to ~1.67 days
+fact workweek: 40 hours
+rule workweek_days: workweek in days  // Converts to ~1.67 days
 ```
 
 ## Document References
 
-Reference other documents with `fact name = doc other_doc`. A document name may
+Reference other documents with `fact name: doc other_doc`. A document name may
 carry an optional `.version_tag` suffix (document base names cannot contain a period).
 
 ### Versioned names
 
 ```lemma
 doc pricing.v1
-fact base_price = 100 eur
+fact base_price: 100 eur
 
 doc pricing.v2
-fact base_price = 120 eur
+fact base_price: 120 eur
 
 doc order
-fact pricing = doc pricing.v1
-rule total = pricing.base_price?
+fact pricing: doc pricing.v1
+rule total: pricing.base_price?
 ```
 
 `doc pricing.v1` and `doc pricing.v2` are distinct documents; they do not share
@@ -111,7 +111,7 @@ semantic error caught during planning:
 
 ```lemma
 doc pricing.v2
-fact old = doc pricing.v1
+fact old: doc pricing.v1
 ```
 
 ### Version tag syntax
@@ -124,7 +124,7 @@ and `.` — for example `v1`, `v2`, `1.2.3`, `rc.1`, `2024-01`. Document base na
 Registry references use the `@` prefix and also support version tags:
 
 ```lemma
-fact finance = doc @lemma/std/finance.v2
+fact finance: doc @lemma/std/finance.v2
 type money from @lemma/std/finance.v2
 ```
 
@@ -148,7 +148,7 @@ Define custom types with units, constraints, and validation:
 ### Basic Type Definition
 
 ```lemma
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.10
   -> decimals 2
@@ -206,9 +206,9 @@ type discount_rate from pricing -> maximum 0.5
 Define types inline in fact declarations:
 
 ```lemma
-fact age = [number -> minimum 0 -> maximum 120]
-fact price = [scale -> unit eur 1.00 -> unit usd 1.10]
-fact status = [text -> option "active" -> option "inactive"]
+fact age: [number -> minimum 0 -> maximum 120]
+fact price: [scale -> unit eur 1.00 -> unit usd 1.10]
+fact status: [text -> option "active" -> option "inactive"]
 ```
 
 ## Type Annotations
@@ -216,21 +216,21 @@ fact status = [text -> option "active" -> option "inactive"]
 Declare expected types without specifying values:
 
 ```lemma
-type mass = scale -> unit kilogram 1.0 -> unit pound 0.453592
+type mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
 
-fact unknown_date = [date]
-fact optional_field = [text]
-fact user_age = [number]
-fact is_active = [boolean]
-fact weight = [mass]
-fact duration = [duration]
+fact unknown_date: [date]
+fact optional_field: [text]
+fact user_age: [number]
+fact is_active: [boolean]
+fact weight: [mass]
+fact duration: [duration]
 ```
 
 You can also use inline type definitions:
 
 ```lemma
-fact age = [number -> minimum 0 -> maximum 120]
-fact price = [scale -> unit eur 1.00 -> decimals 2]
+fact age: [number -> minimum 0 -> maximum 120]
+fact price: [scale -> unit eur 1.00 -> decimals 2]
 ```
 
 ## Boolean Literals
@@ -245,9 +245,9 @@ false = no = reject
 All are interchangeable:
 
 ```lemma
-fact is_active = true
-fact is_approved = yes
-fact can_proceed = accept
+fact is_active: true
+fact is_approved: yes
+fact can_proceed: accept
 ```
 
 ## Special Expressions
@@ -256,7 +256,7 @@ fact can_proceed = accept
 Blocks the rule entirely (no valid result):
 
 ```lemma
-rule result = value
+rule result: value
   unless constraint_violated then veto "Error message"
 ```
 
@@ -267,9 +267,9 @@ Not a boolean - prevents any valid verdict from the rule.
 ISO 8601 format:
 
 ```lemma
-fact date_only = 2024-01-15
-fact date_time = 2024-01-15T14:30:00Z
-fact with_timezone = 2024-01-15T14:30:00+01:00
+fact date_only: 2024-01-15
+fact date_time: 2024-01-15T14:30:00Z
+fact with_timezone: 2024-01-15T14:30:00+01:00
 ```
 
 ## Ratios
@@ -281,32 +281,31 @@ Ratio values represent proportions. The `ratio` type includes `percent` and `per
 - `5 permille` or `5%%` - 5 permille (0.005 as ratio)
 
 ```lemma
-fact tax_rate = 15 percent
-fact discount = 20%
-fact completion = 87.5 percent
-fact error_rate = 2 permille
+fact tax_rate: 15 percent
+fact discount: 20%
+fact completion: 87.5 percent
+fact error_rate: 2 permille
 ```
 
 **Custom ratio types:**
 
 ```lemma
-type discount_ratio = ratio
+type discount_ratio: ratio
   -> minimum 0
   -> maximum 1
 
-fact discount = 0.25  // 25% as decimal ratio
+fact discount: 0.25  // 25% as decimal ratio
 ```
 
 **Use in calculations:**
 
 ```lemma
-rule discount_amount = price * discount_rate
-rule after_discount = price * (1 - discount_rate)
+rule discount_amount: price * discount_rate
+rule after_discount: price * (1 - discount_rate)
 ```
 
 **Number to ratio conversion:**
 
 ```lemma
-rule discount_as_percent = 0.25 in percent  // Converts to 25 percent
+rule discount_as_percent: 0.25 in percent  // Converts to 25 percent
 ```
-
