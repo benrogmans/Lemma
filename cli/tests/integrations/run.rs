@@ -13,10 +13,10 @@ fn test_cli_run_simple_document() {
         &lemma_file,
         r#"
 doc simple_test
-fact x = 10
-fact y = 5
-rule sum = x + y
-rule product = x * y
+fact x: 10
+fact y: 5
+rule sum: x + y
+rule product: x * y
 "#,
     )
     .unwrap();
@@ -44,8 +44,8 @@ fn test_cli_run_with_fact_values() {
         &lemma_file,
         r#"
 doc override_test
-fact base = [number]
-rule doubled = base * 2
+fact base: [number]
+rule doubled: base * 2
 "#,
     )
     .unwrap();
@@ -86,8 +86,8 @@ fn test_cli_run_with_unless_clause() {
         &lemma_file,
         r#"
 doc discount_test
-fact quantity = 15
-rule discount = 0
+fact quantity: 15
+rule discount: 0
   unless quantity >= 10 then 10
   unless quantity >= 20 then 20
 "#,
@@ -114,9 +114,9 @@ fn test_cli_show_document() {
         &lemma_file,
         r#"
 doc inspect_test
-fact name = "Test"
-fact value = 42
-rule doubled = value * 2
+fact name: "Test"
+fact value: 42
+rule doubled: value * 2
 "#,
     )
     .unwrap();
@@ -142,7 +142,7 @@ fn test_cli_list_summary() {
         temp_dir.path().join("doc1.lemma"),
         r#"
 doc doc1
-fact x = 1
+fact x: 1
 "#,
     )
     .unwrap();
@@ -151,7 +151,7 @@ fact x = 1
         temp_dir.path().join("doc2.lemma"),
         r#"
 doc doc2
-fact y = 2
+fact y: 2
 "#,
     )
     .unwrap();
@@ -176,8 +176,8 @@ fn test_cli_run_with_arithmetic() {
         &lemma_file,
         r#"
 doc arithmetic_test
-fact price = 100
-rule with_tax = price * 1.21
+fact price: 100
+rule with_tax: price * 1.21
 "#,
     )
     .unwrap();
@@ -227,8 +227,8 @@ fn test_cli_reports_errors_from_all_files() {
         temp_dir.path().join("valid.lemma"),
         r#"
 doc valid_doc
-fact price = 100
-rule doubled = price * 2
+fact price: 100
+rule doubled: price * 2
 "#,
     )
     .unwrap();

@@ -10,13 +10,13 @@ use std::collections::HashMap;
 fn scale_comparison_converts_units_before_comparing() {
     let code = r#"
 doc pricing
-type money = scale
+type money: scale
     -> unit eur 1
     -> unit usd 1.19
 
-fact price = [money]
+fact price: [money]
 
-rule check = accept
+rule check: accept
     unless price > 100 usd then veto "This price is too high."
 "#;
 
@@ -47,13 +47,13 @@ rule check = accept
 fn scale_comparison_accepts_when_conversion_makes_value_smaller() {
     let code = r#"
 doc pricing
-type money = scale
+type money: scale
     -> unit eur 1
     -> unit usd 1.19
 
-fact price = [money]
+fact price: [money]
 
-rule check = accept
+rule check: accept
     unless price > 100 usd then veto "This price is too high."
 "#;
 
@@ -85,13 +85,13 @@ rule check = accept
 fn scale_fact_value_requires_unit() {
     let code = r#"
 doc pricing
-type money = scale
+type money: scale
     -> unit eur 1
     -> unit usd 1.19
 
-fact price = [money]
+fact price: [money]
 
-rule check = accept
+rule check: accept
 "#;
 
     let mut engine = Engine::new();
@@ -116,13 +116,13 @@ rule check = accept
 fn scale_fact_value_rejects_unknown_unit() {
     let code = r#"
 doc pricing
-type money = scale
+type money: scale
     -> unit eur 1
     -> unit usd 1.19
 
-fact price = [money]
+fact price: [money]
 
-rule check = accept
+rule check: accept
 "#;
 
     let mut engine = Engine::new();
@@ -144,11 +144,11 @@ rule check = accept
 fn scale_in_operator_converts_units() {
     let code = r#"
 doc pricing
-type money = scale
+type money: scale
     -> unit eur 1
     -> unit usd 1.19
 
-rule price_usd = 100 eur in usd
+rule price_usd: 100 eur in usd
 "#;
 
     let mut engine = Engine::new();
@@ -184,11 +184,11 @@ rule price_usd = 100 eur in usd
 fn scale_in_operator_rejects_unknown_unit() {
     let code = r#"
 doc pricing
-type money = scale
+type money: scale
     -> unit eur 1
     -> unit usd 1.19
 
-rule price_gbp = 100 eur in gbp
+rule price_gbp: 100 eur in gbp
 "#;
 
     let mut engine = Engine::new();
@@ -207,11 +207,11 @@ fn named_scale_type_comparison_with_unit_literal() {
     let code = r#"
 doc shipping
 
-type weight = scale -> unit kilogram 1.0
+type weight: scale -> unit kilogram 1.0
 
-fact package_weight = 2.5 kilogram
+fact package_weight: 2.5 kilogram
 
-rule base_shipping = 5.99
+rule base_shipping: 5.99
     unless package_weight > 1 kilogram then 8.99
     unless package_weight > 5 kilogram then 15.99
 "#;
@@ -246,12 +246,12 @@ fn named_scale_type_arithmetic_within_same_family() {
     let code = r#"
 doc shipping
 
-type money = scale -> unit USD 1.00
+type money: scale -> unit USD 1.00
 
-fact base_fee = 5.99 USD
-fact surcharge = 2.00 USD
+fact base_fee: 5.99 USD
+fact surcharge: 2.00 USD
 
-rule total = base_fee + surcharge
+rule total: base_fee + surcharge
 "#;
 
     let mut engine = Engine::new();

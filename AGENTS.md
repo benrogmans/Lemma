@@ -87,7 +87,7 @@ High-level flow:
 5. **Computation** (`engine/src/computation/`)  
    - **Arithmetic** (`arithmetic.rs`): division by zero (and similar) returns **Veto**, not panic.  
    - **Comparison**, **datetime**, **units**: used by evaluation; must preserve “no silent defaults” and use Veto where specified.  
-   - Scale comparison and conversion use **same scale family** (via `TypeExtends::Custom`’s `family` field and `LemmaType::same_scale_family`), not exact type equality, so types in the same extension chain (e.g. `type x = scale ...` and `type x2 = x ...`) are compatible.
+   - Scale comparison and conversion use **same scale family** (via `TypeExtends::Custom`’s `family` field and `LemmaType::same_scale_family`), not exact type equality, so types in the same extension chain (e.g. `type x: scale ...` and `type x2: x ...`) are compatible.
 
 6. **Engine** (`engine/src/engine.rs`)  
    - **Engine** holds documents, sources, and **execution plans**.  
@@ -122,45 +122,45 @@ Document names may carry an optional `.version_tag` suffix (e.g. `doc pricing.v1
 ### Facts
 
 ```lemma
-fact quantity = 10
-fact name = "Alice"
-fact is_active = true
-fact price = 99.50 eur
-fact workweek = 40 hours
-fact tax_rate = 21 percent
-fact deadline = 2024-01-15
-fact birth_date = [date]
-fact age = [number -> minimum 0 -> maximum 120]
-fact product = [text -> option "A" -> option "B"]
-fact currency = doc base_types
-fact other_doc.price = 15
+fact quantity: 10
+fact name: "Alice"
+fact is_active: true
+fact price: 99.50 eur
+fact workweek: 40 hours
+fact tax_rate: 21 percent
+fact deadline: 2024-01-15
+fact birth_date: [date]
+fact age: [number -> minimum 0 -> maximum 120]
+fact product: [text -> option "A" -> option "B"]
+fact currency: doc base_types
+fact other_doc.price: 15
 ```
 
-Values: literals (number, text, boolean, date, duration, percent, number+unit), type annotation `[type]` or `[type -> ...]`, or `doc other_doc`. Bind a fact in another doc with `fact doc.name = value`.
+Values: literals (number, text, boolean, date, duration, percent, number+unit), type annotation `[type]` or `[type -> ...]`, or `doc other_doc`. Bind a fact in another doc with `fact doc.name: value`.
 
 ### Types
 
 ```lemma
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.10
   -> decimals 2
   -> minimum 0
 
-type weight = scale
+type weight: scale
   -> unit kilogram 1.0
   -> unit gram 0.001
   -> minimum 0 kilogram
 
-type status = text
+type status: text
   -> option "active"
   -> option "inactive"
 
-type discount_ratio = ratio
+type discount_ratio: ratio
   -> minimum 0
   -> maximum 1
 
-type age = number
+type age: number
   -> minimum 0
   -> maximum 120
 
@@ -171,42 +171,42 @@ type discount_rate from pricing -> maximum 0.5
 ### Rules and unless (last matching wins)
 
 ```lemma
-rule discount = 0 percent
+rule discount: 0 percent
   unless quantity >= 10 then 10 percent
   unless quantity >= 50 then 20 percent
   unless is_vip then 25 percent
 
-rule daily_fee = 0 eur
+rule daily_fee: 0 eur
   unless book_type is "regular" then 0.25 eur
   unless book_type is "reference" then 0.50 eur
 
-rule total = quantity * price? - discount?
+rule total: quantity * price? - discount?
 ```
 
 ### Veto (user-defined “no value”)
 
 ```lemma
-rule validated_price = price
+rule validated_price: price
   unless price < 0 then veto "Price cannot be negative"
 
-rule can_drive = is_adult? and has_license?
+rule can_drive: is_adult? and has_license?
   unless license_suspended then veto "License suspended"
 ```
 
 ### Rule references and cross-document
 
 ```lemma
-rule price_per_cup = base_price? * size_multiplier?
-rule subtotal = price_per_cup? * number_of_cups
-rule total = subtotal? - discount_amount?
+rule price_per_cup: base_price? * size_multiplier?
+rule subtotal: price_per_cup? * number_of_cups
+rule total: subtotal? - discount_amount?
 
-fact membership = doc premium_membership
-rule discount = monthly_spend * membership.discount_rate?
-rule shipping_cost = 10
+fact membership: doc premium_membership
+rule discount: monthly_spend * membership.discount_rate?
+rule shipping_cost: 10
   unless monthly_spend >= membership.free_shipping_threshold? then 0
 ```
 
-Use `rule_name?` in the same doc; use `doc_name.rule_name?` when the rule lives in another document (referenced via a `fact x = doc other_doc`).
+Use `rule_name?` in the same doc; use `doc_name.rule_name?` when the rule lives in another document (referenced via a `fact x: doc other_doc`).
 
 ### Literals
 

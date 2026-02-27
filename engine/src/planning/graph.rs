@@ -24,7 +24,7 @@ use std::sync::Arc;
 /// which document a segment points to — matching by fact names only ensures bindings
 /// are applied correctly regardless of doc ref bindings.
 ///
-/// Example: `fact employee.salary = 7500` in the root doc produces key `["employee", "salary"]`.
+/// Example: `fact employee.salary: 7500` in the root doc produces key `["employee", "salary"]`.
 type FactBindings = HashMap<Vec<String>, (ParsedFactValue, Source)>;
 
 #[derive(Debug)]
@@ -1540,7 +1540,7 @@ impl<'a> GraphBuilder<'a> {
     ///
     /// - **current_segments**: Path from the root document to the document we're currently converting in. Each segment is a (fact name, doc name) pair. Used to build full [`FactPath`]s and [`RulePath`]s when resolving references like `nested_doc.fact` or `nested_doc.rule?`.
     /// - **depends_on_rules**: Accumulator for the rule we're converting: every [`RulePath`] that this expression references (e.g. via `other_rule?` or `doc_ref.rule?`) is inserted here. Later used for topological ordering and cycle detection.
-    /// - **effective_doc_refs**: For the current document, maps **fact name → doc name** for facts that are document references. E.g. `fact x = doc foo` gives `"x" → "foo"`. Includes bindings (e.g. `fact base.x = doc bar`). Used by [`resolve_path_segments`](Self::resolve_path_segments) when resolving the first segment of a path like `x.some_rule?`.
+    /// - **effective_doc_refs**: For the current document, maps **fact name → doc name** for facts that are document references. E.g. `fact x: doc foo` gives `"x" → "foo"`. Includes bindings (e.g. `fact base.x: doc bar`). Used by [`resolve_path_segments`](Self::resolve_path_segments) when resolving the first segment of a path like `x.some_rule?`.
     fn convert_expression_and_extract_dependencies(
         &mut self,
         expr: &ast::Expression,
@@ -2904,7 +2904,7 @@ mod tests {
                 col: 0,
             },
             "test",
-            Arc::from("doc test\nfact x = 1\nrule result = x"),
+            Arc::from("doc test\nfact x: 1\nrule result: x"),
         )
     }
 
@@ -3305,7 +3305,7 @@ mod tests {
                 col: 0,
             },
             "doc_a",
-            Arc::from("doc test\nfact x = 1\nrule result = x"),
+            Arc::from("doc test\nfact x: 1\nrule result: x"),
         );
         let doc_a = create_test_doc("doc_a")
             .with_attribute("a.lemma".to_string())
@@ -3331,7 +3331,7 @@ mod tests {
                 col: 0,
             },
             "doc_b",
-            Arc::from("doc test\nfact x = 1\nrule result = x"),
+            Arc::from("doc test\nfact x: 1\nrule result: x"),
         );
         let doc_b = create_test_doc("doc_b")
             .with_attribute("b.lemma".to_string())
@@ -3351,11 +3351,11 @@ mod tests {
         let mut sources = HashMap::new();
         sources.insert(
             "a.lemma".to_string(),
-            "doc doc_a\ntype money = number\ntype money = number".to_string(),
+            "doc doc_a\ntype money: number\ntype money: number".to_string(),
         );
         sources.insert(
             "b.lemma".to_string(),
-            "doc doc_b\ntype length = number\ntype length = number".to_string(),
+            "doc doc_b\ntype length: number\ntype length: number".to_string(),
         );
 
         let result = build_graph(&doc_a, &[doc_a.clone(), doc_b.clone()], sources);
@@ -3389,17 +3389,17 @@ mod tests {
     #[test]
     fn versioned_ref_resolves_by_exact_match() {
         let code = r#"doc mydoc
-fact x = 10
+fact x: 10
 
 doc mydoc.v1
-fact x = 11
+fact x: 11
 
 doc mydoc.v10
-fact x = 12
+fact x: 12
 
 doc consumer
-fact m = doc mydoc.v1
-rule result = m.x"#;
+fact m: doc mydoc.v1
+rule result: m.x"#;
         let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
@@ -3415,20 +3415,20 @@ rule result = m.x"#;
     #[test]
     fn unversioned_ref_resolves_to_latest_version() {
         let code = r#"doc mydoc
-fact x = 10
+fact x: 10
 
 doc mydoc.v1
-fact x = 11
+fact x: 11
 
 doc mydoc.v2
-fact x = 12
+fact x: 12
 
 doc mydoc.v10
-fact x = 13
+fact x: 13
 
 doc consumer
-fact m = doc mydoc
-rule result = m.x"#;
+fact m: doc mydoc
+rule result: m.x"#;
         let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
@@ -3452,11 +3452,11 @@ rule result = m.x"#;
     #[test]
     fn versioned_ref_not_found_is_error() {
         let code = r#"doc mydoc
-fact x = 10
+fact x: 10
 
 doc consumer
-fact m = doc mydoc.v99
-rule result = m.x"#;
+fact m: doc mydoc.v99
+rule result: m.x"#;
         let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
@@ -3468,11 +3468,11 @@ rule result = m.x"#;
     #[test]
     fn unversioned_ref_resolves_to_only_unversioned_doc() {
         let code = r#"doc mydoc
-fact x = 10
+fact x: 10
 
 doc consumer
-fact m = doc mydoc
-rule result = m.x"#;
+fact m: doc mydoc
+rule result: m.x"#;
         let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
@@ -3491,7 +3491,7 @@ rule result = m.x"#;
 
     #[test]
     fn self_reference_same_version_is_error() {
-        let code = "doc mydoc.v1\nfact m = doc mydoc.v1";
+        let code = "doc mydoc.v1\nfact m: doc mydoc.v1";
         let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
@@ -3509,7 +3509,7 @@ rule result = m.x"#;
 
     #[test]
     fn cross_version_self_reference_is_error() {
-        let code = "doc mydoc.v1\nfact m = doc mydoc.v2";
+        let code = "doc mydoc.v1\nfact m: doc mydoc.v2";
         let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
@@ -3522,7 +3522,7 @@ rule result = m.x"#;
 
     #[test]
     fn unversioned_self_reference_from_versioned_doc_is_error() {
-        let code = "doc mydoc.v1\nfact m = doc mydoc";
+        let code = "doc mydoc.v1\nfact m: doc mydoc";
         let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
@@ -3535,7 +3535,7 @@ rule result = m.x"#;
 
     #[test]
     fn versioned_self_reference_from_unversioned_doc_is_error() {
-        let code = "doc mydoc\nfact m = doc mydoc.v1";
+        let code = "doc mydoc\nfact m: doc mydoc.v1";
         let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
@@ -3549,11 +3549,11 @@ rule result = m.x"#;
     #[test]
     fn reference_to_different_doc_is_allowed() {
         let code = r#"doc mydoc.v1
-fact x = 10
+fact x: 10
 
 doc otherdoc
-fact m = doc mydoc.v1
-rule result = m.x"#;
+fact m: doc mydoc.v1
+rule result: m.x"#;
         let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         let otherdoc = docs.iter().find(|d| d.name == "otherdoc").unwrap();
         let mut sources = HashMap::new();
@@ -3569,11 +3569,11 @@ rule result = m.x"#;
     #[test]
     fn reference_to_different_doc_same_version_is_allowed() {
         let code = r#"doc mydoc.v1
-fact x = 10
+fact x: 10
 
 doc otherdoc.v1
-fact m = doc mydoc.v1
-rule result = m.x"#;
+fact m: doc mydoc.v1
+rule result: m.x"#;
         let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         let otherdoc = docs.iter().find(|d| d.name == "otherdoc").unwrap();
         let mut sources = HashMap::new();

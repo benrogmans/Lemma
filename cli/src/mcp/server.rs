@@ -568,7 +568,7 @@ mod imp {
             } => {
                 let key = fact_ref.to_string();
                 if seen_facts.insert(key.clone()) {
-                    steps.push(format!("{} = {}", key, value));
+                    steps.push(format!("{}: {}", key, value));
                 }
             }
 
@@ -587,7 +587,7 @@ mod imp {
                 walk_proof_node(expansion, steps, seen_facts, seen_rules);
                 match result {
                     lemma::OperationResult::Value(v) => {
-                        steps.push(format!("{} = {}", rule_path.rule, v));
+                        steps.push(format!("{}: {}", rule_path.rule, v));
                     }
                     lemma::OperationResult::Veto(msg) => match msg {
                         Some(reason) => {
@@ -615,7 +615,7 @@ mod imp {
                 } else {
                     expression.as_str()
                 };
-                steps.push(format!("{} = {}", expr, result));
+                steps.push(format!("{}: {}", expr, result));
             }
 
             ProofNode::Branches {
@@ -700,7 +700,7 @@ mod imp {
             } => {
                 let key = fact_ref.to_string();
                 if seen_facts.insert(key.clone()) {
-                    steps.push(format!("{} = {}", key, value));
+                    steps.push(format!("{}: {}", key, value));
                 }
             }
             ProofNode::Condition { operands, .. } | ProofNode::Computation { operands, .. } => {

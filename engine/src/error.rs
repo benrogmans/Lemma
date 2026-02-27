@@ -327,7 +327,7 @@ mod tests {
                 col: 15,
             },
             "test_doc",
-            Arc::from("fact amount = 100"),
+            Arc::from("fact amount: 100"),
         )
     }
 
@@ -347,7 +347,7 @@ mod tests {
                 col: 6,
             },
             "suggestion_doc",
-            Arc::from("fact amont = 100"),
+            Arc::from("fact amont: 100"),
         );
 
         let parse_error_with_suggestion = Error::parsing_with_suggestion(

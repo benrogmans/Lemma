@@ -76,8 +76,8 @@ export async function test() {
     // Test 2: Add simple document
     const addResult = await engine.addLemmaFile(`
       doc test
-      fact x = 10
-      rule double = x * 2
+      fact x: 10
+      rule double: x * 2
     `, 'test.lemma');
 
     const addParsed = JSON.parse(addResult);
@@ -105,15 +105,15 @@ export async function test() {
     // Test 5: Complex document
     const complexResult = await engine.addLemmaFile(`
       doc pricing
-      fact quantity = 25
-      fact is_vip = false
+      fact quantity: 25
+      fact is_vip: false
 
-      rule discount = 0%
+      rule discount: 0%
         unless quantity >= 10 then 10%
         unless quantity >= 50 then 20%
         unless is_vip then 25%
 
-      rule price = 200 - discount?
+      rule price: 200 - discount?
     `, 'pricing.lemma');
 
     const complexParsed = JSON.parse(complexResult);
@@ -136,13 +136,13 @@ export async function test() {
     // Test 7: Various fact value types
     const typesResult = await engine.addLemmaFile(`
       doc type_test
-      fact number_fact = 42
-      fact bool_fact = false
-      fact string_fact = "hello"
-      fact unit_fact = 100
-      fact date_fact = 2024-01-15
+      fact number_fact: 42
+      fact bool_fact: false
+      fact string_fact: "hello"
+      fact unit_fact: 100
+      fact date_fact: 2024-01-15
 
-      rule double_number = number_fact * 2
+      rule double_number: number_fact * 2
     `, 'type_test.lemma');
 
     const typesParsed = JSON.parse(typesResult);
@@ -184,7 +184,7 @@ export async function test() {
     console.log('✓ Type handling in facts object successful');
 
     // Test 8: Error handling - parse error
-    const parseErrorResult = await engine.addLemmaFile('doc invalid\nfact x =', 'invalid.lemma');
+    const parseErrorResult = await engine.addLemmaFile('doc invalid\nfact x :', 'invalid.lemma');
     const parseErrorParsed = JSON.parse(parseErrorResult);
     if (parseErrorParsed.success) {
       throw new Error('Expected parse error but got success');
@@ -213,8 +213,8 @@ export async function test() {
     // Test 11: Veto scenario
     const vetoResult = await engine.addLemmaFile(`
       doc veto_test
-      fact x = 10
-      rule bad_sqrt = sqrt(-1)
+      fact x: 10
+      rule bad_sqrt: sqrt(-1)
     `, 'veto_test.lemma');
     const vetoAddParsed = JSON.parse(vetoResult);
     if (!vetoAddParsed.success) {
@@ -237,9 +237,9 @@ export async function test() {
     // Test 12: Missing facts
     const missingFactsResult = await engine.addLemmaFile(`
       doc missing_test
-      fact x = [number]
-      fact y = [number]
-      rule sum = x + y
+      fact x: [number]
+      fact y: [number]
+      rule sum: x + y
     `, 'missing_test.lemma');
     const missingAddParsed = JSON.parse(missingFactsResult);
     if (!missingAddParsed.success) {
@@ -284,9 +284,9 @@ export async function test() {
     // Test 14: Units and percentages
     const unitsResult = await engine.addLemmaFile(`
       doc units_test
-      fact price = 100
-      fact discount = 10%
-      rule final_price = price * (1 - discount)
+      fact price: 100
+      fact discount: 10%
+      rule final_price: price * (1 - discount)
     `, 'units_test.lemma');
     const unitsAddParsed = JSON.parse(unitsResult);
     if (!unitsAddParsed.success) {
@@ -306,11 +306,11 @@ export async function test() {
     // Test 15: Scale unit conversion via `in`
     const scaleConvDoc = await engine.addLemmaFile(`
       doc scale_conv
-      type money = scale
+      type money: scale
         -> unit eur 1
         -> unit usd 1.19
 
-      rule price_usd = 100 eur in usd
+      rule price_usd: 100 eur in usd
     `, 'scale_conv.lemma');
     const scaleConvParsed = JSON.parse(scaleConvDoc);
     if (!scaleConvParsed.success) {
@@ -348,8 +348,8 @@ export async function test() {
     console.log('✓ Empty facts handling successful');
 
     // Test 17: Multiple documents
-    const doc1Result = await engine.addLemmaFile('doc doc1\nfact x = 1', 'doc1.lemma');
-    const doc2Result = await engine.addLemmaFile('doc doc2\nfact y = 2', 'doc2.lemma');
+    const doc1Result = await engine.addLemmaFile('doc doc1\nfact x: 1', 'doc1.lemma');
+    const doc2Result = await engine.addLemmaFile('doc doc2\nfact y: 2', 'doc2.lemma');
     if (!JSON.parse(doc1Result).success || !JSON.parse(doc2Result).success) {
       throw new Error('Failed to add multiple documents');
     }

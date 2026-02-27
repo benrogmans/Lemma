@@ -226,22 +226,22 @@ mod tests {
 
     #[test]
     fn span_to_range_single_line() {
-        let text = "doc test\nfact x = 10";
+        let text = "doc test\nfact x: 10";
         let range = span_to_range(text, 9, 20);
         assert_eq!(range.start.line, 1);
         assert_eq!(range.start.character, 0);
         assert_eq!(range.end.line, 1);
-        assert_eq!(range.end.character, 11);
+        assert_eq!(range.end.character, 10);
     }
 
     #[test]
     fn span_to_range_multiline() {
-        let text = "doc test\nfact x = 10\nrule y = 20";
+        let text = "doc test\nfact x: 10\nrule y: 20";
         let range = span_to_range(text, 9, 32);
         assert_eq!(range.start.line, 1);
         assert_eq!(range.start.character, 0);
         assert_eq!(range.end.line, 2);
-        assert_eq!(range.end.character, 11);
+        assert_eq!(range.end.character, 10);
     }
 
     #[test]
@@ -284,7 +284,7 @@ mod tests {
             actual_value: "10MB".to_string(),
             suggestion: "reduce file size".to_string(),
         };
-        let diagnostics = parse_error_to_diagnostics(&error, "doc test\nfact x = 10");
+        let diagnostics = parse_error_to_diagnostics(&error, "doc test\nfact x: 10");
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].range.start.line, 0);
         assert_eq!(diagnostics[0].range.start.character, 0);

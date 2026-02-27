@@ -18,8 +18,8 @@ fn test_duplicate_fact_definition_error() {
         &mut engine,
         r#"
         doc test
-        fact salary = 50000
-        fact salary = 60000
+        fact salary: 50000
+        fact salary: 60000
     "#,
         "test.lemma",
     );
@@ -51,9 +51,9 @@ fn test_duplicate_rule_definition_error() {
         &mut engine,
         r#"
         doc test
-        fact x = 10
-        rule total = x * 2
-        rule total = x * 3
+        fact x: 10
+        rule total: x * 2
+        rule total: x * 3
     "#,
         "test.lemma",
     );
@@ -85,9 +85,9 @@ fn test_duplicate_fact_shows_name() {
         &mut engine,
         r#"
         doc test
-        fact name = "Alice"
-        fact age = 30
-        fact name = "Bob"
+        fact name: "Alice"
+        fact age: 30
+        fact name: "Bob"
     "#,
         "test.lemma",
     );
@@ -123,9 +123,9 @@ fn test_runtime_error_division_by_zero() {
         &mut engine,
         r#"
         doc test
-        fact numerator = 100
-        fact denominator = 0
-        rule result = numerator / denominator
+        fact numerator: 100
+        fact denominator: 0
+        rule result: numerator / denominator
     "#,
         "test.lemma",
     )
@@ -164,9 +164,9 @@ fn test_runtime_error_division_by_zero_with_cli_facts() {
         &mut engine,
         r#"
         doc test
-        fact hours_worked = [number]
-        fact salary = 50000
-        rule hourly_rate = salary / hours_worked
+        fact hours_worked: [number]
+        fact salary: 50000
+        rule hourly_rate: salary / hours_worked
     "#,
         "test.lemma",
     )
@@ -207,7 +207,7 @@ fn test_transpile_error_self_referencing_rule() {
         &mut engine,
         r#"
         doc test
-        rule x = x? + 1
+        rule x: x? + 1
     "#,
         "test.lemma",
     );
@@ -237,9 +237,9 @@ fn test_validation_error_type_mismatch_text_in_arithmetic() {
         &mut engine,
         r#"
         doc test
-        fact name = "Alice"
-        fact salary = 50000
-        rule result = salary + name
+        fact name: "Alice"
+        fact salary: 50000
+        rule result: salary + name
     "#,
         "test.lemma",
     );
@@ -266,9 +266,9 @@ fn test_validation_error_boolean_in_arithmetic() {
         &mut engine,
         r#"
         doc test
-        fact is_active = true
-        fact count = 10
-        rule result = count * is_active
+        fact is_active: true
+        fact count: 10
+        rule result: count * is_active
     "#,
         "test.lemma",
     );
@@ -299,8 +299,8 @@ fn test_duplicate_error_contains_fact_name() {
         &mut engine,
         r#"
         doc my_document
-        fact price = 100
-        fact price = 200
+        fact price: 100
+        fact price: 200
     "#,
         "my_file.lemma",
     );
@@ -324,8 +324,8 @@ fn test_duplicate_error_is_reported() {
         &mut engine,
         r#"
         doc test
-        fact x = 10
-        fact x = 20
+        fact x: 10
+        fact x: 20
     "#,
         "test.lemma",
     );
@@ -349,11 +349,11 @@ fn test_duplicate_in_second_doc_is_caught() {
         &mut engine,
         r#"
         doc first_doc
-        fact a = 1
+        fact a: 1
 
         doc second_doc
-        fact b = 2
-        fact b = 3
+        fact b: 2
+        fact b: 3
     "#,
         "multi.lemma",
     );
@@ -381,8 +381,8 @@ fn test_error_display_contains_duplicate_info() {
         &mut engine,
         r#"
         doc test
-        fact value = 100
-        fact value = 200
+        fact value: 100
+        fact value: 200
     "#,
         "test.lemma",
     );
@@ -410,9 +410,9 @@ fn test_division_by_zero_returns_veto_with_message() {
         &mut engine,
         r#"
         doc test
-        fact x = 100
-        fact y = 0
-        rule result = x / y
+        fact x: 100
+        fact y: 0
+        rule result: x / y
     "#,
         "test.lemma",
     )
@@ -451,8 +451,8 @@ fn test_circular_dependency_has_helpful_suggestion() {
         &mut engine,
         r#"
         doc test
-        rule x = y?
-        rule y = x?
+        rule x: y?
+        rule y: x?
     "#,
         "test.lemma",
     );
@@ -479,10 +479,10 @@ fn test_duplicate_fact_is_detected() {
     let mut engine = Engine::new();
 
     let lemma_code = r#"doc test
-fact line2 = 1
-fact line3 = 2
-fact line4 = 3
-fact line4 = 4"#;
+fact line2: 1
+fact line3: 2
+fact line4: 3
+fact line4: 4"#;
 
     let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
 
@@ -508,9 +508,9 @@ fn test_division_by_zero_returns_veto() {
         &mut engine,
         r#"
         doc test
-        fact numerator = 42
-        fact denominator = 0
-        rule division_result = numerator / denominator
+        fact numerator: 42
+        fact denominator: 0
+        rule division_result: numerator / denominator
     "#,
         "test.lemma",
     )
@@ -545,8 +545,8 @@ fn test_duplicate_detected_from_database_source() {
         &mut engine,
         r#"
         doc contract
-        fact amount = 1000
-        fact amount = 2000
+        fact amount: 1000
+        fact amount: 2000
     "#,
         "db://contracts/123",
     );
@@ -570,8 +570,8 @@ fn test_duplicate_detected_from_api_source() {
         &mut engine,
         r#"
         doc policy
-        rule rate = 1.5
-        rule rate = 2.0
+        rule rate: 1.5
+        rule rate: 2.0
     "#,
         "api://policies/endpoint",
     );
@@ -595,8 +595,8 @@ fn test_duplicate_detected_from_runtime_source() {
         &mut engine,
         r#"
         doc runtime_doc
-        fact x = 5
-        fact x = 10
+        fact x: 5
+        fact x: 10
     "#,
         "<runtime>",
     );
@@ -629,20 +629,20 @@ fn test_multiple_error_phases_reported_together() {
         r#"
         doc pricing
 
-        type money = scale
+        type money: scale
           -> unit eur 1
           -> unit usd 1.19
 
-        fact price     = [money]
-        fact quantity  = [number -> minimum 0]
-        fact is_member = false
+        fact price    : [money]
+        fact quantity : [number -> minimum 0]
+        fact is_member: false
 
-        rule discount = 0%
+        rule discount: 0%
           unless quantity >= 10 then 10%
           unless quantity >= 50 then 20%
           unless is_member then 15
 
-        rule total = price * quantity - discount
+        rule total: price * quantity - discount
           unless price > 100 usd then veto "This price is too high."
     "#,
         "pricing.lemma",

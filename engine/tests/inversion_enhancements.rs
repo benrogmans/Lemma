@@ -7,10 +7,10 @@ use std::collections::HashMap;
 fn test_rule_reference_expansion_simple_constant() {
     let code = r#"
         doc pricing
-        fact base_price = [number]
+        fact base_price: [number]
 
-        rule tax_rate = 0.21
-        rule total_price = base_price * (1 + tax_rate?)
+        rule tax_rate: 0.21
+        rule total_price: base_price * (1 + tax_rate?)
     "#;
 
     let mut engine = Engine::new();
@@ -38,9 +38,9 @@ fn test_rule_reference_expansion_simple_constant() {
 fn test_enhanced_error_message_lists_values() {
     let code = r#"
         doc test
-        fact x = [number]
+        fact x: [number]
 
-        rule result = 10
+        rule result: 10
           unless x > 5 then 20
           unless x > 10 then 30
     "#;

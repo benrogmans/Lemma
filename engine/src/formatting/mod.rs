@@ -110,12 +110,17 @@ fn format_document(doc: &LemmaDoc, max_cols: usize) -> String {
 /// When `align_width` is 0 or less than the reference length, no padding is added.
 fn format_fact(fact: &LemmaFact, align_width: usize) -> String {
     let ref_str = format!("{}", fact.reference);
-    let padded = if align_width > ref_str.len() {
-        format!("{:width$}", ref_str, width = align_width)
+    let padding = if align_width > ref_str.len() {
+        " ".repeat(align_width - ref_str.len())
     } else {
-        ref_str
+        "".to_string()
     };
-    format!("fact {} = {}", padded, AsLemmaSource(&fact.value))
+    format!(
+        "fact {}: {}{}",
+        ref_str,
+        padding,
+        AsLemmaSource(&fact.value)
+    )
 }
 
 /// Compute the maximum fact reference width across a slice of facts.
@@ -210,7 +215,7 @@ fn format_rule(rule: &LemmaRule, max_cols: usize) -> String {
     let mut out = String::new();
     out.push_str("rule ");
     out.push_str(&rule.name);
-    out.push_str(" = ");
+    out.push_str(": ");
     out.push_str(&body);
 
     for unless_clause in &rule.unless_clauses {
@@ -496,9 +501,9 @@ mod tests {
     fn test_format_source_round_trips_text() {
         let source = r#"doc test
 
-fact name = "Alice"
+fact name: "Alice"
 
-rule greeting = "hello"
+rule greeting: "hello"
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
         assert!(formatted.contains("\"Alice\""), "fact text must be quoted");
@@ -509,9 +514,9 @@ rule greeting = "hello"
     fn test_format_source_preserves_percent() {
         let source = r#"doc test
 
-fact rate = 10 percent
+fact rate: 10 percent
 
-rule tax = rate * 21%
+rule tax: rate * 21%
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
         assert!(
@@ -527,13 +532,13 @@ rule tax = rate * 21%
         // in original order, aligned
         let source = r#"doc test
 
-fact income = [number -> minimum 0]
-fact filing_status = [filing_status_type -> default "single"]
-fact country = "NL"
-fact deductions = [number -> minimum 0]
-fact name = [text]
+fact income: [number -> minimum 0]
+fact filing_status: [filing_status_type -> default "single"]
+fact country: "NL"
+fact deductions: [number -> minimum 0]
+fact name: [text]
 
-rule total = income
+rule total: income
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
         let fact_section = formatted
@@ -545,27 +550,27 @@ rule total = income
             .unwrap();
         let lines: Vec<&str> = fact_section.lines().filter(|l| !l.is_empty()).collect();
         // All regular facts in one group, original order, aligned
-        assert_eq!(lines[0], "fact income        = [number -> minimum 0]");
+        assert_eq!(lines[0], "fact income:        [number -> minimum 0]");
         assert_eq!(
             lines[1],
-            "fact filing_status = [filing_status_type -> default \"single\"]"
+            "fact filing_status: [filing_status_type -> default \"single\"]"
         );
-        assert_eq!(lines[2], "fact country       = \"NL\"");
-        assert_eq!(lines[3], "fact deductions    = [number -> minimum 0]");
-        assert_eq!(lines[4], "fact name          = [text]");
+        assert_eq!(lines[2], "fact country:       \"NL\"");
+        assert_eq!(lines[3], "fact deductions:    [number -> minimum 0]");
+        assert_eq!(lines[4], "fact name:          [text]");
     }
 
     #[test]
     fn test_format_groups_doc_refs_with_overrides() {
         let source = r#"doc test
 
-fact retail.quantity = 5
-fact wholesale = doc order/wholesale
-fact retail = doc order/retail
-fact wholesale.quantity = 100
-fact base_price = 50
+fact retail.quantity: 5
+fact wholesale: doc order/wholesale
+fact retail: doc order/retail
+fact wholesale.quantity: 100
+fact base_price: 50
 
-rule total = base_price
+rule total: base_price
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
         let fact_section = formatted
@@ -577,25 +582,25 @@ rule total = base_price
             .unwrap();
         let lines: Vec<&str> = fact_section.lines().filter(|l| !l.is_empty()).collect();
         // Group 1: Literals
-        assert_eq!(lines[0], "fact base_price = 50");
+        assert_eq!(lines[0], "fact base_price: 50");
         // Group 4: Doc refs in original order, each with its overrides, aligned
-        assert_eq!(lines[1], "fact wholesale          = doc order/wholesale");
-        assert_eq!(lines[2], "fact wholesale.quantity = 100");
-        assert_eq!(lines[3], "fact retail          = doc order/retail");
-        assert_eq!(lines[4], "fact retail.quantity = 5");
+        assert_eq!(lines[1], "fact wholesale:          doc order/wholesale");
+        assert_eq!(lines[2], "fact wholesale.quantity: 100");
+        assert_eq!(lines[3], "fact retail:          doc order/retail");
+        assert_eq!(lines[4], "fact retail.quantity: 5");
     }
 
     #[test]
     fn test_format_source_weather_clothing_text_quoted() {
         let source = r#"doc weather_clothing
 
-type clothing_style = text
+type clothing_style: text
   -> option "light"
   -> option "warm"
 
-fact temperature = [number]
+fact temperature: [number]
 
-rule clothing_layer = "light"
+rule clothing_layer: "light"
   unless temperature < 5 then "warm"
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
@@ -620,13 +625,13 @@ rule clothing_layer = "light"
     fn test_format_text_option_round_trips() {
         let source = r#"doc test
 
-type status = text
+type status: text
   -> option "active"
   -> option "inactive"
 
-fact s = [status]
+fact s: [status]
 
-rule out = s
+rule out: s
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
         assert!(
@@ -647,8 +652,8 @@ rule out = s
     #[test]
     fn test_format_help_round_trips() {
         let source = r#"doc test
-fact quantity = [number -> help "Number of items to order"]
-rule total = quantity
+fact quantity: [number -> help "Number of items to order"]
+rule total: quantity
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
         assert!(
@@ -665,15 +670,15 @@ rule total = quantity
     fn test_format_scale_type_def_round_trips() {
         let source = r#"doc test
 
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.10
   -> decimals 2
   -> minimum 0
 
-fact price = [money]
+fact price: [money]
 
-rule total = price
+rule total: price
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
         assert!(

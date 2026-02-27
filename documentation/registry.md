@@ -10,7 +10,7 @@ Note: authentication and authorization is not part of the Registry API yet but i
 
 ## When the engine uses a Registry
 
-- **Document references:** `fact helper = doc @org/example/helper` — the engine needs the Lemma source for the document named by `@org/example/helper`.
+- **Document references:** `fact helper: doc @org/example/helper` — the engine needs the Lemma source for the document named by `@org/example/helper`.
 - **Type imports:** `type money from @lemma/std/finance` — the engine needs the Lemma source for the document that defines the imported types.
 
 Resolution happens during `add_lemma_files`, after parsing and before planning. The engine collects all unresolved `@...` identifiers, calls the registry for each, parses the returned source, and repeats until no unresolved references remain. If the registry returns an error, the engine reports a `Error::Registry` and does not proceed.
@@ -127,8 +127,8 @@ let mut engine = Engine::new().with_registry(my_registry);
 let mut files = HashMap::new();
 files.insert("app.lemma".into(), r#"
     doc app
-    fact helper = doc @my/helper
-    rule value = helper.x
+    fact helper: doc @my/helper
+    rule value: helper.x
 "#.into());
 
 engine.add_lemma_files(files).await?;

@@ -19,8 +19,8 @@ fn dec(s: &str) -> Decimal {
 fn invert_exp_simple() {
     let code = r#"
         doc math
-        fact x = [number]
-        rule y = exp x
+        fact x: [number]
+        rule y: exp x
     "#;
     let engine = setup_engine(code);
 
@@ -41,8 +41,8 @@ fn invert_exp_simple() {
 fn invert_power_exponent_unknown() {
     let code = r#"
         doc math
-        fact x = [number]
-        rule y = 2 ^ x
+        fact x: [number]
+        rule y: 2 ^ x
     "#;
     let engine = setup_engine(code);
     let solutions = engine
@@ -61,8 +61,8 @@ fn invert_power_exponent_unknown() {
 fn invert_power_base_unknown() {
     let code = r#"
         doc math
-        fact x = [number]
-        rule y = x ^ 2
+        fact x: [number]
+        rule y: x ^ 2
     "#;
     let engine = setup_engine(code);
     let solutions = engine

@@ -15,15 +15,15 @@ fn test_unit_subtract_percentage() -> LemmaResult<()> {
         r#"
         doc pricing
 
-        fact quantity = 10
-        fact is_vip = false
+        fact quantity: 10
+        fact is_vip: false
 
-        rule discount = 0%
+        rule discount: 0%
             unless quantity >= 10 then 10%
             unless quantity >= 50 then 20%
             unless is_vip then 25%
 
-        rule price = 200 - discount?
+        rule price: 200 - discount?
         "#,
         "pricing.lemma",
     )?;
@@ -80,10 +80,10 @@ fn test_unit_add_percentage() -> LemmaResult<()> {
         r#"
         doc tax_calculation
 
-        fact base_price = 100
-        fact tax_rate = 8.5%
+        fact base_price: 100
+        fact tax_rate: 8.5%
 
-        rule price_with_tax = base_price + tax_rate
+        rule price_with_tax: base_price + tax_rate
         "#,
         "tax.lemma",
     )?;
@@ -128,13 +128,13 @@ fn test_various_unit_percentage_operations() -> LemmaResult<()> {
         r#"
         doc unit_percentage_ops
 
-        fact price = 50
-        fact increase = 20%
-        fact decrease = 15%
+        fact price: 50
+        fact increase: 20%
+        fact decrease: 15%
 
-        rule increased = price + increase
-        rule decreased = price - decrease
-        rule scaled = price * increase
+        rule increased: price + increase
+        rule decreased: price - decrease
+        rule scaled: price * increase
         "#,
         "ops.lemma",
     )?;
@@ -225,12 +225,12 @@ fn test_complex_discount_scenario() -> LemmaResult<()> {
         r#"
         doc complex_pricing
 
-        fact base_price = 1000
-        fact bulk_discount = 15%
-        fact loyalty_discount = 5%
+        fact base_price: 1000
+        fact bulk_discount: 15%
+        fact loyalty_discount: 5%
 
-        rule after_bulk = base_price - bulk_discount
-        rule final_price = after_bulk? - loyalty_discount
+        rule after_bulk: base_price - bulk_discount
+        rule final_price: after_bulk? - loyalty_discount
         "#,
         "complex.lemma",
     )?;
@@ -303,15 +303,15 @@ fn test_percentage_arithmetic() -> LemmaResult<()> {
         r#"
         doc percentage_ops
 
-        fact discount_a = 5%
-        fact discount_b = 10%
-        fact tax_rate = 15%
-        fact compound_rate = 20%
+        fact discount_a: 5%
+        fact discount_b: 10%
+        fact tax_rate: 15%
+        fact compound_rate: 20%
 
-        rule combined_discount = discount_a + discount_b
-        rule net_rate = tax_rate - discount_a
-        rule compound = compound_rate * compound_rate
-        rule ratio = compound_rate / discount_a
+        rule combined_discount: discount_a + discount_b
+        rule net_rate: tax_rate - discount_a
+        rule compound: compound_rate * compound_rate
+        rule ratio: compound_rate / discount_a
         "#,
         "percentage.lemma",
     )?;
@@ -444,12 +444,12 @@ fn test_averaging_percentages() -> LemmaResult<()> {
         r#"
         doc avg_percentages
 
-        fact rate_a = 10%
-        fact rate_b = 20%
-        fact rate_c = 15%
+        fact rate_a: 10%
+        fact rate_b: 20%
+        fact rate_c: 15%
 
-        rule sum = rate_a + rate_b + rate_c
-        rule average = sum? / 3
+        rule sum: rate_a + rate_b + rate_c
+        rule average: sum? / 3
         "#,
         "avg.lemma",
     )?;

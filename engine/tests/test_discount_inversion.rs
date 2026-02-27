@@ -9,10 +9,10 @@ fn discount_multiple_paths_to_same_value() {
     // Use type annotations [text] to make facts free variables for inversion
     let code = r#"
         doc shop
-        fact discount_code = [text]
-        fact member_level = [text]
+        fact discount_code: [text]
+        fact member_level: [text]
 
-        rule discount = 0.20
+        rule discount: 0.20
           unless discount_code is "SAVE30" then 0.30
           unless member_level is "platinum" then 0.30
     "#;

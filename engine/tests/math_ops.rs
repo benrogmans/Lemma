@@ -48,8 +48,8 @@ fn tol(scale: u32) -> Decimal {
 fn test_exp_and_power() -> LemmaResult<()> {
     let code = r#"
     doc test
-    rule a = exp 1
-    rule b = 2 ^ 3
+    rule a: exp 1
+    rule b: 2 ^ 3
     "#;
     let a = run_num(code, "a")?;
     let b = run_num(code, "b")?;
@@ -63,11 +63,11 @@ fn test_exp_and_power() -> LemmaResult<()> {
 fn test_abs_floor_ceil_round() -> LemmaResult<()> {
     let code = r#"
     doc test
-    rule a = abs -3.5
-    rule b = floor 3.9
-    rule c = ceil 3.1
-    rule d = round 3.5
-    rule e = round -3.5
+    rule a: abs -3.5
+    rule b: floor 3.9
+    rule c: ceil 3.1
+    rule d: round 3.5
+    rule e: round -3.5
     "#;
     assert_eq!(run(code, "a")?, "3.5");
     assert_eq!(run(code, "b")?, "3");
@@ -85,13 +85,13 @@ fn test_abs_floor_ceil_round() -> LemmaResult<()> {
 fn test_sqrt_and_log_basic() -> LemmaResult<()> {
     let code = r#"
     doc test
-    rule a = sqrt 9
-    rule b = sqrt 2
-    rule c = log (exp 1)
-    rule d = log 1
-    rule e = 2 ^ 0.5
-    rule bb = (sqrt 2) * (sqrt 2)
-    rule ee = (2 ^ 0.5) * (2 ^ 0.5)
+    rule a: sqrt 9
+    rule b: sqrt 2
+    rule c: log (exp 1)
+    rule d: log 1
+    rule e: 2 ^ 0.5
+    rule bb: (sqrt 2) * (sqrt 2)
+    rule ee: (2 ^ 0.5) * (2 ^ 0.5)
     "#;
     assert_eq!(run_num(code, "a")?, Decimal::from(3));
     // Validate sqrt(2) via identity: (sqrt 2)^2 ≈ 2 (within tolerance)
@@ -111,12 +111,12 @@ fn test_sqrt_and_log_basic() -> LemmaResult<()> {
 fn test_trig_at_zero() -> LemmaResult<()> {
     let code = r#"
     doc test
-    rule s = sin 0
-    rule c = cos 0
-    rule t = tan 0
-    rule as = asin 0
-    rule ac = acos 1
-    rule at = atan 0
+    rule s: sin 0
+    rule c: cos 0
+    rule t: tan 0
+    rule as: asin 0
+    rule ac: acos 1
+    rule at: atan 0
     "#;
     assert_eq!(run(code, "s")?, "0");
     assert_eq!(run(code, "c")?, "1");
@@ -131,9 +131,9 @@ fn test_trig_at_zero() -> LemmaResult<()> {
 fn test_nested_math_ops() -> LemmaResult<()> {
     let code = r#"
     doc test
-    rule a = round (abs -3.6)
-    rule b = ceil (sqrt 2)
-    rule c = floor (exp 1)
+    rule a: round (abs -3.6)
+    rule b: ceil (sqrt 2)
+    rule c: floor (exp 1)
     "#;
     // abs(-3.6) = 3.6 -> round = 4 (bankers rounding still gives 4 here)
     assert_eq!(run(code, "a")?, "4");
@@ -152,9 +152,9 @@ fn test_sqrt_negative_and_log_domain_errors() {
         &mut engine,
         r#"
         doc test
-        rule bad_sqrt = sqrt -1
-        rule bad_log0 = log 0
-        rule bad_log_neg = log -5
+        rule bad_sqrt: sqrt -1
+        rule bad_log0: log 0
+        rule bad_log_neg: log -5
     "#,
         "test.lemma",
     )
@@ -212,7 +212,7 @@ fn test_inverse_trig_domain_error() {
         &mut engine,
         r#"
         doc test
-        rule bad_asin = asin 2
+        rule bad_asin: asin 2
     "#,
         "test.lemma",
     )

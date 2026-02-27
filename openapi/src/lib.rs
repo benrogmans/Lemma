@@ -1096,7 +1096,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_has_required_fields() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         assert_eq!(spec["openapi"], "3.1.0");
@@ -1109,7 +1109,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_tags_order() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         let tags = spec["tags"].as_array().expect("tags should be array");
@@ -1124,7 +1124,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_x_tag_groups() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         let groups = spec["x-tagGroups"]
@@ -1140,7 +1140,7 @@ mod tests {
     #[test]
     fn test_index_endpoint_uses_documents_tag() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         let index_tag = &spec["paths"]["/"]["get"]["tags"][0];
@@ -1150,7 +1150,7 @@ mod tests {
     #[test]
     fn test_per_rule_endpoints() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         // Per-rule endpoint exists
@@ -1184,7 +1184,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_meta_routes() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         assert!(spec["paths"]["/"].is_object());
@@ -1197,7 +1197,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_document_routes() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         assert!(spec["paths"]["/pricing/{rules}"].is_object());
@@ -1210,7 +1210,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_schemas() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         assert!(spec["components"]["schemas"]["pricing_response"].is_object());
@@ -1220,7 +1220,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_proofs_enabled_adds_x_proofs_and_proof_schema() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity = 10\nrule total = quantity * 2");
+            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, true);
 
         let get_params = &spec["paths"]["/pricing/{rules}"]["get"]["parameters"];
@@ -1306,11 +1306,11 @@ mod tests {
         let mut files = std::collections::HashMap::new();
         files.insert(
             "pricing.lemma".to_string(),
-            "doc pricing\nfact quantity = 10\nrule total = quantity * 2".to_string(),
+            "doc pricing\nfact quantity: 10\nrule total: quantity * 2".to_string(),
         );
         files.insert(
             "shipping.lemma".to_string(),
-            "doc shipping\nfact weight = 5\nrule cost = weight * 3".to_string(),
+            "doc shipping\nfact weight: 5\nrule cost: weight * 3".to_string(),
         );
         runtime
             .block_on(engine.add_lemma_files(files))
@@ -1325,7 +1325,7 @@ mod tests {
     #[test]
     fn test_query_parameter_for_text_with_options() {
         let engine = create_engine_with_code(
-            "doc test\nfact product = [text -> option \"A\" -> option \"B\"]\nrule result = product",
+            "doc test\nfact product: [text -> option \"A\" -> option \"B\"]\nrule result: product",
         );
         let spec = generate_openapi(&engine, false);
 
@@ -1346,9 +1346,8 @@ mod tests {
 
     #[test]
     fn test_post_schema_boolean_uses_native_type() {
-        let engine = create_engine_with_code(
-            "doc test\nfact is_active = [boolean]\nrule result = is_active",
-        );
+        let engine =
+            create_engine_with_code("doc test\nfact is_active: [boolean]\nrule result: is_active");
         let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
@@ -1357,9 +1356,8 @@ mod tests {
 
     #[test]
     fn test_get_parameter_boolean_has_enum() {
-        let engine = create_engine_with_code(
-            "doc test\nfact is_active = [boolean]\nrule result = is_active",
-        );
+        let engine =
+            create_engine_with_code("doc test\nfact is_active: [boolean]\nrule result: is_active");
         let spec = generate_openapi(&engine, false);
 
         let params = &spec["paths"]["/test/{rules}"]["get"]["parameters"];
@@ -1376,7 +1374,7 @@ mod tests {
     #[test]
     fn test_post_schema_number_uses_native_type() {
         let engine =
-            create_engine_with_code("doc test\nfact quantity = [number]\nrule result = quantity");
+            create_engine_with_code("doc test\nfact quantity: [number]\nrule result: quantity");
         let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
@@ -1386,7 +1384,7 @@ mod tests {
     #[test]
     fn test_post_schema_date_uses_string_format() {
         let engine =
-            create_engine_with_code("doc test\nfact deadline = [date]\nrule result = deadline");
+            create_engine_with_code("doc test\nfact deadline: [date]\nrule result: deadline");
         let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
@@ -1397,7 +1395,7 @@ mod tests {
     #[test]
     fn test_fact_with_default_is_not_required() {
         let engine = create_engine_with_code(
-            "doc test\nfact quantity = 10\nfact name = [text]\nrule result = quantity",
+            "doc test\nfact quantity: 10\nfact name: [text]\nrule result: quantity",
         );
         let spec = generate_openapi(&engine, false);
 
@@ -1416,9 +1414,9 @@ mod tests {
     fn test_help_and_default_in_openapi() {
         let engine = create_engine_with_code(
             r#"doc test
-fact quantity = [number -> help "Number of items to order" -> default 10]
-fact active = [boolean -> help "Whether the feature is enabled" -> default true]
-rule result = quantity
+fact quantity: [number -> help "Number of items to order" -> default 10]
+fact active: [boolean -> help "Whether the feature is enabled" -> default true]
+rule result: quantity
 "#,
         );
         let spec = generate_openapi(&engine, false);

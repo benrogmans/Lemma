@@ -13,18 +13,18 @@ fn test_missing_fact_propagation_through_rule_reference() {
     // Referenced document with a rule that requires a fact
     let private_doc = r#"
 doc private_rules
-fact base_price = [number]
-fact quantity = [number]
-rule total_before_discount = base_price * quantity
-rule final_total = total_before_discount?
+fact base_price: [number]
+fact quantity: [number]
+rule total_before_discount: base_price * quantity
+rule final_total: total_before_discount?
 "#;
 
     // Main document that references the private document
     let main_doc = r#"
 doc examples/rules_and_unless
-fact rules = doc private_rules
-fact rules.base_price = 500
-rule total = rules.final_total?
+fact rules: doc private_rules
+fact rules.base_price: 500
+rule total: rules.final_total?
 "#;
 
     add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();
@@ -70,18 +70,18 @@ fn test_rule_path_consistency_for_missing_facts() {
     // Referenced document
     let private_doc = r#"
 doc private_rules
-fact base_price = [number]
-fact quantity = [number]
-rule total_before_discount = base_price * quantity
-rule final_total = total_before_discount?
+fact base_price: [number]
+fact quantity: [number]
+rule total_before_discount: base_price * quantity
+rule final_total: total_before_discount?
 "#;
 
     // Main document
     let main_doc = r#"
 doc examples/rules_and_unless
-fact rules = doc private_rules
-fact rules.base_price = 500
-rule total = rules.final_total?
+fact rules: doc private_rules
+fact rules.base_price: 500
+rule total: rules.final_total?
 "#;
 
     add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();
@@ -128,10 +128,10 @@ fn test_multiple_missing_facts_reported_together() {
 
     let doc = r#"
 doc test_doc
-fact price = [number]
-fact quantity = [number]
-fact discount = [percent]
-rule total = price * quantity - discount
+fact price: [number]
+fact quantity: [number]
+fact discount: [percent]
+rule total: price * quantity - discount
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
@@ -182,10 +182,10 @@ fn test_rules_without_missing_facts_still_evaluate() {
 
     let doc = r#"
 doc test_doc
-fact price = [number]
-fact quantity = [number]
-rule subtotal = price * quantity
-rule message = "Order processed"
+fact price: [number]
+fact quantity: [number]
+rule subtotal: price * quantity
+rule message: "Order processed"
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
@@ -235,19 +235,19 @@ fn test_cross_document_missing_facts() {
     // Referenced document
     let private_doc = r#"
 doc private_rules
-fact base_price = [number]
-fact quantity = [number]
-fact tax_rate = [percent]
-rule subtotal = base_price * quantity
-rule total = subtotal? + (subtotal? * tax_rate)
+fact base_price: [number]
+fact quantity: [number]
+fact tax_rate: [percent]
+rule subtotal: base_price * quantity
+rule total: subtotal? + (subtotal? * tax_rate)
 "#;
 
     // Main document
     let main_doc = r#"
 doc examples/rules_and_unless
-fact rules = doc private_rules
-fact rules.base_price = 500
-rule total = rules.total?
+fact rules: doc private_rules
+fact rules.base_price: 500
+rule total: rules.total?
 "#;
 
     add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();

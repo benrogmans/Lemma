@@ -9,7 +9,7 @@ fn test_type_system_with_imports_and_extensions() {
 
     let age_doc = r#"
 doc age
-type age = number
+type age: number
   -> minimum 0
   -> maximum 150
 "#;
@@ -19,14 +19,14 @@ doc test_types
 
 type age from age
 
-type adult_age = age
+type adult_age: age
   -> minimum 21
 
-fact age = [age]
-fact adult_age = [adult_age]
-fact twenties = [adult_age -> maximum 30]
+fact age: [age]
+fact adult_age: [adult_age]
+fact twenties: [adult_age -> maximum 30]
 
-rule total = age + adult_age + twenties
+rule total: age + adult_age + twenties
 "#;
 
     add_lemma_code_blocking(&mut engine, age_doc, "age.lemma").unwrap();
@@ -64,12 +64,12 @@ fn test_scale_type_default_before_unit_declarations() {
         &mut engine,
         r#"
         doc pricing
-        type money = scale
+        type money: scale
           -> default 4 eur
           -> unit eur 1
           -> unit usd 1.19
-        fact price = [money]
-        rule doubled = price * 2
+        fact price: [money]
+        rule doubled: price * 2
     "#,
         "pricing.lemma",
     )
@@ -92,12 +92,12 @@ fn test_scale_type_default_after_unit_declarations() {
         &mut engine,
         r#"
         doc pricing
-        type money = scale
+        type money: scale
           -> unit eur 1
           -> unit usd 1.19
           -> default 4 eur
-        fact price = [money]
-        rule doubled = price * 2
+        fact price: [money]
+        rule doubled: price * 2
     "#,
         "pricing.lemma",
     )

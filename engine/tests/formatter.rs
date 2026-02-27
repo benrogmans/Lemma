@@ -4,12 +4,12 @@ fn format_and_extract_rule_expr(source: &str) -> String {
     let formatted = format_source(source, "test.lemma").unwrap();
     for line in formatted.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("rule x = ") {
+        if let Some(rest) = trimmed.strip_prefix("rule x: ") {
             return rest.to_string();
         }
     }
     panic!(
-        "Could not find 'rule x = ...' in formatted output:\n{}",
+        "Could not find 'rule x: ...' in formatted output:\n{}",
         formatted
     );
 }
@@ -20,86 +20,85 @@ fn format_and_extract_rule_expr(source: &str) -> String {
 
 #[test]
 fn precedence_add_inside_multiply_preserves_parens() {
-    let src = "doc test\nfact a = 1\nfact b = 2\nfact c = 3\nrule x = (a + b) * c";
+    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a + b) * c";
     assert_eq!(format_and_extract_rule_expr(src), "(a + b) * c");
 }
 
 #[test]
 fn precedence_multiply_inside_add_omits_parens() {
-    let src = "doc test\nfact a = 1\nfact b = 2\nfact c = 3\nrule x = a + b * c";
+    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a + b * c";
     assert_eq!(format_and_extract_rule_expr(src), "a + b * c");
 }
 
 #[test]
 fn precedence_add_right_of_multiply_preserves_parens() {
-    let src = "doc test\nfact a = 1\nfact b = 2\nfact c = 3\nrule x = a * (b + c)";
+    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a * (b + c)";
     assert_eq!(format_and_extract_rule_expr(src), "a * (b + c)");
 }
 
 #[test]
 fn precedence_same_level_add_no_extra_parens() {
-    let src = "doc test\nfact a = 1\nfact b = 2\nfact c = 3\nrule x = (a + b) + c";
+    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a + b) + c";
     assert_eq!(format_and_extract_rule_expr(src), "a + b + c");
 }
 
 #[test]
 fn precedence_same_level_multiply_no_extra_parens() {
-    let src = "doc test\nfact a = 1\nfact b = 2\nfact c = 3\nrule x = (a * b) * c";
+    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a * b) * c";
     assert_eq!(format_and_extract_rule_expr(src), "a * b * c");
 }
 
 #[test]
 fn precedence_not_binds_tighter_than_and() {
-    let src = "doc test\nfact a = true\nfact b = true\nrule x = not a and b";
+    let src = "doc test\nfact a: true\nfact b: true\nrule x: not a and b";
     assert_eq!(format_and_extract_rule_expr(src), "not a and b");
 }
 
 #[test]
 fn precedence_not_over_and_preserves_parens() {
-    let src = "doc test\nfact a = true\nfact b = true\nrule x = not (a and b)";
+    let src = "doc test\nfact a: true\nfact b: true\nrule x: not (a and b)";
     assert_eq!(format_and_extract_rule_expr(src), "not (a and b)");
 }
 
 #[test]
 fn precedence_and_binds_tighter_than_or() {
-    let src = "doc test\nfact a = true\nfact b = true\nfact c = true\nrule x = a or b and c";
+    let src = "doc test\nfact a: true\nfact b: true\nfact c: true\nrule x: a or b and c";
     assert_eq!(format_and_extract_rule_expr(src), "a or b and c");
 }
 
 #[test]
 fn precedence_or_inside_and_preserves_parens() {
-    let src = "doc test\nfact a = true\nfact b = true\nfact c = true\nrule x = (a or b) and c";
+    let src = "doc test\nfact a: true\nfact b: true\nfact c: true\nrule x: (a or b) and c";
     assert_eq!(format_and_extract_rule_expr(src), "(a or b) and c");
 }
 
 #[test]
 fn precedence_subtract_inside_multiply_preserves_parens() {
-    let src = "doc test\nfact a = 1\nfact b = 2\nfact c = 3\nrule x = (a - b) * c";
+    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a - b) * c";
     assert_eq!(format_and_extract_rule_expr(src), "(a - b) * c");
 }
 
 #[test]
 fn precedence_multiply_inside_subtract_omits_parens() {
-    let src = "doc test\nfact a = 1\nfact b = 2\nfact c = 3\nrule x = a - b * c";
+    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a - b * c";
     assert_eq!(format_and_extract_rule_expr(src), "a - b * c");
 }
 
 #[test]
 fn precedence_nested_arithmetic_mixed() {
-    let src =
-        "doc test\nfact a = 1\nfact b = 2\nfact c = 3\nfact d = 4\nrule x = (a + b) * (c - d)";
+    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: (a + b) * (c - d)";
     assert_eq!(format_and_extract_rule_expr(src), "(a + b) * (c - d)");
 }
 
 #[test]
 fn precedence_comparison_lower_than_arithmetic() {
-    let src = "doc test\nfact a = 1\nfact b = 2\nfact c = 3\nrule x = a + b > c";
+    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a + b > c";
     assert_eq!(format_and_extract_rule_expr(src), "a + b > c");
 }
 
 #[test]
 fn precedence_deeply_nested() {
-    let src = "doc test\nfact a = 1\nfact b = 2\nfact c = 3\nfact d = 4\nrule x = a + b * c + d";
+    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: a + b * c + d";
     assert_eq!(format_and_extract_rule_expr(src), "a + b * c + d");
 }
 
@@ -325,7 +324,7 @@ fn idempotency_precedence_expressions() {
     ];
     for expr in expressions {
         let src = format!(
-            "doc test\nfact a = 1\nfact b = 2\nfact c = 3\nfact d = 4\nrule x = {}",
+            "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: {}",
             expr
         );
         let output1 = format_source(&src, "test.lemma")

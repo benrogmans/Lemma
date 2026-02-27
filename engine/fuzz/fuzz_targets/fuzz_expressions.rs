@@ -10,9 +10,9 @@ fuzz_target!(|data: &[u8]| {
         
         let code = format!(r#"
 doc fuzz_test
-fact x = 100
-fact y = 50
-rule test_expr = {}
+fact x: 100
+fact y: 50
+rule test_expr: {}
 "#, s);
         
         let files: HashMap<String, String> =

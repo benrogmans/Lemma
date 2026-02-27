@@ -2,7 +2,7 @@
 //!
 //! Covers: "in percent" / "in permille" as ratio conversion; comparison with percent literals;
 //! unknown unit error; scale conversion unchanged; ratio display with no unit;
-//! number ± ratio fact semantics (e.g. 100 - discount = 100 * (1 - discount)).
+//! number ± ratio fact semantics (e.g. 100 - discount: 100 * (1 - discount)).
 
 use lemma::evaluation::OperationResult;
 mod common;
@@ -17,12 +17,12 @@ use std::str::FromStr;
 fn in_percent_produces_ratio_and_compares_with_percent_literal() {
     let code = r#"
 doc savings
-fact savings_amount = 75
-fact total_amount = 300
+fact savings_amount: 75
+fact total_amount: 300
 
-rule savings_ratio = (savings_amount / total_amount) in percent
-rule is_above_20 = savings_ratio? > 20%
-rule is_above_30 = savings_ratio? > 30%
+rule savings_ratio: (savings_amount / total_amount) in percent
+rule is_above_20: savings_ratio? > 20%
+rule is_above_30: savings_ratio? > 30%
 "#;
 
     let mut engine = Engine::new();
@@ -63,11 +63,11 @@ rule is_above_30 = savings_ratio? > 30%
 fn in_percent_then_chained_comparison_with_multiple_thresholds() {
     let code = r#"
 doc summary
-fact part = 18
-fact whole = 60
+fact part: 18
+fact whole: 60
 
-rule pct = (part / whole) in percent
-rule tier = "low"
+rule pct: (part / whole) in percent
+rule tier: "low"
     unless pct? > 25% then "mid"
     unless pct? > 50% then "high"
 "#;
@@ -89,10 +89,10 @@ rule tier = "low"
 fn in_permille_produces_ratio() {
     let code = r#"
 doc permille_doc
-fact value = 0.025
+fact value: 0.025
 
-rule as_permille = value in permille
-rule above_20_permille = as_permille? > 20 permille
+rule as_permille: value in permille
+rule above_20_permille: as_permille? > 20 permille
 "#;
 
     let mut engine = Engine::new();
@@ -124,9 +124,9 @@ rule above_20_permille = as_permille? > 20 permille
 fn unknown_unit_in_conversion_fails_planning() {
     let code = r#"
 doc bad
-fact x = 100
+fact x: 100
 
-rule bad_conv = x in not_a_unit
+rule bad_conv: x in not_a_unit
 "#;
 
     let mut engine = Engine::new();
@@ -144,14 +144,14 @@ rule bad_conv = x in not_a_unit
 fn scale_in_eur_still_works_unchanged() {
     let code = r#"
 doc pricing
-type money = scale
+type money: scale
   -> unit eur 1
   -> unit usd 1.1
 
-fact amount = 100
+fact amount: 100
 
-rule in_eur = amount in eur
-rule in_usd = amount in usd
+rule in_eur: amount in eur
+rule in_usd: amount in usd
 "#;
 
     let mut engine = Engine::new();
@@ -174,9 +174,9 @@ rule in_usd = amount in usd
 fn number_minus_ratio_fact_is_100_times_one_minus_discount() {
     let code = r#"
 doc pricing
-fact discount = [ratio]
+fact discount: [ratio]
 
-rule price = 100 - discount
+rule price: 100 - discount
 "#;
 
     let mut engine = Engine::new();
@@ -229,12 +229,12 @@ fn ratio_display_with_none_unit_shows_number_only() {
 fn chained_ratio_conversion_and_arithmetic() {
     let code = r#"
 doc chained
-fact a = 10
-fact b = 40
+fact a: 10
+fact b: 40
 
-rule pct = (a / b) in percent
-rule plus_five = pct? + 5%
-rule compared = plus_five? > 25%
+rule pct: (a / b) in percent
+rule plus_five: pct? + 5%
+rule compared: plus_five? > 25%
 "#;
 
     let mut engine = Engine::new();
@@ -271,15 +271,15 @@ rule compared = plus_five? > 25%
 fn scale_and_ratio_conversion_in_same_doc() {
     let code = r#"
 doc mixed
-type money = scale
+type money: scale
   -> unit eur 1
 
-fact amount = 200
-fact part = 50
+fact amount: 200
+fact part: 50
 
-rule as_eur = amount in eur
-rule share_pct = (part / amount) in percent
-rule share_above_20 = share_pct? > 20%
+rule as_eur: amount in eur
+rule share_pct: (part / amount) in percent
+rule share_above_20: share_pct? > 20%
 "#;
 
     let mut engine = Engine::new();
@@ -322,11 +322,11 @@ rule share_above_20 = share_pct? > 20%
 fn ratio_comparison_both_sides_ratio() {
     let code = r#"
 doc compare
-fact discount = 15%
-fact threshold = 10%
+fact discount: 15%
+fact threshold: 10%
 
-rule meets = discount >= threshold
-rule exceeds = discount > threshold
+rule meets: discount >= threshold
+rule exceeds: discount > threshold
 "#;
 
     let mut engine = Engine::new();

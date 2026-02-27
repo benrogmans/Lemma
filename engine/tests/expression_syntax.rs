@@ -10,15 +10,15 @@ fn parentheses_syntax_evaluates_correctly() {
     // Integration test: parentheses syntax is accepted by parser and behaves correctly in evaluation.
     let code = r#"
 doc test
-fact x = true
-fact y = false
-fact num = 16
-rule not_x = not(x)
-rule sqrt_num = sqrt(num)
-rule sin_zero = sin(0)
-rule log_ten = log(10)
-rule combined = not(x) and sqrt(16) == 4
-rule with_spaces = not  (  x  )
+fact x: true
+fact y: false
+fact num: 16
+rule not_x: not(x)
+rule sqrt_num: sqrt(num)
+rule sin_zero: sin(0)
+rule log_ten: log(10)
+rule combined: not(x) and sqrt(16) == 4
+rule with_spaces: not  (  x  )
 "#;
 
     let mut engine = Engine::new();

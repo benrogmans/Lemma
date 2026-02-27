@@ -72,15 +72,15 @@ Consider a simple pricing rule:
 ```lemma
 doc pricing
 
-fact quantity   = [number]
-fact is_vip     = false
+fact quantity: [number]
+fact is_vip: false
 
-rule discount = 0%
+rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
   unless is_vip         then 25%
 
-rule price = 200 - discount?
+rule price: 200 - discount?
 ```
 
 This document is immediately readable by business stakeholders while being fully executable by software systems. The semantics are clear: start with no discount, but if quantity is 10 or more, apply 10%; if 50 or more, apply 20%; if customer is VIP, apply 25%. The last matching condition wins, so a VIP customer with 100 units gets 25%, not 20%.
@@ -98,7 +98,7 @@ Lemma's syntax is designed to mirror how people naturally express business rules
 Lemma encodes this exactly as stated:
 
 ```lemma
-rule shipping = 12.99
+rule shipping: 12.99
   unless destination == "CA" then 25.00
   unless order_total >= 100 then 0
 ```
@@ -119,22 +119,22 @@ Lemma is purely declarative. You describe *what* should be true, not *how* to co
 Programming languages typically require verbose type annotations. Lemma infers types from literals while providing a rich type system:
 
 ```lemma
-type mass = scale -> unit kilogram 1.0 -> unit pound 0.453592
+type mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
 
-fact salary = 75000              // Number type inferred
-fact vacation = 3 weeks          // Duration type inferred
-fact weight = 15 kilograms       // Uses custom mass type
-fact deadline = 2024-12-31       // Date type inferred
-fact tax_rate = 22%              // Ratio type inferred
+fact salary: 75000              // Number type inferred
+fact vacation: 3 weeks          // Duration type inferred
+fact weight: 15 kilograms       // Uses custom mass type
+fact deadline: 2024-12-31       // Date type inferred
+fact tax_rate: 22%              // Ratio type inferred
 ```
 
 The type system prevents nonsensical operations (you can't add a date to a weight) while enabling automatic unit conversions within the same type:
 
 ```lemma
-type mass = scale -> unit kilogram 1.0 -> unit pound 0.453592
+type mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
 
-fact weight = 70 kilograms
-rule weight_in_pounds = weight in pounds  // Automatic conversion within type
+fact weight: 70 kilograms
+rule weight_in_pounds: weight in pounds  // Automatic conversion within type
 ```
 
 ### 2.4 Composition over configuration
@@ -143,15 +143,15 @@ Lemma encourages building complex systems from simple, composable pieces. Docume
 
 ```lemma
 doc base_employee
-fact salary = 50000
-fact bonus_rate = 5%
+fact salary: 50000
+fact bonus_rate: 5%
 
 doc manager
-fact employee = doc base_employee
-fact employee.salary = 80000
-fact employee.bonus_rate = 15%
+fact employee: doc base_employee
+fact employee.salary: 80000
+fact employee.bonus_rate: 15%
 
-rule manager_bonus = employee.salary * employee.bonus_rate
+rule manager_bonus: employee.salary * employee.bonus_rate
 ```
 
 This compositional design enables reusable rule libraries and reduces duplication.
@@ -165,19 +165,19 @@ This compositional design enables reusable rule libraries and reduces duplicatio
 Facts are named values of a certain type. They represent inputs to the system:
 
 ```lemma
-fact name = "Alice"
-fact age = 35
-fact start_date = 2024-01-15
-fact salary = 75000
-fact is_manager = true
+fact name: "Alice"
+fact age: 35
+fact start_date: 2024-01-15
+fact salary: 75000
+fact is_manager: true
 ```
 
 Facts can also be type annotations, declaring expected inputs without values:
 
 ```lemma
-fact birth_date = [date]
-fact employee_count = [number]
-fact location = [text]
+fact birth_date: [date]
+fact employee_count: [number]
+fact location: [text]
 ```
 
 ### 3.2 Rules
@@ -185,7 +185,7 @@ fact location = [text]
 Rules compute values based on facts and other rules. A rule has a name, a default value, and optional "unless" clauses:
 
 ```lemma
-rule discount = 0%
+rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
   unless is_vip then 25%
@@ -194,9 +194,9 @@ rule discount = 0%
 Rules can reference other rules using the `?` suffix:
 
 ```lemma
-rule is_adult = age >= 18
-rule has_license = license_status == "valid"
-rule can_drive = is_adult? and has_license?
+rule is_adult: age >= 18
+rule has_license: license_status == "valid"
+rule can_drive: is_adult? and has_license?
 ```
 
 ### 3.3 Unless clauses
@@ -204,7 +204,7 @@ rule can_drive = is_adult? and has_license?
 The "unless" clause is Lemma's primary conditional construct. Unlike if-else chains that stop at the first match, unless clauses use "last matching wins" semantics:
 
 ```lemma
-rule status = "standard"
+rule status: "standard"
   unless score >= 70 then "good"
   unless score >= 90 then "excellent"
 ```
@@ -216,7 +216,7 @@ If `score` is 95, the result is "excellent" (not "good"), because the last match
 While "unless" clauses override values, sometimes you need to block a rule entirely. The `veto` keyword does this:
 
 ```lemma
-rule loan_approval = reject
+rule loan_approval: reject
   unless credit_score >= 600 then accept
   unless age < 18 then veto "Must be 18 or older"
   unless bankruptcy_flag then veto "Cannot approve due to bankruptcy"
@@ -231,25 +231,25 @@ Lemma provides comprehensive operators for arithmetic, comparison, logical opera
 **Arithmetic**: `+`, `-`, `*`, `/`, `%`, `^`
 
 ```lemma
-rule compound = principal * (1 + rate) ^ years
+rule compound: principal * (1 + rate) ^ years
 ```
 
 **Comparison**: `>`, `<`, `>=`, `<=`, `==`, `!=`, `is`, `is not`
 
 ```lemma
-rule is_eligible = age >= 18 and income > 30000
+rule is_eligible: age >= 18 and income > 30000
 ```
 
 **Logical**: `and`, `or`, `not`
 
 ```lemma
-rule can_approve = is_manager? and not is_suspended?
+rule can_approve: is_manager? and not is_suspended?
 ```
 
 **Mathematical**: `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `abs`, `floor`, `ceil`, `round`
 
 ```lemma
-rule hypotenuse = sqrt(a^2 + b^2)
+rule hypotenuse: sqrt(a^2 + b^2)
 ```
 
 ### 3.6 Type-aware arithmetic
@@ -257,7 +257,7 @@ rule hypotenuse = sqrt(a^2 + b^2)
 Lemma intelligently handles arithmetic between different types. When you write:
 
 ```lemma
-rule discounted_price = 200 - 25%
+rule discounted_price: 200 - 25%
 ```
 
 Lemma understands that subtracting a ratio from a number means "subtract 25% of the value," producing `150`.
@@ -280,12 +280,12 @@ Lemma provides several primitive types:
 - **Ratio**: Proportional values (percent, permille)
 
 ```lemma
-fact count = 42
-fact name = "Alice"
-fact is_active = true
-fact deadline = 2024-12-31
-fact workweek = 40 hours
-fact tax_rate = 15%
+fact count: 42
+fact name: "Alice"
+fact is_active: true
+fact deadline: 2024-12-31
+fact workweek: 40 hours
+fact tax_rate: 15%
 ```
 
 ### 4.2 User-defined types
@@ -295,19 +295,19 @@ Lemma allows users to define custom types with units, constraints, and validatio
 **Basic type definition:**
 
 ```lemma
-type money = scale
+type money: scale
   -> unit eur 1.00
   -> unit usd 1.10
   -> decimals 2
   -> minimum 0
 
-type mass = scale
+type mass: scale
   -> unit kilogram 1.0
   -> unit gram 0.001
   -> unit pound 0.453592
 
-fact price = 100 eur
-fact weight = 75 kilograms
+fact price: 100 eur
+fact weight: 75 kilograms
 ```
 
 **Type commands** allow fine-grained control:
@@ -329,8 +329,8 @@ type discount_rate from pricing -> maximum 0.5
 **Inline types** allow type definitions directly in fact declarations:
 
 ```lemma
-fact age = [number -> minimum 0 -> maximum 120]
-fact price = [scale -> unit eur 1.00 -> unit usd 1.10]
+fact age: [number -> minimum 0 -> maximum 120]
+fact price: [scale -> unit eur 1.00 -> unit usd 1.10]
 ```
 
 ### 4.3 Unit conversion
@@ -338,23 +338,23 @@ fact price = [scale -> unit eur 1.00 -> unit usd 1.10]
 Unit conversions work within the same type definition. This ensures type safety while allowing flexible unit systems.
 
 ```lemma
-type money = scale -> unit eur 1.00 -> unit usd 1.10
+type money: scale -> unit eur 1.00 -> unit usd 1.10
 
-fact price = 100 eur
-rule price_usd = price in usd  // Converts to 110 usd
+fact price: 100 eur
+rule price_usd: price in usd  // Converts to 110 usd
 ```
 
 **Duration units** are built-in (the only exception):
 
 ```lemma
-fact workweek = 40 hours
-rule workweek_days = workweek in days  // Converts to ~1.67 days
+fact workweek: 40 hours
+rule workweek_days: workweek in days  // Converts to ~1.67 days
 ```
 
 **Number to ratio conversion:**
 
 ```lemma
-rule discount_as_percent = 0.25 in percent  // Converts to 25 percent
+rule discount_as_percent: 0.25 in percent  // Converts to 25 percent
 ```
 
 This design eliminates manual conversion logic while maintaining clear type boundaries.
@@ -364,20 +364,20 @@ This design eliminates manual conversion logic while maintaining clear type boun
 Ratios represent proportional values. The `ratio` type includes `percent` and `permille` units by default.
 
 ```lemma
-fact tax_rate = 15%        // or 15 percent
-fact discount = 25%
-fact error_rate = 2 permille  // or 2%%
-fact completion = 87.5%
+fact tax_rate: 15%        // or 15 percent
+fact discount: 25%
+fact error_rate: 2 permille  // or 2%%
+fact completion: 87.5%
 ```
 
 **Custom ratio types:**
 
 ```lemma
-type discount_ratio = ratio
+type discount_ratio: ratio
   -> minimum 0
   -> maximum 1
 
-fact discount = 0.25  // 25% as decimal ratio
+fact discount: 0.25  // 25% as decimal ratio
 ```
 
 Ratios interact intelligently with other types in arithmetic operations, automatically applying proportional calculations.
@@ -396,10 +396,10 @@ doc employee/benefits
 Company benefits policy for full-time employees
 """
 
-fact base_vacation = 15 days
-fact years_of_service = [number]
+fact base_vacation: 15 days
+fact years_of_service: [number]
 
-rule vacation_days = base_vacation
+rule vacation_days: base_vacation
   unless years_of_service >= 5 then 20 days
   unless years_of_service >= 10 then 25 days
 ```
@@ -412,14 +412,14 @@ Documents can reference other documents, enabling composition and reuse:
 
 ```lemma
 doc base_employee
-fact name = "John Doe"
-fact salary = 50000
+fact name: "John Doe"
+fact salary: 50000
 
 doc manager
-fact employee = doc base_employee
-fact employee.salary = 80000
+fact employee: doc base_employee
+fact employee.salary: 80000
 
-rule manager_bonus = employee.salary * 0.15
+rule manager_bonus: employee.salary * 0.15
 ```
 
 This pattern allows creating specialized variants of base documents without duplication.
@@ -430,14 +430,14 @@ Facts can be bound at different levels:
 
 ```lemma
 doc pricing
-fact quantity = 100
-fact unit_price = 50
+fact quantity: 100
+fact unit_price: 50
 
 doc wholesale_pricing
-fact pricing.quantity = 1000
-fact pricing.unit_price = 35
+fact pricing.quantity: 1000
+fact pricing.unit_price: 35
 
-rule total = pricing.quantity * pricing.unit_price
+rule total: pricing.quantity * pricing.unit_price
 ```
 
 This enables scenario modeling and context-specific rule evaluation.
@@ -532,7 +532,7 @@ The evaluator handles:
 Example evaluation:
 
 ```lemma
-rule discount = 0%
+rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
 ```
@@ -582,15 +582,15 @@ Progressive tax systems are naturally expressed in Lemma:
 ```lemma
 doc tax_policy
 
-fact income = 85000
-fact filing_status = "single"
+fact income: 85000
+fact filing_status: "single"
 
-rule taxable_income = income - standard_deduction?
+rule taxable_income: income - standard_deduction?
 
-rule standard_deduction = 13850
+rule standard_deduction: 13850
   unless filing_status == "married" then 27700
 
-rule tax_owed = 0
+rule tax_owed: 0
   unless taxable_income? > 11000
     then (taxable_income? - 11000) * 10%
   unless taxable_income? > 44725
@@ -606,24 +606,24 @@ Complex pricing rules with volume discounts and customer tiers:
 ```lemma
 doc pricing
 
-fact quantity = [number]
-fact customer_tier = "standard"
-fact unit_price = 100
+fact quantity: [number]
+fact customer_tier: "standard"
+fact unit_price: 100
 
-rule volume_discount = 0%
+rule volume_discount: 0%
   unless quantity >= 10 then 5%
   unless quantity >= 50 then 10%
   unless quantity >= 100 then 15%
 
-rule tier_discount = 0%
+rule tier_discount: 0%
   unless customer_tier == "silver" then 5%
   unless customer_tier == "gold" then 10%
   unless customer_tier == "platinum" then 15%
 
-rule best_discount = volume_discount?
+rule best_discount: volume_discount?
   unless tier_discount? > volume_discount? then tier_discount?
 
-rule final_price = quantity * unit_price * (1 - best_discount?)
+rule final_price: quantity * unit_price * (1 - best_discount?)
 ```
 
 ### 7.3 Insurance eligibility
@@ -633,19 +633,19 @@ Determining eligibility based on multiple criteria:
 ```lemma
 doc insurance/eligibility
 
-fact age = [number]
-fact pre_existing_conditions = [boolean]
-fact employment_status = [text]
-fact coverage_start = [date]
+fact age: [number]
+fact pre_existing_conditions: [boolean]
+fact employment_status: [text]
+fact coverage_start: [date]
 
-rule eligible_age = age >= 18 and age <= 65
+rule eligible_age: age >= 18 and age <= 65
 
-rule eligible_health = not pre_existing_conditions
+rule eligible_health: not pre_existing_conditions
 
-rule eligible_employment = employment_status == "full_time"
+rule eligible_employment: employment_status == "full_time"
   or employment_status == "part_time"
 
-rule is_eligible = eligible_age? and eligible_health? and eligible_employment?
+rule is_eligible: eligible_age? and eligible_health? and eligible_employment?
   unless eligible_age? == false then veto "Age not within eligible range"
   unless eligible_health? == false then veto "Pre-existing conditions"
   unless eligible_employment? == false then veto "Employment status ineligible"
@@ -658,27 +658,27 @@ Complex shipping calculations with multiple factors:
 ```lemma
 doc shipping
 
-fact order_total = [number]
-type mass = scale -> unit kilogram 1.0 -> unit pound 0.453592
+fact order_total: [number]
+type mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
 
-fact weight = [mass]
-fact destination = [text]
-fact is_expedited = false
+fact weight: [mass]
+fact destination: [text]
+fact is_expedited: false
 
-rule base_rate = 12.99
+rule base_rate: 12.99
   unless destination == "CA" then 25.00
   unless destination == "MX" then 22.00
 
-rule weight_surcharge = 0
+rule weight_surcharge: 0
   unless weight > 5 kilograms then 7.50
   unless weight > 20 kilograms then veto "Too heavy for standard shipping"
 
-rule expedited_fee = 0
+rule expedited_fee: 0
   unless is_expedited then 25.00
 
-rule free_shipping = order_total >= 100 and destination == "US"
+rule free_shipping: order_total >= 100 and destination == "US"
 
-rule final_shipping = base_rate? + weight_surcharge? + expedited_fee?
+rule final_shipping: base_rate? + weight_surcharge? + expedited_fee?
   unless free_shipping? then 0
 ```
 
@@ -689,26 +689,26 @@ Complex compensation rules with multiple variables:
 ```lemma
 doc compensation
 
-fact base_salary = [number]
-fact years_of_service = [number]
-fact performance_rating = [number]
-fact department = [text]
+fact base_salary: [number]
+fact years_of_service: [number]
+fact performance_rating: [number]
+fact department: [text]
 
-rule tenure_bonus = 0
+rule tenure_bonus: 0
   unless years_of_service >= 5 then base_salary * 5%
   unless years_of_service >= 10 then base_salary * 10%
   unless years_of_service >= 15 then base_salary * 15%
 
-rule performance_bonus = base_salary * 0%
+rule performance_bonus: base_salary * 0%
   unless performance_rating >= 3 then base_salary * 5%
   unless performance_rating >= 4 then base_salary * 10%
   unless performance_rating >= 4.5 then base_salary * 15%
 
-rule department_bonus = 0
+rule department_bonus: 0
   unless department == "sales" then base_salary * 10%
   unless department == "engineering" then base_salary * 5%
 
-rule total_compensation = base_salary + tenure_bonus?
+rule total_compensation: base_salary + tenure_bonus?
                           + performance_bonus? + department_bonus?
 ```
 
@@ -744,7 +744,7 @@ Issues:
 Lemma equivalent is clearer and matches natural language:
 
 ```lemma
-rule discount = 0%
+rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
   unless is_vip then 25%
@@ -855,13 +855,13 @@ Lemma provides better readability, version control, testing, and composition.
 **Planned feature**: Support facts that hold multiple values with declarative operations.
 
 ```lemma
-fact employees = multi [text]
-fact salaries = multi [number]
+fact employees: multi [text]
+fact salaries: multi [number]
 
-rule total_payroll = sum of salaries
-rule average_salary = avg of salaries
-rule employee_count = count of employees
-rule high_earners = salaries where value > 100000
+rule total_payroll: sum of salaries
+rule average_salary: avg of salaries
+rule employee_count: count of employees
+rule high_earners: salaries where value > 100000
 ```
 
 This will enable working with collections of data in a declarative way.
@@ -945,13 +945,13 @@ cargo install lemma
 cat > example.lemma << 'EOF'
 doc example
 
-fact age = 25
-fact income = 50000
+fact age: 25
+fact income: 50000
 
-rule can_vote = false
+rule can_vote: false
   unless age >= 18 then true
 
-rule tax_bracket = "10%"
+rule tax_bracket: "10%"
   unless income > 44725 then "12%"
   unless income > 95375 then "22%"
 EOF
@@ -981,52 +981,52 @@ This document encodes the complete compensation rules including
 base salary, bonuses, equity, and benefits.
 """
 
-fact employee_id = [text]
-fact base_salary = [number]
-fact years_of_service = [number]
-fact performance_rating = [number]
-fact department = [text]
-fact location = [text]
-fact is_manager = false
+fact employee_id: [text]
+fact base_salary: [number]
+fact years_of_service: [number]
+fact performance_rating: [number]
+fact department: [text]
+fact location: [text]
+fact is_manager: false
 
-rule cost_of_living_adjustment = 0%
+rule cost_of_living_adjustment: 0%
   unless location == "San Francisco" then 25%
   unless location == "New York" then 20%
   unless location == "Seattle" then 15%
 
-rule adjusted_salary = base_salary * (1 + cost_of_living_adjustment?)
+rule adjusted_salary: base_salary * (1 + cost_of_living_adjustment?)
 
-rule tenure_bonus_rate = 0%
+rule tenure_bonus_rate: 0%
   unless years_of_service >= 5 then 5%
   unless years_of_service >= 10 then 10%
   unless years_of_service >= 15 then 15%
 
-rule tenure_bonus = adjusted_salary? * tenure_bonus_rate?
+rule tenure_bonus: adjusted_salary? * tenure_bonus_rate?
 
-rule performance_multiplier = 0
+rule performance_multiplier: 1.0
   unless performance_rating >= 3.0 then 1.0
   unless performance_rating >= 4.0 then 1.5
   unless performance_rating >= 4.5 then 2.0
 
-rule target_bonus_rate = 10%
+rule target_bonus_rate: 10%
   unless is_manager then 20%
   unless department == "sales" then 30%
 
-rule performance_bonus = adjusted_salary? * target_bonus_rate? * performance_multiplier?
+rule performance_bonus: adjusted_salary? * target_bonus_rate? * performance_multiplier?
 
-rule equity_grant_value = 0
+rule equity_grant_value: 0
   unless is_manager then adjusted_salary? * 25%
   unless years_of_service < 1 then veto "Not eligible for equity in first year"
 
-rule vacation_days = 15 days
+rule vacation_days: 15 days
   unless years_of_service >= 5 then 20 days
   unless years_of_service >= 10 then 25 days
   unless is_manager then 30 days
 
-rule total_compensation = adjusted_salary? + tenure_bonus?
+rule total_compensation: adjusted_salary? + tenure_bonus?
                           + performance_bonus? + equity_grant_value?
 
-rule compensation_summary = "Total: " + total_compensation?
+rule compensation_summary: "Total: " + total_compensation?
 ```
 
 Query examples:
@@ -1053,14 +1053,14 @@ Document:
   <statements>
 
 Fact Definition:
-  fact <name> = <value>
-  fact <name> = [<type>]
+  fact <name>: <value>
+  fact <name>: [<type>]
 
 Fact Binding:
-  fact <qualified.name> = <value>
+  fact <qualified.name>: <value>
 
 Rule Definition:
-  rule <name> = <expression>
+  rule <name>: <expression>
   [unless <condition> then <expression>]*
 
 Expressions:
@@ -1089,4 +1089,3 @@ Literals:
 **License**: Apache 2.0
 **Authors**: Ben Rogmans
 **Contact**: https://github.com/benrogmans/lemma
-

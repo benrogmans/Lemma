@@ -9,8 +9,8 @@ use std::str::FromStr;
 fn test_percentage_arithmetic() {
     let code = r#"
 doc pricing
-fact discount = 25%
-rule net_multiplier = 1 - discount
+fact discount: 25%
+rule net_multiplier: 1 - discount
 "#;
 
     let mut engine = Engine::new();
@@ -38,8 +38,8 @@ rule net_multiplier = 1 - discount
 fn test_duration_operations() {
     let code = r#"
 doc scheduling
-fact meeting_length = 30 minutes
-rule double_meeting = meeting_length * 2
+fact meeting_length: 30 minutes
+rule double_meeting: meeting_length * 2
 "#;
 
     let mut engine = Engine::new();
@@ -72,8 +72,8 @@ rule double_meeting = meeting_length * 2
 fn test_date_arithmetic_with_duration() {
     let code = r#"
 doc dates
-fact start = 2024-01-15
-rule end = start + 7 days
+fact start: 2024-01-15
+rule end: start + 7 days
 "#;
 
     let mut engine = Engine::new();
@@ -99,9 +99,9 @@ rule end = start + 7 days
 fn test_boolean_operations() {
     let code = r#"
 doc logic
-fact is_active = true
-fact is_premium = false
-rule can_access = is_active and not is_premium
+fact is_active: true
+fact is_premium: false
+rule can_access: is_active and not is_premium
 "#;
 
     let mut engine = Engine::new();
@@ -131,8 +131,8 @@ rule can_access = is_active and not is_premium
 fn test_text_operations() {
     let code = r#"
 doc strings
-fact greeting = "hello"
-rule message = greeting
+fact greeting: "hello"
+rule message: greeting
 "#;
 
     let mut engine = Engine::new();

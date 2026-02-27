@@ -486,7 +486,7 @@ mod tests {
     fn registry_error_with_matching_attribute_appears_in_file_diagnostics() {
         let path = "/tmp/registry_missing.lemma";
         let url = url_from_path(path);
-        let content = "doc example\nfact ext = doc @nonexistent/foo";
+        let content = "doc example\nfact ext: doc @nonexistent/foo";
         let mut workspace = WorkspaceModel::new();
         workspace.update_file(url.clone(), content.to_string());
 
@@ -537,7 +537,7 @@ mod tests {
         let path = "/tmp/registry_demo.lemma";
         let url = url_from_path(path);
         let content = r#"doc registry_demo
-fact helper = doc @org/example/helper
+fact helper: doc @org/example/helper
 type money from @lemma/std/finance"#;
         let mut workspace = WorkspaceModel::new();
         workspace.update_file(url.clone(), content.to_string());

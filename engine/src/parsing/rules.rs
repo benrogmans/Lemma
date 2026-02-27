@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn parse_document_with_unless_clause_records_unless_clause() {
         let input = r#"doc person
-rule is_active = service_started? and not service_ended?
+rule is_active: service_started? and not service_ended?
 unless maintenance_mode then false"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
@@ -211,7 +211,7 @@ unless maintenance_mode then false"#;
     #[test]
     fn parse_multiple_unless_clauses_records_all_unless_clauses() {
         let input = r#"doc test
-rule is_eligible = age >= 18 and has_license
+rule is_eligible: age >= 18 and has_license
 unless emergency_mode then true
 unless system_override then accept"#;
 
@@ -224,10 +224,10 @@ unless system_override then accept"#;
     #[test]
     fn parse_multiple_rules_in_document_preserves_rule_names() {
         let input = r#"doc test
-rule is_adult = age >= 18
-rule is_senior = age >= 65
-rule is_minor = age < 18
-rule can_vote = age >= 18 and is_citizen"#;
+rule is_adult: age >= 18
+rule is_senior: age >= 65
+rule is_minor: age < 18
+rule can_vote: age >= 18 and is_citizen"#;
 
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
@@ -241,7 +241,7 @@ rule can_vote = age >= 18 and is_citizen"#;
     #[test]
     fn veto_in_unless_clauses_parses_with_message() {
         let input = r#"doc test
-rule is_adult = age >= 18 unless age < 0 then veto "Age must be 0 or higher""#;
+rule is_adult: age >= 18 unless age < 0 then veto "Age must be 0 or higher""#;
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].rules.len(), 1);
@@ -258,7 +258,7 @@ rule is_adult = age >= 18 unless age < 0 then veto "Age must be 0 or higher""#;
         }
 
         let input = r#"doc test
-rule is_adult = age >= 18
+rule is_adult: age >= 18
   unless age > 150 then veto "Age cannot be over 150"
   unless age < 0 then veto "Age must be 0 or higher""#;
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
@@ -283,7 +283,7 @@ rule is_adult = age >= 18
     #[test]
     fn veto_without_message_parses_as_veto_with_no_message() {
         let input = r#"doc test
-rule adult = age >= 18 unless age > 150 then veto"#;
+rule adult: age >= 18 unless age > 150 then veto"#;
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         let rule = &docs[0].rules[0];
         assert_eq!(rule.unless_clauses.len(), 1);
@@ -299,7 +299,7 @@ rule adult = age >= 18 unless age > 150 then veto"#;
     #[test]
     fn mixed_veto_and_regular_unless_parses_both_results() {
         let input = r#"doc test
-rule adjusted_age = age + 1
+rule adjusted_age: age + 1
   unless age < 0 then veto "Invalid age"
   unless age > 100 then 100"#;
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();

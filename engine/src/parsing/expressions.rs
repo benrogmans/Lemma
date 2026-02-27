@@ -1247,7 +1247,7 @@ mod tests {
     #[test]
     fn test_simple_number() {
         let input = r#"doc test
-rule num = 42"#;
+rule num: 42"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
@@ -1259,7 +1259,7 @@ rule num = 42"#;
     #[test]
     fn test_fact_reference_parsing() {
         let input = r#"doc test
-rule simple_ref = age"#;
+rule simple_ref: age"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
@@ -1268,7 +1268,7 @@ rule simple_ref = age"#;
         );
 
         let input = r#"doc test
-rule nested_ref = employee.salary"#;
+rule nested_ref: employee.salary"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
@@ -1283,7 +1283,7 @@ rule nested_ref = employee.salary"#;
             "2 + 3", "2+1", "5 * 6", "5* 6", "7 % 3", "3%2", "2 ^ 3", "2^3",
         ];
         for expr in cases {
-            let input = format!("doc test\nrule test = {}", expr);
+            let input = format!("doc test\nrule test: {}", expr);
             let result = parse(&input, "test.lemma", &crate::ResourceLimits::default());
             assert!(
                 result.is_ok(),
@@ -1297,9 +1297,9 @@ rule nested_ref = employee.salary"#;
     #[test]
     fn test_conversion_expression_parsing() {
         let input = r#"doc test
-fact income = 80000
-fact total_tax = 20000
-rule effective_tax_rate = total_tax? / income in percent"#;
+fact income: 80000
+fact total_tax: 20000
+rule effective_tax_rate: total_tax? / income in percent"#;
 
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
@@ -1321,7 +1321,7 @@ rule effective_tax_rate = total_tax? / income in percent"#;
         ];
 
         for (expr, description) in test_cases {
-            let input = format!("doc test\nrule test = {}", expr);
+            let input = format!("doc test\nrule test: {}", expr);
             let result = parse(&input, "test.lemma", &crate::ResourceLimits::default());
             assert!(
                 result.is_ok(),
@@ -1344,7 +1344,7 @@ rule effective_tax_rate = total_tax? / income in percent"#;
         ];
 
         for (expr, description) in test_cases {
-            let input = format!("doc test\nrule test = {}", expr);
+            let input = format!("doc test\nrule test: {}", expr);
             let result = parse(&input, "test.lemma", &crate::ResourceLimits::default());
             assert!(
                 result.is_ok(),
@@ -1402,10 +1402,7 @@ rule effective_tax_rate = total_tax? / income in percent"#;
         ];
 
         for (expr, description) in test_cases {
-            let input = format!(
-                "doc test\nfact x = true\nfact y = false\nrule test = {}",
-                expr
-            );
+            let input = format!("doc test\nfact x: true\nfact y: false\nrule test: {}", expr);
             let result = parse(&input, "test.lemma", &crate::ResourceLimits::default());
             assert!(
                 result.is_ok(),

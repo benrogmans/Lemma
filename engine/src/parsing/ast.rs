@@ -443,7 +443,7 @@ impl DocRef {
 }
 
 /// A parsed constraint command argument, preserving the literal kind from the
-/// grammar rule `command_arg = { number_literal | boolean_literal | text_literal | label }`.
+/// grammar rule `command_arg: { number_literal | boolean_literal | text_literal | label }`.
 ///
 /// The parser sets the variant based on which grammar alternative matched.
 /// This information is used by:
@@ -947,13 +947,13 @@ impl fmt::Display for FactReference {
 
 impl fmt::Display for LemmaFact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "fact {} = {}", self.reference, self.value)
+        writeln!(f, "fact {}: {}", self.reference, self.value)
     }
 }
 
 impl fmt::Display for LemmaRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "rule {} = {}", self.name, self.expression)?;
+        write!(f, "rule {}: {}", self.name, self.expression)?;
         for unless_clause in &self.unless_clauses {
             write!(
                 f,
@@ -1218,7 +1218,7 @@ impl fmt::Display for TypeDef {
                 constraints,
                 ..
             } => {
-                write!(f, "type {} = {}", name, parent)?;
+                write!(f, "type {}: {}", name, parent)?;
                 if let Some(constraints) = constraints {
                     for (cmd, args) in constraints {
                         write!(f, "\n  -> {}", cmd)?;
@@ -1422,7 +1422,7 @@ impl<'a> fmt::Display for AsLemmaSource<'a, TypeDef> {
                 constraints,
                 ..
             } => {
-                write!(f, "type {} = {}", name, parent)?;
+                write!(f, "type {}: {}", name, parent)?;
                 if let Some(constraints) = constraints {
                     for (cmd, args) in constraints {
                         write!(f, "\n  -> {}", format_constraint_as_source(cmd, args))?;
@@ -1769,7 +1769,7 @@ mod tests {
                     col: 0,
                 },
                 "test",
-                std::sync::Arc::from("doc test\nfact x = 1"),
+                std::sync::Arc::from("doc test\nfact x: 1"),
             ),
             name: "status".to_string(),
             parent: "text".to_string(),
@@ -1801,7 +1801,7 @@ mod tests {
                     col: 0,
                 },
                 "test",
-                std::sync::Arc::from("doc test\nfact x = 1"),
+                std::sync::Arc::from("doc test\nfact x: 1"),
             ),
             name: "money".to_string(),
             parent: "scale".to_string(),

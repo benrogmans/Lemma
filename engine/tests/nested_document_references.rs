@@ -12,16 +12,16 @@ fn test_single_level_doc_ref_with_rule_reference() {
 
     let base_doc = r#"
 doc pricing
-fact base_price = 100
-fact tax_rate = 21%
-rule final_price = base_price * (1 + tax_rate)
+fact base_price: 100
+fact tax_rate: 21%
+rule final_price: base_price * (1 + tax_rate)
 "#;
 
     let line_item_doc = r#"
 doc line_item
-fact pricing = doc pricing
-fact quantity = 10
-rule line_total = pricing.final_price? * quantity
+fact pricing: doc pricing
+fact quantity: 10
+rule line_total: pricing.final_price? * quantity
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "pricing.lemma").unwrap();
@@ -55,20 +55,20 @@ fn test_multi_level_document_rule_reference() {
 
     let base_doc = r#"
 doc base
-fact value = 100
-rule doubled = value * 2
+fact value: 100
+rule doubled: value * 2
 "#;
 
     let middle_doc = r#"
 doc middle
-fact base_ref = doc base
-rule middle_calc = base_ref.doubled? + 50
+fact base_ref: doc base
+rule middle_calc: base_ref.doubled? + 50
 "#;
 
     let top_doc = r#"
 doc top
-fact middle_ref = doc middle
-rule top_calc = middle_ref.middle_calc?
+fact middle_ref: doc middle
+rule top_calc: middle_ref.middle_calc?
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -101,29 +101,29 @@ fn test_nested_document_binding_with_rule_reference() {
 
     let pricing_doc = r#"
 doc pricing
-fact base_price = 100
-rule final_price = base_price * 1.1
+fact base_price: 100
+rule final_price: base_price * 1.1
 "#;
 
     let wholesale_doc = r#"
 doc wholesale_pricing
-fact base_price = 75
-rule final_price = base_price * 1.1
+fact base_price: 75
+rule final_price: base_price * 1.1
 "#;
 
     let line_item_doc = r#"
 doc line_item
-fact pricing = doc pricing
-fact quantity = 10
-rule line_total = pricing.final_price? * quantity
+fact pricing: doc pricing
+fact quantity: 10
+rule line_total: pricing.final_price? * quantity
 "#;
 
     let order_doc = r#"
 doc order
-fact line = doc line_item
-fact line.pricing = doc wholesale_pricing
-fact line.quantity = 100
-rule order_total = line.line_total?
+fact line: doc line_item
+fact line.pricing: doc wholesale_pricing
+fact line.quantity: 100
+rule order_total: line.line_total?
 "#;
 
     add_lemma_code_blocking(&mut engine, pricing_doc, "test.lemma").unwrap();
@@ -155,19 +155,19 @@ fn test_multi_level_fact_access_through_doc_refs() {
 
     let base_doc = r#"
 doc base
-fact value = 50
+fact value: 50
 "#;
 
     let middle_doc = r#"
 doc middle
-fact config = doc base
-fact config.value = 100
+fact config: doc base
+fact config.value: 100
 "#;
 
     let top_doc = r#"
 doc top
-fact settings = doc middle
-rule final_value = settings.config.value * 2
+fact settings: doc middle
+rule final_value: settings.config.value * 2
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -199,24 +199,24 @@ fn test_deep_nested_fact_binding() {
 
     let pricing_doc = r#"
 doc pricing
-fact base_price = 100
-fact tax_rate = 21%
-rule final_price = base_price * (1 + tax_rate)
+fact base_price: 100
+fact tax_rate: 21%
+rule final_price: base_price * (1 + tax_rate)
 "#;
 
     let line_item_doc = r#"
 doc line_item
-fact pricing = doc pricing
-fact quantity = 10
-rule line_total = pricing.final_price? * quantity
+fact pricing: doc pricing
+fact quantity: 10
+rule line_total: pricing.final_price? * quantity
 "#;
 
     let order_doc = r#"
 doc order
-fact line = doc line_item
-fact line.pricing.tax_rate = 10%
-fact line.quantity = 5
-rule order_total = line.line_total?
+fact line: doc line_item
+fact line.pricing.tax_rate: 10%
+fact line.quantity: 5
+rule order_total: line.line_total?
 "#;
 
     add_lemma_code_blocking(&mut engine, pricing_doc, "test.lemma").unwrap();
@@ -251,23 +251,23 @@ fn test_different_paths_different_results() {
 
     let base_doc = r#"
 doc base
-fact price = 100
-rule total = price * 1.21
+fact price: 100
+rule total: price * 1.21
 "#;
 
     let wrapper_doc = r#"
 doc wrapper
-fact base = doc base
+fact base: doc base
 "#;
 
     let comparison_doc = r#"
 doc comparison
-fact path1 = doc wrapper
-fact path2 = doc wrapper
-fact path2.base.price = 75
-rule total1 = path1.base.total?
-rule total2 = path2.base.total?
-rule difference = total2? - total1?
+fact path1: doc wrapper
+fact path2: doc wrapper
+fact path2.base.price: 75
+rule total1: path1.base.total?
+rule total2: path2.base.total?
+rule difference: total2? - total1?
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
@@ -328,22 +328,22 @@ fn test_multiple_independent_doc_refs() {
 
     let config1_doc = r#"
 doc config1
-fact value = 100
-rule doubled = value * 2
+fact value: 100
+rule doubled: value * 2
 "#;
 
     let config2_doc = r#"
 doc config2
-fact value = 50
-rule tripled = value * 3
+fact value: 50
+rule tripled: value * 3
 "#;
 
     let combined_doc = r#"
 doc combined
-fact c1 = doc config1
-fact c2 = doc config2
-rule sum = c1.doubled? + c2.tripled?
-rule product = c1.value * c2.value
+fact c1: doc config1
+fact c2: doc config2
+rule sum: c1.doubled? + c2.tripled?
+rule product: c1.value * c2.value
 "#;
 
     add_lemma_code_blocking(&mut engine, config1_doc, "test.lemma").unwrap();
@@ -389,21 +389,21 @@ fn test_transitive_rule_dependencies() {
 
     let base_doc = r#"
 doc base
-fact x = 10
-rule x_squared = x * x
+fact x: 10
+rule x_squared: x * x
 "#;
 
     let middle_doc = r#"
 doc middle
-fact base_config = doc base
-fact base_config.x = 20
-rule x_squared_plus_ten = base_config.x_squared? + 10
+fact base_config: doc base
+fact base_config.x: 20
+rule x_squared_plus_ten: base_config.x_squared? + 10
 "#;
 
     let top_doc = r#"
 doc top
-fact middle_config = doc middle
-rule final_result = middle_config.x_squared_plus_ten? * 2
+fact middle_config: doc middle
+rule final_result: middle_config.x_squared_plus_ten? * 2
 "#;
 
     add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
@@ -436,23 +436,23 @@ fn test_same_doc_different_bindings() {
 
     let pricing_doc = r#"
 doc pricing
-fact price = 100
-fact discount = 0%
-rule final_price = price * (1 - discount)
+fact price: 100
+fact discount: 0%
+rule final_price: price * (1 - discount)
 "#;
 
     let scenario_doc = r#"
 doc scenarios
-fact retail = doc pricing
-fact retail.discount = 5%
+fact retail: doc pricing
+fact retail.discount: 5%
 
-fact wholesale = doc pricing
-fact wholesale.discount = 15%
-fact wholesale.price = 80
+fact wholesale: doc pricing
+fact wholesale.discount: 15%
+fact wholesale.price: 80
 
-rule retail_final = retail.final_price?
-rule wholesale_final = wholesale.final_price?
-rule price_difference = retail_final? - wholesale_final?
+rule retail_final: retail.final_price?
+rule wholesale_final: wholesale.final_price?
+rule price_difference: retail_final? - wholesale_final?
 "#;
 
     add_lemma_code_blocking(&mut engine, pricing_doc, "test.lemma").unwrap();
@@ -512,25 +512,25 @@ fn test_doc_ref_binding_interface_rule_type_rejected() {
 
     let doc_a = r#"
 doc a
-rule x = 5
+rule x: 5
 "#;
 
     let doc_b = r#"
 doc b
-rule x = true
+rule x: true
 "#;
 
     let doc_c = r#"
 doc c
-fact aa = doc a
-rule y = aa.x? > 1
+fact aa: doc a
+rule y: aa.x? > 1
 "#;
 
     let doc_d = r#"
 doc d
-fact cc = doc c
-fact cc.aa = doc b
-rule yy = cc.y?
+fact cc: doc c
+fact cc.aa: doc b
+rule yy: cc.y?
 "#;
 
     add_lemma_code_blocking(&mut engine, doc_a, "test.lemma").unwrap();

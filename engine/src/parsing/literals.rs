@@ -662,7 +662,7 @@ mod tests {
         // Guard against tokenization bugs around percent literals.
         // The grammar comment says '%' must be directly followed by a non-digit or EOI.
         let input = r#"doc test
-fact x = 10%5"#;
+fact x: 10%5"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(
             result.is_err(),
@@ -676,7 +676,7 @@ fact x = 10%5"#;
         use rust_decimal::Decimal;
         use std::str::FromStr;
 
-        let input = "doc test\nrule x = 5%%";
+        let input = "doc test\nrule x: 5%%";
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         let rule = &docs[0].rules[0];
         match &rule.expression.kind {
@@ -694,7 +694,7 @@ fact x = 10%5"#;
         use rust_decimal::Decimal;
         use std::str::FromStr;
 
-        let input = "doc test\nrule x = 5 permille";
+        let input = "doc test\nrule x: 5 permille";
         let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         let rule = &docs[0].rules[0];
         match &rule.expression.kind {
@@ -708,7 +708,7 @@ fact x = 10%5"#;
 
     #[test]
     fn parse_rejects_permille_literal_with_trailing_digits() {
-        let input = "doc test\nfact x = 10%%5";
+        let input = "doc test\nfact x: 10%%5";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(
             result.is_err(),

@@ -267,8 +267,8 @@ mod tests {
     #[test]
     fn parse_workspace_file_yields_expected_doc_facts_and_rules() {
         let input = r#"doc person
-fact name = "John Doe"
-rule adult = true"#;
+fact name: "John Doe"
+rule adult: true"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "person");
@@ -280,12 +280,12 @@ rule adult = true"#;
     #[test]
     fn mixing_facts_and_rules_is_collected_into_doc() {
         let input = r#"doc test
-fact name = "John"
-rule is_adult = age >= 18
-fact age = 25
-rule can_drink = age >= 21
-fact status = "active"
-rule is_eligible = is_adult and status == "active""#;
+fact name: "John"
+rule is_adult: age >= 18
+fact age: 25
+rule can_drink: age >= 21
+fact status: "active"
+rule is_eligible: is_adult and status == "active""#;
 
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
@@ -296,8 +296,8 @@ rule is_eligible = is_adult and status == "active""#;
     #[test]
     fn parse_simple_document_collects_facts() {
         let input = r#"doc person
-fact name = "John"
-fact age = 25"#;
+fact name: "John"
+fact age: 25"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "person");
@@ -307,7 +307,7 @@ fact age = 25"#;
     #[test]
     fn parse_doc_name_with_slashes_is_preserved() {
         let input = r#"doc contracts/employment/jack
-fact name = "Jack""#;
+fact name: "Jack""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "contracts/employment/jack");
@@ -315,7 +315,7 @@ fact name = "Jack""#;
 
     #[test]
     fn parse_doc_name_first_dot_separates_version() {
-        let input = "doc my.doc\nrule x = 1";
+        let input = "doc my.doc\nrule x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "my");
@@ -329,7 +329,7 @@ fact name = "Jack""#;
 This is a markdown comment
 with **bold** text
 """
-fact name = "John""#;
+fact name: "John""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert!(result[0].commentary.is_some());
@@ -339,7 +339,7 @@ fact name = "John""#;
     #[test]
     fn parse_document_with_rule_collects_rule() {
         let input = r#"doc person
-rule is_adult = age >= 18"#;
+rule is_adult: age >= 18"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].rules.len(), 1);
@@ -349,10 +349,10 @@ rule is_adult = age >= 18"#;
     #[test]
     fn parse_multiple_documents_returns_all_docs() {
         let input = r#"doc person
-fact name = "John"
+fact name: "John"
 
 doc company
-fact name = "Acme Corp""#;
+fact name: "Acme Corp""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "person");
@@ -363,8 +363,8 @@ fact name = "Acme Corp""#;
     fn parse_allows_duplicate_fact_names() {
         // Duplicate fact names are rejected during planning/validation, not parsing.
         let input = r#"doc person
-fact name = "John"
-fact name = "Jane""#;
+fact name: "John"
+fact name: "Jane""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(
             result.is_ok(),
@@ -376,8 +376,8 @@ fact name = "Jane""#;
     fn parse_allows_duplicate_rule_names() {
         // Duplicate rule names are rejected during planning/validation, not parsing.
         let input = r#"doc person
-rule is_adult = age >= 18
-rule is_adult = age >= 21"#;
+rule is_adult: age >= 18
+rule is_adult: age >= 21"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(
             result.is_ok(),
@@ -395,18 +395,18 @@ rule is_adult = age >= 21"#;
     #[test]
     fn parse_handles_whitespace_variants_in_expressions() {
         let test_cases = vec![
-            ("doc test\nrule test = 2+3", "no spaces in arithmetic"),
-            ("doc test\nrule test = age>=18", "no spaces in comparison"),
+            ("doc test\nrule test: 2+3", "no spaces in arithmetic"),
+            ("doc test\nrule test: age>=18", "no spaces in comparison"),
             (
-                "doc test\nrule test = age >= 18 and salary>50000",
+                "doc test\nrule test: age >= 18 and salary>50000",
                 "spaces around and keyword",
             ),
             (
-                "doc test\nrule test = age  >=  18  and  salary  >  50000",
+                "doc test\nrule test: age  >=  18  and  salary  >  50000",
                 "extra spaces",
             ),
             (
-                "doc test\nrule test = \n  age >= 18 \n  and \n  salary > 50000",
+                "doc test\nrule test: \n  age >= 18 \n  and \n  salary > 50000",
                 "newlines in expression",
             ),
         ];
@@ -427,18 +427,15 @@ rule is_adult = age >= 21"#;
     fn parse_error_cases_are_rejected() {
         let error_cases = vec![
             (
-                "doc test\nfact name = \"unclosed string",
+                "doc test\nfact name: \"unclosed string",
                 "unclosed string literal",
             ),
-            ("doc test\nrule test = 2 + + 3", "double operator"),
-            ("doc test\nrule test = (2 + 3", "unclosed parenthesis"),
-            ("doc test\nrule test = 2 + 3)", "extra closing paren"),
+            ("doc test\nrule test: 2 + + 3", "double operator"),
+            ("doc test\nrule test: (2 + 3", "unclosed parenthesis"),
+            ("doc test\nrule test: 2 + 3)", "extra closing paren"),
             // Note: "invalid unit" now parses as a user-defined unit (validated during planning)
-            ("doc test\nfact doc = 123", "reserved keyword as fact name"),
-            (
-                "doc test\nrule rule = true",
-                "reserved keyword as rule name",
-            ),
+            ("doc test\nfact doc: 123", "reserved keyword as fact name"),
+            ("doc test\nrule rule: true", "reserved keyword as rule name"),
         ];
 
         for (input, description) in error_cases {
@@ -467,7 +464,7 @@ rule is_adult = age >= 21"#;
         ];
 
         for (expr, description) in test_cases {
-            let input = format!("doc test\nrule test = {}", expr);
+            let input = format!("doc test\nrule test: {}", expr);
             let result = parse(&input, "test.lemma", &ResourceLimits::default());
             assert!(
                 result.is_ok(),
@@ -521,7 +518,7 @@ rule is_adult = age >= 21"#;
         ];
 
         for (expr, description) in test_cases {
-            let input = format!("doc test\nrule test = {}", expr);
+            let input = format!("doc test\nrule test: {}", expr);
             let result = parse(&input, "test.lemma", &ResourceLimits::default());
             assert!(
                 result.is_ok(),
@@ -538,8 +535,8 @@ rule is_adult = age >= 21"#;
         let result = parse(
             r#"
 doc test
-fact name = "Unclosed string
-fact age = 25
+fact name: "Unclosed string
+fact age: 25
 "#,
             "test.lemma",
             &ResourceLimits::default(),
@@ -559,7 +556,7 @@ fact age = 25
     #[test]
     fn parse_registry_style_doc_name() {
         let input = r#"doc user/workspace/somedoc
-fact name = "Alice""#;
+fact name: "Alice""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "user/workspace/somedoc");
@@ -568,7 +565,7 @@ fact name = "Alice""#;
     #[test]
     fn parse_fact_doc_reference_with_at_prefix() {
         let input = r#"doc example
-fact external = doc @user/workspace/somedoc"#;
+fact external: doc @user/workspace/somedoc"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].facts.len(), 1);
@@ -585,7 +582,7 @@ fact external = doc @user/workspace/somedoc"#;
     fn parse_type_import_with_at_prefix() {
         let input = r#"doc example
 type money from @lemma/std/finance
-fact price = [money]"#;
+fact price: [money]"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].types.len(), 1);
@@ -602,11 +599,11 @@ fact price = [money]"#;
     #[test]
     fn parse_multiple_registry_docs_in_same_file() {
         let input = r#"doc user/workspace/doc_a
-fact x = 10
+fact x: 10
 
 doc user/workspace/doc_b
-fact y = 20
-fact a = doc @user/workspace/doc_a"#;
+fact y: 20
+fact a: doc @user/workspace/doc_a"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "user/workspace/doc_a");
@@ -619,7 +616,7 @@ fact a = doc @user/workspace/doc_a"#;
 
     #[test]
     fn parse_registry_doc_ref_without_version() {
-        let input = "doc example\nfact x = doc @owner/repo/somedoc";
+        let input = "doc example\nfact x: doc @owner/repo/somedoc";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
             crate::FactValue::DocumentReference(doc_ref) => {
@@ -633,7 +630,7 @@ fact a = doc @user/workspace/doc_a"#;
 
     #[test]
     fn parse_registry_doc_ref_with_version() {
-        let input = "doc example\nfact x = doc @owner/repo/somedoc.v1234234";
+        let input = "doc example\nfact x: doc @owner/repo/somedoc.v1234234";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
             crate::FactValue::DocumentReference(doc_ref) => {
@@ -647,7 +644,7 @@ fact a = doc @user/workspace/doc_a"#;
 
     #[test]
     fn parse_local_doc_ref_without_version() {
-        let input = "doc example\nfact x = doc mydoc";
+        let input = "doc example\nfact x: doc mydoc";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
             crate::FactValue::DocumentReference(doc_ref) => {
@@ -661,7 +658,7 @@ fact a = doc @user/workspace/doc_a"#;
 
     #[test]
     fn parse_local_doc_ref_with_version() {
-        let input = "doc example\nfact x = doc mydoc.v1234234";
+        let input = "doc example\nfact x: doc mydoc.v1234234";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
             crate::FactValue::DocumentReference(doc_ref) => {
@@ -675,14 +672,14 @@ fact a = doc @user/workspace/doc_a"#;
 
     #[test]
     fn parse_doc_name_with_empty_version_is_error() {
-        let input = "doc mydoc.\nfact x = 1";
+        let input = "doc mydoc.\nfact x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(result.is_err(), "Empty version tag should be a parse error");
     }
 
     #[test]
     fn parse_type_import_with_version() {
-        let input = "doc example\ntype money from @lemma/std/finance.v2\nfact price = [money]";
+        let input = "doc example\ntype money from @lemma/std/finance.v2\nfact price: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].types[0] {
             crate::TypeDef::Import { from, name, .. } => {
@@ -697,7 +694,7 @@ fact a = doc @user/workspace/doc_a"#;
 
     #[test]
     fn parse_versioned_doc_declaration() {
-        let input = "doc mydoc.v1234234\nrule x = 1";
+        let input = "doc mydoc.v1234234\nrule x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result[0].name, "mydoc");
         assert_eq!(result[0].version, Some("v1234234".to_string()));
@@ -705,7 +702,7 @@ fact a = doc @user/workspace/doc_a"#;
 
     #[test]
     fn parse_multiple_versioned_docs_in_same_file() {
-        let input = "doc mydoc.v1\nrule x = 1\n\ndoc mydoc.v1234234\nrule x = 2";
+        let input = "doc mydoc.v1\nrule x: 1\n\ndoc mydoc.v1234234\nrule x: 2";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "mydoc");
@@ -716,21 +713,21 @@ fact a = doc @user/workspace/doc_a"#;
 
     #[test]
     fn version_tag_at_max_length_is_accepted() {
-        let input = "doc mydoc.12345678\nrule x = 1";
+        let input = "doc mydoc.12345678\nrule x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(result.is_ok(), "8-char version tag should be accepted");
     }
 
     #[test]
     fn version_tag_exceeding_max_length_in_declaration_is_rejected() {
-        let input = "doc mydoc.123456789\nrule x = 1";
+        let input = "doc mydoc.123456789\nrule x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(result.is_err(), "9-char version tag should be rejected");
     }
 
     #[test]
     fn version_tag_exceeding_max_length_in_doc_reference_is_rejected() {
-        let input = "doc consumer\nfact m = doc other.123456789";
+        let input = "doc consumer\nfact m: doc other.123456789";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(
             result.is_err(),
@@ -740,7 +737,7 @@ fact a = doc @user/workspace/doc_a"#;
 
     #[test]
     fn version_tag_exceeding_max_length_in_type_import_is_rejected() {
-        let input = "doc consumer\ntype money from @lemma/std/finance.123456789\nfact p = [money]";
+        let input = "doc consumer\ntype money from @lemma/std/finance.123456789\nfact p: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(
             result.is_err(),

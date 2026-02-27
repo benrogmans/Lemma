@@ -35,10 +35,10 @@ let mut engine = Engine::new();
 
 engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
     doc compensation
-    fact base_salary = 60000
-    fact bonus_rate = 10%
-    rule bonus = base_salary * bonus_rate
-    rule total = base_salary + bonus?
+    fact base_salary: 60000
+    fact bonus_rate: 10%
+    rule bonus: base_salary * bonus_rate
+    rule total: base_salary + bonus?
 "#.into())]))?;
 
 let response = engine.evaluate("compensation", vec![], HashMap::new())?;
@@ -61,14 +61,14 @@ let mut engine = Engine::new();
 engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
     doc shipping
 
-    fact weight = 5 kilogram
-    fact destination = "domestic"
+    fact weight: 5 kilogram
+    fact destination: "domestic"
 
-    rule rate = 10
+    rule rate: 10
       unless weight > 10 kilogram           then 15
       unless destination is "international" then 25
 
-    rule valid = weight <= 30 kilogram
+    rule valid: weight <= 30 kilogram
       unless veto "Package too heavy for shipping"
 
 "#.into())]))?;
@@ -95,10 +95,10 @@ let mut engine = Engine::new();
 
 engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
     doc pricing
-    fact quantity = [number]
-    fact is_vip = false
+    fact quantity: [number]
+    fact is_vip: false
 
-    rule discount = 0%
+    rule discount: 0%
       unless quantity >= 10 then 10%
       unless quantity >= 50 then 20%
       unless is_vip then 25%

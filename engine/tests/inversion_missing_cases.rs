@@ -8,10 +8,10 @@ use std::collections::HashMap;
 fn target_operator_greater_than() {
     let code = r#"
         doc pricing
-        fact base_price = [number]
-        fact markup_rate = 1.5
+        fact base_price: [number]
+        fact markup_rate: 1.5
 
-        rule final_price = base_price * markup_rate
+        rule final_price: base_price * markup_rate
     "#;
 
     let mut engine = Engine::new();
@@ -49,10 +49,10 @@ fn target_operator_greater_than() {
 fn target_operator_less_than_or_equal() {
     let code = r#"
         doc budget
-        fact monthly_cost = [number]
-        fact months = 12
+        fact monthly_cost: [number]
+        fact months: 12
 
-        rule annual_cost = monthly_cost * months
+        rule annual_cost: monthly_cost * months
     "#;
 
     let mut engine = Engine::new();
@@ -86,10 +86,10 @@ fn target_operator_less_than_or_equal() {
 fn target_operator_greater_than_or_equal() {
     let code = r#"
         doc compensation
-        fact base_salary = [number]
-        fact bonus_rate = 0.20
+        fact base_salary: [number]
+        fact bonus_rate: 0.20
 
-        rule total_comp = base_salary * (1 + bonus_rate)
+        rule total_comp: base_salary * (1 + bonus_rate)
     "#;
 
     let mut engine = Engine::new();
@@ -123,10 +123,10 @@ fn target_operator_greater_than_or_equal() {
 fn boolean_not_operator() {
     let code = r#"
         doc eligibility
-        fact is_suspended = [boolean]
-        fact has_membership = [boolean]
+        fact is_suspended: [boolean]
+        fact has_membership: [boolean]
 
-        rule can_access = true
+        rule can_access: true
           unless not has_membership then veto "Must be a member"
           unless is_suspended then veto "Account suspended"
     "#;
@@ -162,16 +162,16 @@ fn boolean_not_operator() {
 fn cross_document_simple() {
     let base_doc = r#"
         doc base
-        fact discount_rate = 0.15
+        fact discount_rate: 0.15
     "#;
 
     let derived_doc = r#"
         doc derived
-        fact base = doc base
-        fact order_total = [number]
+        fact base: doc base
+        fact order_total: [number]
 
-        rule discount = order_total * base.discount_rate
-        rule final_total = order_total - discount?
+        rule discount: order_total * base.discount_rate
+        rule final_total: order_total - discount?
     "#;
 
     let mut engine = Engine::new();
@@ -205,17 +205,17 @@ fn cross_document_simple() {
 fn cross_document_rule_references() {
     let config_doc = r#"
         doc config
-        fact min_threshold = 1000
+        fact min_threshold: 1000
 
-        rule eligibility_threshold = min_threshold * 2
+        rule eligibility_threshold: min_threshold * 2
     "#;
 
     let order_doc = r#"
         doc order
-        fact settings = doc config
-        fact customer_lifetime_value = [number]
+        fact settings: doc config
+        fact customer_lifetime_value: [number]
 
-        rule is_vip = customer_lifetime_value >= settings.eligibility_threshold?
+        rule is_vip: customer_lifetime_value >= settings.eligibility_threshold?
     "#;
 
     let mut engine = Engine::new();
@@ -248,23 +248,23 @@ fn cross_document_rule_references() {
 fn cross_document_multi_level() {
     let global_doc = r#"
         doc global
-        fact base_rate = 0.10
+        fact base_rate: 0.10
     "#;
 
     let regional_doc = r#"
         doc regional
-        fact global_config = doc global
-        fact regional_multiplier = 1.5
+        fact global_config: doc global
+        fact regional_multiplier: 1.5
 
-        rule effective_rate = global_config.base_rate * regional_multiplier
+        rule effective_rate: global_config.base_rate * regional_multiplier
     "#;
 
     let transaction_doc = r#"
         doc transaction
-        fact regional = doc regional
-        fact amount = [number]
+        fact regional: doc regional
+        fact amount: [number]
 
-        rule fee = amount * regional.effective_rate?
+        rule fee: amount * regional.effective_rate?
     "#;
 
     let mut engine = Engine::new();
@@ -309,9 +309,9 @@ fn cross_document_multi_level() {
 fn cross_document_piecewise() {
     let base_doc = r#"
         doc base
-        fact tier = "gold"
+        fact tier: "gold"
 
-        rule discount_rate = 0%
+        rule discount_rate: 0%
           unless tier is "silver" then 10%
           unless tier is "gold" then 20%
           unless tier is "platinum" then 30%
@@ -319,11 +319,11 @@ fn cross_document_piecewise() {
 
     let pricing_doc = r#"
         doc pricing
-        fact customer = doc base
-        fact subtotal = [number]
+        fact customer: doc base
+        fact subtotal: [number]
 
-        rule discount = subtotal * customer.discount_rate?
-        rule total = subtotal - discount?
+        rule discount: subtotal * customer.discount_rate?
+        rule total: subtotal - discount?
     "#;
 
     let mut engine = Engine::new();
@@ -362,11 +362,11 @@ fn cross_document_piecewise() {
 fn complex_boolean_not_and_combination() {
     let code = r#"
         doc shipping
-        fact is_domestic = [boolean]
-        fact has_po_box = [boolean]
-        fact is_oversized = [boolean]
+        fact is_domestic: [boolean]
+        fact has_po_box: [boolean]
+        fact is_oversized: [boolean]
 
-        rule can_ship = true
+        rule can_ship: true
           unless not is_domestic and is_oversized
             then veto "Cannot ship oversized internationally"
           unless is_domestic and has_po_box and is_oversized
@@ -400,9 +400,9 @@ fn complex_boolean_not_and_combination() {
 fn target_operator_not_equal() {
     let code = r#"
         doc validation
-        fact status = [text]
+        fact status: [text]
 
-        rule is_complete = status is "complete"
+        rule is_complete: status is "complete"
     "#;
 
     let mut engine = Engine::new();
