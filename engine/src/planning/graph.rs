@@ -1769,7 +1769,7 @@ impl<'a> GraphBuilder<'a> {
                                 format!("{} Valid units: {}", msg, valid.join(", "))
                             })
                             .unwrap_or(msg);
-                        self.errors.push(LemmaError::semantic(
+                        self.errors.push(LemmaError::engine(
                             full_msg,
                             expr.source_location.clone(),
                             None::<String>,
@@ -2050,11 +2050,6 @@ fn infer_fact_type(fact_path: &FactPath, graph: &Graph) -> LemmaType {
 /// Construct a LemmaError::engine with source context.
 fn engine_error_at(source: &Source, message: impl Into<String>) -> LemmaError {
     LemmaError::engine(message.into(), Some(source.clone()), None::<String>)
-}
-
-/// Construct a LemmaError::semantic with source context.
-fn semantic_error_at(source: &Source, message: impl Into<String>) -> LemmaError {
-    LemmaError::semantic(message.into(), Some(source.clone()), None::<String>)
 }
 
 /// Check that both operands of a logical operation (and/or) are boolean.
@@ -2485,7 +2480,7 @@ fn check_fact_reference(
             };
 
             if graph.rules().contains_key(&maybe_rule_path) {
-                return Err(vec![semantic_error_at(
+                return Err(vec![engine_error_at(
                     fact_source,
                     format!(
                         "Rule reference '{}' must use '?' (did you mean '{}?')",
@@ -2493,7 +2488,7 @@ fn check_fact_reference(
                     ),
                 )]);
             } else {
-                return Err(vec![semantic_error_at(
+                return Err(vec![engine_error_at(
                     fact_source,
                     format!("Unknown fact reference '{}'", fact_path),
                 )]);
@@ -2791,7 +2786,7 @@ fn check_rule_types(
                             ));
                         }
 
-                        errors.push(LemmaError::semantic(
+                        errors.push(LemmaError::engine(
                             format!("Type mismatch in rule '{}' in document '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same primitive type.",
                             rule_path.rule,
                             rule_source.doc_name,

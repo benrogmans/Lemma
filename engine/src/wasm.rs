@@ -192,7 +192,6 @@ fn parse_rule_names(rule_names_json: &str) -> Result<Vec<String>, String> {
 fn format_error(error: &LemmaError) -> String {
     match error {
         LemmaError::Parse(details) => format!("Parse Error: {}", details.message),
-        LemmaError::Semantic(details) => format!("Semantic Error: {}", details.message),
         LemmaError::Inversion(details) => format!("Inversion Error: {}", details.message),
         LemmaError::Engine(details) => format!("Engine Error: {}", details.message),
         LemmaError::Registry {

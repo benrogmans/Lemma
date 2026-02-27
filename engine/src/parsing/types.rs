@@ -29,31 +29,11 @@ pub(crate) fn parse_type_definition(
         }
     }
 
-    let type_name_str = type_name.ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: type_definition missing type_name_def",
-            Some(crate::Source::new(
-                attribute,
-                span.clone(),
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
+    let type_name_str =
+        type_name.expect("BUG: grammar guarantees type_definition has type_name_def");
 
-    let arrow_chain_pair = type_arrow_chain.ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: type_definition missing type_arrow_chain",
-            Some(crate::Source::new(
-                attribute,
-                span,
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
+    let arrow_chain_pair =
+        type_arrow_chain.expect("BUG: grammar guarantees type_definition has type_arrow_chain");
 
     let (parent, constraints, _from) = parse_type_arrow_chain_with_commands(
         arrow_chain_pair,
@@ -81,18 +61,10 @@ pub(crate) fn parse_type_import(
     let source_location =
         crate::Source::new(attribute, span.clone(), doc_name, source_text.clone());
     // The pair is type_import, which contains type_import_def
-    let type_import_def = pair.into_inner().next().ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: type_import must contain type_import_def",
-            Some(crate::Source::new(
-                attribute,
-                span.clone(),
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
+    let type_import_def = pair
+        .into_inner()
+        .next()
+        .expect("BUG: grammar guarantees type_import contains type_import_def");
 
     let mut type_names = Vec::new();
     let mut imported_doc_name = None;
@@ -109,31 +81,13 @@ pub(crate) fn parse_type_import(
         }
     }
 
-    let imported_doc_name = imported_doc_name.ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: type_import missing doc_name",
-            Some(crate::Source::new(
-                attribute,
-                span.clone(),
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
+    let imported_doc_name =
+        imported_doc_name.expect("BUG: grammar guarantees type_import has doc_name");
 
-    if type_names.is_empty() {
-        return Err(LemmaError::engine(
-            "Grammar error: type_import missing type_name_def",
-            Some(crate::Source::new(
-                attribute,
-                span,
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        ));
-    }
+    assert!(
+        !type_names.is_empty(),
+        "BUG: grammar guarantees type_import has type_name_def"
+    );
 
     let source_type_name = if type_names.len() == 1 {
         type_names[0].clone()
@@ -164,56 +118,31 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
     doc_name: &str,
     source_text: Arc<str>,
 ) -> Result<TypeArrowChainResult, LemmaError> {
-    let span = Span::from_pest_span(pair.as_span());
     let mut inner = pair.into_inner();
-    let first = inner.next().ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: type_arrow_chain cannot be empty",
-            Some(crate::Source::new(
-                attribute,
-                span.clone(),
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
+    let first = inner
+        .next()
+        .expect("BUG: grammar guarantees type_arrow_chain is non-empty");
 
     // Store the remaining items for command parsing (after the first element)
     let remaining_items: Vec<_> = inner.collect();
 
     fn parse_type_name_def_pair(
         pair: &Pair<Rule>,
-        attribute: &str,
-        doc_name: &str,
-        source_text: Arc<str>,
+        _attribute: &str,
+        _doc_name: &str,
+        _source_text: Arc<str>,
     ) -> Result<String, LemmaError> {
         let mut inner = pair.clone().into_inner();
-        match inner.next() {
-            Some(child) => match child.as_rule() {
-                Rule::type_standard => Ok(pair.as_str().to_lowercase()),
-                Rule::type_custom => Ok(pair.as_str().to_string()),
-                _ => Err(LemmaError::engine(
-                    format!("Unexpected rule in type_name_def: {:?}", child.as_rule()),
-                    Some(crate::Source::new(
-                        attribute,
-                        Span::from_pest_span(child.as_span()),
-                        doc_name,
-                        source_text.clone(),
-                    )),
-                    None::<String>,
-                )),
-            },
-            None => Err(LemmaError::engine(
-                "Grammar error: type_name_def must contain type_custom or type_standard",
-                Some(crate::Source::new(
-                    attribute,
-                    Span::from_pest_span(pair.as_span()),
-                    doc_name,
-                    source_text.clone(),
-                )),
-                None::<String>,
-            )),
+        let child = inner
+            .next()
+            .expect("BUG: grammar guarantees type_name_def has inner rule");
+        match child.as_rule() {
+            Rule::type_standard => Ok(pair.as_str().to_lowercase()),
+            Rule::type_custom => Ok(pair.as_str().to_string()),
+            _ => unreachable!(
+                "BUG: unexpected rule in type_name_def: {:?}",
+                child.as_rule()
+            ),
         }
     }
 
@@ -245,46 +174,19 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
                 }
             }
 
-            let first_span = Span::from_pest_span(first.as_span());
-            let source_type = type_name_def.ok_or_else(|| {
-                LemmaError::engine(
-                    "Grammar error: type_import_def missing type_name_def",
-                    Some(crate::Source::new(
-                        attribute,
-                        first_span.clone(),
-                        doc_name,
-                        source_text.clone(),
-                    )),
-                    None::<String>,
-                )
-            })?;
+            let source_type =
+                type_name_def.expect("BUG: grammar guarantees type_import_def has type_name_def");
 
-            let from = imported_doc_name.ok_or_else(|| {
-                LemmaError::engine(
-                    "Grammar error: type_import_def missing doc_name",
-                    Some(crate::Source::new(
-                        attribute,
-                        first_span,
-                        doc_name,
-                        source_text.clone(),
-                    )),
-                    None::<String>,
-                )
-            })?;
+            let from =
+                imported_doc_name.expect("BUG: grammar guarantees type_import_def has doc_name");
 
             (source_type, Some(from))
         }
         _ => {
-            return Err(LemmaError::engine(
-                format!("Unexpected rule in type_arrow_chain: {:?}", first.as_rule()),
-                Some(crate::Source::new(
-                    attribute,
-                    span.clone(),
-                    doc_name,
-                    source_text.clone(),
-                )),
-                None::<String>,
-            ));
+            unreachable!(
+                "BUG: unexpected rule in type_arrow_chain: {:?}",
+                first.as_rule()
+            )
         }
     };
 
@@ -297,52 +199,28 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
                 expecting_command = true;
             }
             Rule::command => {
-                if !expecting_command {
-                    let item_span = Span::from_pest_span(item.as_span());
-                    return Err(LemmaError::engine(
-                        "Grammar error: command must follow arrow_symbol",
-                        Some(crate::Source::new(
-                            attribute,
-                            item_span,
-                            doc_name,
-                            source_text.clone(),
-                        )),
-                        None::<String>,
-                    ));
-                }
+                assert!(
+                    expecting_command,
+                    "BUG: grammar guarantees command follows arrow_symbol"
+                );
                 let (command_name, args) =
                     parse_command(item, attribute, doc_name, source_text.clone())?;
                 commands.push((command_name, args));
                 expecting_command = false;
             }
             _ => {
-                let item_span = Span::from_pest_span(item.as_span());
-                return Err(LemmaError::engine(
-                    format!("Unexpected rule in type_arrow_chain: {:?}", item.as_rule()),
-                    Some(crate::Source::new(
-                        attribute,
-                        item_span,
-                        doc_name,
-                        source_text.clone(),
-                    )),
-                    None::<String>,
-                ));
+                unreachable!(
+                    "BUG: unexpected rule in type_arrow_chain: {:?}",
+                    item.as_rule()
+                )
             }
         }
     }
 
-    if expecting_command {
-        return Err(LemmaError::engine(
-            "Grammar error: arrow_symbol must be followed by command",
-            Some(crate::Source::new(
-                attribute,
-                span.clone(),
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        ));
-    }
+    assert!(
+        !expecting_command,
+        "BUG: grammar guarantees arrow_symbol is followed by command"
+    );
 
     let constraints = if commands.is_empty() {
         None
@@ -389,11 +267,10 @@ fn command_arg_value(pair: Pair<Rule>) -> CommandArg {
 
 fn parse_command(
     pair: Pair<Rule>,
-    attribute: &str,
-    doc_name: &str,
-    source_text: Arc<str>,
+    _attribute: &str,
+    _doc_name: &str,
+    _source_text: Arc<str>,
 ) -> Result<(String, Vec<CommandArg>), LemmaError> {
-    let span = Span::from_pest_span(pair.as_span());
     let mut command_name = None;
     let mut command_args = Vec::new();
 
@@ -410,18 +287,7 @@ fn parse_command(
         }
     }
 
-    let name = command_name.ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: command must contain command_name",
-            Some(crate::Source::new(
-                attribute,
-                span,
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
+    let name = command_name.expect("BUG: grammar guarantees command has command_name");
 
     Ok((name, command_args))
 }

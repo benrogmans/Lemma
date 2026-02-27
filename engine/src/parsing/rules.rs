@@ -33,30 +33,9 @@ pub(crate) fn parse_rule_definition(
         }
     }
 
-    let name = rule_name.ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: rule_definition missing rule_name",
-            Some(Source::new(
-                attribute,
-                span.clone(),
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
-    let (expression, unless_clauses) = rule_expression.ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: rule_definition missing rule_expression",
-            Some(Source::new(
-                attribute,
-                span.clone(),
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
+    let name = rule_name.expect("BUG: grammar guarantees rule_definition has rule_name");
+    let (expression, unless_clauses) =
+        rule_expression.expect("BUG: grammar guarantees rule_definition has rule_expression");
 
     Ok(LemmaRule {
         name,
@@ -73,7 +52,6 @@ fn parse_rule_expression(
     doc_name: &str,
     source_text: Arc<str>,
 ) -> Result<(Expression, Vec<UnlessClause>), LemmaError> {
-    let span = Span::from_pest_span(pair.as_span());
     let mut expression = None;
     let mut unless_clauses = Vec::new();
 
@@ -110,13 +88,7 @@ fn parse_rule_expression(
         }
     }
 
-    let expr = expression.ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: rule_expression missing expression",
-            Some(Source::new(attribute, span, doc_name, source_text.clone())),
-            None::<String>,
-        )
-    })?;
+    let expr = expression.expect("BUG: grammar guarantees rule_expression has expression");
     Ok((expr, unless_clauses))
 }
 
@@ -145,7 +117,7 @@ fn parse_veto_expression(
                 Value::Text(s) => Some(s),
                 _ => {
                     let span = Span::from_pest_span(string_pair.as_span());
-                    return Err(LemmaError::engine(
+                    return Err(LemmaError::parse(
                         "veto message must be a text literal",
                         Some(Source::new(attribute, span, doc_name, source_text.clone())),
                         None::<String>,
@@ -206,30 +178,8 @@ fn parse_unless_statement(
         }
     }
 
-    let cond = condition.ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: unless_statement missing condition",
-            Some(Source::new(
-                attribute,
-                span.clone(),
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
-    let res = result.ok_or_else(|| {
-        LemmaError::engine(
-            "Grammar error: unless_statement missing result",
-            Some(Source::new(
-                attribute,
-                span.clone(),
-                doc_name,
-                source_text.clone(),
-            )),
-            None::<String>,
-        )
-    })?;
+    let cond = condition.expect("BUG: grammar guarantees unless_statement has condition");
+    let res = result.expect("BUG: grammar guarantees unless_statement has result");
 
     Ok(UnlessClause {
         condition: cond,
