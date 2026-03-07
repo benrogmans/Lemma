@@ -273,3 +273,38 @@ also invalid lemma syntax
         stderr
     );
 }
+
+#[test]
+fn test_cli_explain_shows_negated_comparison_not_false() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("test.lemma"),
+        r#"
+doc explain_test
+rule out: true
+ unless 5 < 3 then false
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("explain_test")
+        .arg("--explain")
+        .arg("--dir")
+        .arg(temp_dir.path());
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --explain should succeed: {}",
+        stdout
+    );
+
+    assert!(
+        stdout.contains(">="),
+        "explain should show negated comparison (e.g. 5 >= 3), got:\n{}",
+        stdout
+    );
+}

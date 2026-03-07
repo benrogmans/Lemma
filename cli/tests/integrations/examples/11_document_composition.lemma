@@ -6,14 +6,17 @@ Foundation pricing rules that can be referenced and customized.
 """
 
 fact standard_discount: 5%
-fact tax_rate         : 21%
-fact base_price       : [number -> minimum 0 -> default 100]
+fact tax_rate:          21%
+fact base_price:        [number -> minimum 0 -> default 100]
 
-rule price_with_tax: base_price * (1 + tax_rate)
+rule price_with_tax:
+  base_price * (1 + tax_rate)
 
-rule discounted_price: base_price * (1 - standard_discount)
+rule discounted_price:
+  base_price * (1 - standard_discount)
 
-rule final_price: base_price * (1 - standard_discount) * (1 + tax_rate)
+rule final_price:
+  base_price * (1 - standard_discount) * (1 + tax_rate)
 
 
 doc pricing/wholesale
@@ -24,18 +27,24 @@ Implements the pricing/base_config interface with wholesale-specific values.
 Provides the same interface for composability.
 """
 
-fact base_price       : 75
+fact base_price:        75
 fact standard_discount: 15%
-fact tax_rate         : 21%
+fact tax_rate:          21%
 
-rule price_with_tax: base_price * (1 + tax_rate)
+rule price_with_tax:
+  base_price * (1 + tax_rate)
 
-rule discounted_price: base_price * (1 - standard_discount)
+rule discounted_price:
+  base_price * (1 - standard_discount)
 
-rule final_price: base_price * (1 - standard_discount) * (1 + tax_rate)
+rule final_price:
+  base_price * (1 - standard_discount) * (1 + tax_rate)
 
-rule wholesale_final: final_price
-rule margin_savings: 100 - base_price
+rule wholesale_final:
+  final_price
+
+rule margin_savings:
+  100 - base_price
 
 
 doc pricing/retail
@@ -46,18 +55,24 @@ Implements the pricing/base_config interface with retail-specific values.
 Provides the same interface for composability.
 """
 
-fact base_price       : 120
+fact base_price:        120
 fact standard_discount: 0%
-fact tax_rate         : 21%
+fact tax_rate:          21%
 
-rule price_with_tax: base_price * (1 + tax_rate)
+rule price_with_tax:
+  base_price * (1 + tax_rate)
 
-rule discounted_price: base_price * (1 - standard_discount)
+rule discounted_price:
+  base_price * (1 - standard_discount)
 
-rule final_price: base_price * (1 - standard_discount) * (1 + tax_rate)
+rule final_price:
+  base_price * (1 - standard_discount) * (1 + tax_rate)
 
-rule retail_final: final_price
-rule premium_multiplier: base_price / 100
+rule retail_final:
+  final_price
+
+rule premium_multiplier:
+  base_price / 100
 
 
 doc order/line_item
@@ -72,9 +87,11 @@ fact quantity: [number -> minimum 0 -> default 10]
 
 fact pricing: doc pricing/base_config
 
-rule line_total: pricing.final_price * quantity
+rule line_total:
+  pricing.final_price * quantity
 
-rule has_discount: pricing.standard_discount > 0%
+rule has_discount:
+  pricing.standard_discount > 0%
 
 
 doc order/wholesale_order
@@ -85,12 +102,15 @@ Uses wholesale pricing configuration for bulk orders.
 Shows how to reference a document that itself references another document.
 """
 
-fact line         : doc order/line_item
-fact line.pricing : doc pricing/wholesale
+fact line:          doc order/line_item
+fact line.pricing:  doc pricing/wholesale
 fact line.quantity: 100
 
-rule order_total: line.line_total
-rule effective_unit_price: order_total / line.quantity
+rule order_total:
+  line.line_total
+
+rule effective_unit_price:
+  order_total / line.quantity
 
 
 doc order/retail_order
@@ -101,12 +121,15 @@ Uses retail pricing for individual customer orders.
 Demonstrates different fact paths producing different results.
 """
 
-fact line         : doc order/line_item
-fact line.pricing : doc pricing/retail
+fact line:          doc order/line_item
+fact line.pricing:  doc pricing/retail
 fact line.quantity: 5
 
-rule order_total: line.line_total
-rule effective_unit_price: order_total / line.quantity
+rule order_total:
+  line.line_total
+
+rule effective_unit_price:
+  order_total / line.quantity
 
 
 doc order/comparison
@@ -121,10 +144,18 @@ fact retail: doc order/retail_order
 
 fact wholesale: doc order/wholesale_order
 
-rule wholesale_total: wholesale.order_total
-rule retail_total: retail.order_total
-rule price_difference: retail_total - wholesale_total
-rule retail_is_more_expensive: retail_total > wholesale_total
+rule wholesale_total:
+  wholesale.order_total
+
+rule retail_total:
+  retail.order_total
+
+rule price_difference:
+  retail_total - wholesale_total
+
+rule retail_is_more_expensive:
+  retail_total > wholesale_total
+
 
 doc order/custom_wholesale
 """
@@ -134,12 +165,16 @@ Demonstrates fine-grained bindings through nested paths.
 Shows binding facts deep in the reference chain.
 """
 
-fact order                      : doc order/wholesale_order
+fact order:                       doc order/wholesale_order
 fact order.line.pricing.tax_rate: 19%
-fact order.line.quantity        : 250
+fact order.line.quantity:         250
 
-rule custom_total: order.order_total
-rule savings_vs_standard: order.order_total
+rule custom_total:
+  order.order_total
+
+rule savings_vs_standard:
+  order.order_total
+
 
 doc complex/multi_reference
 """
@@ -155,10 +190,15 @@ fact retail_config: doc pricing/retail
 
 fact wholesale_config: doc pricing/wholesale
 
-rule avg_discount: (wholesale_config.standard_discount
+rule avg_discount:
+  (wholesale_config.standard_discount
   + retail_config.standard_discount
   + base_config.standard_discount)
   / 3
 
-rule price_range: retail_config.retail_final  - wholesale_config.wholesale_final
-rule all_configs_loaded: wholesale_config.wholesale_final > 0 and retail_config.retail_final > 0 and base_config.final_price > 0
+rule price_range:
+  retail_config.retail_final
+  - wholesale_config.wholesale_final
+
+rule all_configs_loaded:
+  wholesale_config.wholesale_final > 0 and retail_config.retail_final > 0 and base_config.final_price > 0

@@ -2,14 +2,15 @@ pub mod http {
     use crate::response;
     use axum::{
         extract::{Path, Query, State},
-        http::{HeaderMap, StatusCode},
+        http::{HeaderMap, HeaderValue, StatusCode},
         response::{Html, IntoResponse, Json},
         routing::get,
         Router,
     };
+    use lemma::parsing::ast::DateTimeValue;
     use lemma::Engine;
+    use serde::Deserialize;
 
-    use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -18,6 +19,65 @@ pub mod http {
     use tracing::{error, info, warn};
 
     type SharedEngine = Arc<RwLock<Engine>>;
+
+    /// Parse doc path into (doc_name, optional hash_pin). Path like "pricing", "pricing~abc1234", "ind/kennismigrant/aanvraag~xyz".
+    fn parse_doc_path(path: &str) -> (String, Option<String>) {
+        let path = path.trim_matches('/');
+        if path.is_empty() {
+            return (String::new(), None);
+        }
+        let segments: Vec<&str> = path.split('/').collect();
+        let last = segments.last().copied().unwrap_or("");
+        if let Some(tilde_pos) = last.rfind('~') {
+            let (base, hash) = last.split_at(tilde_pos);
+            let hash = hash[1..].to_string();
+            let doc_name = if segments.len() == 1 {
+                base.to_string()
+            } else {
+                format!("{}/{}", segments[..segments.len() - 1].join("/"), base)
+            };
+            (doc_name, if hash.is_empty() { None } else { Some(hash) })
+        } else {
+            (path.to_string(), None)
+        }
+    }
+
+    /// Read Accept-Datetime (RFC 7089) from headers; fallback to now.
+    fn accept_datetime_from_headers(
+        headers: &HeaderMap,
+    ) -> Result<DateTimeValue, (StatusCode, Json<ErrorResponse>)> {
+        let raw = headers
+            .get("Accept-Datetime")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim());
+        resolve_effective(raw)
+    }
+
+    #[derive(Deserialize, Default)]
+    struct DocQuery {
+        effective: Option<String>,
+    }
+
+    #[derive(Deserialize, Default)]
+    struct RulesQuery {
+        rules: Option<String>,
+    }
+
+    fn resolve_effective(
+        raw: Option<&str>,
+    ) -> Result<DateTimeValue, (StatusCode, Json<ErrorResponse>)> {
+        match raw {
+            Some(s) => DateTimeValue::parse(s).ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: format!("Invalid effective value '{}'. Expected: YYYY, YYYY-MM, YYYY-MM-DD, or ISO 8601 datetime", s),
+                    }),
+                )
+            }),
+            None => Ok(DateTimeValue::now()),
+        }
+    }
 
     #[derive(Clone)]
     struct AppState {
@@ -28,6 +88,53 @@ pub mod http {
     #[derive(Debug, serde::Serialize)]
     struct ErrorResponse {
         error: String,
+    }
+
+    #[derive(serde::Serialize)]
+    struct GetDocResponse {
+        doc: String,
+        effective_from: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        facts: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rules: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        meta: Option<serde_json::Value>,
+        versions: Vec<VersionEntry>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct VersionEntry {
+        effective_from: Option<String>,
+        hash: String,
+        permalink: String,
+    }
+
+    /// Build ETag, Memento-Datetime, Vary for the resolved doc.
+    fn doc_response_headers(
+        _doc_name: &str,
+        effective_from: Option<&DateTimeValue>,
+        hash: Option<&str>,
+    ) -> Vec<(axum::http::header::HeaderName, HeaderValue)> {
+        let mut h = Vec::new();
+        if let Some(hash) = hash {
+            if let Ok(v) = HeaderValue::from_str(&format!("\"{}\"", hash)) {
+                h.push((axum::http::header::ETAG, v));
+            }
+        }
+        if let Some(af) = effective_from {
+            if let Ok(v) = HeaderValue::from_str(&af.to_string()) {
+                h.push((
+                    axum::http::header::HeaderName::from_static("memento-datetime"),
+                    v,
+                ));
+            }
+        }
+        h.push((
+            axum::http::header::VARY,
+            HeaderValue::from_static("Accept-Datetime"),
+        ));
+        h
     }
 
     /// Start the Lemma HTTP server.
@@ -75,11 +182,7 @@ pub mod http {
             .route("/scalar.js", get(scalar_js))
             .route("/schema/{doc_name}", get(schema_all_rules))
             .route("/schema/{doc_name}/{rules}", get(schema_for_rules))
-            .route("/{doc_name}", get(evaluate_get).post(evaluate_post))
-            .route(
-                "/{doc_name}/{rules}",
-                get(evaluate_get_with_rules).post(evaluate_post_with_rules),
-            )
+            .route("/{*path}", get(doc_get_schema).post(doc_post_evaluate))
             .fallback(fallback_404)
             .layer(CorsLayer::permissive())
             .with_state(state);
@@ -98,18 +201,21 @@ pub mod http {
     // Meta routes
     // -----------------------------------------------------------------------
 
-    async fn list_documents(State(state): State<AppState>) -> impl IntoResponse {
+    async fn list_documents(
+        State(state): State<AppState>,
+        Query(q): Query<DocQuery>,
+    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+        let now = resolve_effective(q.effective.as_deref())?;
         let engine = state.engine.read().await;
-        let mut document_names = engine.list_documents();
-        document_names.sort();
 
-        let documents: Vec<lemma::DocumentSchema> = document_names
+        let documents: Vec<lemma::DocumentSchema> = engine
+            .list_documents_effective(&now)
             .iter()
-            .filter_map(|name| engine.get_execution_plan(name))
+            .filter_map(|doc| engine.get_execution_plan(&doc.name, None, &now))
             .map(|plan| plan.schema())
             .collect();
 
-        Json(documents)
+        Ok(Json(documents))
     }
 
     async fn health_check() -> impl IntoResponse {
@@ -131,28 +237,27 @@ pub mod http {
         )
     }
 
-    async fn openapi_spec(State(state): State<AppState>) -> impl IntoResponse {
+    async fn openapi_spec(
+        State(state): State<AppState>,
+        Query(q): Query<DocQuery>,
+    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+        let effective = resolve_effective(q.effective.as_deref())?;
         let engine = state.engine.read().await;
-        let spec = lemma_openapi::generate_openapi(&engine, state.proofs_enabled);
-        Json(spec)
+        let use_permalink = q.effective.is_some();
+        let spec = lemma_openapi::generate_openapi_effective(
+            &engine,
+            state.proofs_enabled,
+            &effective,
+            use_permalink,
+        );
+        Ok(Json(spec))
     }
 
-    async fn scalar_docs() -> impl IntoResponse {
-        Html(
-            r#"<!doctype html>
-<html>
-<head>
-  <title>Lemma API</title>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-</head>
-<body>
-  <div id="app"></div>
-  <script src="/scalar.js"></script>
-  <script>
-    Scalar.createApiReference('#app', {
-      url: '/openapi.json',
-      layout: 'modern',
+    async fn scalar_docs(State(state): State<AppState>) -> impl IntoResponse {
+        let engine = state.engine.read().await;
+        let sources = lemma_openapi::temporal_api_sources(&engine);
+
+        let shared_opts = r#"layout: 'modern',
       theme: 'solarized',
       agent: { disabled: true },
       hideClientButton: true,
@@ -181,13 +286,46 @@ pub mod http {
           content: 'Powered by Lemma';
           font-size: var(--scalar-mini, 10px);
         }
-      `,
-    })
+      `"#;
+
+        let config_js = if sources.len() == 1 {
+            format!("{{ url: '{}', {} }}", sources[0].url, shared_opts)
+        } else {
+            let sources_js: Vec<String> = sources
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{{ title: '{}', slug: '{}', url: '{}' }}",
+                        s.title, s.slug, s.url
+                    )
+                })
+                .collect();
+            format!(
+                "{{ sources: [{}], {} }}",
+                sources_js.join(", "),
+                shared_opts
+            )
+        };
+
+        let html = format!(
+            r#"<!doctype html>
+<html>
+<head>
+  <title>Lemma API</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+  <div id="app"></div>
+  <script src="/scalar.js"></script>
+  <script>
+    Scalar.createApiReference('#app', {config_js})
   </script>
 </body>
 </html>"#
-                .to_string(),
-        )
+        );
+
+        Html(html)
     }
 
     /// Serve the vendored Scalar API reference JavaScript bundle.
@@ -205,15 +343,178 @@ pub mod http {
     }
 
     // -----------------------------------------------------------------------
-    // Schema routes
+    // Doc path (wildcard): GET = schema with versions, POST = evaluate
+    // -----------------------------------------------------------------------
+
+    /// `GET /{*path}` — schema of resolved version; path = doc name with optional ~hash. Accept-Datetime for temporal. ?rules= to scope.
+    async fn doc_get_schema(
+        State(state): State<AppState>,
+        Path(path): Path<String>,
+        Query(q): Query<RulesQuery>,
+        headers: HeaderMap,
+    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+        let (doc_name, hash_pin) = parse_doc_path(&path);
+        if doc_name.is_empty() {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Document path required".to_string(),
+                }),
+            ));
+        }
+        let effective = accept_datetime_from_headers(&headers)?;
+        let engine = state.engine.read().await;
+
+        let doc_arc = hash_pin
+            .as_deref()
+            .and_then(|pin| engine.get_document_by_hash_pin(&doc_name, pin))
+            .or_else(|| engine.get_document(&doc_name, &effective));
+        let doc_arc = match doc_arc {
+            Some(a) => a,
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: format!("Document '{}' not found", doc_name),
+                    }),
+                ));
+            }
+        };
+
+        let plan = match engine.get_execution_plan(&doc_name, hash_pin.as_deref(), &effective) {
+            Some(p) => p,
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: format!("Document '{}' not found", doc_name),
+                    }),
+                ));
+            }
+        };
+
+        let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
+        let schema = if rule_names.is_empty() {
+            plan.schema()
+        } else {
+            plan.schema_for_rules(&rule_names).map_err(|err| {
+                (
+                    lemma_error_to_status(&err),
+                    Json(ErrorResponse {
+                        error: err.to_string(),
+                    }),
+                )
+            })?
+        };
+
+        let versions: Vec<VersionEntry> = engine
+            .all_hash_pins()
+            .into_iter()
+            .filter(|(name, _, _)| *name == doc_name)
+            .map(|(_, effective_from, hash)| VersionEntry {
+                effective_from: effective_from.clone(),
+                hash: hash.to_string(),
+                permalink: format!("/{}~{}", doc_name, hash),
+            })
+            .collect();
+
+        let effective_from_str = doc_arc.effective_from().map(|d| d.to_string());
+        let hash = engine.hash_pin_for_doc(&doc_arc);
+
+        let body = GetDocResponse {
+            doc: schema.doc.clone(),
+            effective_from: effective_from_str,
+            facts: serde_json::to_value(&schema.facts).ok(),
+            rules: serde_json::to_value(&schema.rules).ok(),
+            meta: serde_json::to_value(&schema.meta).ok(),
+            versions,
+        };
+
+        let mut response = Json(body).into_response();
+        let headers_mut = response.headers_mut();
+        for (k, v) in doc_response_headers(&doc_name, doc_arc.effective_from(), hash) {
+            headers_mut.insert(k, v);
+        }
+        Ok(response)
+    }
+
+    /// `POST /{*path}` — evaluate; path = doc name with optional ~hash. Accept-Datetime for temporal. ?rules= to limit. Body = facts JSON.
+    async fn doc_post_evaluate(
+        State(state): State<AppState>,
+        Path(path): Path<String>,
+        Query(q): Query<RulesQuery>,
+        headers: HeaderMap,
+        Json(body): Json<serde_json::Value>,
+    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+        let (doc_name, hash_pin) = parse_doc_path(&path);
+        if doc_name.is_empty() {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Document path required".to_string(),
+                }),
+            ));
+        }
+        let effective = accept_datetime_from_headers(&headers)?;
+        let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
+        let fact_values = lemma_openapi::json_body_to_fact_values(&body);
+        let engine = state.engine.read().await;
+
+        let doc_arc = hash_pin
+            .as_deref()
+            .and_then(|pin| engine.get_document_by_hash_pin(&doc_name, pin))
+            .or_else(|| engine.get_document(&doc_name, &effective));
+        let doc_arc = match doc_arc {
+            Some(a) => a,
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: format!("Document '{}' not found", doc_name),
+                    }),
+                ));
+            }
+        };
+
+        let response = engine
+            .evaluate(
+                &doc_name,
+                hash_pin.as_deref(),
+                &effective,
+                rule_names,
+                fact_values,
+            )
+            .map_err(|err| {
+                (
+                    lemma_error_to_status(&err),
+                    Json(ErrorResponse {
+                        error: err.to_string(),
+                    }),
+                )
+            })?;
+
+        let hash = engine.hash_pin_for_doc(&doc_arc);
+        let results = response::convert_response(&response, want_proofs(&state, &headers));
+        let mut axum_response = Json(results).into_response();
+        let headers_mut = axum_response.headers_mut();
+        for (k, v) in doc_response_headers(&doc_name, doc_arc.effective_from(), hash) {
+            headers_mut.insert(k, v);
+        }
+        Ok(axum_response)
+    }
+
+    // -----------------------------------------------------------------------
+    // Schema routes (legacy)
     // -----------------------------------------------------------------------
 
     /// `GET /schema/{doc_name}` — full document schema (all facts and rules).
     async fn schema_all_rules(
         State(state): State<AppState>,
         Path(doc_name): Path<String>,
+        Query(q): Query<DocQuery>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        schema_inner(&state.engine, &doc_name, &[]).await
+        let now = resolve_effective(q.effective.as_deref())?;
+        schema_inner(&state.engine, &doc_name, &[], &now).await
     }
 
     /// `GET /schema/{doc_name}/{rules}` — schema scoped to specific rules and
@@ -221,26 +522,31 @@ pub mod http {
     async fn schema_for_rules(
         State(state): State<AppState>,
         Path((doc_name, rules)): Path<(String, String)>,
+        Query(q): Query<DocQuery>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+        let now = resolve_effective(q.effective.as_deref())?;
         let rule_names = parse_rule_names(&rules);
-        schema_inner(&state.engine, &doc_name, &rule_names).await
+        schema_inner(&state.engine, &doc_name, &rule_names, &now).await
     }
 
     async fn schema_inner(
         engine: &SharedEngine,
         doc_name: &str,
         rule_names: &[String],
+        now: &DateTimeValue,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let engine = engine.read().await;
 
-        let plan = engine.get_execution_plan(doc_name).ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Document '{}' not found", doc_name),
-                }),
-            )
-        })?;
+        let plan = engine
+            .get_execution_plan(doc_name, None, now)
+            .ok_or_else(|| {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: format!("Document '{}' not found", doc_name),
+                    }),
+                )
+            })?;
 
         if rule_names.is_empty() {
             return Ok(Json(plan.schema()));
@@ -258,10 +564,6 @@ pub mod http {
         Ok(Json(schema))
     }
 
-    // -----------------------------------------------------------------------
-    // Document evaluation routes
-    // -----------------------------------------------------------------------
-
     fn want_proofs(state: &AppState, headers: &HeaderMap) -> bool {
         state.proofs_enabled
             && headers
@@ -269,115 +571,6 @@ pub mod http {
                 .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
                 .map(|s: &str| !s.trim().is_empty())
                 .unwrap_or(false)
-    }
-
-    /// `GET /{doc_name}` — evaluate all rules, facts as query parameters
-    async fn evaluate_get(
-        State(state): State<AppState>,
-        Path(doc_name): Path<String>,
-        Query(params): Query<HashMap<String, String>>,
-        headers: HeaderMap,
-    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        evaluate_inner(
-            &state.engine,
-            &doc_name,
-            &[],
-            params,
-            want_proofs(&state, &headers),
-        )
-        .await
-    }
-
-    /// `GET /{doc_name}/{rules}` — evaluate selected rules, facts as query parameters.
-    /// If the rules segment is empty after trimming, evaluates all rules.
-    async fn evaluate_get_with_rules(
-        State(state): State<AppState>,
-        Path((doc_name, rules)): Path<(String, String)>,
-        Query(params): Query<HashMap<String, String>>,
-        headers: HeaderMap,
-    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let rule_names = parse_rule_names(&rules);
-        evaluate_inner(
-            &state.engine,
-            &doc_name,
-            &rule_names,
-            params,
-            want_proofs(&state, &headers),
-        )
-        .await
-    }
-
-    /// `POST /{doc_name}` — evaluate all rules, facts as JSON body
-    async fn evaluate_post(
-        State(state): State<AppState>,
-        Path(doc_name): Path<String>,
-        headers: HeaderMap,
-        Json(body): Json<serde_json::Value>,
-    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let fact_values = lemma_openapi::json_body_to_fact_values(&body);
-        evaluate_inner(
-            &state.engine,
-            &doc_name,
-            &[],
-            fact_values,
-            want_proofs(&state, &headers),
-        )
-        .await
-    }
-
-    /// `POST /{doc_name}/{rules}` — evaluate selected rules, facts as JSON body.
-    /// If the rules segment is empty after trimming, evaluates all rules.
-    async fn evaluate_post_with_rules(
-        State(state): State<AppState>,
-        Path((doc_name, rules)): Path<(String, String)>,
-        headers: HeaderMap,
-        Json(body): Json<serde_json::Value>,
-    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let rule_names = parse_rule_names(&rules);
-        let fact_values = lemma_openapi::json_body_to_fact_values(&body);
-        evaluate_inner(
-            &state.engine,
-            &doc_name,
-            &rule_names,
-            fact_values,
-            want_proofs(&state, &headers),
-        )
-        .await
-    }
-
-    // -----------------------------------------------------------------------
-    // Shared evaluation logic
-    // -----------------------------------------------------------------------
-
-    async fn evaluate_inner(
-        engine: &SharedEngine,
-        doc_name: &str,
-        rule_names: &[String],
-        fact_values: HashMap<String, String>,
-        include_proofs: bool,
-    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let engine = engine.read().await;
-
-        let response = engine
-            .evaluate(doc_name, rule_names.to_vec(), fact_values)
-            .map_err(|err| {
-                error!("Evaluation failed for '{}': {}", doc_name, err);
-                (
-                    lemma_error_to_status(&err),
-                    Json(ErrorResponse {
-                        error: err.to_string(),
-                    }),
-                )
-            })?;
-
-        let results = response::convert_response(&response, include_proofs);
-        info!(
-            "Evaluated '{}' with {} results",
-            doc_name,
-            response.results.len()
-        );
-
-        Ok(Json(results))
     }
 
     /// Map a `Error` to an HTTP status code.
@@ -563,11 +756,12 @@ pub mod http {
             }
         }
 
-        engine
-            .add_lemma_files(files)
-            .await
-            .map_err(lemma::Error::MultipleErrors)?;
-
+        if let Err(errs) = engine.add_lemma_files(files).await {
+            for e in &errs {
+                tracing::error!("{}", crate::error_formatter::format_error(e));
+            }
+            anyhow::bail!("Workspace load failed ({} error(s))", errs.len());
+        }
         Ok(engine)
     }
 }
