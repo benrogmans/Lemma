@@ -10,10 +10,10 @@
       "include": "#type_annotations"
     },
     {
-      "include": "#keywords"
+      "include": "#declaration-names"
     },
     {
-      "include": "#declaration-names"
+      "include": "#keywords"
     },
     {
       "include": "#operators"
@@ -34,15 +34,11 @@
     "keywords": {
       "patterns": [
         {
-          "match": "\\b(doc|fact|rule|type)\\b",
-          "name": "variable.name"
+          "match": "\\b(doc|fact|rule|type|meta)\\b",
+          "name": "keyword.declaration.lemma"
         },
         {
-          "match": "\\bunless\\b",
-          "name": "keyword.control.conditional.lemma"
-        },
-        {
-          "match": "\\bthen\\b",
+          "match": "\\b(unless|then)\\b",
           "name": "keyword.control.conditional.lemma"
         },
         {
@@ -50,11 +46,7 @@
           "name": "keyword.control.veto.lemma"
         },
         {
-          "match": "\\b(and|or|not|in)\\b",
-          "name": "keyword.control.lemma"
-        },
-        {
-          "match": "\\b(from|with)\\b",
+          "match": "\\b(and|not|in|from|with)\\b",
           "name": "keyword.control.lemma"
         },
         {
@@ -62,8 +54,8 @@
           "name": "storage.type.lemma"
         },
         {
-          "match": "\\b(minimum|maximum|minimal|decimals|precision|unit|units|options|length|default|help)\\b",
-          "name": "keyword.other.lemma"
+          "match": "\\b(option|minimum|maximum|minimal|decimals|precision|unit|units|options|length|default|help)\\b",
+          "name": "keyword.operator.constraint.lemma"
         }
       ]
     },
@@ -71,37 +63,46 @@
       "patterns": [
         {
           "match": "\\b(true|false|yes|no|accept|reject)\\b",
-          "name": "string"
+          "name": "constant.language.lemma"
+        },
+        {
+          "match": "\\b\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2})?([+-]\\d{2}:\\d{2}|Z)?)?\\b",
+          "name": "constant.numeric.date.lemma"
+        },
+        {
+          "match": "\\b\\d{2}:\\d{2}(:\\d{2})?([+-]\\d{2}:\\d{2}|Z)?\\b",
+          "name": "constant.numeric.time.lemma"
+        },
+        {
+          "match": "\\b\\d+([_,]\\d+)*(\\.\\d+)?([eE][+-]?\\d+)?%%",
+          "name": "constant.numeric.promille.lemma"
+        },
+        {
+          "match": "\\b\\d+([_,]\\d+)*(\\.\\d+)?([eE][+-]?\\d+)?%",
+          "name": "constant.numeric.percent.lemma"
+        },
+        {
+          "match": "\\b\\d+([_,]\\d+)*(\\.\\d+)?([eE][+-]?\\d+)?\\s+(percent|permille)\\b",
+          "name": "constant.numeric.percent.lemma"
+        },
+        {
+          "match": "\\b\\d+([_,]\\d+)*(\\.\\d+)?([eE][+-]?\\d+)?\\s+[a-zA-Z_][a-zA-Z0-9_]*\\b",
+          "name": "constant.numeric.unit.lemma"
         },
         {
           "match": "\\b\\d+([_,]\\d+)*(\\.\\d+)?([eE][+-]?\\d+)?\\b",
-          "name": "string"
+          "name": "constant.numeric.lemma"
         },
         {
           "begin": "\"",
           "end": "\"",
-          "name": "string"
-        },
-        {
-          "begin": "/",
-          "end": "/",
-          "name": "string"
-        },
-        {
-          "match": "\\b\\d+([_,]\\d+)*(\\.\\d+)?([eE][+-]?\\d+)?%\\b",
-          "name": "string"
-        },
-        {
-          "match": "\\b\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2})?([+-]\\d{2}:\\d{2}|Z)?)?\\b",
-          "name": "string"
-        },
-        {
-          "match": "\\b\\d{2}:\\d{2}(:\\d{2})?([+-]\\d{2}:\\d{2}|Z)?\\b",
-          "name": "string"
-        },
-        {
-          "match": "\\b\\d+([_,]\\d+)*(\\.\\d+)?([eE][+-]?\\d+)?\\s+[a-zA-Z_][a-zA-Z0-9_]*\\b",
-          "name": "string"
+          "name": "string.quoted.double.lemma",
+          "patterns": [
+            {
+              "match": "\\\\.",
+              "name": "constant.character.escape.lemma"
+            }
+          ]
         }
       ]
     },
@@ -112,16 +113,16 @@
           "name": "keyword.operator.arrow.lemma"
         },
         {
-          "match": "(==|!=|>=|<=|>|<|is not|\\bis\\b)",
+          "match": "(==|!=|>=|<=|>|<|\\bis\\s+not\\b|\\bis\\b)",
           "name": "keyword.operator.comparison.lemma"
         },
         {
-          "match": "[+\\-*/%^=]",
+          "match": "[+\\-*/%^]",
           "name": "keyword.operator.arithmetic.lemma"
         },
         {
           "match": "\\b(sqrt|sin|cos|tan|asin|acos|atan|log|exp|abs|floor|ceil|round)\\b",
-          "name": "keyword.operator"
+          "name": "support.function.math.lemma"
         }
       ]
     },
@@ -131,13 +132,13 @@
           "begin": "\\[",
           "beginCaptures": {
             "0": {
-              "name": "punctuation.definition.type.annotation.begin.lemma"
+              "name": "punctuation.bracket.lemma"
             }
           },
           "end": "\\]",
           "endCaptures": {
             "0": {
-              "name": "punctuation.definition.type.annotation.end.lemma"
+              "name": "punctuation.bracket.lemma"
             }
           },
           "name": "meta.type.annotation.lemma",
@@ -155,12 +156,8 @@
               "include": "#literals"
             },
             {
-              "match": "\\b[a-zA-Z_][a-zA-Z0-9_-]*(/[a-zA-Z_][a-zA-Z0-9_\\-.]*)*\\b",
-              "name": "string.unquoted.docpath.lemma"
-            },
-            {
               "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
-              "name": "entity.name.type.lemma"
+              "name": "storage.type.lemma"
             }
           ]
         }
@@ -169,88 +166,64 @@
     "declaration-names": {
       "patterns": [
         {
-          "begin": "\\b(doc)\\s+",
-          "beginCaptures": {
+          "match": "\\b(doc)\\s+([a-zA-Z_][a-zA-Z0-9_-]*(?:/[a-zA-Z_][a-zA-Z0-9_-]*)*(?:\\.[a-zA-Z0-9_]+)?)",
+          "captures": {
             "1": {
-              "name": "markup"
+              "name": "keyword.declaration.lemma"
+            },
+            "2": {
+              "name": "entity.name.class.lemma"
             }
-          },
-          "end": "(?=\\s|$)",
-          "patterns": [
-            {
-              "match": "\\b[a-zA-Z_][a-zA-Z0-9_-]*(/[a-zA-Z_][a-zA-Z0-9_-]*)*",
-              "name": "variable.language"
-            }
-          ]
+          }
         },
         {
-          "begin": "\\b(fact)\\s+",
-          "beginCaptures": {
+          "match": "\\b(fact)\\s+([a-zA-Z_][a-zA-Z0-9_]*(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)*)\\s*:",
+          "captures": {
             "1": {
-              "name": "markup"
+              "name": "keyword.declaration.lemma"
+            },
+            "2": {
+              "name": "entity.name.tag.lemma"
             }
-          },
-          "end": "\\s*=",
-          "patterns": [
-            {
-              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*)*",
-              "name": "variable.language"
-            }
-          ]
+          }
         },
         {
-          "begin": "\\b(rule)\\s+",
-          "beginCaptures": {
+          "match": "\\b(rule)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*:",
+          "captures": {
             "1": {
-              "name": "markup"
+              "name": "keyword.declaration.lemma"
+            },
+            "2": {
+              "name": "entity.name.function.lemma"
             }
-          },
-          "end": "\\s*=",
-          "patterns": [
-            {
-              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*",
-              "name": "variable.language"
-            }
-          ]
+          }
         },
         {
-          "begin": "\\b(type)\\s+",
-          "beginCaptures": {
+          "match": "\\b(type)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=:|\\bfrom\\b)",
+          "captures": {
             "1": {
-              "name": "markup"
+              "name": "keyword.declaration.lemma"
+            },
+            "2": {
+              "name": "storage.type.lemma"
             }
-          },
-          "end": "(?=\\s*(=|\\bfrom\\b|$))",
-          "patterns": [
-            {
-              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
-              "name": "variable.language"
-            }
-          ]
+          }
         }
       ]
     },
     "references": {
       "patterns": [
         {
-          "match": "\\b[a-zA-Z_][a-zA-Z0-9_\\-.]*(/[a-zA-Z_][a-zA-Z0-9_\\-.]*)+\\b",
-          "name": "string.unquoted.docpath.lemma"
-        },
-        {
-          "match": "\\?",
-          "name": "variable.language"
-        },
-        {
-          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*)*\\?",
-          "name": "variable.language"
+          "match": "@[a-zA-Z_][a-zA-Z0-9_\\-.]*(/[a-zA-Z_][a-zA-Z0-9_\\-.]*)*",
+          "name": "string.unquoted.registry.lemma"
         },
         {
           "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*)+",
-          "name": "variable.language"
+          "name": "variable.other.property.lemma"
         },
         {
           "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*",
-          "name": "variable.language"
+          "name": "variable.other.lemma"
         }
       ]
     }

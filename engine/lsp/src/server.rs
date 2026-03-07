@@ -50,36 +50,6 @@ impl LemmaLanguageServer {
         }
     }
 
-    /// Publish parse-only diagnostics for a single file immediately (fast path).
-    ///
-    /// This is called right after a file is opened or changed, before the debounced
-    /// full workspace validation runs. Parse errors are cheap to compute.
-    async fn publish_parse_diagnostics(&self, uri: &Url) {
-        let workspace = self.state.workspace.read().await;
-        let parse_errors = workspace.get_parse_errors(uri);
-
-        if parse_errors.is_empty() {
-            // No parse errors — the debounced full validation will publish the real diagnostics.
-            return;
-        }
-
-        let text = workspace.get_file_text(uri).unwrap_or("");
-
-        let error_for_conversion = if parse_errors.len() == 1 {
-            parse_errors.into_iter().next().expect(
-                "BUG: parse_errors confirmed non-empty with length 1 but next() returned None",
-            )
-        } else {
-            lemma::Error::MultipleErrors(parse_errors)
-        };
-
-        let lsp_diagnostics = diagnostics::parse_error_to_diagnostics(&error_for_conversion, text);
-
-        self.client
-            .publish_diagnostics(uri.clone(), lsp_diagnostics, None)
-            .await;
-    }
-
     /// Signal the debounce task that a workspace re-validation is needed.
     #[cfg(not(target_arch = "wasm32"))]
     fn request_workspace_validation(&self) {
@@ -138,7 +108,6 @@ impl LemmaLanguageServer {
     fn spawn_debounce_task(&self) {
         let state = Arc::clone(&self.state);
         let client = self.client.clone();
-        let registry = Arc::clone(&self.registry);
 
         tokio::spawn(async move {
             loop {
@@ -156,97 +125,38 @@ impl LemmaLanguageServer {
                     }
                 }
 
-                let (local_docs, mut sources, limits, attr_map) = {
+                let (files, attr_map) = {
                     let workspace = state.workspace.read().await;
                     (
-                        workspace.all_parsed_docs(),
                         workspace.sources_map(),
-                        workspace.limits().clone(),
                         workspace.attribute_to_url_and_text(),
                     )
                 };
 
-                let file_diagnostics = match lemma::resolve_registry_references(
-                    local_docs,
-                    &mut sources,
-                    registry.as_ref(),
-                    &limits,
-                )
-                .await
-                {
-                    Err(registry_error) => attribute_errors_to_files(&registry_error, &attr_map),
-                    Ok(resolved_docs) => {
-                        let workspace = state.workspace.read().await;
-                        workspace.validate_workspace_with_resolved_docs(&resolved_docs, &sources)
-                    }
+                let mut engine = lemma::Engine::new();
+                let errors = match engine.add_lemma_files(files).await {
+                    Ok(()) => Vec::new(),
+                    Err(errs) => errs,
                 };
 
-                for file_diag in &file_diagnostics {
-                    let lsp_diagnostics = diagnostics::errors_to_diagnostics(
-                        &file_diag.errors,
-                        &file_diag.text,
-                        &file_diag.attribute,
-                    );
+                for (attr, (url, text)) in &attr_map {
+                    let file_errors: Vec<_> = errors
+                        .iter()
+                        .filter(|e| match e.location() {
+                            Some(src) => src.attribute == *attr,
+                            None => false,
+                        })
+                        .collect();
+                    let lsp_diagnostics = file_errors
+                        .iter()
+                        .map(|e| diagnostics::single_error_to_diagnostic(e, text))
+                        .collect::<Vec<_>>();
                     client
-                        .publish_diagnostics(file_diag.url.clone(), lsp_diagnostics, None)
+                        .publish_diagnostics(url.clone(), lsp_diagnostics, None)
                         .await;
                 }
             }
         });
-    }
-}
-
-/// Map a registry error (possibly MultipleErrors) to FileDiagnostics by error location attribute.
-#[cfg(any(not(target_arch = "wasm32"), test))]
-fn attribute_errors_to_files(
-    error: &lemma::Error,
-    attr_map: &std::collections::HashMap<String, (Url, String)>,
-) -> Vec<crate::workspace::FileDiagnostics> {
-    use crate::workspace::FileDiagnostics;
-    use lemma::Error;
-
-    let errors: Vec<Error> = match error {
-        Error::MultipleErrors(inner) => inner
-            .iter()
-            .flat_map(attribute_errors_to_files_inner)
-            .collect(),
-        other => vec![other.clone()],
-    };
-
-    let mut by_url: std::collections::HashMap<Url, (String, String, Vec<Error>)> =
-        std::collections::HashMap::new();
-    for err in errors {
-        let attribute = err
-            .location()
-            .map(|s| s.attribute.clone())
-            .unwrap_or_default();
-        if let Some((url, text)) = attr_map.get(&attribute) {
-            by_url
-                .entry(url.clone())
-                .or_insert_with(|| (attribute.clone(), text.clone(), Vec::new()))
-                .2
-                .push(err);
-        }
-    }
-    by_url
-        .into_iter()
-        .map(|(url, (attribute, text, errors))| FileDiagnostics {
-            url,
-            text,
-            attribute,
-            errors,
-        })
-        .collect()
-}
-
-#[cfg(any(not(target_arch = "wasm32"), test))]
-fn attribute_errors_to_files_inner(error: &lemma::Error) -> Vec<lemma::Error> {
-    match error {
-        lemma::Error::MultipleErrors(inner) => inner
-            .iter()
-            .flat_map(attribute_errors_to_files_inner)
-            .collect(),
-        other => vec![other.clone()],
     }
 }
 
@@ -331,10 +241,6 @@ impl LanguageServer for LemmaLanguageServer {
             workspace.update_file(uri.clone(), text);
         }
 
-        // Fast path: publish parse errors immediately.
-        self.publish_parse_diagnostics(&uri).await;
-
-        // Full validation: debounce task on native, inline on WASM.
         #[cfg(not(target_arch = "wasm32"))]
         self.request_workspace_validation();
         #[cfg(target_arch = "wasm32")]
@@ -350,12 +256,7 @@ impl LanguageServer for LemmaLanguageServer {
                 let mut workspace = self.state.workspace.write().await;
                 workspace.update_file(uri.clone(), change.text);
             }
-
-            // Fast path: publish parse errors immediately.
-            self.publish_parse_diagnostics(&uri).await;
         }
-
-        // Full validation: debounce task on native, inline on WASM.
         #[cfg(not(target_arch = "wasm32"))]
         self.request_workspace_validation();
         #[cfg(target_arch = "wasm32")]
@@ -464,144 +365,5 @@ fn find_lemma_files_recursive(directory: &Path, results: &mut Vec<std::path::Pat
         } else if path.extension().and_then(|ext| ext.to_str()) == Some("lemma") {
             results.push(path);
         }
-    }
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod tests {
-    use super::attribute_errors_to_files;
-    use crate::workspace::WorkspaceModel;
-    use lemma::{Error, Source, Span};
-    use std::sync::Arc;
-    use tower_lsp::lsp_types::Url;
-
-    fn url_from_path(path: &str) -> Url {
-        Url::from_file_path(path).expect("valid file path for test URL")
-    }
-
-    /// Regression test: Registry errors must be attributed to the correct file when the error's
-    /// source_location.attribute matches the workspace attr_map key (same as attribute_for_url).
-    /// If this test fails, registry squiggles will not appear in the editor.
-    #[test]
-    fn registry_error_with_matching_attribute_appears_in_file_diagnostics() {
-        let path = "/tmp/registry_missing.lemma";
-        let url = url_from_path(path);
-        let content = "doc example\nfact ext: doc @nonexistent/foo";
-        let mut workspace = WorkspaceModel::new();
-        workspace.update_file(url.clone(), content.to_string());
-
-        let attr_map = workspace.attribute_to_url_and_text();
-        assert_eq!(attr_map.len(), 1);
-        let (attribute, _) = attr_map.iter().next().unwrap();
-        let attribute = attribute.clone();
-
-        let source = Source::new(
-            attribute.clone(),
-            Span {
-                start: 0,
-                end: 10,
-                line: 1,
-                col: 1,
-            },
-            "example",
-            Arc::from(content),
-        );
-        let registry_error = Error::registry(
-            "Document not found: @nonexistent/foo",
-            Some(source),
-            "nonexistent/foo",
-            lemma::RegistryErrorKind::NotFound,
-            Some("Check that the identifier exists on the registry."),
-        );
-
-        let file_diagnostics = attribute_errors_to_files(&registry_error, &attr_map);
-        assert_eq!(
-            file_diagnostics.len(),
-            1,
-            "Registry error with matching attribute should produce one FileDiagnostics"
-        );
-        assert_eq!(file_diagnostics[0].url, url);
-        assert_eq!(file_diagnostics[0].errors.len(), 1);
-        assert!(matches!(
-            &file_diagnostics[0].errors[0],
-            Error::Registry { .. }
-        ));
-    }
-
-    /// When both a doc ref and a type import fail, both errors must appear in file diagnostics
-    /// and convert to two LSP diagnostics (so both lines get squiggles).
-    #[test]
-    fn multiple_registry_errors_same_file_produce_multiple_diagnostics() {
-        use crate::diagnostics;
-
-        let path = "/tmp/registry_demo.lemma";
-        let url = url_from_path(path);
-        let content = r#"doc registry_demo
-fact helper: doc @org/example/helper
-type money from @lemma/std/finance"#;
-        let mut workspace = WorkspaceModel::new();
-        workspace.update_file(url.clone(), content.to_string());
-
-        let attr_map = workspace.attribute_to_url_and_text();
-        let (attribute, (_url, text)) = attr_map.iter().next().unwrap();
-        let attribute = attribute.clone();
-        let text = text.clone();
-
-        let doc_ref_source = Source::new(
-            attribute.clone(),
-            Span {
-                start: 15,
-                end: 42,
-                line: 2,
-                col: 1,
-            },
-            "registry_demo",
-            Arc::from(text.as_str()),
-        );
-        let type_ref_source = Source::new(
-            attribute.clone(),
-            Span {
-                start: 43,
-                end: 72,
-                line: 3,
-                col: 1,
-            },
-            "registry_demo",
-            Arc::from(text.as_str()),
-        );
-        let doc_error = Error::registry(
-            "Document not found: @org/example/helper",
-            Some(doc_ref_source),
-            "org/example/helper",
-            lemma::RegistryErrorKind::NotFound,
-            None::<String>,
-        );
-        let type_error = Error::registry(
-            "Document not found: @lemma/std/finance",
-            Some(type_ref_source),
-            "lemma/std/finance",
-            lemma::RegistryErrorKind::NotFound,
-            None::<String>,
-        );
-        let multiple = Error::MultipleErrors(vec![doc_error, type_error]);
-
-        let file_diagnostics = attribute_errors_to_files(&multiple, &attr_map);
-        assert_eq!(file_diagnostics.len(), 1);
-        assert_eq!(
-            file_diagnostics[0].errors.len(),
-            2,
-            "Both doc and type registry errors must be attributed to the file"
-        );
-
-        let lsp_diagnostics = diagnostics::errors_to_diagnostics(
-            &file_diagnostics[0].errors,
-            &text,
-            &file_diagnostics[0].attribute,
-        );
-        assert_eq!(
-            lsp_diagnostics.len(),
-            2,
-            "Both errors must become LSP diagnostics so both lines show squiggles"
-        );
     }
 }
