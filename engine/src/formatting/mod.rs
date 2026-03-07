@@ -303,6 +303,18 @@ fn format_expr(expr: &Expression, parent_prec: u8) -> String {
             Some(msg) => format!("veto {}", crate::parsing::ast::quote_lemma_text(msg)),
             None => "veto".to_string(),
         },
+        ExpressionKind::Now => "now".to_string(),
+        ExpressionKind::DateRelative(kind, date_expr, tolerance) => {
+            let date_str = format_expr(date_expr, my_prec);
+            match tolerance {
+                Some(tol) => format!("{} {} {}", date_str, kind, format_expr(tol, my_prec)),
+                None => format!("{} {}", date_str, kind),
+            }
+        }
+        ExpressionKind::DateCalendar(kind, unit, date_expr) => {
+            let date_str = format_expr(date_expr, my_prec);
+            format!("{} {} {}", date_str, kind, unit)
+        }
     };
 
     if needs_parens {
@@ -471,6 +483,7 @@ mod tests {
             hour: 0,
             minute: 0,
             second: 0,
+            microsecond: 0,
             timezone: None,
         });
         assert_eq!(fmt_value(&v), "2024-01-15");
@@ -485,6 +498,7 @@ mod tests {
             hour: 14,
             minute: 30,
             second: 0,
+            microsecond: 0,
             timezone: Some(TimezoneValue {
                 offset_hours: 0,
                 offset_minutes: 0,

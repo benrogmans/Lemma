@@ -1296,6 +1296,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "indexmap",
  "inquire",
  "lemma-engine",
  "lemma-openapi",

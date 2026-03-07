@@ -9,15 +9,15 @@ This example demonstrates:
 - Type annotations for dynamic input
 """
 
-fact contract_end:        2024-12-31
-fact contract_start:      2024-01-15
-fact employee_birth_date: 1990-05-20
-fact hire_date:           2024-03-01
-fact meeting_duration:    1.5 hours
-fact meeting_time:        14:30:00
-fact probation_period:    90 days
-fact project_deadline:    2024-10-01T17:00:00Z
-fact current_date:        [date]
+fact contract_end        : 2024-12-31
+fact contract_start      : 2024-01-15
+fact employee_birth_date : 1990-05-20
+fact hire_date           : 2024-03-01
+fact meeting_duration    : 1.5 hours
+fact meeting_time        : 14:30:00
+fact probation_period    : 90 days
+fact project_deadline    : 2024-10-01T17:00:00Z
+fact current_date        : [date]
 
 rule contract_duration:
   contract_end - contract_start

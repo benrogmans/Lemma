@@ -744,7 +744,31 @@ fn collect_expected_constraints_for_rule_ref(
                 ExpectedRuleTypeConstraint::Number,
             ));
         }
-        ExpressionKind::Literal(_) | ExpressionKind::FactPath(_) | ExpressionKind::Veto(_) => {}
+        ExpressionKind::DateRelative(_, date_expr, tolerance) => {
+            out.extend(collect_expected_constraints_for_rule_ref(
+                date_expr,
+                rule_path,
+                ExpectedRuleTypeConstraint::Comparable,
+            ));
+            if let Some(tol) = tolerance {
+                out.extend(collect_expected_constraints_for_rule_ref(
+                    tol,
+                    rule_path,
+                    ExpectedRuleTypeConstraint::Duration,
+                ));
+            }
+        }
+        ExpressionKind::DateCalendar(_, _, date_expr) => {
+            out.extend(collect_expected_constraints_for_rule_ref(
+                date_expr,
+                rule_path,
+                ExpectedRuleTypeConstraint::Comparable,
+            ));
+        }
+        ExpressionKind::Literal(_)
+        | ExpressionKind::FactPath(_)
+        | ExpressionKind::Veto(_)
+        | ExpressionKind::Now => {}
     }
     out
 }

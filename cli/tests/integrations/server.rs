@@ -140,8 +140,8 @@ rule result: x
     let resp = client
         .post(&url)
         .header("x-proofs", "true")
-        .header("Content-Type", "application/json")
-        .body(r#"{"x": "42"}"#)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body("x=42")
         .send()
         .expect("POST request");
     let status = resp.status();
@@ -166,7 +166,7 @@ rule result: x
     assert_eq!(
         result
             .get("value")
-            .and_then(|v: &serde_json::Value| v.as_str()),
-        Some("42")
+            .and_then(|v: &serde_json::Value| v.as_i64()),
+        Some(42)
     );
 }

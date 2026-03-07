@@ -29,6 +29,7 @@ strip-ansi-escapes = "0.2"
 axum = "0.8.8"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors"] }
+indexmap = { version = "2.0", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
 tracing = "0.1"

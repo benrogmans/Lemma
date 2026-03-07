@@ -361,7 +361,19 @@ fn extract_rule_paths_from_expression(expr: &Expression, paths: &mut HashSet<Rul
         | ExpressionKind::MathematicalComputation(_, inner) => {
             extract_rule_paths_from_expression(inner, paths);
         }
-        ExpressionKind::Literal(_) | ExpressionKind::FactPath(_) | ExpressionKind::Veto(_) => {}
+        ExpressionKind::DateRelative(_, date_expr, tolerance) => {
+            extract_rule_paths_from_expression(date_expr, paths);
+            if let Some(tol) = tolerance {
+                extract_rule_paths_from_expression(tol, paths);
+            }
+        }
+        ExpressionKind::DateCalendar(_, _, date_expr) => {
+            extract_rule_paths_from_expression(date_expr, paths);
+        }
+        ExpressionKind::Literal(_)
+        | ExpressionKind::FactPath(_)
+        | ExpressionKind::Veto(_)
+        | ExpressionKind::Now => {}
     }
 }
 
@@ -519,6 +531,12 @@ fn substitute_rules_in_expression(
                             ExpressionKind::Veto(veto.clone()),
                             source_loc,
                         ));
+                    }
+                    ExpressionKind::Now => {
+                        result_pool.push(Expression::with_source(ExpressionKind::Now, source_loc));
+                    }
+                    ExpressionKind::DateRelative(..) | ExpressionKind::DateCalendar(..) => {
+                        result_pool.push(Expression::with_source(e.kind.clone(), source_loc));
                     }
                 }
             }
@@ -747,6 +765,13 @@ fn hydrate_facts_in_expression(
                             ExpressionKind::Veto(veto.clone()),
                             source_loc,
                         ));
+                    }
+                    ExpressionKind::Now => {
+                        result_pool.push(Expression::with_source(ExpressionKind::Now, source_loc));
+                    }
+                    ExpressionKind::DateRelative(..) | ExpressionKind::DateCalendar(..) => {
+                        result_pool
+                            .push(Expression::with_source(expr_kind_ref.clone(), source_loc));
                     }
                 }
             }
