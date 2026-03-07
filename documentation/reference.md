@@ -35,7 +35,6 @@ Quick reference for all operators and types in Lemma.
 | Operator | Description | Example |
 |----------|-------------|---------|
 | `and` | Logical AND | `is_valid and not is_blocked` |
-| `or` | Logical OR | `is_admin or is_manager` |
 | `not` | Logical NOT | `not is_suspended` |
 
 ### Mathematical
@@ -76,8 +75,11 @@ rule workweek_days: workweek in days  // Converts to ~1.67 days
 
 ## Document References
 
-Reference other documents with `fact name: doc other_doc`. A document name may
-carry an optional `.version_tag` suffix (document base names cannot contain a period).
+Reference other documents with `fact name: doc other_doc`. The document name is
+**required**. You may optionally add a datetime (effective, for temporal version resolution) and/or a content
+hash for verification. Syntax: `doc name`, `doc name datetime`, `doc name datetime hash`,
+or `doc name hash`. A document name may carry an optional `.version_tag` suffix
+(document base names cannot contain a period).
 
 ### Versioned names
 
@@ -104,9 +106,18 @@ facts, rules, or state.
   natural sort order (numeric segments compared numerically, so `v10` > `v2`).
   If only an unversioned document exists, it resolves to that.
 
+### Temporal version resolution and content hash
+
+- **Datetime:** `fact x: doc pricing 2025` resolves the document as of 2025-01-01T00:00:00.
+  Use when you need a specific temporal version (see temporal versioning).
+- **Content hash:** `fact x: doc pricing a1b2c3d4` or `fact x: doc pricing 2025 a1b2c3d4`
+  verifies that the resolved document’s content hash equals the given value (8 hex chars, e.g. `a1b2c3d4`).
+  Hash is **verification only**; resolution is always by (name, effective). Mismatch ⇒ validation error.
+  Compute the hash with `lemma hash <doc> [--effective T]`.
+
 ### Self-reference restriction
 
-A document cannot reference any version of itself (same base name). This is a
+A document cannot reference any temporal version of itself (same base name). This is a
 semantic error caught during planning:
 
 ```lemma

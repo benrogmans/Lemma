@@ -206,6 +206,7 @@ pub(crate) fn parse_expression(
             limit_value: depth_tracker.max_depth().to_string(),
             actual_value: actual_depth,
             suggestion: "Simplify nested expressions to reduce depth".to_string(),
+            document_context: None,
         });
     }
 
@@ -229,40 +230,11 @@ fn parse_expression_impl(
 ) -> Result<Expression, Error> {
     match pair.as_rule() {
         Rule::expression => {
-            let original = pair.clone();
             let mut inner = pair.into_inner();
-
-            let mut left = parse_and_expression(
-                inner
-                    .next()
-                    .expect("BUG: grammar guarantees expression has left operand"),
-                depth_tracker,
-                attribute,
-                doc_name,
-                source_text.clone(),
-            )?;
-
-            for child in inner {
-                if child.as_rule() == Rule::and_expression {
-                    let right = parse_and_expression(
-                        child.clone(),
-                        depth_tracker,
-                        attribute,
-                        doc_name,
-                        source_text.clone(),
-                    )?;
-                    let kind = ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right));
-                    left = create_expression_with_location(
-                        kind,
-                        &original,
-                        attribute,
-                        doc_name,
-                        source_text.clone(),
-                    );
-                }
-            }
-
-            return Ok(left);
+            let and_expr = inner
+                .next()
+                .expect("BUG: grammar guarantees expression has one and_expression");
+            return parse_and_expression(and_expr, depth_tracker, attribute, doc_name, source_text);
         }
 
         Rule::and_expression => {
@@ -1296,7 +1268,6 @@ rule effective_tax_rate: total_tax / income in percent"#;
     fn test_logical_expressions() {
         let test_cases = vec![
             ("is_active and is_verified", "simple and"),
-            ("is_student or is_employee", "simple or"),
             ("not is_blocked", "simple not"),
             ("sqrt 16", "square root"),
             ("sin 0", "sine function"),
@@ -1355,7 +1326,6 @@ rule effective_tax_rate: total_tax / income in percent"#;
             ("log (  x + 1  )", "log with spaces around expression"),
             ("exp (  2 * 3  )", "exp with spaces in complex expr"),
             // Combined with other operators
-            ("not(x) or not(y)", "not with parens in or expression"),
             ("sqrt(x) ^ 2", "sqrt with parens and power operator"),
             ("sin(x) * cos(x)", "multiple function calls"),
         ];

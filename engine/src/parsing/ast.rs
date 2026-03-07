@@ -85,18 +85,21 @@ impl Default for DepthTracker {
 // -----------------------------------------------------------------------------
 
 use crate::parsing::source::Source;
+use chrono::{Datelike, Timelike};
 use rust_decimal::Decimal;
 use serde::Serialize;
+use std::cmp::Ordering;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-/// A Lemma document containing facts and rules
-#[derive(Debug, Clone, PartialEq)]
+/// A Lemma document containing facts and rules.
+/// Ordered and compared by (name, effective_from) for use in BTreeSet; None < Some(_) for Option<DateTimeValue>.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LemmaDoc {
-    /// Base document name (without version tag).
+    /// Base document name.
     pub name: String,
-    /// Optional version tag (e.g. `"v1"`, `"1.2.3"`).
-    pub version: Option<String>,
+    pub effective_from: Option<DateTimeValue>,
     pub attribute: Option<String>,
     pub start_line: usize,
     pub commentary: Option<String>,
@@ -147,7 +150,7 @@ pub struct LemmaFact {
 /// Unless clauses are evaluated in order, and the last matching condition wins.
 /// This matches natural language: "X unless A then Y, unless B then Z" - if both
 /// A and B are true, Z is returned (the last match).
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct UnlessClause {
     pub condition: Expression,
     pub result: Expression,
@@ -155,7 +158,7 @@ pub struct UnlessClause {
 }
 
 /// A rule with a single expression and optional unless clauses
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LemmaRule {
     pub name: String,
     pub expression: Expression,
@@ -219,7 +222,6 @@ pub enum ExpressionKind {
     /// Contains (number, unit_name) - the unit name will be resolved to its type during semantic analysis
     UnresolvedUnitLiteral(Decimal, String),
     LogicalAnd(Arc<Expression>, Arc<Expression>),
-    LogicalOr(Arc<Expression>, Arc<Expression>),
     Arithmetic(Arc<Expression>, ArithmeticComputation, Arc<Expression>),
     Comparison(Arc<Expression>, ComparisonComputation, Arc<Expression>),
     UnitConversion(Arc<Expression>, ConversionTarget),
@@ -411,18 +413,20 @@ pub enum MathematicalComputation {
     Round,
 }
 
-/// A reference to a document, with a flag indicating whether the `@` registry
-/// qualifier was present in the source.  The `name` field always contains the
-/// plain base document name (without `@` or version tag); `is_registry` is `true`
-/// when the author wrote `@name`; `version` holds the optional version tag.
+/// A reference to a document, with optional hash pin and optional effective datetime.
+/// The `name` field is the plain base document name (without `@`); `is_registry`
+/// is true when the source used `@name`; `hash_pin` pins to a specific temporal version
+/// by content hash; `effective` requests temporal resolution at that datetime.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DocRef {
-    /// Plain base document name (never contains `@` or version suffix).
+    /// Plain base document name (never contains `@`).
     pub name: String,
-    /// Optional version tag (e.g. `"v1"`, `"1.2.3"`).
-    pub version: Option<String>,
     /// `true` when the source used the `@` qualifier (registry reference).
     pub is_registry: bool,
+    /// Optional content hash pin to resolve to a specific document version.
+    pub hash_pin: Option<String>,
+    /// Optional effective datetime for temporal resolution. When used with `hash_pin`, resolve by hash then verify that version was active at this datetime.
+    pub effective: Option<DateTimeValue>,
 }
 
 impl std::fmt::Display for DocRef {
@@ -432,8 +436,11 @@ impl std::fmt::Display for DocRef {
         } else {
             write!(f, "{}", self.name)?;
         }
-        if let Some(ref v) = self.version {
-            write!(f, ".{}", v)?;
+        if let Some(ref h) = self.hash_pin {
+            write!(f, "~{}", h)?;
+        }
+        if let Some(ref d) = self.effective {
+            write!(f, " {}", d)?;
         }
         Ok(())
     }
@@ -444,17 +451,9 @@ impl DocRef {
     pub fn local(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            version: None,
             is_registry: false,
-        }
-    }
-
-    /// Create a local document reference with a version tag.
-    pub fn local_versioned(name: impl Into<String>, version: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            version: Some(version.into()),
-            is_registry: false,
+            hash_pin: None,
+            effective: None,
         }
     }
 
@@ -462,27 +461,14 @@ impl DocRef {
     pub fn registry(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            version: None,
             is_registry: true,
+            hash_pin: None,
+            effective: None,
         }
     }
 
-    /// Create a registry document reference with a version tag.
-    pub fn registry_versioned(name: impl Into<String>, version: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            version: Some(version.into()),
-            is_registry: true,
-        }
-    }
-
-    /// A unique string identifier combining name and optional version.
-    /// Used as a key for document lookup maps.
-    pub fn full_id(&self) -> String {
-        match &self.version {
-            Some(v) => format!("{}.{}", self.name, v),
-            None => self.name.clone(),
-        }
+    pub fn resolution_key(&self) -> String {
+        self.name.clone()
     }
 }
 
@@ -765,6 +751,62 @@ pub struct DateTimeValue {
     pub timezone: Option<TimezoneValue>,
 }
 
+impl DateTimeValue {
+    pub fn now() -> Self {
+        let now = chrono::Local::now();
+        let offset_secs = now.offset().local_minus_utc();
+        Self {
+            year: now.year(),
+            month: now.month(),
+            day: now.day(),
+            hour: now.time().hour(),
+            minute: now.time().minute(),
+            second: now.time().second(),
+            timezone: Some(TimezoneValue {
+                offset_hours: (offset_secs / 3600) as i8,
+                offset_minutes: ((offset_secs.abs() % 3600) / 60) as u8,
+            }),
+        }
+    }
+
+    /// Parse a datetime string. Accepts:
+    /// - Full ISO 8601: `2026-03-04T10:30:00Z`, `2026-03-04T10:30:00+02:00`
+    /// - Date + time without tz: `2026-03-04T10:30:00`
+    /// - Date only: `2026-03-04` (midnight)
+    /// - Year-month: `2026-03` (first of month)
+    /// - Year only: `2026` (Jan 1)
+    pub fn parse(s: &str) -> Option<Self> {
+        if let Some(dtv) = crate::parsing::literals::parse_datetime_str(s) {
+            return Some(dtv);
+        }
+        if let Ok(ym) = chrono::NaiveDate::parse_from_str(&format!("{}-01", s), "%Y-%m-%d") {
+            return Some(Self {
+                year: ym.year(),
+                month: ym.month(),
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                timezone: None,
+            });
+        }
+        if let Ok(year) = s.parse::<i32>() {
+            if (1..=9999).contains(&year) {
+                return Some(Self {
+                    year,
+                    month: 1,
+                    day: 1,
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                    timezone: None,
+                });
+            }
+        }
+        None
+    }
+}
+
 /// Unit types for different physical quantities
 macro_rules! impl_unit_serialize {
     ($($unit_type:ty),+) => {
@@ -832,7 +874,7 @@ impl LemmaDoc {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            version: None,
+            effective_from: None,
             attribute: None,
             start_line: 1,
             commentary: None,
@@ -843,19 +885,9 @@ impl LemmaDoc {
         }
     }
 
-    /// A unique string identifier combining name and optional version.
-    /// Used as a key for document lookup maps.
-    pub fn full_id(&self) -> String {
-        match &self.version {
-            Some(v) => format!("{}.{}", self.name, v),
-            None => self.name.clone(),
-        }
-    }
-
-    #[must_use]
-    pub fn with_version(mut self, version: String) -> Self {
-        self.version = Some(version);
-        self
+    /// Temporal range start. None means −∞.
+    pub fn effective_from(&self) -> Option<&DateTimeValue> {
+        self.effective_from.as_ref()
     }
 
     #[must_use]
@@ -901,11 +933,42 @@ impl LemmaDoc {
     }
 }
 
+impl PartialEq for LemmaDoc {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.effective_from() == other.effective_from()
+    }
+}
+
+impl Eq for LemmaDoc {}
+
+impl PartialOrd for LemmaDoc {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for LemmaDoc {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.name.as_str(), self.effective_from())
+            .cmp(&(other.name.as_str(), other.effective_from()))
+    }
+}
+
+impl Hash for LemmaDoc {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        match self.effective_from() {
+            Some(d) => d.hash(state),
+            None => 0u8.hash(state),
+        }
+    }
+}
+
 impl fmt::Display for LemmaDoc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "doc {}", self.name)?;
-        if let Some(ref v) = self.version {
-            write!(f, ".{}", v)?;
+        if let Some(ref af) = self.effective_from {
+            write!(f, " {}", af)?;
         }
         writeln!(f)?;
 
@@ -986,7 +1049,6 @@ impl fmt::Display for LemmaRule {
 /// to insert parentheses only where needed.
 pub fn expression_precedence(kind: &ExpressionKind) -> u8 {
     match kind {
-        ExpressionKind::LogicalOr(..) => 1,
         ExpressionKind::LogicalAnd(..) => 2,
         ExpressionKind::LogicalNegation(..) => 3,
         ExpressionKind::Comparison(..) => 4,
@@ -1050,12 +1112,6 @@ impl fmt::Display for Expression {
                 let my_prec = expression_precedence(&self.kind);
                 write_expression_child(f, left, my_prec)?;
                 write!(f, " and ")?;
-                write_expression_child(f, right, my_prec)
-            }
-            ExpressionKind::LogicalOr(left, right) => {
-                let my_prec = expression_precedence(&self.kind);
-                write_expression_child(f, left, my_prec)?;
-                write!(f, " or ")?;
                 write_expression_child(f, right, my_prec)
             }
             ExpressionKind::MathematicalComputation(op, operand) => {
@@ -1173,7 +1229,8 @@ impl fmt::Display for DateTimeValue {
 
 /// Type definition (named, import, or inline).
 /// Applying constraints to produce TypeSpecification is done in planning (semantics).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TypeDef {
     Regular {
         source_location: Source,
@@ -1209,6 +1266,13 @@ impl TypeDef {
             | TypeDef::Inline {
                 source_location, ..
             } => source_location,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            TypeDef::Regular { name, .. } | TypeDef::Import { name, .. } => name,
+            TypeDef::Inline { parent, .. } => parent,
         }
     }
 }

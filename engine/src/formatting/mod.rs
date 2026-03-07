@@ -56,12 +56,24 @@ fn format_document(doc: &LemmaDoc, max_cols: usize) -> String {
     let mut out = String::new();
     out.push_str("doc ");
     out.push_str(&doc.name);
+    if let Some(ref af) = doc.effective_from {
+        out.push(' ');
+        out.push_str(&af.to_string());
+    }
     out.push('\n');
 
     if let Some(ref commentary) = doc.commentary {
         out.push_str("\"\"\"\n");
         out.push_str(commentary);
         out.push_str("\n\"\"\"\n");
+    }
+
+    for meta in &doc.meta_fields {
+        out.push_str(&format!(
+            "meta {}: {}\n",
+            meta.key,
+            AsLemmaSource(&meta.value)
+        ));
     }
 
     let named_types: Vec<_> = doc
@@ -113,10 +125,10 @@ fn format_fact(fact: &LemmaFact, align_width: usize) -> String {
     let padding = if align_width > ref_str.len() {
         " ".repeat(align_width - ref_str.len())
     } else {
-        "".to_string()
+        String::new()
     };
     format!(
-        "fact {}: {}{}",
+        "fact {}{} : {}",
         ref_str,
         padding,
         AsLemmaSource(&fact.value)
@@ -215,7 +227,8 @@ fn format_rule(rule: &LemmaRule, max_cols: usize) -> String {
     let mut out = String::new();
     out.push_str("rule ");
     out.push_str(&rule.name);
-    out.push_str(": ");
+    out.push_str(":\n");
+    out.push_str(expr_indent);
     out.push_str(&body);
 
     for unless_clause in &rule.unless_clauses {
@@ -281,11 +294,6 @@ fn format_expr(expr: &Expression, parent_prec: u8) -> String {
             let left_str = format_expr(left, my_prec);
             let right_str = format_expr(right, my_prec);
             format!("{} and {}", left_str, right_str)
-        }
-        ExpressionKind::LogicalOr(left, right) => {
-            let left_str = format_expr(left, my_prec);
-            let right_str = format_expr(right, my_prec);
-            format!("{} or {}", left_str, right_str)
         }
         ExpressionKind::MathematicalComputation(op, operand) => {
             let operand_str = format_expr(operand, my_prec);
@@ -549,14 +557,14 @@ rule total: income
             .unwrap();
         let lines: Vec<&str> = fact_section.lines().filter(|l| !l.is_empty()).collect();
         // All regular facts in one group, original order, aligned
-        assert_eq!(lines[0], "fact income:        [number -> minimum 0]");
+        assert_eq!(lines[0], "fact income        : [number -> minimum 0]");
         assert_eq!(
             lines[1],
-            "fact filing_status: [filing_status_type -> default \"single\"]"
+            "fact filing_status : [filing_status_type -> default \"single\"]"
         );
-        assert_eq!(lines[2], "fact country:       \"NL\"");
-        assert_eq!(lines[3], "fact deductions:    [number -> minimum 0]");
-        assert_eq!(lines[4], "fact name:          [text]");
+        assert_eq!(lines[2], "fact country       : \"NL\"");
+        assert_eq!(lines[3], "fact deductions    : [number -> minimum 0]");
+        assert_eq!(lines[4], "fact name          : [text]");
     }
 
     #[test]
@@ -581,12 +589,12 @@ rule total: base_price
             .unwrap();
         let lines: Vec<&str> = fact_section.lines().filter(|l| !l.is_empty()).collect();
         // Group 1: Literals
-        assert_eq!(lines[0], "fact base_price: 50");
+        assert_eq!(lines[0], "fact base_price : 50");
         // Group 4: Doc refs in original order, each with its overrides, aligned
-        assert_eq!(lines[1], "fact wholesale:          doc order/wholesale");
-        assert_eq!(lines[2], "fact wholesale.quantity: 100");
-        assert_eq!(lines[3], "fact retail:          doc order/retail");
-        assert_eq!(lines[4], "fact retail.quantity: 5");
+        assert_eq!(lines[1], "fact wholesale          : doc order/wholesale");
+        assert_eq!(lines[2], "fact wholesale.quantity : 100");
+        assert_eq!(lines[3], "fact retail          : doc order/retail");
+        assert_eq!(lines[4], "fact retail.quantity : 5");
     }
 
     #[test]
