@@ -299,9 +299,8 @@ impl Constraint {
                         let should_negate = if op.is_equal() { !*bool_val } else { *bool_val };
                         if should_negate {
                             return Ok(inner_constraint.not());
-                        } else {
-                            return Ok(inner_constraint);
                         }
+                        return Ok(inner_constraint);
                     }
                 }
             }
@@ -315,9 +314,8 @@ impl Constraint {
                         let should_negate = if op.is_equal() { !*bool_val } else { *bool_val };
                         if should_negate {
                             return Ok(inner_constraint.not());
-                        } else {
-                            return Ok(inner_constraint);
                         }
+                        return Ok(inner_constraint);
                     }
                 }
             }

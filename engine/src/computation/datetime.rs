@@ -294,12 +294,13 @@ fn semantic_datetime_to_chrono(date: &SemanticDateTime) -> Result<DateTime<Fixed
         .ok_or_else(|| format!("Invalid date: {}-{}-{}", date.year, date.month, date.day))?;
 
     let naive_time =
-        NaiveTime::from_hms_opt(date.hour, date.minute, date.second).ok_or_else(|| {
-            format!(
-                "Invalid time: {}:{}:{}",
-                date.hour, date.minute, date.second
-            )
-        })?;
+        NaiveTime::from_hms_micro_opt(date.hour, date.minute, date.second, date.microsecond)
+            .ok_or_else(|| {
+                format!(
+                    "Invalid time: {}:{}:{}.{}",
+                    date.hour, date.minute, date.second, date.microsecond
+                )
+            })?;
 
     let naive_dt = NaiveDateTime::new(naive_date, naive_time);
 
@@ -806,4 +807,694 @@ pub fn compute_date_calendar(
         _ => in_period,
     };
     bool_result(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+
+    fn utc_datetime(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> SemanticDateTime {
+        SemanticDateTime {
+            year: y,
+            month: m,
+            day: d,
+            hour: h,
+            minute: min,
+            second: s,
+            microsecond: 0,
+            timezone: Some(SemanticTimezone {
+                offset_hours: 0,
+                offset_minutes: 0,
+            }),
+        }
+    }
+
+    fn tz_datetime(
+        (y, m, d, h, min, s, us): (i32, u32, u32, u32, u32, u32, u32),
+        (tz_h, tz_m): (i8, u8),
+    ) -> SemanticDateTime {
+        SemanticDateTime {
+            year: y,
+            month: m,
+            day: d,
+            hour: h,
+            minute: min,
+            second: s,
+            microsecond: us,
+            timezone: Some(SemanticTimezone {
+                offset_hours: tz_h,
+                offset_minutes: tz_m,
+            }),
+        }
+    }
+
+    fn assert_true(result: &OperationResult) {
+        match result {
+            OperationResult::Value(v) => match &v.value {
+                ValueKind::Boolean(b) => assert!(*b, "expected true, got false"),
+                other => panic!("expected Boolean, got {:?}", other),
+            },
+            OperationResult::Veto(msg) => panic!("expected Value(true), got Veto({:?})", msg),
+        }
+    }
+
+    fn assert_false(result: &OperationResult) {
+        match result {
+            OperationResult::Value(v) => match &v.value {
+                ValueKind::Boolean(b) => assert!(!*b, "expected false, got true"),
+                other => panic!("expected Boolean, got {:?}", other),
+            },
+            OperationResult::Veto(msg) => panic!("expected Value(false), got Veto({:?})", msg),
+        }
+    }
+
+    // ── compute_date_relative ──────────────────────────────────────────
+
+    #[test]
+    fn in_past_date_before_now() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 3, 1, 0, 0, 0);
+        assert_true(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &date,
+            None,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_date_equal_now_no_tolerance() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        assert_false(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &now,
+            None,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_date_after_now() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 4, 1, 0, 0, 0);
+        assert_false(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &date,
+            None,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_with_tolerance_inside_window() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 3, 5, 0, 0, 0);
+        let amount = Decimal::from(7);
+        assert_true(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &date,
+            Some((&amount, &SemanticDurationUnit::Day)),
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_with_tolerance_at_boundary_equals_now() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let amount = Decimal::from(7);
+        assert_true(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &now,
+            Some((&amount, &SemanticDurationUnit::Day)),
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_with_tolerance_at_window_start() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 2, 28, 12, 0, 0);
+        let amount = Decimal::from(7);
+        assert_true(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &date,
+            Some((&amount, &SemanticDurationUnit::Day)),
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_with_tolerance_outside_window() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 2, 1, 0, 0, 0);
+        let amount = Decimal::from(7);
+        assert_false(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &date,
+            Some((&amount, &SemanticDurationUnit::Day)),
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_with_zero_tolerance() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let amount = Decimal::from(0);
+        assert_true(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &now,
+            Some((&amount, &SemanticDurationUnit::Day)),
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_future_date_after_now() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 4, 1, 0, 0, 0);
+        assert_true(&compute_date_relative(
+            &DateRelativeKind::InFuture,
+            &date,
+            None,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_future_date_equal_now_no_tolerance() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        assert_false(&compute_date_relative(
+            &DateRelativeKind::InFuture,
+            &now,
+            None,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_future_date_before_now() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 1, 1, 0, 0, 0);
+        assert_false(&compute_date_relative(
+            &DateRelativeKind::InFuture,
+            &date,
+            None,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_future_with_tolerance_inside_window() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 3, 10, 0, 0, 0);
+        let amount = Decimal::from(7);
+        assert_true(&compute_date_relative(
+            &DateRelativeKind::InFuture,
+            &date,
+            Some((&amount, &SemanticDurationUnit::Day)),
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_future_with_tolerance_at_boundary_equals_now() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let amount = Decimal::from(7);
+        assert_true(&compute_date_relative(
+            &DateRelativeKind::InFuture,
+            &now,
+            Some((&amount, &SemanticDurationUnit::Day)),
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_future_with_tolerance_outside_window() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 6, 1, 0, 0, 0);
+        let amount = Decimal::from(7);
+        assert_false(&compute_date_relative(
+            &DateRelativeKind::InFuture,
+            &date,
+            Some((&amount, &SemanticDurationUnit::Day)),
+            &now,
+        ));
+    }
+
+    // ── compute_date_calendar ──────────────────────────────────────────
+
+    #[test]
+    fn in_calendar_year_same_year() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 6, 15, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_year_different_year() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2025, 6, 15, 0, 0, 0);
+        assert_false(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_year_boundary_jan_1() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 1, 1, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_year_boundary_dec_31() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 12, 31, 23, 59, 59);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_calendar_year() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2025, 6, 15, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Past,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_calendar_year_current_year_excluded() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 1, 15, 0, 0, 0);
+        assert_false(&compute_date_calendar(
+            &DateCalendarKind::Past,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_future_calendar_year() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2027, 6, 15, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Future,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_future_calendar_year_current_year_excluded() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 12, 31, 0, 0, 0);
+        assert_false(&compute_date_calendar(
+            &DateCalendarKind::Future,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn not_in_calendar_year_different_year() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2025, 6, 15, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::NotIn,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn not_in_calendar_year_same_year() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 6, 15, 0, 0, 0);
+        assert_false(&compute_date_calendar(
+            &DateCalendarKind::NotIn,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_month_same_month() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 3, 20, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_month_different_month() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 4, 1, 0, 0, 0);
+        assert_false(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_month_boundary_first_day() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 3, 1, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_month_boundary_last_day_march() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 3, 31, 23, 59, 59);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_month_feb_leap_year_boundary() {
+        let now = utc_datetime(2024, 2, 15, 12, 0, 0);
+        let date = utc_datetime(2024, 2, 29, 23, 59, 59);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_month_feb_non_leap_year_boundary() {
+        let now = utc_datetime(2025, 2, 15, 12, 0, 0);
+        let date = utc_datetime(2025, 2, 28, 23, 59, 59);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_calendar_month() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 2, 15, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Past,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_calendar_month_cross_year() {
+        let now = utc_datetime(2026, 1, 15, 12, 0, 0);
+        let date = utc_datetime(2025, 12, 20, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Past,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_future_calendar_month() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 4, 15, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Future,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_future_calendar_month_cross_year() {
+        let now = utc_datetime(2026, 12, 15, 12, 0, 0);
+        let date = utc_datetime(2027, 1, 10, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Future,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_week_same_week() {
+        // 2026-03-07 is a Saturday (ISO week 10)
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        // Monday of same week: 2026-03-02
+        let date = utc_datetime(2026, 3, 2, 10, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Week,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_week_different_week() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 3, 15, 0, 0, 0);
+        assert_false(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Week,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_week_sunday_boundary() {
+        // 2026-03-07 is Saturday, same ISO week Mon 2026-03-02 through Sun 2026-03-08
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 3, 8, 23, 59, 59);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Week,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn not_in_calendar_month_different_month() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 5, 1, 0, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::NotIn,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn not_in_calendar_month_same_month() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 3, 15, 0, 0, 0);
+        assert_false(&compute_date_calendar(
+            &DateCalendarKind::NotIn,
+            &CalendarUnit::Month,
+            &date,
+            &now,
+        ));
+    }
+
+    // ── timezone-aware tests ───────────────────────────────────────────
+
+    #[test]
+    fn in_past_respects_timezone_offset() {
+        // now is 2026-03-07 01:00 +02:00 = 2026-03-06 23:00 UTC
+        let now = tz_datetime((2026, 3, 7, 1, 0, 0, 0), (2, 0));
+        // date is 2026-03-07 00:00 UTC = 2026-03-07 00:00 +00:00
+        let date = utc_datetime(2026, 3, 7, 0, 0, 0);
+        // date (UTC midnight Mar 7) is AFTER now (UTC 23:00 Mar 6)
+        assert_false(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &date,
+            None,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_year_timezone_boundary_respects_now_tz() {
+        // now is +05:00; calendar year boundary ends at 2026-12-31T23:59:59.999999 +05:00
+        // = 2026-12-31T18:59:59.999999 UTC
+        // date is 2026-12-31T23:59:59 UTC which is 2027-01-01T04:59:59 +05:00
+        // so date is OUTSIDE the calendar year in now's timezone
+        let now = tz_datetime((2026, 6, 15, 12, 0, 0, 0), (5, 0));
+        let date = utc_datetime(2026, 12, 31, 23, 59, 59);
+        assert_false(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_calendar_year_timezone_boundary_inside() {
+        // now is +05:00; date is 2026-12-31T18:00 UTC = 2026-12-31T23:00 +05:00 → inside year
+        let now = tz_datetime((2026, 6, 15, 12, 0, 0, 0), (5, 0));
+        let date = utc_datetime(2026, 12, 31, 18, 0, 0);
+        assert_true(&compute_date_calendar(
+            &DateCalendarKind::Current,
+            &CalendarUnit::Year,
+            &date,
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_with_tolerance_hours() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 3, 7, 10, 0, 0);
+        let amount = Decimal::from(4);
+        assert_true(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &date,
+            Some((&amount, &SemanticDurationUnit::Hour)),
+            &now,
+        ));
+    }
+
+    #[test]
+    fn in_past_with_tolerance_hours_outside() {
+        let now = utc_datetime(2026, 3, 7, 12, 0, 0);
+        let date = utc_datetime(2026, 3, 7, 6, 0, 0);
+        let amount = Decimal::from(4);
+        assert_false(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &date,
+            Some((&amount, &SemanticDurationUnit::Hour)),
+            &now,
+        ));
+    }
+
+    // ── microsecond precision ──────────────────────────────────────────
+
+    #[test]
+    fn in_past_microsecond_precision_boundary() {
+        let now = tz_datetime((2026, 3, 7, 12, 0, 0, 500_000), (0, 0));
+        let date = tz_datetime((2026, 3, 7, 12, 0, 0, 499_999), (0, 0));
+        // date is 1 microsecond before now
+        assert_true(&compute_date_relative(
+            &DateRelativeKind::InPast,
+            &date,
+            None,
+            &now,
+        ));
+    }
+
+    // ── calendar_boundaries direct tests ───────────────────────────────
+
+    #[test]
+    fn calendar_boundaries_year_covers_full_year() {
+        let now = semantic_datetime_to_chrono(&utc_datetime(2026, 6, 15, 12, 0, 0)).unwrap();
+        let (start, end) = calendar_boundaries(&now, &CalendarUnit::Year, 0).unwrap();
+        assert_eq!(start.month(), 1);
+        assert_eq!(start.day(), 1);
+        assert_eq!(start.hour(), 0);
+        assert_eq!(end.month(), 12);
+        assert_eq!(end.day(), 31);
+        assert_eq!(end.hour(), 23);
+        assert_eq!(end.minute(), 59);
+    }
+
+    #[test]
+    fn calendar_boundaries_month_feb_leap() {
+        let now = semantic_datetime_to_chrono(&utc_datetime(2024, 2, 15, 0, 0, 0)).unwrap();
+        let (start, end) = calendar_boundaries(&now, &CalendarUnit::Month, 0).unwrap();
+        assert_eq!(start.day(), 1);
+        assert_eq!(end.day(), 29);
+    }
+
+    #[test]
+    fn calendar_boundaries_month_feb_non_leap() {
+        let now = semantic_datetime_to_chrono(&utc_datetime(2025, 2, 15, 0, 0, 0)).unwrap();
+        let (start, end) = calendar_boundaries(&now, &CalendarUnit::Month, 0).unwrap();
+        assert_eq!(start.day(), 1);
+        assert_eq!(end.day(), 28);
+    }
+
+    #[test]
+    fn calendar_boundaries_week_monday_to_sunday() {
+        // 2026-03-07 is a Saturday
+        let now = semantic_datetime_to_chrono(&utc_datetime(2026, 3, 7, 12, 0, 0)).unwrap();
+        let (start, end) = calendar_boundaries(&now, &CalendarUnit::Week, 0).unwrap();
+        assert_eq!(start.weekday(), chrono::Weekday::Mon);
+        assert_eq!(end.weekday(), chrono::Weekday::Sun);
+    }
+
+    #[test]
+    fn calendar_boundaries_past_month_december_from_january() {
+        let now = semantic_datetime_to_chrono(&utc_datetime(2026, 1, 15, 12, 0, 0)).unwrap();
+        let (start, end) = calendar_boundaries(&now, &CalendarUnit::Month, -1).unwrap();
+        assert_eq!(start.year(), 2025);
+        assert_eq!(start.month(), 12);
+        assert_eq!(start.day(), 1);
+        assert_eq!(end.year(), 2025);
+        assert_eq!(end.month(), 12);
+        assert_eq!(end.day(), 31);
+    }
+
+    #[test]
+    fn calendar_boundaries_future_month_january_from_december() {
+        let now = semantic_datetime_to_chrono(&utc_datetime(2026, 12, 15, 12, 0, 0)).unwrap();
+        let (start, end) = calendar_boundaries(&now, &CalendarUnit::Month, 1).unwrap();
+        assert_eq!(start.year(), 2027);
+        assert_eq!(start.month(), 1);
+        assert_eq!(start.day(), 1);
+        assert_eq!(end.year(), 2027);
+        assert_eq!(end.month(), 1);
+        assert_eq!(end.day(), 31);
+    }
 }

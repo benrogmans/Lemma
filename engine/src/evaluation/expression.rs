@@ -208,23 +208,22 @@ pub fn evaluate_rule(
                     tree: branches_node,
                 };
                 return (result, proof);
-            } else {
-                // Branch didn't match - record it as non-matched.
-                context.push_operation(OperationKind::RuleBranchEvaluated {
-                    index: Some(unless_clause_index),
-                    matched: false,
-                    condition_expr,
-                    result_expr,
-                    result_value: None,
-                });
-
-                non_matched_branches.push(NonMatchedBranch {
-                    condition: Box::new(condition_proof),
-                    result: None,
-                    clause_index: Some(unless_clause_index),
-                    source_location: Some(branch.source.clone()),
-                });
             }
+            // Branch didn't match - record it as non-matched.
+            context.push_operation(OperationKind::RuleBranchEvaluated {
+                index: Some(unless_clause_index),
+                matched: false,
+                condition_expr,
+                result_expr,
+                result_value: None,
+            });
+
+            non_matched_branches.push(NonMatchedBranch {
+                condition: Box::new(condition_proof),
+                result: None,
+                clause_index: Some(unless_clause_index),
+                source_location: Some(branch.source.clone()),
+            });
         }
     }
 
@@ -326,8 +325,15 @@ fn evaluate_expression(
             }
             ExpressionKind::LogicalNegation(operand, _)
             | ExpressionKind::UnitConversion(operand, _)
-            | ExpressionKind::MathematicalComputation(_, operand) => {
+            | ExpressionKind::MathematicalComputation(_, operand)
+            | ExpressionKind::DateCalendar(_, _, operand) => {
                 work_list.push(operand);
+            }
+            ExpressionKind::DateRelative(_, date_expr, tolerance_expr) => {
+                work_list.push(date_expr);
+                if let Some(tol) = tolerance_expr {
+                    work_list.push(tol);
+                }
             }
             _ => {}
         }
@@ -351,8 +357,15 @@ fn evaluate_expression(
                 }
                 ExpressionKind::LogicalNegation(operand, _)
                 | ExpressionKind::UnitConversion(operand, _)
-                | ExpressionKind::MathematicalComputation(_, operand) => {
+                | ExpressionKind::MathematicalComputation(_, operand)
+                | ExpressionKind::DateCalendar(_, _, operand) => {
                     results.contains_key(operand.as_ref())
+                }
+                ExpressionKind::DateRelative(_, date_expr, tolerance_expr) => {
+                    results.contains_key(date_expr.as_ref())
+                        && tolerance_expr
+                            .as_ref()
+                            .is_none_or(|t| results.contains_key(t.as_ref()))
                 }
                 _ => true,
             };
