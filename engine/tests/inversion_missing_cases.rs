@@ -8,7 +8,7 @@ use std::collections::HashMap;
 #[test]
 fn target_operator_greater_than() {
     let code = r#"
-        doc pricing
+        spec pricing
         fact base_price: [number]
         fact markup_rate: 1.5
 
@@ -51,7 +51,7 @@ fn target_operator_greater_than() {
 #[test]
 fn target_operator_less_than_or_equal() {
     let code = r#"
-        doc budget
+        spec budget
         fact monthly_cost: [number]
         fact months: 12
 
@@ -90,7 +90,7 @@ fn target_operator_less_than_or_equal() {
 #[test]
 fn target_operator_greater_than_or_equal() {
     let code = r#"
-        doc compensation
+        spec compensation
         fact base_salary: [number]
         fact bonus_rate: 0.20
 
@@ -129,7 +129,7 @@ fn target_operator_greater_than_or_equal() {
 #[test]
 fn boolean_not_operator() {
     let code = r#"
-        doc eligibility
+        spec eligibility
         fact is_suspended: [boolean]
         fact has_membership: [boolean]
 
@@ -166,17 +166,17 @@ fn boolean_not_operator() {
     );
 }
 
-/// Test Cross-Document Inversion - Simple case
+/// Test cross-spec inversion - Simple case
 #[test]
-fn cross_document_simple() {
-    let base_doc = r#"
-        doc base
+fn cross_spec_simple() {
+    let base_spec = r#"
+        spec base
         fact discount_rate: 0.15
     "#;
 
-    let derived_doc = r#"
-        doc derived
-        fact base: doc base
+    let derived_spec = r#"
+        spec derived
+        fact base: spec base
         fact order_total: [number]
 
         rule discount: order_total * base.discount_rate
@@ -184,8 +184,8 @@ fn cross_document_simple() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, base_doc, "base").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_doc, "derived").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "base").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_spec, "derived").unwrap();
 
     // Question: "What order_total gives final_total of $85?"
     let now = DateTimeValue::now();
@@ -211,27 +211,27 @@ fn cross_document_simple() {
     );
 }
 
-/// Test Cross-Document Inversion - Rule references across docs
+/// Test cross-spec inversion - Rule references across specs
 #[test]
-fn cross_document_rule_references() {
-    let config_doc = r#"
-        doc config
+fn cross_spec_rule_references() {
+    let config_spec = r#"
+        spec config
         fact min_threshold: 1000
 
         rule eligibility_threshold: min_threshold * 2
     "#;
 
-    let order_doc = r#"
-        doc order
-        fact settings: doc config
+    let order_spec = r#"
+        spec order
+        fact settings: spec config
         fact customer_lifetime_value: [number]
 
         rule is_vip: customer_lifetime_value >= settings.eligibility_threshold
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, config_doc, "config").unwrap();
-    add_lemma_code_blocking(&mut engine, order_doc, "order").unwrap();
+    add_lemma_code_blocking(&mut engine, config_spec, "config").unwrap();
+    add_lemma_code_blocking(&mut engine, order_spec, "order").unwrap();
 
     let mut given = HashMap::new();
     given.insert("settings.min_threshold".to_string(), "1000".to_string());
@@ -256,34 +256,34 @@ fn cross_document_rule_references() {
     );
 }
 
-/// Test Cross-Document Inversion - Multi-level inheritance
+/// Test cross-spec inversion - Multi-level inheritance
 #[test]
-fn cross_document_multi_level() {
-    let global_doc = r#"
-        doc global
+fn cross_spec_multi_level() {
+    let global_spec = r#"
+        spec global
         fact base_rate: 0.10
     "#;
 
-    let regional_doc = r#"
-        doc regional
-        fact global_config: doc global
+    let regional_spec = r#"
+        spec regional
+        fact global_config: spec global
         fact regional_multiplier: 1.5
 
         rule effective_rate: global_config.base_rate * regional_multiplier
     "#;
 
-    let transaction_doc = r#"
-        doc transaction
-        fact regional: doc regional
+    let transaction_spec = r#"
+        spec transaction
+        fact regional: spec regional
         fact amount: [number]
 
         rule fee: amount * regional.effective_rate
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, global_doc, "global").unwrap();
-    add_lemma_code_blocking(&mut engine, regional_doc, "regional").unwrap();
-    add_lemma_code_blocking(&mut engine, transaction_doc, "transaction").unwrap();
+    add_lemma_code_blocking(&mut engine, global_spec, "global").unwrap();
+    add_lemma_code_blocking(&mut engine, regional_spec, "regional").unwrap();
+    add_lemma_code_blocking(&mut engine, transaction_spec, "transaction").unwrap();
 
     let mut given = HashMap::new();
     given.insert(
@@ -319,11 +319,11 @@ fn cross_document_multi_level() {
     );
 }
 
-/// Test Cross-Document with Piecewise Rules
+/// Test cross-spec with piecewise rules
 #[test]
-fn cross_document_piecewise() {
-    let base_doc = r#"
-        doc base
+fn cross_spec_piecewise() {
+    let base_spec = r#"
+        spec base
         fact tier: "gold"
 
         rule discount_rate: 0%
@@ -332,9 +332,9 @@ fn cross_document_piecewise() {
           unless tier is "platinum" then 30%
     "#;
 
-    let pricing_doc = r#"
-        doc pricing
-        fact customer: doc base
+    let pricing_spec = r#"
+        spec pricing
+        fact customer: spec base
         fact subtotal: [number]
 
         rule discount: subtotal * customer.discount_rate
@@ -342,8 +342,8 @@ fn cross_document_piecewise() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, base_doc, "base").unwrap();
-    add_lemma_code_blocking(&mut engine, pricing_doc, "pricing").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "base").unwrap();
+    add_lemma_code_blocking(&mut engine, pricing_spec, "pricing").unwrap();
 
     let mut given = HashMap::new();
     given.insert("subtotal".to_string(), "100".to_string());
@@ -378,7 +378,7 @@ fn cross_document_piecewise() {
 #[test]
 fn complex_boolean_not_and_combination() {
     let code = r#"
-        doc shipping
+        spec shipping
         fact is_domestic: [boolean]
         fact has_po_box: [boolean]
         fact is_oversized: [boolean]
@@ -422,7 +422,7 @@ fn complex_boolean_not_and_combination() {
 #[test]
 fn target_operator_not_equal() {
     let code = r#"
-        doc validation
+        spec validation
         fact status: [text]
 
         rule is_complete: status is "complete"

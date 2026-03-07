@@ -1185,23 +1185,23 @@ impl fmt::Display for ValueKind {
 
 /// A single segment in a resolved path traversal
 ///
-/// Used in both FactPath and RulePath to represent document traversal.
-/// Each segment contains a fact name that points to a document.
+/// Used in both FactPath and RulePath to represent spec traversal.
+/// Each segment contains a fact name that points to a spec.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PathSegment {
     /// The fact name in this segment
     pub fact: String,
-    /// The document this fact references (resolved during planning)
-    pub doc: String,
+    /// The spec this fact references (resolved during planning)
+    pub spec: String,
 }
 
 /// Resolved path to a fact (created during planning from AST FactReference)
 ///
-/// Represents a fully resolved path through documents to reach a fact.
-/// All document references are resolved during planning.
+/// Represents a fully resolved path through specs to reach a fact.
+/// All spec references are resolved during planning.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FactPath {
-    /// Path segments (each is a document traversal)
+    /// Path segments (each is a spec traversal)
     pub segments: Vec<PathSegment>,
     /// Final fact name
     pub fact: String,
@@ -1213,7 +1213,7 @@ impl FactPath {
         Self { segments, fact }
     }
 
-    /// Create a local fact path (no document traversal)
+    /// Create a local fact path (no spec traversal)
     pub fn local(fact: String) -> Self {
         Self {
             segments: vec![],
@@ -1222,7 +1222,7 @@ impl FactPath {
     }
 
     /// Dot-separated key used for matching user-provided fact values (e.g. `"order.payment_method"`).
-    /// Unlike `Display`, this omits the resolved document name.
+    /// Unlike `Display`, this omits the resolved spec name.
     pub fn input_key(&self) -> String {
         let mut s = String::new();
         for segment in &self.segments {
@@ -1236,10 +1236,10 @@ impl FactPath {
 
 /// Resolved path to a rule (created during planning from RuleReference)
 ///
-/// Represents a fully resolved path through documents to reach a rule.
+/// Represents a fully resolved path through specs to reach a rule.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RulePath {
-    /// Path segments (each is a document traversal)
+    /// Path segments (each is a spec traversal)
     pub segments: Vec<PathSegment>,
     /// Final rule name
     pub rule: String,
@@ -1447,7 +1447,7 @@ pub struct LemmaType {
     pub name: Option<String>,
     /// The type specification (Boolean, Number, Scale, etc.)
     pub specifications: TypeSpecification,
-    /// What this type extends (primitive or custom from a document)
+    /// What this type extends (primitive or custom from a spec)
     pub extends: TypeExtends,
 }
 
@@ -1865,12 +1865,12 @@ impl LiteralValue {
     }
 }
 
-/// Fact value: literal, type declaration (resolved type only), or document reference.
+/// Fact value: literal, type declaration (resolved type only), or spec reference.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FactValue {
     Literal(LiteralValue),
     TypeDeclaration { resolved_type: LemmaType },
-    DocumentReference(String),
+    SpecReference(String),
 }
 
 /// Fact: path, value, and source location.
@@ -1891,30 +1891,30 @@ pub enum FactData {
         resolved_type: LemmaType,
         source: Source,
     },
-    /// Document reference fact: holds the resolved document.
+    /// Spec reference fact: holds the resolved spec.
     /// When the source ref specified a hash pin, it is stored here for verification.
-    DocumentRef {
-        doc: Arc<crate::parsing::ast::LemmaDoc>,
+    SpecRef {
+        spec: Arc<crate::parsing::ast::LemmaSpec>,
         source: Source,
         expected_hash_pin: Option<String>,
     },
 }
 
 impl FactData {
-    /// Returns the schema type for value and type-declaration facts; `None` for document references.
+    /// Returns the schema type for value and type-declaration facts; `None` for spec references.
     pub fn schema_type(&self) -> Option<&LemmaType> {
         match self {
             FactData::Value { value, .. } => Some(&value.lemma_type),
             FactData::TypeDeclaration { resolved_type, .. } => Some(resolved_type),
-            FactData::DocumentRef { .. } => None,
+            FactData::SpecRef { .. } => None,
         }
     }
 
-    /// Returns the literal value for value facts; `None` for type-declaration and document references.
+    /// Returns the literal value for value facts; `None` for type-declaration and spec references.
     pub fn value(&self) -> Option<&LiteralValue> {
         match self {
             FactData::Value { value, .. } => Some(value),
-            FactData::TypeDeclaration { .. } | FactData::DocumentRef { .. } => None,
+            FactData::TypeDeclaration { .. } | FactData::SpecRef { .. } => None,
         }
     }
 
@@ -1923,33 +1923,33 @@ impl FactData {
         match self {
             FactData::Value { source, .. } => source,
             FactData::TypeDeclaration { source, .. } => source,
-            FactData::DocumentRef { source, .. } => source,
+            FactData::SpecRef { source, .. } => source,
         }
     }
 
-    /// Returns the expected hash pin for document reference facts when the source ref specified one; `None` otherwise.
+    /// Returns the expected hash pin for spec reference facts when the source ref specified one; `None` otherwise.
     pub fn expected_hash_pin(&self) -> Option<&str> {
         match self {
             FactData::Value { .. } | FactData::TypeDeclaration { .. } => None,
-            FactData::DocumentRef {
+            FactData::SpecRef {
                 expected_hash_pin, ..
             } => expected_hash_pin.as_deref(),
         }
     }
 
-    /// Returns the referenced document Arc for document reference facts; `None` otherwise.
-    pub fn doc_arc(&self) -> Option<&Arc<crate::parsing::ast::LemmaDoc>> {
+    /// Returns the referenced spec Arc for spec reference facts; `None` otherwise.
+    pub fn spec_arc(&self) -> Option<&Arc<crate::parsing::ast::LemmaSpec>> {
         match self {
             FactData::Value { .. } | FactData::TypeDeclaration { .. } => None,
-            FactData::DocumentRef { doc, .. } => Some(doc),
+            FactData::SpecRef { spec: spec_arc, .. } => Some(spec_arc),
         }
     }
 
-    /// Returns the referenced document name for document reference facts; `None` otherwise.
-    pub fn doc_ref(&self) -> Option<&str> {
+    /// Returns the referenced spec name for spec reference facts; `None` otherwise.
+    pub fn spec_ref(&self) -> Option<&str> {
         match self {
             FactData::Value { .. } | FactData::TypeDeclaration { .. } => None,
-            FactData::DocumentRef { doc, .. } => Some(&doc.name),
+            FactData::SpecRef { spec, .. } => Some(&spec.name),
         }
     }
 }
@@ -2020,8 +2020,8 @@ pub(crate) fn duration_unit_to_semantic(
 /// Convert AST conversion target to semantic (planning boundary; evaluation/computation use only semantic).
 ///
 /// The AST uses `ConversionTarget::Unit(name)` for non-duration units; this function looks up `name`
-/// in the document's unit index and returns `RatioUnit` or `ScaleUnit` based on the type that defines
-/// the unit. The unit must be defined by a scale or ratio type in the document (e.g. primitive ratio for
+/// in the spec's unit index and returns `RatioUnit` or `ScaleUnit` based on the type that defines
+/// the unit. The unit must be defined by a scale or ratio type in the spec (e.g. primitive ratio for
 /// "percent", "permille").
 pub fn conversion_target_to_semantic(
     ct: &ConversionTarget,
@@ -2116,7 +2116,7 @@ pub fn primitive_ratio() -> &'static LemmaType {
 
 impl fmt::Display for PathSegment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} → {}", self.fact, self.doc)
+        write!(f, "{} → {}", self.fact, self.spec)
     }
 }
 
@@ -2290,7 +2290,7 @@ mod tests {
     }
 
     #[test]
-    fn test_doc_type_display() {
+    fn test_spec_type_display() {
         assert_eq!(format!("{}", primitive_text()), "text");
         assert_eq!(format!("{}", primitive_number()), "number");
         assert_eq!(format!("{}", primitive_date()), "date");

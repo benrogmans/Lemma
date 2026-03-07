@@ -10,17 +10,21 @@ use lemma::parsing::ast::DateTimeValue;
 /// Get the result of a rule evaluation.
 /// Panics if the rule is not found (test failure).
 /// Returns the OperationResult which must be checked explicitly.
-fn get_rule_result(engine: &mut Engine, doc_name: &str, rule_name: &str) -> lemma::OperationResult {
+fn get_rule_result(
+    engine: &mut Engine,
+    spec_name: &str,
+    rule_name: &str,
+) -> lemma::OperationResult {
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate(doc_name, None, &now, vec![], HashMap::new())
+        .evaluate(spec_name, None, &now, vec![], HashMap::new())
         .unwrap();
     response
         .results
         .values()
         .find(|r| r.rule.name == rule_name)
         .map(|r| r.result.clone())
-        .unwrap_or_else(|| panic!("Rule '{}' not found in document '{}'", rule_name, doc_name))
+        .unwrap_or_else(|| panic!("Rule '{}' not found in spec '{}'", rule_name, spec_name))
 }
 
 proptest! {
@@ -33,7 +37,7 @@ proptest! {
     fn prop_multiplication_by_zero(n in -1000.0..1000.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact x: {}
 rule result: x * 0
 "#, n);
@@ -53,7 +57,7 @@ rule result: x * 0
     fn prop_multiplication_identity(n in -100.0..100.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact x: {}
 rule result: x * 1
 "#, n);
@@ -75,7 +79,7 @@ rule result: x * 1
     fn prop_addition_identity(n in -100.0..100.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact x: {}
 rule result: x + 0
 "#, n);
@@ -97,7 +101,7 @@ rule result: x + 0
     fn prop_comparison_consistency(n in -100.0..100.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact x: {}
 rule eq_self: x == x
 rule lte_self: x <= x
@@ -121,7 +125,7 @@ rule lte_self: x <= x
     fn prop_fact_binding_works(n in -100.0..100.0) {
         let mut engine = Engine::new();
         let code = r#"
-doc test
+spec test
 fact x: [number]
 rule doubled: x * 2
 "#;
@@ -152,7 +156,7 @@ rule doubled: x * 2
     fn prop_addition_commutative(a in -100.0..100.0, b in -100.0..100.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact a: {}
 fact b: {}
 rule sum1: a + b
@@ -175,7 +179,7 @@ rule sum2: b + a
     fn prop_multiplication_commutative(a in -50.0..50.0, b in -50.0..50.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact a: {}
 fact b: {}
 rule prod1: a * b
@@ -198,7 +202,7 @@ rule prod2: b * a
     fn prop_addition_associative(a in -50.0..50.0, b in -50.0..50.0, c in -50.0..50.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact a: {}
 fact b: {}
 fact c: {}
@@ -222,7 +226,7 @@ rule sum2: a + (b + c)
     fn prop_multiplication_associative(a in -20.0..20.0, b in -20.0..20.0, c in -20.0..20.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact a: {}
 fact b: {}
 fact c: {}
@@ -246,7 +250,7 @@ rule prod2: a * (b * c)
     fn prop_distributive(a in -50.0..50.0, b in -50.0..50.0, c in -50.0..50.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact a: {}
 fact b: {}
 fact c: {}
@@ -270,7 +274,7 @@ rule dist2: (a * b) + (a * c)
     fn prop_negation_involution(n in -100.0..100.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact x: {}
 rule double_neg: -(-x)
 "#, n);
@@ -293,7 +297,7 @@ rule double_neg: -(-x)
     fn prop_subtraction_as_addition_of_negative(a in -100.0..100.0, b in -100.0..100.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact a: {}
 fact b: {}
 rule sub: a - b
@@ -316,7 +320,7 @@ rule add_neg: a + (-b)
     fn prop_division_inverse_of_multiplication(a in 1.0..100.0, b in 1.0..100.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact a: {}
 fact b: {}
 rule product: a * b
@@ -341,7 +345,7 @@ rule back: product / b
     fn prop_boolean_not_involution(b in prop::bool::ANY) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact b: {}
 rule double_not: not (not b)
 "#, b);
@@ -362,7 +366,7 @@ rule double_not: not (not b)
     fn prop_and_commutative(a in prop::bool::ANY, b in prop::bool::ANY) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact a: {}
 fact b: {}
 rule and1: a and b
@@ -387,7 +391,7 @@ rule and2: b and a
 
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact a: {}
 fact b: {}
 fact c: {}
@@ -415,7 +419,7 @@ rule ac: a < c
     fn prop_unless_last_matching_wins(n in 1.0..100.0) {
         let mut engine = Engine::new();
         let code = format!(r#"
-doc test
+spec test
 fact x: {}
 rule discount: 0
   unless x > 10 then 10
@@ -453,7 +457,7 @@ fn test_arithmetic_properties() {
         let mut engine = Engine::new();
         let code = format!(
             r#"
-doc test
+spec test
 fact x: {}
 rule zero: x * 0
 rule identity_mul: x * 1
@@ -537,7 +541,7 @@ rule commutative2: 5 + x
 fn test_comparison_properties() {
     let mut engine = Engine::new();
     let code = r#"
-doc test
+spec test
 fact a: 10
 fact b: 20
 fact c: 30
@@ -601,7 +605,7 @@ rule a_gte_a: a >= a
 fn test_duration_conversion_properties() {
     let mut engine = Engine::new();
     let code = r#"
-doc test
+spec test
 fact duration: 60 minutes
 rule to_hours: duration in hours
 "#;
@@ -634,7 +638,7 @@ rule to_hours: duration in hours
 fn test_percentage_properties() {
     let mut engine = Engine::new();
     let code = r#"
-doc test
+spec test
 fact base: 200
 fact rate: 10%
 rule result: base * rate
@@ -664,7 +668,7 @@ fn test_inverse_operations() {
         let mut engine = Engine::new();
         let code = format!(
             r#"
-doc test
+spec test
 fact a: {}
 fact b: {}
 rule sum: a + b

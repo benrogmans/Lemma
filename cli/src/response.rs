@@ -62,7 +62,7 @@ fn decimal_to_json(d: &rust_decimal::Decimal) -> serde_json::Value {
 }
 
 /// Convert an engine `Response` into a JSON-ready map of rule results,
-/// ordered by definition line in the source document.
+/// ordered by definition line in the source spec.
 pub fn convert_response(
     response: &lemma::Response,
     include_proofs: bool,

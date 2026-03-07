@@ -5,14 +5,14 @@ use std::fs;
 use tempfile::TempDir;
 
 #[test]
-fn test_cli_run_simple_document() {
+fn test_cli_run_simple_spec() {
     let temp_dir = TempDir::new().unwrap();
     let lemma_file = temp_dir.path().join("test.lemma");
 
     fs::write(
         &lemma_file,
         r#"
-doc simple_test
+spec simple_test
 fact x: 10
 fact y: 5
 rule sum: x + y
@@ -43,7 +43,7 @@ fn test_cli_run_with_fact_values() {
     fs::write(
         &lemma_file,
         r#"
-doc override_test
+spec override_test
 fact base: [number]
 rule doubled: base * 2
 "#,
@@ -63,7 +63,7 @@ rule doubled: base * 2
 }
 
 #[test]
-fn test_cli_run_nonexistent_document() {
+fn test_cli_run_nonexistent_spec() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
@@ -85,7 +85,7 @@ fn test_cli_run_with_unless_clause() {
     fs::write(
         &lemma_file,
         r#"
-doc discount_test
+spec discount_test
 fact quantity: 15
 rule discount: 0
   unless quantity >= 10 then 10
@@ -106,14 +106,14 @@ rule discount: 0
 }
 
 #[test]
-fn test_cli_show_document() {
+fn test_cli_show_spec() {
     let temp_dir = TempDir::new().unwrap();
     let lemma_file = temp_dir.path().join("test.lemma");
 
     fs::write(
         &lemma_file,
         r#"
-doc inspect_test
+spec inspect_test
 fact name: "Test"
 fact value: 42
 rule doubled: value * 2
@@ -139,18 +139,18 @@ fn test_cli_list_summary() {
     let temp_dir = TempDir::new().unwrap();
 
     fs::write(
-        temp_dir.path().join("doc1.lemma"),
+        temp_dir.path().join("spec1.lemma"),
         r#"
-doc doc1
+spec spec1
 fact x: 1
 "#,
     )
     .unwrap();
 
     fs::write(
-        temp_dir.path().join("doc2.lemma"),
+        temp_dir.path().join("spec2.lemma"),
         r#"
-doc doc2
+spec spec2
 fact y: 2
 "#,
     )
@@ -162,9 +162,9 @@ fact y: 2
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("2 files"))
-        .stdout(predicate::str::contains("2 documents"))
-        .stdout(predicate::str::contains("doc1"))
-        .stdout(predicate::str::contains("doc2"));
+        .stdout(predicate::str::contains("2 specs"))
+        .stdout(predicate::str::contains("spec1"))
+        .stdout(predicate::str::contains("spec2"));
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn test_cli_run_with_arithmetic() {
     fs::write(
         &lemma_file,
         r#"
-doc arithmetic_test
+spec arithmetic_test
 fact price: 100
 rule with_tax: price * 1.21
 "#,
@@ -201,7 +201,7 @@ fn test_cli_parse_error_handling() {
     fs::write(
         &lemma_file,
         r#"
-doc invalid
+spec invalid
 this is not valid lemma syntax
 "#,
     )
@@ -226,7 +226,7 @@ fn test_cli_reports_errors_from_all_files() {
     fs::write(
         temp_dir.path().join("valid.lemma"),
         r#"
-doc valid_doc
+spec valid_spec
 fact price: 100
 rule doubled: price * 2
 "#,
@@ -237,7 +237,7 @@ rule doubled: price * 2
     fs::write(
         temp_dir.path().join("broken_a.lemma"),
         r#"
-doc broken_a
+spec broken_a
 this is not valid lemma
 "#,
     )
@@ -247,7 +247,7 @@ this is not valid lemma
     fs::write(
         temp_dir.path().join("broken_b.lemma"),
         r#"
-doc broken_b
+spec broken_b
 also invalid lemma syntax
 "#,
     )
@@ -255,7 +255,7 @@ also invalid lemma syntax
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("valid_doc")
+        .arg("valid_spec")
         .arg("--dir")
         .arg(temp_dir.path());
 
@@ -280,7 +280,7 @@ fn test_cli_explain_shows_negated_comparison_not_false() {
     fs::write(
         temp_dir.path().join("test.lemma"),
         r#"
-doc explain_test
+spec explain_test
 rule out: true
  unless 5 < 3 then false
 "#,

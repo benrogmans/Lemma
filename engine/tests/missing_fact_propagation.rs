@@ -4,32 +4,32 @@ use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
-/// Test that when a rule in a referenced document fails due to missing facts,
+/// Test that when a rule in a referenced spec fails due to missing facts,
 /// the error message correctly shows "Missing fact" instead of "Rule not found"
 /// when another rule references it.
 #[test]
 fn test_missing_fact_propagation_through_rule_reference() {
     let mut engine = Engine::new();
 
-    // Referenced document with a rule that requires a fact
-    let private_doc = r#"
-doc private_rules
+    // Referenced spec with a rule that requires a fact
+    let private_spec = r#"
+spec private_rules
 fact base_price: [number]
 fact quantity: [number]
 rule total_before_discount: base_price * quantity
 rule final_total: total_before_discount
 "#;
 
-    // Main document that references the private document
-    let main_doc = r#"
-doc examples/rules_and_unless
-fact rules: doc private_rules
+    // Main spec that references the other spec
+    let main_spec = r#"
+spec examples/rules_and_unless
+fact rules: spec private_rules
 fact rules.base_price: 500
 rule total: rules.final_total
 "#;
 
-    add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, private_spec, "private.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
 
     let now = DateTimeValue::now();
     // Evaluate with missing quantity fact
@@ -75,25 +75,25 @@ rule total: rules.final_total
 fn test_rule_path_consistency_for_missing_facts() {
     let mut engine = Engine::new();
 
-    // Referenced document
-    let private_doc = r#"
-doc private_rules
+    // Referenced spec
+    let private_spec = r#"
+spec private_rules
 fact base_price: [number]
 fact quantity: [number]
 rule total_before_discount: base_price * quantity
 rule final_total: total_before_discount
 "#;
 
-    // Main document
-    let main_doc = r#"
-doc examples/rules_and_unless
-fact rules: doc private_rules
+    // Main spec
+    let main_spec = r#"
+spec examples/rules_and_unless
+fact rules: spec private_rules
 fact rules.base_price: 500
 rule total: rules.final_total
 "#;
 
-    add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, private_spec, "private.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("rules.base_price".to_string(), "9".to_string());
@@ -135,20 +135,20 @@ rule total: rules.final_total
 fn test_multiple_missing_facts_reported_together() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test_doc
+    let spec = r#"
+spec test_spec
 fact price: [number]
 fact quantity: [number]
 fact discount: [percent]
 rule total: price * quantity - discount
 "#;
 
-    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     // Evaluate with no facts provided
     let response = engine
-        .evaluate("test_doc", None, &now, vec![], HashMap::new())
+        .evaluate("test_spec", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let total_rule = response
@@ -192,22 +192,22 @@ rule total: price * quantity - discount
 fn test_rules_without_missing_facts_still_evaluate() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test_doc
+    let spec = r#"
+spec test_spec
 fact price: [number]
 fact quantity: [number]
 rule subtotal: price * quantity
 rule message: "Order processed"
 "#;
 
-    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("price".to_string(), "10".to_string());
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_doc", None, &now, vec![], facts)
+        .evaluate("test_spec", None, &now, vec![], facts)
         .unwrap();
 
     // subtotal should fail due to missing quantity
@@ -242,14 +242,14 @@ rule message: "Order processed"
     }
 }
 
-/// Test cross-document missing facts
+/// Test cross-spec missing facts
 #[test]
-fn test_cross_document_missing_facts() {
+fn test_cross_spec_missing_facts() {
     let mut engine = Engine::new();
 
-    // Referenced document
-    let private_doc = r#"
-doc private_rules
+    // Referenced spec
+    let private_spec = r#"
+spec private_rules
 fact base_price: [number]
 fact quantity: [number]
 fact tax_rate: [percent]
@@ -257,16 +257,16 @@ rule subtotal: base_price * quantity
 rule total: subtotal + (subtotal * tax_rate)
 "#;
 
-    // Main document
-    let main_doc = r#"
-doc examples/rules_and_unless
-fact rules: doc private_rules
+    // Main spec
+    let main_spec = r#"
+spec examples/rules_and_unless
+fact rules: spec private_rules
 fact rules.base_price: 500
 rule total: rules.total
 "#;
 
-    add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, private_spec, "private.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("rules.base_price".to_string(), "100".to_string());

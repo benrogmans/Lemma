@@ -17,7 +17,7 @@ use std::str::FromStr;
 #[test]
 fn test_veto_blocks_rule_evaluation() {
     let code = r#"
-doc age_check
+spec age_check
 fact age: 15
 rule is_adult: age >= 18
     unless age < 18 then veto "Must be at least 18 years old"
@@ -45,7 +45,7 @@ rule is_adult: age >= 18
 #[test]
 fn test_veto_without_message() {
     let code = r#"
-doc validation
+spec validation
 fact value: -5
 rule is_valid: value > 0
     unless value < 0 then veto
@@ -70,7 +70,7 @@ rule is_valid: value > 0
 #[test]
 fn test_veto_does_not_trigger_when_condition_false() {
     let code = r#"
-doc age_check
+spec age_check
 fact age: 25
 rule is_adult: age >= 18
     unless age < 18 then veto "Must be at least 18 years old"
@@ -98,7 +98,7 @@ rule is_adult: age >= 18
 #[test]
 fn test_multiple_veto_clauses_first_one_triggers() {
     let code = r#"
-doc validation
+spec validation
 fact age: 15
 fact score: 85
 rule eligible: age >= 18 and score >= 80
@@ -128,7 +128,7 @@ rule eligible: age >= 18 and score >= 80
 #[test]
 fn test_multiple_veto_clauses_second_one_triggers() {
     let code = r#"
-doc validation
+spec validation
 fact age: 25
 fact score: 65
 rule eligible: age >= 18 and score >= 80
@@ -158,7 +158,7 @@ rule eligible: age >= 18 and score >= 80
 #[test]
 fn test_veto_with_complex_condition() {
     let code = r#"
-doc salary_check
+spec salary_check
 fact salary: 30000
 fact experience: 2
 rule valid_compensation: salary >= 40000
@@ -187,7 +187,7 @@ rule valid_compensation: salary >= 40000
 #[test]
 fn test_veto_vs_regular_unless_mixed() {
     let code = r#"
-doc mixed_validation
+spec mixed_validation
 fact age: 20
 fact country: "US"
 fact has_license: false
@@ -219,7 +219,7 @@ rule can_drive: age >= 16
 #[test]
 fn test_veto_with_number_comparison() {
     let code = r#"
-doc weight_check
+spec weight_check
 fact package_weight: 100
 rule can_ship: package_weight <= 50
     unless package_weight > 75 then veto "Package exceeds maximum weight limit"
@@ -247,7 +247,7 @@ rule can_ship: package_weight <= 50
 #[test]
 fn test_veto_with_money_comparison() {
     let code = r#"
-doc pricing_check
+spec pricing_check
 fact price: 5000
 rule is_affordable: price <= 1000
     unless price > 4000 then veto "Price exceeds budget limit"
@@ -275,7 +275,7 @@ rule is_affordable: price <= 1000
 #[test]
 fn test_veto_with_date_comparison() {
     let code = r#"
-doc date_validation
+spec date_validation
 fact event_date: 2024-01-15
 fact min_date: 2024-06-01
 rule is_valid_date: event_date >= min_date
@@ -304,7 +304,7 @@ rule is_valid_date: event_date >= min_date
 #[test]
 fn test_veto_with_percentage_comparison() {
     let code = r#"
-doc completion_check
+spec completion_check
 fact completion: 15%
 rule is_complete: completion >= 95%
     unless completion < 20% then veto "Project barely started"
@@ -332,7 +332,7 @@ rule is_complete: completion >= 95%
 #[test]
 fn test_veto_with_rule_reference() {
     let code = r#"
-doc eligibility
+spec eligibility
 fact age: 16
 fact has_permission: false
 rule is_adult: age >= 18
@@ -362,7 +362,7 @@ rule eligible: has_permission
 #[test]
 fn test_veto_with_arithmetic_in_condition() {
     let code = r#"
-doc budget_check
+spec budget_check
 fact expenses: 9500
 fact income: 10000
 rule within_budget: expenses < income
@@ -391,7 +391,7 @@ rule within_budget: expenses < income
 #[test]
 fn test_veto_with_string_equality() {
     let code = r#"
-doc status_check
+spec status_check
 fact status: "cancelled"
 rule is_active: status == "active"
     unless status == "cancelled" then veto "Cannot process cancelled items"
@@ -419,7 +419,7 @@ rule is_active: status == "active"
 #[test]
 fn test_veto_does_not_affect_other_rules() {
     let code = r#"
-doc multi_rule
+spec multi_rule
 fact value: -10
 rule check_positive: value > 0
     unless value < 0 then veto "Value must be positive"
@@ -471,7 +471,7 @@ rule double_value: value * 2
 #[test]
 fn test_veto_with_empty_string_message() {
     let code = r#"
-doc edge_case
+spec edge_case
 fact value: 0
 rule is_valid: value > 0
     unless value == 0 then veto ""
@@ -496,7 +496,7 @@ rule is_valid: value > 0
 #[test]
 fn test_veto_with_special_characters_in_message() {
     let code = r#"
-doc special_chars
+spec special_chars
 fact age: 10
 rule valid: age >= 18
     unless age < 18 then veto "Error: Age < 18! Must be 18+. Contact: admin@example.com (555-1234)"
@@ -529,7 +529,7 @@ fn test_veto_with_very_long_message() {
 
     let code = format!(
         r#"
-doc long_message
+spec long_message
 fact value: 0
 rule valid: value > 0
     unless value == 0 then veto "{}"
@@ -559,7 +559,7 @@ rule valid: value > 0
 #[test]
 fn test_veto_priority_over_false_result() {
     let code = r#"
-doc priority_test
+spec priority_test
 fact value: 5
 rule check: value > 10
     unless value < 10 then veto "Value too small"
@@ -588,7 +588,7 @@ rule check: value > 10
 #[test]
 fn test_multiple_vetoes_both_conditions_true() {
     let code = r#"
-doc double_veto
+spec double_veto
 fact age: 15
 fact score: 65
 rule eligible: age >= 18 and score >= 80
@@ -615,7 +615,7 @@ rule eligible: age >= 18 and score >= 80
 #[test]
 fn test_veto_with_multiple_unless_conditions() {
     let code = r#"
-doc multi_unless
+spec multi_unless
 fact age: 30
 fact has_criminal_record: true
 rule eligible: age >= 18
@@ -645,7 +645,7 @@ rule eligible: age >= 18
 #[test]
 fn test_veto_with_negation() {
     let code = r#"
-doc negation_test
+spec negation_test
 fact is_verified: false
 rule can_proceed: true
     unless not is_verified then veto "Account must be verified"

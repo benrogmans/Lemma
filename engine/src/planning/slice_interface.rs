@@ -1,18 +1,18 @@
-use crate::parsing::ast::LemmaDoc;
+use crate::parsing::ast::LemmaSpec;
 use crate::planning::execution_plan::ExecutionPlan;
 use crate::planning::semantics::{ExpressionKind, FactData, LemmaType, PathSegment, RulePath};
-use crate::planning::types::ResolvedDocumentTypes;
+use crate::planning::types::ResolvedSpecTypes;
 use crate::Error;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-type ResolvedTypesMap = HashMap<Arc<LemmaDoc>, ResolvedDocumentTypes>;
+type ResolvedTypesMap = HashMap<Arc<LemmaSpec>, ResolvedSpecTypes>;
 
-/// The resolved interface of a referenced document within a single temporal slice.
+/// The resolved interface of a referenced spec within a single temporal slice.
 ///
 /// Captures only what the caller actually uses: needed facts, referenced rules,
 /// and type definitions. Two SliceInterfaces are equal iff the caller sees the
-/// exact same contract from the referenced doc in both slices.
+/// exact same contract from the referenced spec in both slices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SliceInterface {
     pub facts: BTreeMap<String, FactKind>,
@@ -23,19 +23,19 @@ pub struct SliceInterface {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FactKind {
     Value(LemmaType),
-    DocumentRef { doc_name: String },
+    SpecRef { spec_name: String },
 }
 
 impl SliceInterface {
-    /// Extract the interface of a referenced doc from a built execution plan.
+    /// Extract the interface of a referenced spec from a built execution plan.
     ///
-    /// `segments` identifies the referenced doc (e.g. `[PathSegment { fact: "b", doc: "B" }]`).
+    /// `segments` identifies the referenced spec (e.g. `[PathSegment { fact: "b", spec: "B" }]`).
     /// Uses the plan's precomputed `needs_facts` to determine which facts matter.
     pub(crate) fn from_plan(
         plan: &ExecutionPlan,
         segments: &[PathSegment],
         resolved_types: &ResolvedTypesMap,
-        ref_doc: &Arc<LemmaDoc>,
+        ref_spec: &Arc<LemmaSpec>,
     ) -> Self {
         let needed_at_segments = collect_needed_facts_at_segments(plan, segments);
 
@@ -52,8 +52,8 @@ impl SliceInterface {
                 FactData::TypeDeclaration { resolved_type, .. } => {
                     FactKind::Value(resolved_type.clone())
                 }
-                FactData::DocumentRef { doc, .. } => FactKind::DocumentRef {
-                    doc_name: doc.name.clone(),
+                FactData::SpecRef { spec, .. } => FactKind::SpecRef {
+                    spec_name: spec.name.clone(),
                 },
             };
             facts.insert(path.fact.clone(), kind);
@@ -72,8 +72,8 @@ impl SliceInterface {
         }
 
         let mut types = BTreeMap::new();
-        if let Some(doc_types) = resolved_types.get(ref_doc) {
-            for (name, lemma_type) in &doc_types.named_types {
+        if let Some(spec_types) = resolved_types.get(ref_spec) {
+            for (name, lemma_type) in &spec_types.named_types {
                 types.insert(name.clone(), lemma_type.clone());
             }
         }
@@ -126,7 +126,7 @@ fn diff_map<V: std::fmt::Debug>(
 /// Collect fact names at `segments` depth that any root-level rule needs.
 ///
 /// Uses the plan's precomputed `needs_facts` (transitive closure) and also
-/// extracts intermediate DocumentRef traversal facts: if a needed FactPath or
+/// extracts intermediate SpecRef traversal facts: if a needed FactPath or
 /// a referenced RulePath passes through a deeper segment, the linking fact at
 /// `segments` depth is itself a needed interface fact.
 fn collect_needed_facts_at_segments<'a>(
@@ -150,7 +150,7 @@ fn collect_needed_facts_at_segments<'a>(
     }
 
     // RulePath references at deeper segments also imply an intermediate
-    // DocumentRef fact at our level (e.g. `b.nested.val` means `nested` is needed).
+    // SpecRef fact at our level (e.g. `b.nested.val` means `nested` is needed).
     let referenced_rules = collect_root_rule_paths(plan);
     for rp in &referenced_rules {
         if rp.segments.len() > segments.len() && rp.segments[..segments.len()] == *segments {
@@ -230,10 +230,10 @@ fn collect_rule_paths_from_expr<'a>(
     }
 }
 
-/// Validate that all temporal slices of a document see the same interface
-/// from each referenced doc.
+/// Validate that all temporal slices of a spec see the same interface
+/// from each referenced spec.
 pub(crate) fn validate_slice_interfaces(
-    doc_name: &str,
+    spec_name: &str,
     slice_plans: &[ExecutionPlan],
     resolved_types_per_slice: &[ResolvedTypesMap],
 ) -> Vec<Error> {
@@ -241,23 +241,23 @@ pub(crate) fn validate_slice_interfaces(
         return Vec::new();
     }
 
-    let ref_segments = collect_ref_doc_segments(&slice_plans[0]);
+    let ref_segments = collect_ref_spec_segments(&slice_plans[0]);
 
     let mut errors = Vec::new();
 
-    for (segments, ref_doc_arc) in &ref_segments {
+    for (segments, ref_spec_arc) in &ref_segments {
         let first_interface = SliceInterface::from_plan(
             &slice_plans[0],
             segments,
             &resolved_types_per_slice[0],
-            ref_doc_arc,
+            ref_spec_arc,
         );
 
         for (i, plan) in slice_plans.iter().enumerate().skip(1) {
-            let ref_doc_in_slice = find_ref_doc_in_plan(plan, segments);
-            let ref_doc = ref_doc_in_slice.as_ref().unwrap_or(ref_doc_arc);
+            let ref_spec_in_slice = find_ref_spec_in_plan(plan, segments);
+            let ref_spec = ref_spec_in_slice.as_ref().unwrap_or(ref_spec_arc);
             let slice_interface =
-                SliceInterface::from_plan(plan, segments, &resolved_types_per_slice[i], ref_doc);
+                SliceInterface::from_plan(plan, segments, &resolved_types_per_slice[i], ref_spec);
 
             if first_interface != slice_interface {
                 let diffs = first_interface.diff(&slice_interface);
@@ -268,9 +268,9 @@ pub(crate) fn validate_slice_interfaces(
                 };
                 errors.push(Error::validation(
                     format!(
-                        "Referenced document '{}' changed its interface between temporal slices of '{}'{}\n\
+                        "Referenced spec '{}' changed its interface between temporal slices of '{}'{}\n\
                          Create a new temporal version of '{}' to handle the interface change.",
-                        ref_doc_arc.name, doc_name, diff_detail, doc_name
+                        ref_spec_arc.name, spec_name, diff_detail, spec_name
                     ),
                     None,
                     None::<String>,
@@ -283,26 +283,26 @@ pub(crate) fn validate_slice_interfaces(
     errors
 }
 
-/// Find all first-level referenced doc segments, plus nested ones reachable
+/// Find all first-level referenced spec segments, plus nested ones reachable
 /// through the plan's facts/rules.
-fn collect_ref_doc_segments(plan: &ExecutionPlan) -> Vec<(Vec<PathSegment>, Arc<LemmaDoc>)> {
+fn collect_ref_spec_segments(plan: &ExecutionPlan) -> Vec<(Vec<PathSegment>, Arc<LemmaSpec>)> {
     let mut seen = HashSet::new();
     let mut result = Vec::new();
 
     for (path, data) in &plan.facts {
-        if let FactData::DocumentRef { doc, .. } = data {
+        if let FactData::SpecRef { spec, .. } = data {
             let mut seg = path.segments.clone();
             seg.push(PathSegment {
                 fact: path.fact.clone(),
-                doc: doc.name.clone(),
+                spec: spec.name.clone(),
             });
             let key = seg
                 .iter()
-                .map(|s| format!("{}.{}", s.fact, s.doc))
+                .map(|s| format!("{}.{}", s.fact, s.spec))
                 .collect::<Vec<_>>()
                 .join("/");
             if seen.insert(key) {
-                result.push((seg, Arc::clone(doc)));
+                result.push((seg, Arc::clone(spec)));
             }
         }
     }
@@ -310,8 +310,8 @@ fn collect_ref_doc_segments(plan: &ExecutionPlan) -> Vec<(Vec<PathSegment>, Arc<
     result
 }
 
-/// Find the Arc<LemmaDoc> for a referenced doc in a plan by matching segments.
-fn find_ref_doc_in_plan(plan: &ExecutionPlan, segments: &[PathSegment]) -> Option<Arc<LemmaDoc>> {
+/// Find the Arc<LemmaSpec> for a referenced spec in a plan by matching segments.
+fn find_ref_spec_in_plan(plan: &ExecutionPlan, segments: &[PathSegment]) -> Option<Arc<LemmaSpec>> {
     if segments.is_empty() {
         return None;
     }
@@ -319,12 +319,12 @@ fn find_ref_doc_in_plan(plan: &ExecutionPlan, segments: &[PathSegment]) -> Optio
     let target_seg = &segments[segments.len() - 1];
 
     for (path, data) in &plan.facts {
-        if let FactData::DocumentRef { doc, .. } = data {
+        if let FactData::SpecRef { spec, .. } = data {
             if path.segments == *parent_segments
                 && path.fact == target_seg.fact
-                && doc.name == target_seg.doc
+                && spec.name == target_seg.spec
             {
-                return Some(Arc::clone(doc));
+                return Some(Arc::clone(spec));
             }
         }
     }

@@ -83,7 +83,7 @@ impl EvaluationContext {
     }
 }
 
-/// Evaluates Lemma rules within their document context
+/// Evaluates Lemma rules within their spec context
 #[derive(Default)]
 pub struct Evaluator;
 
@@ -104,7 +104,7 @@ impl Evaluator {
         let mut context = EvaluationContext::new(plan, now);
 
         let mut response = Response {
-            doc_name: plan.doc_name.clone(),
+            spec_name: plan.spec_name.clone(),
             facts: Vec::new(),
             results: IndexMap::new(),
         };

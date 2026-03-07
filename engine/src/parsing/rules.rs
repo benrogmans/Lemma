@@ -10,7 +10,7 @@ pub(crate) fn parse_rule_definition(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<LemmaRule, Error> {
     let span = Span::from_pest_span(pair.as_span());
@@ -25,7 +25,7 @@ pub(crate) fn parse_rule_definition(
                     inner_pair,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )?)
             }
@@ -41,7 +41,7 @@ pub(crate) fn parse_rule_definition(
         name,
         expression,
         unless_clauses,
-        source_location: Source::new(attribute, span.clone(), doc_name, source_text.clone()),
+        source_location: Source::new(attribute, span.clone(), spec_name, source_text.clone()),
     })
 }
 
@@ -49,7 +49,7 @@ fn parse_rule_expression(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<(Expression, Vec<UnlessClause>), Error> {
     let mut expression = None;
@@ -62,7 +62,7 @@ fn parse_rule_expression(
                     inner_pair,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )?);
             }
@@ -70,7 +70,7 @@ fn parse_rule_expression(
                 expression = Some(parse_veto_expression(
                     inner_pair,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )?);
             }
@@ -79,7 +79,7 @@ fn parse_rule_expression(
                     inner_pair,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )?;
                 unless_clauses.push(unless_clause);
@@ -95,7 +95,7 @@ fn parse_rule_expression(
 fn parse_veto_expression(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let veto_span = Span::from_pest_span(pair.as_span());
@@ -110,7 +110,7 @@ fn parse_veto_expression(
             let value = crate::parsing::literals::parse_literal(
                 string_pair.clone(),
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )?;
             match value {
@@ -119,7 +119,7 @@ fn parse_veto_expression(
                     let span = Span::from_pest_span(string_pair.as_span());
                     return Err(Error::parsing(
                         "veto message must be a text literal",
-                        Some(Source::new(attribute, span, doc_name, source_text.clone())),
+                        Some(Source::new(attribute, span, spec_name, source_text.clone())),
                         None::<String>,
                     ));
                 }
@@ -130,7 +130,7 @@ fn parse_veto_expression(
     let kind = ExpressionKind::Veto(VetoExpression { message });
     Ok(Expression::new(
         kind,
-        Source::new(attribute, veto_span, doc_name, source_text.clone()),
+        Source::new(attribute, veto_span, spec_name, source_text.clone()),
     ))
 }
 
@@ -138,7 +138,7 @@ fn parse_unless_statement(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<UnlessClause, Error> {
     let span = Span::from_pest_span(pair.as_span());
@@ -153,7 +153,7 @@ fn parse_unless_statement(
                         inner_pair,
                         depth_tracker,
                         attribute,
-                        doc_name,
+                        spec_name,
                         source_text.clone(),
                     )?);
                 } else {
@@ -161,7 +161,7 @@ fn parse_unless_statement(
                         inner_pair,
                         depth_tracker,
                         attribute,
-                        doc_name,
+                        spec_name,
                         source_text.clone(),
                     )?);
                 }
@@ -170,7 +170,7 @@ fn parse_unless_statement(
                 result = Some(parse_veto_expression(
                     inner_pair,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )?);
             }
@@ -184,7 +184,7 @@ fn parse_unless_statement(
     Ok(UnlessClause {
         condition: cond,
         result: res,
-        source_location: Source::new(attribute, span.clone(), doc_name, source_text.clone()),
+        source_location: Source::new(attribute, span.clone(), spec_name, source_text.clone()),
     })
 }
 
@@ -198,8 +198,8 @@ mod tests {
     use crate::{ExpressionKind, ResourceLimits, Value};
 
     #[test]
-    fn parse_document_with_unless_clause_records_unless_clause() {
-        let input = r#"doc person
+    fn parse_spec_with_unless_clause_records_unless_clause() {
+        let input = r#"spec person
 rule is_active: service_started and not service_ended
 unless maintenance_mode then false"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
@@ -210,7 +210,7 @@ unless maintenance_mode then false"#;
 
     #[test]
     fn parse_multiple_unless_clauses_records_all_unless_clauses() {
-        let input = r#"doc test
+        let input = r#"spec test
 rule is_eligible: age >= 18 and has_license
 unless emergency_mode then true
 unless system_override then accept"#;
@@ -222,8 +222,8 @@ unless system_override then accept"#;
     }
 
     #[test]
-    fn parse_multiple_rules_in_document_preserves_rule_names() {
-        let input = r#"doc test
+    fn parse_multiple_rules_in_spec_preserves_rule_names() {
+        let input = r#"spec test
 rule is_adult: age >= 18
 rule is_senior: age >= 65
 rule is_minor: age < 18
@@ -240,13 +240,13 @@ rule can_vote: age >= 18 and is_citizen"#;
 
     #[test]
     fn veto_in_unless_clauses_parses_with_message() {
-        let input = r#"doc test
+        let input = r#"spec test
 rule is_adult: age >= 18 unless age < 0 then veto "Age must be 0 or higher""#;
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
-        assert_eq!(docs.len(), 1);
-        assert_eq!(docs[0].rules.len(), 1);
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].rules.len(), 1);
 
-        let rule = &docs[0].rules[0];
+        let rule = &specs[0].rules[0];
         assert_eq!(rule.name, "is_adult");
         assert_eq!(rule.unless_clauses.len(), 1);
 
@@ -257,12 +257,12 @@ rule is_adult: age >= 18 unless age < 0 then veto "Age must be 0 or higher""#;
             other => panic!("Expected veto expression, got {:?}", other),
         }
 
-        let input = r#"doc test
+        let input = r#"spec test
 rule is_adult: age >= 18
   unless age > 150 then veto "Age cannot be over 150"
   unless age < 0 then veto "Age must be 0 or higher""#;
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
-        let rule = &docs[0].rules[0];
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let rule = &specs[0].rules[0];
         assert_eq!(rule.unless_clauses.len(), 2);
 
         match &rule.unless_clauses[0].result.kind {
@@ -282,10 +282,10 @@ rule is_adult: age >= 18
 
     #[test]
     fn veto_without_message_parses_as_veto_with_no_message() {
-        let input = r#"doc test
+        let input = r#"spec test
 rule adult: age >= 18 unless age > 150 then veto"#;
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
-        let rule = &docs[0].rules[0];
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let rule = &specs[0].rules[0];
         assert_eq!(rule.unless_clauses.len(), 1);
 
         match &rule.unless_clauses[0].result.kind {
@@ -298,12 +298,12 @@ rule adult: age >= 18 unless age > 150 then veto"#;
 
     #[test]
     fn mixed_veto_and_regular_unless_parses_both_results() {
-        let input = r#"doc test
+        let input = r#"spec test
 rule adjusted_age: age + 1
   unless age < 0 then veto "Invalid age"
   unless age > 100 then 100"#;
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
-        let rule = &docs[0].rules[0];
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let rule = &specs[0].rules[0];
         assert_eq!(rule.unless_clauses.len(), 2);
 
         match &rule.unless_clauses[0].result.kind {

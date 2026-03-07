@@ -51,7 +51,7 @@ fn tol(scale: u32) -> Decimal {
 #[test]
 fn test_exp_and_power() -> Result<(), Vec<lemma::Error>> {
     let code = r#"
-    doc test
+    spec test
     rule a: exp 1
     rule b: 2 ^ 3
     "#;
@@ -66,7 +66,7 @@ fn test_exp_and_power() -> Result<(), Vec<lemma::Error>> {
 #[test]
 fn test_abs_floor_ceil_round() -> Result<(), Vec<lemma::Error>> {
     let code = r#"
-    doc test
+    spec test
     rule a: abs -3.5
     rule b: floor 3.9
     rule c: ceil 3.1
@@ -88,7 +88,7 @@ fn test_abs_floor_ceil_round() -> Result<(), Vec<lemma::Error>> {
 #[test]
 fn test_sqrt_and_log_basic() -> Result<(), Vec<lemma::Error>> {
     let code = r#"
-    doc test
+    spec test
     rule a: sqrt 9
     rule b: sqrt 2
     rule c: log (exp 1)
@@ -114,7 +114,7 @@ fn test_sqrt_and_log_basic() -> Result<(), Vec<lemma::Error>> {
 #[test]
 fn test_trig_at_zero() -> Result<(), Vec<lemma::Error>> {
     let code = r#"
-    doc test
+    spec test
     rule s: sin 0
     rule c: cos 0
     rule t: tan 0
@@ -134,7 +134,7 @@ fn test_trig_at_zero() -> Result<(), Vec<lemma::Error>> {
 #[test]
 fn test_nested_math_ops() -> Result<(), Vec<lemma::Error>> {
     let code = r#"
-    doc test
+    spec test
     rule a: round (abs -3.6)
     rule b: ceil (sqrt 2)
     rule c: floor (exp 1)
@@ -155,7 +155,7 @@ fn test_sqrt_negative_and_log_domain_errors() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         rule bad_sqrt: sqrt -1
         rule bad_log0: log 0
         rule bad_log_neg: log -5
@@ -233,7 +233,7 @@ fn test_inverse_trig_domain_error() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         rule bad_asin: asin 2
     "#,
         "test.lemma",

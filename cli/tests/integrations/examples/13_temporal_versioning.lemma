@@ -1,4 +1,4 @@
-doc money
+spec money
 
 type salary: scale
   -> unit eur 1.00
@@ -6,7 +6,7 @@ type salary: scale
   -> minimum 0 eur
 
 
-doc ind/kennismigrant 2024-01-01
+spec ind/kennismigrant 2024-01-01
 """
 Dutch Highly Skilled Migrant (Kennismigrant) salary thresholds — 2024.
 
@@ -28,7 +28,7 @@ rule min_annual_salary_under_30:
   threshold_under_30 * 12
 
 
-doc ind/kennismigrant 2025-01-01
+spec ind/kennismigrant 2025-01-01
 """
 Dutch Highly Skilled Migrant (Kennismigrant) salary thresholds — 2025.
 
@@ -49,7 +49,7 @@ rule min_annual_salary_under_30:
   threshold_under_30 * 12
 
 
-doc ind/kennismigrant/aanvraag 2024-01-01
+spec ind/kennismigrant/aanvraag 2024-01-01
 """
 Kennismigrant Visa Eligibility Check
 
@@ -64,7 +64,7 @@ type salary from money
 fact applicant_age        : [number -> minimum 18 -> maximum 67]
 fact gross_monthly_salary : [salary]
 
-fact thresholds : doc ind/kennismigrant
+fact thresholds : spec ind/kennismigrant
 
 rule eligible:
   meets_salary_requirement

@@ -1,12 +1,12 @@
-use lemma::{parse, Context, Error, LemmaDoc, ResourceLimits};
+use lemma::{parse, Context, Error, LemmaSpec, ResourceLimits};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tower_lsp::lsp_types::Url;
 
 /// Result of parsing a single file's content.
 enum ParseOutcome {
-    /// Parsing succeeded, producing one or more LemmaDoc ASTs.
-    Success(Vec<LemmaDoc>),
+    /// Parsing succeeded, producing one or more LemmaSpec ASTs.
+    Success(Vec<LemmaSpec>),
     /// Parsing failed with errors.
     Failed(Vec<Error>),
 }
@@ -17,7 +17,7 @@ struct TrackedFile {
     url: Url,
     /// The latest text content of the file (from the editor buffer or disk).
     text: String,
-    /// The parsed outcome: either successfully parsed docs or parse errors.
+    /// The parsed outcome: either successfully parsed specs or parse errors.
     parse_outcome: ParseOutcome,
 }
 
@@ -67,7 +67,7 @@ impl WorkspaceModel {
     pub fn update_file(&mut self, url: Url, text: String) {
         let attribute = Self::attribute_for_url(&url);
         let parse_outcome = match parse(&text, &attribute, &self.limits) {
-            Ok(docs) => ParseOutcome::Success(docs),
+            Ok(specs) => ParseOutcome::Success(specs),
             Err(error) => ParseOutcome::Failed(vec![error]),
         };
         self.files.insert(
@@ -86,15 +86,15 @@ impl WorkspaceModel {
         self.files.remove(&attribute);
     }
 
-    /// Collect all successfully parsed LemmaDoc ASTs across the entire workspace.
-    pub fn all_parsed_docs(&self) -> Vec<LemmaDoc> {
-        let mut all_docs = Vec::new();
+    /// Collect all successfully parsed LemmaSpec ASTs across the entire workspace.
+    pub fn all_parsed_specs(&self) -> Vec<LemmaSpec> {
+        let mut all_specs = Vec::new();
         for tracked in self.files.values() {
-            if let ParseOutcome::Success(docs) = &tracked.parse_outcome {
-                all_docs.extend(docs.iter().cloned());
+            if let ParseOutcome::Success(specs) = &tracked.parse_outcome {
+                all_specs.extend(specs.iter().cloned());
             }
         }
-        all_docs
+        all_specs
     }
 
     /// Build the sources map (attribute -> source text) for planning.
@@ -122,15 +122,15 @@ impl WorkspaceModel {
     pub fn validate_workspace(&self) -> Vec<FileDiagnostics> {
         let mut ctx = Context::new();
         let mut insert_errors: Vec<(String, Error)> = Vec::new();
-        for doc in self.all_parsed_docs() {
-            let attr = doc.attribute.clone().unwrap_or_else(|| doc.name.clone());
-            match ctx.insert_doc(Arc::new(doc)) {
+        for spec in self.all_parsed_specs() {
+            let attr = spec.attribute.clone().unwrap_or_else(|| spec.name.clone());
+            match ctx.insert_spec(Arc::new(spec)) {
                 Ok(()) => {}
                 Err(e) => insert_errors.push((attr, e)),
             }
         }
         let sources = self.sources_map();
-        let mut results = self.validate_workspace_with_resolved_docs(&ctx, &sources);
+        let mut results = self.validate_workspace_with_resolved_specs(&ctx, &sources);
         for (attr, e) in insert_errors {
             if let Some(r) = results.iter_mut().find(|d| d.attribute == attr) {
                 r.errors.push(e);
@@ -142,7 +142,7 @@ impl WorkspaceModel {
     }
 
     /// Run planning with the given context. Returns one FileDiagnostics per workspace file.
-    pub fn validate_workspace_with_resolved_docs(
+    pub fn validate_workspace_with_resolved_specs(
         &self,
         ctx: &Context,
         sources: &HashMap<String, String>,
@@ -153,11 +153,11 @@ impl WorkspaceModel {
         let all_planning_errors: Vec<Error> = planning_result
             .global_errors
             .into_iter()
-            .chain(planning_result.per_document.into_iter().flat_map(|r| {
-                let doc = Arc::clone(&r.document);
+            .chain(planning_result.per_spec.into_iter().flat_map(|r| {
+                let spec = Arc::clone(&r.spec);
                 r.errors
                     .into_iter()
-                    .map(move |e| e.with_document_context(Arc::clone(&doc)))
+                    .map(move |e| e.with_spec_context(Arc::clone(&spec)))
                     .collect::<Vec<_>>()
             }))
             .collect();
@@ -224,12 +224,12 @@ mod tests {
     }
 
     #[test]
-    fn update_file_and_validate_single_valid_document() {
+    fn update_file_and_validate_single_valid_spec() {
         let mut workspace = WorkspaceModel::new();
         let url = url_from_path("/tmp/test.lemma");
         workspace.update_file(
             url.clone(),
-            "doc test\nfact x: 10\nrule y: x + 1".to_string(),
+            "spec test\nfact x: 10\nrule y: x + 1".to_string(),
         );
 
         let results = workspace.validate_workspace();
@@ -256,18 +256,18 @@ mod tests {
     }
 
     #[test]
-    fn cross_document_reference_resolves_when_both_files_present() {
+    fn cross_spec_reference_resolves_when_both_files_present() {
         let mut workspace = WorkspaceModel::new();
         let url_a = url_from_path("/tmp/a.lemma");
         let url_b = url_from_path("/tmp/b.lemma");
 
         workspace.update_file(
             url_a.clone(),
-            "doc person\nfact name: \"Alice\"\nfact age: 30".to_string(),
+            "spec person\nfact name: \"Alice\"\nfact age: 30".to_string(),
         );
         workspace.update_file(
             url_b.clone(),
-            "doc company\nfact employee: doc person\nfact employee.name: \"Bob\"".to_string(),
+            "spec company\nfact employee: spec person\nfact employee.name: \"Bob\"".to_string(),
         );
 
         let results = workspace.validate_workspace();
@@ -282,19 +282,19 @@ mod tests {
     }
 
     #[test]
-    fn missing_cross_document_reference_produces_planning_error() {
+    fn missing_cross_spec_reference_produces_planning_error() {
         let mut workspace = WorkspaceModel::new();
         let url = url_from_path("/tmp/orphan.lemma");
         workspace.update_file(
             url.clone(),
-            "doc orphan\nfact other: doc nonexistent".to_string(),
+            "spec orphan\nfact other: spec nonexistent".to_string(),
         );
 
         let results = workspace.validate_workspace();
         assert_eq!(results.len(), 1);
         assert!(
             !results[0].errors.is_empty(),
-            "Expected planning error for missing document reference"
+            "Expected planning error for missing spec reference"
         );
     }
 
@@ -302,7 +302,7 @@ mod tests {
     fn remove_file_clears_it_from_workspace() {
         let mut workspace = WorkspaceModel::new();
         let url = url_from_path("/tmp/remove_me.lemma");
-        workspace.update_file(url.clone(), "doc test\nfact x: 10".to_string());
+        workspace.update_file(url.clone(), "spec test\nfact x: 10".to_string());
         assert!(workspace.contains_file(&url));
 
         workspace.remove_file(&url);
@@ -317,8 +317,8 @@ mod tests {
         let mut workspace = WorkspaceModel::new();
         let url1 = url_from_path("/tmp/test.lemma");
         let url2 = url_from_path("/tmp/test.lemma");
-        workspace.update_file(url1, "doc test\nfact x: 10".to_string());
-        workspace.update_file(url2, "doc test\nfact x: 20".to_string());
+        workspace.update_file(url1, "spec test\nfact x: 10".to_string());
+        workspace.update_file(url2, "spec test\nfact x: 20".to_string());
 
         let results = workspace.validate_workspace();
         assert_eq!(

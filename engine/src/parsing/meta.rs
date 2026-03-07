@@ -9,13 +9,13 @@ use std::sync::Arc;
 pub fn parse_meta_definition(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<MetaField, Error> {
     debug_assert_eq!(pair.as_rule(), Rule::meta_definition);
 
     let span = Span::from_pest_span(pair.as_span());
-    let source_location = Source::new(attribute, span, doc_name, source_text.clone());
+    let source_location = Source::new(attribute, span, spec_name, source_text.clone());
 
     let mut key = String::new();
     let mut value = None;
@@ -33,7 +33,7 @@ pub fn parse_meta_definition(
                         let val = parse_literal(
                             specific_literal,
                             attribute,
-                            doc_name,
+                            spec_name,
                             source_text.clone(),
                         )?;
                         value = Some(MetaValue::Literal(val));

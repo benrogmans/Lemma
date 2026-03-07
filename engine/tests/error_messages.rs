@@ -18,7 +18,7 @@ fn test_duplicate_fact_definition_error() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact salary: 50000
         fact salary: 60000
     "#,
@@ -51,7 +51,7 @@ fn test_duplicate_rule_definition_error() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact x: 10
         rule total: x * 2
         rule total: x * 3
@@ -85,7 +85,7 @@ fn test_duplicate_fact_shows_name() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact name: "Alice"
         fact age: 30
         fact name: "Bob"
@@ -123,7 +123,7 @@ fn test_runtime_error_division_by_zero() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact numerator: 100
         fact denominator: 0
         rule result: numerator / denominator
@@ -165,7 +165,7 @@ fn test_runtime_error_division_by_zero_with_cli_facts() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact hours_worked: [number]
         fact salary: 50000
         rule hourly_rate: salary / hours_worked
@@ -209,7 +209,7 @@ fn test_transpile_error_self_referencing_rule() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         rule x: x + 1
     "#,
         "test.lemma",
@@ -239,7 +239,7 @@ fn test_validation_error_type_mismatch_text_in_arithmetic() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact name: "Alice"
         fact salary: 50000
         rule result: salary + name
@@ -265,7 +265,7 @@ fn test_validation_error_boolean_in_arithmetic() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact is_active: true
         fact count: 10
         rule result: count * is_active
@@ -295,7 +295,7 @@ fn test_duplicate_error_contains_fact_name() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc my_document
+        spec my_spec
         fact price: 100
         fact price: 200
     "#,
@@ -321,7 +321,7 @@ fn test_duplicate_error_is_reported() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact x: 10
         fact x: 20
     "#,
@@ -341,16 +341,16 @@ fn test_duplicate_error_is_reported() {
 }
 
 #[test]
-fn test_duplicate_in_second_doc_is_caught() {
+fn test_duplicate_in_second_spec_is_caught() {
     let mut engine = Engine::new();
 
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc first_doc
+        spec first_spec
         fact a: 1
 
-        doc second_doc
+        spec second_spec
         fact b: 2
         fact b: 3
     "#,
@@ -380,7 +380,7 @@ fn test_error_display_contains_duplicate_info() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact value: 100
         fact value: 200
     "#,
@@ -410,7 +410,7 @@ fn test_division_by_zero_returns_veto_with_message() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact x: 100
         fact y: 0
         rule result: x / y
@@ -452,7 +452,7 @@ fn test_circular_dependency_has_helpful_suggestion() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         rule x: y
         rule y: x
     "#,
@@ -480,7 +480,7 @@ fn test_circular_dependency_has_helpful_suggestion() {
 fn test_duplicate_fact_is_detected() {
     let mut engine = Engine::new();
 
-    let lemma_code = r#"doc test
+    let lemma_code = r#"spec test
 fact line2: 1
 fact line3: 2
 fact line4: 3
@@ -507,7 +507,7 @@ fn test_division_by_zero_returns_veto() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact numerator: 42
         fact denominator: 0
         rule division_result: numerator / denominator
@@ -545,7 +545,7 @@ fn test_duplicate_detected_from_database_source() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc contract
+        spec contract
         fact amount: 1000
         fact amount: 2000
     "#,
@@ -571,7 +571,7 @@ fn test_duplicate_detected_from_api_source() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc policy
+        spec policy
         rule rate: 1.5
         rule rate: 2.0
     "#,
@@ -597,7 +597,7 @@ fn test_duplicate_detected_from_runtime_source() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc runtime_doc
+        spec runtime_spec
         fact x: 5
         fact x: 10
     "#,
@@ -631,7 +631,7 @@ fn test_multiple_error_phases_reported_together() {
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc pricing
+        spec pricing
 
         type money: scale
           -> unit eur 1

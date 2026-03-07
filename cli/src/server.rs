@@ -20,8 +20,8 @@ pub mod http {
 
     type SharedEngine = Arc<RwLock<Engine>>;
 
-    /// Parse doc path into (doc_name, optional hash_pin). Path like "pricing", "pricing~abc1234", "ind/kennismigrant/aanvraag~xyz".
-    fn parse_doc_path(path: &str) -> (String, Option<String>) {
+    /// Parse spec path into (spec_name, optional hash_pin). Path like "pricing", "pricing~abc1234", "ind/kennismigrant/aanvraag~xyz".
+    fn parse_spec_path(path: &str) -> (String, Option<String>) {
         let path = path.trim_matches('/');
         if path.is_empty() {
             return (String::new(), None);
@@ -31,12 +31,12 @@ pub mod http {
         if let Some(tilde_pos) = last.rfind('~') {
             let (base, hash) = last.split_at(tilde_pos);
             let hash = hash[1..].to_string();
-            let doc_name = if segments.len() == 1 {
+            let spec_name = if segments.len() == 1 {
                 base.to_string()
             } else {
                 format!("{}/{}", segments[..segments.len() - 1].join("/"), base)
             };
-            (doc_name, if hash.is_empty() { None } else { Some(hash) })
+            (spec_name, if hash.is_empty() { None } else { Some(hash) })
         } else {
             (path.to_string(), None)
         }
@@ -54,7 +54,7 @@ pub mod http {
     }
 
     #[derive(Deserialize, Default)]
-    struct DocQuery {
+    struct EffectiveQuery {
         effective: Option<String>,
     }
 
@@ -91,8 +91,8 @@ pub mod http {
     }
 
     #[derive(serde::Serialize)]
-    struct GetDocResponse {
-        doc: String,
+    struct GetSpecResponse {
+        spec: String,
         effective_from: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         facts: Option<serde_json::Value>,
@@ -110,9 +110,9 @@ pub mod http {
         permalink: String,
     }
 
-    /// Build ETag, Memento-Datetime, Vary for the resolved doc.
-    fn doc_response_headers(
-        _doc_name: &str,
+    /// Build ETag, Memento-Datetime, Vary for the resolved spec.
+    fn spec_response_headers(
+        _spec_name: &str,
         effective_from: Option<&DateTimeValue>,
         hash: Option<&str>,
     ) -> Vec<(axum::http::header::HeaderName, HeaderValue)> {
@@ -139,12 +139,12 @@ pub mod http {
 
     /// Start the Lemma HTTP server.
     ///
-    /// The server auto-generates typed REST endpoints for each loaded document:
-    /// - `GET /{doc}/{rules?}` — evaluate rules (all if rules omitted), facts as query params
-    /// - `POST /{doc}/{rules?}` — evaluate rules (all if rules omitted), facts as JSON body
+    ///         The server auto-generates typed REST endpoints for each loaded spec:
+    /// - `GET /{spec}/{rules?}` — evaluate rules (all if rules omitted), facts as query params
+    /// - `POST /{spec}/{rules?}` — evaluate rules (all if rules omitted), facts as JSON body
     ///
     /// Meta routes:
-    /// - `GET /` — list all documents
+    /// - `GET /` — list all specs
     /// - `GET /health` — health check
     /// - `GET /openapi.json` — OpenAPI 3.1 specification
     /// - `GET /docs` — Scalar interactive documentation
@@ -175,14 +175,14 @@ pub mod http {
         };
 
         let app = Router::new()
-            .route("/", get(list_documents))
+            .route("/", get(list_specs))
             .route("/health", get(health_check))
             .route("/openapi.json", get(openapi_spec))
             .route("/docs", get(scalar_docs))
             .route("/scalar.js", get(scalar_js))
-            .route("/schema/{doc_name}", get(schema_all_rules))
-            .route("/schema/{doc_name}/{rules}", get(schema_for_rules))
-            .route("/{*path}", get(doc_get_schema).post(doc_post_evaluate))
+            .route("/schema/{spec_name}", get(schema_all_rules))
+            .route("/schema/{spec_name}/{rules}", get(schema_for_rules))
+            .route("/{*path}", get(spec_get_schema).post(spec_post_evaluate))
             .fallback(fallback_404)
             .layer(CorsLayer::permissive())
             .with_state(state);
@@ -201,21 +201,21 @@ pub mod http {
     // Meta routes
     // -----------------------------------------------------------------------
 
-    async fn list_documents(
+    async fn list_specs(
         State(state): State<AppState>,
-        Query(q): Query<DocQuery>,
+        Query(q): Query<EffectiveQuery>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let now = resolve_effective(q.effective.as_deref())?;
         let engine = state.engine.read().await;
 
-        let documents: Vec<lemma::DocumentSchema> = engine
-            .list_documents_effective(&now)
+        let specs: Vec<lemma::SpecSchema> = engine
+            .list_specs_effective(&now)
             .iter()
-            .filter_map(|doc| engine.get_execution_plan(&doc.name, None, &now))
+            .filter_map(|s| engine.get_execution_plan(&s.name, None, &now))
             .map(|plan| plan.schema())
             .collect();
 
-        Ok(Json(documents))
+        Ok(Json(specs))
     }
 
     async fn health_check() -> impl IntoResponse {
@@ -231,15 +231,14 @@ pub mod http {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: "Not found. Use GET / for document list, GET /docs for API docs."
-                    .to_string(),
+                error: "Not found. Use GET / for spec list, GET /docs for API docs.".to_string(),
             }),
         )
     }
 
     async fn openapi_spec(
         State(state): State<AppState>,
-        Query(q): Query<DocQuery>,
+        Query(q): Query<EffectiveQuery>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let effective = resolve_effective(q.effective.as_deref())?;
         let engine = state.engine.read().await;
@@ -268,7 +267,7 @@ pub mod http {
       persistAuth: false,
       telemetry: false,
       hideModels: true,
-      documentDownloadType: 'both',
+      documentDownloadType: 'both', // Scalar UI option, not Lemma
       hideSearch: false,
       showOperationId: false,
       hideDarkModeToggle: false,
@@ -346,48 +345,48 @@ pub mod http {
     // Doc path (wildcard): GET = schema with versions, POST = evaluate
     // -----------------------------------------------------------------------
 
-    /// `GET /{*path}` — schema of resolved version; path = doc name with optional ~hash. Accept-Datetime for temporal. ?rules= to scope.
-    async fn doc_get_schema(
+    /// `GET /{*path}` — schema of resolved version; path = spec name with optional ~hash. Accept-Datetime for temporal. ?rules= to scope.
+    async fn spec_get_schema(
         State(state): State<AppState>,
         Path(path): Path<String>,
         Query(q): Query<RulesQuery>,
         headers: HeaderMap,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let (doc_name, hash_pin) = parse_doc_path(&path);
-        if doc_name.is_empty() {
+        let (spec_name, hash_pin) = parse_spec_path(&path);
+        if spec_name.is_empty() {
             return Err((
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: "Document path required".to_string(),
+                    error: "Spec path required".to_string(),
                 }),
             ));
         }
         let effective = accept_datetime_from_headers(&headers)?;
         let engine = state.engine.read().await;
 
-        let doc_arc = hash_pin
+        let spec_arc = hash_pin
             .as_deref()
-            .and_then(|pin| engine.get_document_by_hash_pin(&doc_name, pin))
-            .or_else(|| engine.get_document(&doc_name, &effective));
-        let doc_arc = match doc_arc {
+            .and_then(|pin| engine.get_spec_by_hash_pin(&spec_name, pin))
+            .or_else(|| engine.get_spec(&spec_name, &effective));
+        let spec_arc = match spec_arc {
             Some(a) => a,
             None => {
                 return Err((
                     StatusCode::NOT_FOUND,
                     Json(ErrorResponse {
-                        error: format!("Document '{}' not found", doc_name),
+                        error: format!("Spec '{}' not found", spec_name),
                     }),
                 ));
             }
         };
 
-        let plan = match engine.get_execution_plan(&doc_name, hash_pin.as_deref(), &effective) {
+        let plan = match engine.get_execution_plan(&spec_name, hash_pin.as_deref(), &effective) {
             Some(p) => p,
             None => {
                 return Err((
                     StatusCode::NOT_FOUND,
                     Json(ErrorResponse {
-                        error: format!("Document '{}' not found", doc_name),
+                        error: format!("Spec '{}' not found", spec_name),
                     }),
                 ));
             }
@@ -410,19 +409,19 @@ pub mod http {
         let versions: Vec<VersionEntry> = engine
             .all_hash_pins()
             .into_iter()
-            .filter(|(name, _, _)| *name == doc_name)
+            .filter(|(name, _, _)| *name == spec_name)
             .map(|(_, effective_from, hash)| VersionEntry {
                 effective_from: effective_from.clone(),
                 hash: hash.to_string(),
-                permalink: format!("/{}~{}", doc_name, hash),
+                permalink: format!("/{}~{}", spec_name, hash),
             })
             .collect();
 
-        let effective_from_str = doc_arc.effective_from().map(|d| d.to_string());
-        let hash = engine.hash_pin_for_doc(&doc_arc);
+        let effective_from_str = spec_arc.effective_from().map(|d| d.to_string());
+        let hash = engine.hash_pin_for_spec(&spec_arc);
 
-        let body = GetDocResponse {
-            doc: schema.doc.clone(),
+        let body = GetSpecResponse {
+            spec: schema.spec.clone(),
             effective_from: effective_from_str,
             facts: serde_json::to_value(&schema.facts).ok(),
             rules: serde_json::to_value(&schema.rules).ok(),
@@ -432,26 +431,26 @@ pub mod http {
 
         let mut response = Json(body).into_response();
         let headers_mut = response.headers_mut();
-        for (k, v) in doc_response_headers(&doc_name, doc_arc.effective_from(), hash) {
+        for (k, v) in spec_response_headers(&spec_name, spec_arc.effective_from(), hash) {
             headers_mut.insert(k, v);
         }
         Ok(response)
     }
 
-    /// `POST /{*path}` — evaluate; path = doc name with optional ~hash. Accept-Datetime for temporal. ?rules= to limit. Body = form-encoded facts.
-    async fn doc_post_evaluate(
+    /// `POST /{*path}` — evaluate; path = spec name with optional ~hash. Accept-Datetime for temporal. ?rules= to limit. Body = form-encoded facts.
+    async fn spec_post_evaluate(
         State(state): State<AppState>,
         Path(path): Path<String>,
         Query(q): Query<RulesQuery>,
         headers: HeaderMap,
         Form(fact_values): Form<std::collections::HashMap<String, String>>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let (doc_name, hash_pin) = parse_doc_path(&path);
-        if doc_name.is_empty() {
+        let (spec_name, hash_pin) = parse_spec_path(&path);
+        if spec_name.is_empty() {
             return Err((
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: "Document path required".to_string(),
+                    error: "Spec path required".to_string(),
                 }),
             ));
         }
@@ -459,17 +458,17 @@ pub mod http {
         let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
         let engine = state.engine.read().await;
 
-        let doc_arc = hash_pin
+        let spec_arc = hash_pin
             .as_deref()
-            .and_then(|pin| engine.get_document_by_hash_pin(&doc_name, pin))
-            .or_else(|| engine.get_document(&doc_name, &effective));
-        let doc_arc = match doc_arc {
+            .and_then(|pin| engine.get_spec_by_hash_pin(&spec_name, pin))
+            .or_else(|| engine.get_spec(&spec_name, &effective));
+        let spec_arc = match spec_arc {
             Some(a) => a,
             None => {
                 return Err((
                     StatusCode::NOT_FOUND,
                     Json(ErrorResponse {
-                        error: format!("Document '{}' not found", doc_name),
+                        error: format!("Spec '{}' not found", spec_name),
                     }),
                 ));
             }
@@ -477,7 +476,7 @@ pub mod http {
 
         let response = engine
             .evaluate(
-                &doc_name,
+                &spec_name,
                 hash_pin.as_deref(),
                 &effective,
                 rule_names,
@@ -492,11 +491,11 @@ pub mod http {
                 )
             })?;
 
-        let hash = engine.hash_pin_for_doc(&doc_arc);
+        let hash = engine.hash_pin_for_spec(&spec_arc);
         let results = response::convert_response(&response, want_proofs(&state, &headers));
         let mut axum_response = Json(results).into_response();
         let headers_mut = axum_response.headers_mut();
-        for (k, v) in doc_response_headers(&doc_name, doc_arc.effective_from(), hash) {
+        for (k, v) in spec_response_headers(&spec_name, spec_arc.effective_from(), hash) {
             headers_mut.insert(k, v);
         }
         Ok(axum_response)
@@ -506,43 +505,43 @@ pub mod http {
     // Schema routes (legacy)
     // -----------------------------------------------------------------------
 
-    /// `GET /schema/{doc_name}` — full document schema (all facts and rules).
+    /// `GET /schema/{spec_name}` — full spec schema (all facts and rules).
     async fn schema_all_rules(
         State(state): State<AppState>,
-        Path(doc_name): Path<String>,
-        Query(q): Query<DocQuery>,
+        Path(spec_name): Path<String>,
+        Query(q): Query<EffectiveQuery>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let now = resolve_effective(q.effective.as_deref())?;
-        schema_inner(&state.engine, &doc_name, &[], &now).await
+        schema_inner(&state.engine, &spec_name, &[], &now).await
     }
 
-    /// `GET /schema/{doc_name}/{rules}` — schema scoped to specific rules and
+    /// `GET /schema/{spec_name}/{rules}` — schema scoped to specific rules and
     /// only the facts those rules need.
     async fn schema_for_rules(
         State(state): State<AppState>,
-        Path((doc_name, rules)): Path<(String, String)>,
-        Query(q): Query<DocQuery>,
+        Path((spec_name, rules)): Path<(String, String)>,
+        Query(q): Query<EffectiveQuery>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let now = resolve_effective(q.effective.as_deref())?;
         let rule_names = parse_rule_names(&rules);
-        schema_inner(&state.engine, &doc_name, &rule_names, &now).await
+        schema_inner(&state.engine, &spec_name, &rule_names, &now).await
     }
 
     async fn schema_inner(
         engine: &SharedEngine,
-        doc_name: &str,
+        spec_name: &str,
         rule_names: &[String],
         now: &DateTimeValue,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let engine = engine.read().await;
 
         let plan = engine
-            .get_execution_plan(doc_name, None, now)
+            .get_execution_plan(spec_name, None, now)
             .ok_or_else(|| {
                 (
                     StatusCode::NOT_FOUND,
                     Json(ErrorResponse {
-                        error: format!("Document '{}' not found", doc_name),
+                        error: format!("Spec '{}' not found", spec_name),
                     }),
                 )
             })?;
@@ -703,13 +702,10 @@ pub mod http {
                             runtime.block_on(async {
                                 match reload_engine(&workdir_clone).await {
                                     Ok(new_engine) => {
-                                        let document_count = new_engine.list_documents().len();
+                                        let spec_count = new_engine.list_specs().len();
                                         let mut engine = engine_clone.write().await;
                                         *engine = new_engine;
-                                        info!(
-                                            "Reloaded engine with {} document(s)",
-                                            document_count
-                                        );
+                                        info!("Reloaded engine with {} spec(s)", spec_count);
                                     }
                                     Err(err) => {
                                         warn!("Reload failed (keeping previous state): {}", err);

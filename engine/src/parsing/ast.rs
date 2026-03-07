@@ -1,6 +1,6 @@
 //! AST types
 //!
-//! Infrastructure (Span, DepthTracker) and document/fact/rule/expression/value types from parsing.
+//! Infrastructure (Span, DepthTracker) and spec/fact/rule/expression/value types from parsing.
 //!
 //! # `AsLemmaSource<T>` wrapper
 //!
@@ -81,7 +81,7 @@ impl Default for DepthTracker {
 }
 
 // -----------------------------------------------------------------------------
-// Document, fact, rule, expression and value types
+// Spec, fact, rule, expression and value types
 // -----------------------------------------------------------------------------
 
 use crate::parsing::source::Source;
@@ -93,11 +93,11 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-/// A Lemma document containing facts and rules.
+/// A Lemma spec containing facts and rules.
 /// Ordered and compared by (name, effective_from) for use in BTreeSet; None < Some(_) for Option<DateTimeValue>.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct LemmaDoc {
-    /// Base document name.
+pub struct LemmaSpec {
+    /// Base spec name.
     pub name: String,
     pub effective_from: Option<DateTimeValue>,
     pub attribute: Option<String>,
@@ -303,7 +303,7 @@ pub enum ExpressionKind {
 /// are resolved to FactPath or RulePath (semantics layer).
 /// Examples:
 /// - Local "age": segments=[], name="age"
-/// - Cross-document "employee.salary": segments=["employee"], name="salary"
+/// - Cross-spec "employee.salary": segments=["employee"], name="salary"
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Reference {
     pub segments: Vec<String>,
@@ -478,23 +478,23 @@ pub enum MathematicalComputation {
     Round,
 }
 
-/// A reference to a document, with optional hash pin and optional effective datetime.
-/// The `name` field is the plain base document name (without `@`); `is_registry`
+/// A reference to a spec, with optional hash pin and optional effective datetime.
+/// The `name` field is the plain base spec name (without `@`); `is_registry`
 /// is true when the source used `@name`; `hash_pin` pins to a specific temporal version
 /// by content hash; `effective` requests temporal resolution at that datetime.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct DocRef {
-    /// Plain base document name (never contains `@`).
+pub struct SpecRef {
+    /// Plain base spec name (never contains `@`).
     pub name: String,
     /// `true` when the source used the `@` qualifier (registry reference).
     pub is_registry: bool,
-    /// Optional content hash pin to resolve to a specific document version.
+    /// Optional content hash pin to resolve to a specific spec version.
     pub hash_pin: Option<String>,
     /// Optional effective datetime for temporal resolution. When used with `hash_pin`, resolve by hash then verify that version was active at this datetime.
     pub effective: Option<DateTimeValue>,
 }
 
-impl std::fmt::Display for DocRef {
+impl std::fmt::Display for SpecRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.is_registry {
             write!(f, "@{}", self.name)?;
@@ -511,8 +511,8 @@ impl std::fmt::Display for DocRef {
     }
 }
 
-impl DocRef {
-    /// Create a local (non-registry) document reference.
+impl SpecRef {
+    /// Create a local (non-registry) spec reference.
     pub fn local(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -522,7 +522,7 @@ impl DocRef {
         }
     }
 
-    /// Create a registry document reference.
+    /// Create a registry spec reference.
     pub fn registry(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -589,13 +589,13 @@ pub type Constraint = (String, Vec<CommandArg>);
 pub enum FactValue {
     /// A literal value (parse-time; type will be resolved during planning)
     Literal(Value),
-    /// A reference to another document
-    DocumentReference(DocRef),
+    /// A reference to another spec
+    SpecReference(SpecRef),
     /// A type declaration (inline type annotation on a fact)
     TypeDeclaration {
         base: String,
         constraints: Option<Vec<Constraint>>,
-        from: Option<DocRef>,
+        from: Option<SpecRef>,
     },
 }
 
@@ -746,11 +746,11 @@ impl fmt::Display for FactValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FactValue::Literal(v) => write!(f, "{}", v),
-            FactValue::DocumentReference(doc_ref) => {
-                if doc_ref.is_registry {
-                    write!(f, "doc @{}", doc_ref.name)
+            FactValue::SpecReference(spec_ref) => {
+                if spec_ref.is_registry {
+                    write!(f, "spec @{}", spec_ref.name)
                 } else {
-                    write!(f, "doc {}", doc_ref.name)
+                    write!(f, "spec {}", spec_ref.name)
                 }
             }
             FactValue::TypeDeclaration {
@@ -758,8 +758,8 @@ impl fmt::Display for FactValue {
                 constraints,
                 from,
             } => {
-                let base_str = if let Some(from_doc) = from {
-                    format!("{} from {}", base, from_doc)
+                let base_str = if let Some(from_spec) = from {
+                    format!("{} from {}", base, from_spec)
                 } else {
                     base.clone()
                 };
@@ -968,7 +968,7 @@ impl LemmaFact {
     }
 }
 
-impl LemmaDoc {
+impl LemmaSpec {
     #[must_use]
     pub fn new(name: String) -> Self {
         Self {
@@ -1032,28 +1032,28 @@ impl LemmaDoc {
     }
 }
 
-impl PartialEq for LemmaDoc {
+impl PartialEq for LemmaSpec {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.effective_from() == other.effective_from()
     }
 }
 
-impl Eq for LemmaDoc {}
+impl Eq for LemmaSpec {}
 
-impl PartialOrd for LemmaDoc {
+impl PartialOrd for LemmaSpec {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for LemmaDoc {
+impl Ord for LemmaSpec {
     fn cmp(&self, other: &Self) -> Ordering {
         (self.name.as_str(), self.effective_from())
             .cmp(&(other.name.as_str(), other.effective_from()))
     }
 }
 
-impl Hash for LemmaDoc {
+impl Hash for LemmaSpec {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         match self.effective_from() {
@@ -1063,9 +1063,9 @@ impl Hash for LemmaDoc {
     }
 }
 
-impl fmt::Display for LemmaDoc {
+impl fmt::Display for LemmaSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "doc {}", self.name)?;
+        write!(f, "spec {}", self.name)?;
         if let Some(ref af) = self.effective_from {
             write!(f, " {}", af)?;
         }
@@ -1360,7 +1360,7 @@ pub enum TypeDef {
         source_location: Source,
         name: String,
         source_type: String,
-        from: DocRef,
+        from: SpecRef,
         constraints: Option<Vec<Constraint>>,
     },
     Inline {
@@ -1368,7 +1368,7 @@ pub enum TypeDef {
         parent: String,
         constraints: Option<Vec<Constraint>>,
         fact_ref: Reference,
-        from: Option<DocRef>,
+        from: Option<SpecRef>,
     },
 }
 
@@ -1519,11 +1519,11 @@ impl<'a> fmt::Display for AsLemmaSource<'a, FactValue> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
             FactValue::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
-            FactValue::DocumentReference(doc_ref) => {
-                if doc_ref.is_registry {
-                    write!(f, "doc @{}", doc_ref.name)
+            FactValue::SpecReference(spec_ref) => {
+                if spec_ref.is_registry {
+                    write!(f, "spec @{}", spec_ref.name)
                 } else {
-                    write!(f, "doc {}", doc_ref.name)
+                    write!(f, "spec {}", spec_ref.name)
                 }
             }
             FactValue::TypeDeclaration {
@@ -1531,8 +1531,8 @@ impl<'a> fmt::Display for AsLemmaSource<'a, FactValue> {
                 constraints,
                 from,
             } => {
-                let base_str = if let Some(from_doc) = from {
-                    format!("{} from {}", base, from_doc)
+                let base_str = if let Some(from_spec) = from {
+                    format!("{} from {}", base, from_spec)
                 } else {
                     base.clone()
                 };
@@ -2031,7 +2031,7 @@ mod tests {
                     col: 0,
                 },
                 "test",
-                std::sync::Arc::from("doc test\nfact x: 1"),
+                std::sync::Arc::from("spec test\nfact x: 1"),
             ),
             name: "status".to_string(),
             parent: "text".to_string(),
@@ -2063,7 +2063,7 @@ mod tests {
                     col: 0,
                 },
                 "test",
-                std::sync::Arc::from("doc test\nfact x: 1"),
+                std::sync::Arc::from("spec test\nfact x: 1"),
             ),
             name: "money".to_string(),
             parent: "scale".to_string(),

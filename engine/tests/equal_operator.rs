@@ -10,7 +10,7 @@ fn test_equal_operator_numbers() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc test_equal_numbers
+spec test_equal_numbers
 
 fact a: 42
 fact b: 42
@@ -41,7 +41,7 @@ fn test_equal_operator_text() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc test_equal_text
+spec test_equal_text
 
 fact greeting: "hello"
 fact other: "world"
@@ -71,7 +71,7 @@ fn test_equal_operator_money() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc test_equal_money
+spec test_equal_money
 
 fact price_a: 100
 fact price_b: 100
@@ -102,7 +102,7 @@ fn test_equal_operator_booleans() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc test_equal_booleans
+spec test_equal_booleans
 
 fact flag_a: true
 fact flag_b: true
@@ -133,7 +133,7 @@ fn test_equal_operator_in_conditions() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc test_equal_conditions
+spec test_equal_conditions
 
 fact status: "active"
 fact count: 10

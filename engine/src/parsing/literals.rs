@@ -13,37 +13,38 @@ use std::sync::Arc;
 pub(crate) fn parse_literal(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Value, Error> {
     match pair.as_rule() {
         Rule::number_literal => {
-            parse_number_literal(pair, attribute, doc_name, source_text.clone())
+            parse_number_literal(pair, attribute, spec_name, source_text.clone())
         }
         Rule::number_unit_literal => {
-            let (n, u) = parse_number_unit_literal(pair, attribute, doc_name, source_text.clone())?;
+            let (n, u) =
+                parse_number_unit_literal(pair, attribute, spec_name, source_text.clone())?;
             Ok(Value::Scale(n, u))
         }
         Rule::text_literal => parse_string_literal(pair),
         Rule::boolean_literal => {
-            parse_boolean_literal(pair, attribute, doc_name, source_text.clone())
+            parse_boolean_literal(pair, attribute, spec_name, source_text.clone())
         }
         Rule::percent_literal => {
-            parse_percent_literal(pair, attribute, doc_name, source_text.clone())
+            parse_percent_literal(pair, attribute, spec_name, source_text.clone())
         }
         Rule::permille_literal => {
-            parse_permille_literal(pair, attribute, doc_name, source_text.clone())
+            parse_permille_literal(pair, attribute, spec_name, source_text.clone())
         }
         Rule::date_time_literal => {
-            parse_datetime_literal(pair, attribute, doc_name, source_text.clone())
+            parse_datetime_literal(pair, attribute, spec_name, source_text.clone())
         }
-        Rule::time_literal => parse_time_literal(pair, attribute, doc_name, source_text.clone()),
+        Rule::time_literal => parse_time_literal(pair, attribute, spec_name, source_text.clone()),
         Rule::duration_literal => {
             let s = pair.as_str();
             let source = Source::new(
                 attribute,
                 Span::from_pest_span(pair.as_span()),
-                doc_name,
+                spec_name,
                 source_text.clone(),
             );
             parse_duration_from_string(s, &source)
@@ -53,7 +54,7 @@ pub(crate) fn parse_literal(
             Some(Source::new(
                 attribute,
                 Span::from_pest_span(pair.as_span()),
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )),
             None::<String>,
@@ -64,7 +65,7 @@ pub(crate) fn parse_literal(
 fn parse_number_literal(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Value, Error> {
     let pair_str = pair.as_str();
@@ -74,7 +75,7 @@ fn parse_number_literal(
     let number = match inner.next() {
         Some(inner_pair) => match inner_pair.as_rule() {
             Rule::scientific_number => {
-                parse_scientific_number(inner_pair, attribute, doc_name, source_text.clone())?
+                parse_scientific_number(inner_pair, attribute, spec_name, source_text.clone())?
             }
             Rule::decimal_number => {
                 let inner_span = Span::from_pest_span(inner_pair.as_span());
@@ -82,14 +83,14 @@ fn parse_number_literal(
                     inner_pair.as_str(),
                     inner_span,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )?
             }
             _ => {
                 return Err(Error::validation(
                     "Unexpected number literal structure",
-                    Some(Source::new(attribute, span, doc_name, source_text.clone())),
+                    Some(Source::new(attribute, span, spec_name, source_text.clone())),
                     None::<String>,
                 ));
             }
@@ -98,7 +99,7 @@ fn parse_number_literal(
             pair_str,
             span.clone(),
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         )?,
     };
@@ -115,7 +116,7 @@ fn parse_string_literal(pair: Pair<Rule>) -> Result<Value, Error> {
 fn parse_boolean_literal(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Value, Error> {
     use crate::BooleanValue;
@@ -131,7 +132,7 @@ fn parse_boolean_literal(
             let span = Span::from_pest_span(pair.as_span());
             return Err(Error::validation(
                 format!("Invalid boolean: '{}'\n             Expected one of: true, false, yes, no, accept, reject", pair.as_str()),
-                Some(Source::new(attribute, span, doc_name, source_text.clone())),
+                Some(Source::new(attribute, span, spec_name, source_text.clone())),
                 None::<String>,
             ));
         }
@@ -143,7 +144,7 @@ fn parse_boolean_literal(
 fn parse_percent_literal(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Value, Error> {
     let pair_span = Span::from_pest_span(pair.as_span());
@@ -151,7 +152,7 @@ fn parse_percent_literal(
         if inner_pair.as_rule() == Rule::number_literal {
             let inner_span = Span::from_pest_span(inner_pair.as_span());
             let percentage_value =
-                parse_number_literal(inner_pair, attribute, doc_name, source_text.clone())?;
+                parse_number_literal(inner_pair, attribute, spec_name, source_text.clone())?;
             match &percentage_value {
                 Value::Number(n) => {
                     // Convert percent (50) to ratio (0.50) for storage
@@ -165,7 +166,7 @@ fn parse_percent_literal(
                         Some(Source::new(
                             attribute,
                             inner_span,
-                            doc_name,
+                            spec_name,
                             source_text.clone(),
                         )),
                         None::<String>,
@@ -179,7 +180,7 @@ fn parse_percent_literal(
         Some(Source::new(
             attribute,
             pair_span,
-            doc_name,
+            spec_name,
             source_text.clone(),
         )),
         None::<String>,
@@ -189,7 +190,7 @@ fn parse_percent_literal(
 fn parse_permille_literal(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Value, Error> {
     let pair_span = Span::from_pest_span(pair.as_span());
@@ -197,7 +198,7 @@ fn parse_permille_literal(
         if inner_pair.as_rule() == Rule::number_literal {
             let inner_span = Span::from_pest_span(inner_pair.as_span());
             let permille_value =
-                parse_number_literal(inner_pair, attribute, doc_name, source_text.clone())?;
+                parse_number_literal(inner_pair, attribute, spec_name, source_text.clone())?;
             match &permille_value {
                 Value::Number(n) => {
                     // Convert permille (5) to ratio (0.005) for storage
@@ -211,7 +212,7 @@ fn parse_permille_literal(
                         Some(Source::new(
                             attribute,
                             inner_span,
-                            doc_name,
+                            spec_name,
                             source_text.clone(),
                         )),
                         None::<String>,
@@ -225,7 +226,7 @@ fn parse_permille_literal(
         Some(Source::new(
             attribute,
             pair_span,
-            doc_name,
+            spec_name,
             source_text.clone(),
         )),
         None::<String>,
@@ -314,7 +315,7 @@ pub(crate) fn parse_number_unit_string(s: &str) -> Result<(Decimal, String), Str
 pub(crate) fn parse_number_unit_literal(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<(Decimal, String), Error> {
     let s = pair.as_str();
@@ -322,7 +323,7 @@ pub(crate) fn parse_number_unit_literal(
     parse_number_unit_string(s).map_err(|msg| {
         Error::validation(
             msg,
-            Some(Source::new(attribute, span, doc_name, source_text.clone())),
+            Some(Source::new(attribute, span, spec_name, source_text.clone())),
             None::<String>,
         )
     })
@@ -377,7 +378,7 @@ pub(crate) fn parse_datetime_str(s: &str) -> Option<DateTimeValue> {
 fn parse_datetime_literal(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Value, Error> {
     let datetime_str = pair.as_str();
@@ -389,7 +390,7 @@ fn parse_datetime_literal(
         Some(Source::new(
             attribute,
             Span::from_pest_span(pair.as_span()),
-            doc_name,
+            spec_name,
             source_text.clone(),
         )),
         None::<String>,
@@ -399,7 +400,7 @@ fn parse_datetime_literal(
 fn parse_time_literal(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Value, Error> {
     let time_str = pair.as_str();
@@ -431,7 +432,7 @@ fn parse_time_literal(
         Some(Source::new(
             attribute,
             Span::from_pest_span(pair.as_span()),
-            doc_name,
+            spec_name,
             source_text.clone(),
         )),
         None::<String>,
@@ -443,7 +444,7 @@ const MAX_DECIMAL_EXPONENT: i32 = 28;
 fn parse_scientific_number(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Decimal, Error> {
     let span = Span::from_pest_span(pair.as_span());
@@ -455,7 +456,7 @@ fn parse_scientific_number(
             Some(Source::new(
                 attribute,
                 span.clone(),
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )),
             None::<String>,
@@ -467,7 +468,7 @@ fn parse_scientific_number(
             Some(Source::new(
                 attribute,
                 span.clone(),
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )),
             None::<String>,
@@ -478,7 +479,7 @@ fn parse_scientific_number(
         mantissa_pair.as_str(),
         Span::from_pest_span(mantissa_pair.as_span()),
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     )?;
     let exponent_span = Span::from_pest_span(exponent_pair.as_span());
@@ -493,7 +494,7 @@ fn parse_scientific_number(
             Some(Source::new(
                 attribute,
                 exponent_span.clone(),
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )),
             None::<String>,
@@ -506,7 +507,7 @@ fn parse_scientific_number(
             Some(Source::new(
                 attribute,
                 exponent_span,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )),
             None::<String>,
@@ -523,7 +524,7 @@ fn parse_scientific_number(
                 Some(Source::new(
                     attribute,
                     span.clone(),
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )),
                 None::<String>,
@@ -536,7 +537,7 @@ fn parse_scientific_number(
                     "Precision error: result of {}e{} has too many decimal places (max 28)",
                     mantissa, exponent
                 ),
-                Some(Source::new(attribute, span, doc_name, source_text.clone())),
+                Some(Source::new(attribute, span, spec_name, source_text.clone())),
                 None::<String>,
             )
         })
@@ -563,14 +564,14 @@ fn parse_decimal_number(
     number_str: &str,
     span: Span,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Decimal, Error> {
     let clean_number = number_str.replace(['_', ','], "");
     Decimal::from_str(&clean_number).map_err(|_| {
         Error::validation(
             format!("Invalid number: '{}'\n             Expected a valid decimal number (e.g., 42, 3.14, 1_000_000, 1,000,000)\n             Note: Use underscores or commas as thousand separators if needed", number_str),
-            Some(Source::new(attribute, span, doc_name, source_text)),
+            Some(Source::new(attribute, span, spec_name, source_text)),
             None::<String>,
         )
     })
@@ -635,7 +636,7 @@ mod tests {
     fn parse_rejects_percent_literal_with_trailing_digits() {
         // Guard against tokenization bugs around percent literals.
         // The grammar comment says '%' must be directly followed by a non-digit or EOI.
-        let input = r#"doc test
+        let input = r#"spec test
 fact x: 10%5"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(
@@ -650,9 +651,9 @@ fact x: 10%5"#;
         use rust_decimal::Decimal;
         use std::str::FromStr;
 
-        let input = "doc test\nrule x: 5%%";
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
-        let rule = &docs[0].rules[0];
+        let input = "spec test\nrule x: 5%%";
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let rule = &specs[0].rules[0];
         match &rule.expression.kind {
             crate::parsing::ast::ExpressionKind::Literal(Value::Ratio(n, Some(unit))) => {
                 assert_eq!(*n, Decimal::from_str("0.005").unwrap());
@@ -668,9 +669,9 @@ fact x: 10%5"#;
         use rust_decimal::Decimal;
         use std::str::FromStr;
 
-        let input = "doc test\nrule x: 5 permille";
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
-        let rule = &docs[0].rules[0];
+        let input = "spec test\nrule x: 5 permille";
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let rule = &specs[0].rules[0];
         match &rule.expression.kind {
             crate::parsing::ast::ExpressionKind::Literal(Value::Ratio(n, Some(unit))) => {
                 assert_eq!(*n, Decimal::from_str("0.005").unwrap());
@@ -682,7 +683,7 @@ fact x: 10%5"#;
 
     #[test]
     fn parse_rejects_permille_literal_with_trailing_digits() {
-        let input = "doc test\nfact x: 10%%5";
+        let input = "spec test\nfact x: 10%%5";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(
             result.is_err(),

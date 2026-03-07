@@ -5,9 +5,9 @@ Language Server Protocol implementation for [Lemma](https://github.com/benrogman
 ## Features
 
 - **Diagnostics** — Parse and planning (semantic) errors are published as you type. Parse errors are shown immediately; a debounced (250ms) full workspace validation adds planning errors. Errors use source spans where available; diagnostics are cleared when a file is closed.
-- **Workspace validation** — On native, when the client provides a workspace root, the server scans for `.lemma` files under that root at startup (skips hidden directories only) and runs full planning so cross-document errors (missing doc/type refs, circular dependencies, etc.) are reported per file. The client keeps the server in sync via document open/change/close. On WASM, only the open document is validated (no filesystem).
-- **Document links** — `@`-prefixed Registry references (e.g. `doc @user/workspace/somedoc`, `type ... from @lemma/std/finance`) are turned into clickable links when the Registry (LemmaBase) provides a URL. Works even when the file has parse errors (text-based scan).
-- **Text document sync** — Full document sync on open, change, and close; no incremental sync.
+- **Workspace validation** — On native, when the client provides a workspace root, the server scans for `.lemma` files under that root at startup (skips hidden directories only) and runs full planning so cross-spec errors (missing spec/type refs, circular dependencies, etc.) are reported per file. The client keeps the server in sync via file open/change/close. On WASM, only the open file is validated (no filesystem).
+- **Registry links** — `@`-prefixed Registry references (e.g. `spec @user/workspace/somespec`, `type ... from @lemma/std/finance`) are turned into clickable links when the Registry (LemmaBase) provides a URL. Works even when the file has parse errors (text-based scan).
+- **Text document sync** — Full file sync on open, change, and close; no incremental sync.
 
 The server uses the Lemma engine with **registry** support (LemmaBase) for resolving `@...` identifiers and communicates over stdio (native) or browser streams (WASM).
 
@@ -32,5 +32,5 @@ Run the binary with no arguments. It speaks LSP over stdio:
 
 ## Layout
 
-- **`src/`** — LSP server (tower-lsp): server, diagnostics, document links, workspace model, registry integration.
+- **`src/`** — LSP server (tower-lsp): server, diagnostics, registry links, workspace model, registry integration.
 - **`editors/`** — Editor-specific clients and config (e.g. VS Code extension); see [editors/README.md](editors/README.md).

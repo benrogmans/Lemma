@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 /// Unified source location information
 ///
-/// Combines source file identifier, span, document name, and the full source text.
+/// Combines source file identifier, span, spec name, and the full source text.
 /// Pass this type through; do not unpack into individual fields.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Source {
@@ -13,8 +13,8 @@ pub struct Source {
     /// Span in source code (uses Lemma's existing `Span` type from `crate::ast::Span`)
     pub span: Span,
 
-    /// Document name (the Lemma document containing this code)
-    pub doc_name: String,
+    /// Spec name (the Lemma spec containing this code)
+    pub spec_name: String,
 
     /// Full source text of the file this location refers to
     pub source_text: Arc<str>,
@@ -26,13 +26,13 @@ impl Source {
     pub fn new(
         attribute: impl Into<String>,
         span: Span,
-        doc_name: impl Into<String>,
+        spec_name: impl Into<String>,
         source_text: Arc<str>,
     ) -> Self {
         Self {
             attribute: attribute.into(),
             span,
-            doc_name: doc_name.into(),
+            spec_name: spec_name.into(),
             source_text,
         }
     }
@@ -161,7 +161,7 @@ mod tests {
         };
         let loc = Source::new("test.lemma", span, "test", test_arc());
         assert_eq!(loc.attribute, "test.lemma");
-        assert_eq!(loc.doc_name, "test");
+        assert_eq!(loc.spec_name, "test");
         assert_eq!(&*loc.source_text, "hello world");
     }
 
@@ -175,7 +175,7 @@ mod tests {
         };
         let loc = Source::new("test.lemma", span, "test", Arc::from("other"));
         assert_eq!(loc.attribute, "test.lemma");
-        assert_eq!(loc.doc_name, "test");
+        assert_eq!(loc.spec_name, "test");
         assert_eq!(&*loc.source_text, "other");
     }
 }

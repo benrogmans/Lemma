@@ -11,7 +11,7 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
     // C := solution is "EU"
     // (A & B) | (!A & C) | (B & C) => (A & B) | (!A & C)
     let code = r#"
-        doc shop_consensus
+        spec shop_consensus
         fact discount_code: [text]
         fact member_level: [text]
         fact solution: [text]

@@ -8,21 +8,21 @@ use std::collections::HashMap;
 fn test_inline_type_import() -> Result<(), Error> {
     let mut engine = Engine::new();
 
-    // Define a type in one document
-    let age_doc = r#"
-doc age
+    // Define a type in one spec
+    let age_spec = r#"
+spec age
 type age: number -> minimum 0 -> maximum 150
 "#;
 
-    // Use that type inline in another document (without commands)
-    let test_doc = r#"
-doc test
+    // Use that type inline in another spec (without commands)
+    let test_spec = r#"
+spec test
 fact user_age: [age from age]
 rule is_adult: user_age >= 18
 "#;
 
-    add_lemma_code_blocking(&mut engine, age_doc, "age.lemma").expect("add age doc");
-    add_lemma_code_blocking(&mut engine, test_doc, "test.lemma").expect("add test doc");
+    add_lemma_code_blocking(&mut engine, age_spec, "age.lemma").expect("add age spec");
+    add_lemma_code_blocking(&mut engine, test_spec, "test.lemma").expect("add test spec");
     let now = DateTimeValue::now();
 
     let mut facts = HashMap::new();
@@ -57,21 +57,21 @@ rule is_adult: user_age >= 18
 fn test_inline_type_import_with_constraints() -> Result<(), Error> {
     let mut engine = Engine::new();
 
-    // Define a type in one document
-    let age_doc = r#"
-doc age
+    // Define a type in one spec
+    let age_spec = r#"
+spec age
 type age: number -> minimum 0 -> maximum 150
 "#;
 
     // Use that type inline with additional constraints
-    let test_doc = r#"
-doc test
+    let test_spec = r#"
+spec test
 fact user_age: [age from age -> maximum 120]
 rule is_senior: user_age >= 65
 "#;
 
-    add_lemma_code_blocking(&mut engine, age_doc, "age.lemma").expect("add age doc");
-    add_lemma_code_blocking(&mut engine, test_doc, "test.lemma").expect("add test doc");
+    add_lemma_code_blocking(&mut engine, age_spec, "age.lemma").expect("add age spec");
+    add_lemma_code_blocking(&mut engine, test_spec, "test.lemma").expect("add test spec");
     let now = DateTimeValue::now();
 
     let mut facts = HashMap::new();

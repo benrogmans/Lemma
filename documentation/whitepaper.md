@@ -15,7 +15,7 @@ title: Whitepaper
 
 Business rules are traditionally encoded in either natural language documents that humans can read but machines cannot execute, or in imperative code that machines can execute but humans struggle to read. This creates a fundamental disconnect: legal contracts, compliance policies, and business rules live in one world, while their software implementations live in another. Changes to policies require translation by developers, introducing delay, cost, and the risk of misinterpretation.
 
-Lemma bridges this gap. It is a declarative language designed specifically for expressing business logic in a form that flows like natural language. Lemma documents can encode pricing rules, tax calculations, eligibility criteria, contracts, and policies in a way that business stakeholders can read and validate, while software systems can enforce and automate them.
+Lemma bridges this gap. It is a declarative language designed specifically for expressing business logic in a form that flows like natural language. Lemma specs can encode pricing rules, tax calculations, eligibility criteria, contracts, and policies in a way that business stakeholders can read and validate, while software systems can enforce and automate them.
 
 This white paper introduces Lemma's design principles, core features, implementation architecture, and practical applications. We demonstrate how Lemma's unique "default/unless" semantics, rich type system, and compositional design make it an ideal choice for encoding complex business rules in domains ranging from finance and insurance to e-commerce and human resources.
 
@@ -62,7 +62,7 @@ Lemma addresses these problems by providing a declarative language that:
 - **Types matter**: User-defined types with units, constraints, and automatic conversions eliminate a major source of bugs.
 - **Last wins semantics**: The "unless" clause uses "last matching wins" logic that mirrors how humans naturally express exceptions and special cases.
 - **Fully executable**: Despite its natural syntax, Lemma uses a pure Rust evaluator, providing rigorous logical inference and deterministic evaluation.
-- **Composable**: Documents reference and extend each other, enabling modular rule design.
+- **Composable**: Specs reference and extend each other, enabling modular rule design.
 - **Auditable**: Every decision can be traced back to specific facts and rules with operation records.
 
 ### 1.3 Example
@@ -70,7 +70,7 @@ Lemma addresses these problems by providing a declarative language that:
 Consider a simple pricing rule:
 
 ```lemma
-doc pricing
+spec pricing
 
 fact quantity: [number]
 fact is_vip: false
@@ -83,7 +83,7 @@ rule discount: 0%
 rule price: 200 - discount
 ```
 
-This document is immediately readable by business stakeholders while being fully executable by software systems. The semantics are clear: start with no discount, but if quantity is 10 or more, apply 10%; if 50 or more, apply 20%; if customer is VIP, apply 25%. The last matching condition wins, so a VIP customer with 100 units gets 25%, not 20%.
+This spec is immediately readable by business stakeholders while being fully executable by software systems. The semantics are clear: start with no discount, but if quantity is 10 or more, apply 10%; if 50 or more, apply 20%; if customer is VIP, apply 25%. The last matching condition wins, so a VIP customer with 100 units gets 25%, not 20%.
 
 ---
 
@@ -139,15 +139,15 @@ rule weight_in_pounds: weight in pounds  // Automatic conversion within type
 
 ### 2.4 Composition over configuration
 
-Lemma encourages building complex systems from simple, composable pieces. Documents can reference other documents, rules can reference other rules, and facts can be overridden in specific contexts:
+Lemma encourages building complex systems from simple, composable pieces. Specs can reference other specs, rules can reference other rules, and facts can be overridden in specific contexts:
 
 ```lemma
-doc base_employee
+spec base_employee
 fact salary: 50000
 fact bonus_rate: 5%
 
-doc manager
-fact employee: doc base_employee
+spec manager
+fact employee: spec base_employee
 fact employee.salary: 80000
 fact employee.bonus_rate: 15%
 
@@ -319,7 +319,7 @@ fact weight: 75 kilograms
 - `help "<text>"` - Add documentation
 - `default <value>` - Set default values
 
-**Type imports** enable reuse across documents:
+**Type imports** enable reuse across specs:
 
 ```lemma
 type currency from base_types
@@ -386,12 +386,12 @@ Ratios interact intelligently with other types in arithmetic operations, automat
 
 ## 5. Compositional architecture
 
-### 5.1 Documents
+### 5.1 Specs
 
-Every Lemma file contains one or more documents. Documents are namespaces that encapsulate related facts and rules:
+Every Lemma file contains one or more specs. Specs are namespaces that encapsulate related facts and rules:
 
 ```lemma
-doc employee/benefits
+spec employee/benefits
 """
 Company benefits policy for full-time employees
 """
@@ -404,36 +404,36 @@ rule vacation_days: base_vacation
   unless years_of_service >= 10 then 25 days
 ```
 
-Document names can be hierarchical (using `/` separators), enabling logical organization of rule libraries.
+Spec names can be hierarchical (using `/` separators), enabling logical organization of rule libraries.
 
 ### 5.2 Document references
 
-Documents can reference other documents, enabling composition and reuse:
+Specs can reference other specs, enabling composition and reuse:
 
 ```lemma
-doc base_employee
+spec base_employee
 fact name: "John Doe"
 fact salary: 50000
 
-doc manager
-fact employee: doc base_employee
+spec manager
+fact employee: spec base_employee
 fact employee.salary: 80000
 
 rule manager_bonus: employee.salary * 0.15
 ```
 
-This pattern allows creating specialized variants of base documents without duplication.
+This pattern allows creating specialized variants of base specs without duplication.
 
 ### 5.3 Fact bindings
 
 Facts can be bound at different levels:
 
 ```lemma
-doc pricing
+spec pricing
 fact quantity: 100
 fact unit_price: 50
 
-doc wholesale_pricing
+spec wholesale_pricing
 fact pricing.quantity: 1000
 fact pricing.unit_price: 35
 
@@ -444,7 +444,7 @@ This enables scenario modeling and context-specific rule evaluation.
 
 ### 5.4 Workspace model
 
-Lemma supports loading multiple documents together in a workspace. Documents can reference each other, creating a network of related rules:
+Lemma supports loading multiple specs together in a workspace. Specs can reference each other, creating a network of related rules:
 
 ```
 policies/
@@ -465,7 +465,7 @@ The CLI can show a workspace summary:
 lemma workspace ./policies/
 ```
 
-Or run queries against documents in a workspace:
+Or run queries against specs in a workspace:
 
 ```bash
 lemma run pricing final_price --workdir ./policies/
@@ -501,10 +501,10 @@ The parser is built using Pest, a parsing expression grammar (PEG) parser genera
 
 - Token recognition (numbers, strings, dates, units)
 - Expression parsing with correct operator precedence
-- Document structure and statements
+- Spec structure and statements
 - Error recovery and reporting
 
-The parser produces an Abstract Syntax Tree (AST) that captures the structure of the source document.
+The parser produces an Abstract Syntax Tree (AST) that captures the structure of the source spec.
 
 ### 6.3 Semantic validation
 
@@ -515,7 +515,7 @@ After parsing, the semantic validator performs several checks:
 3. **Scope Checking**: Ensures identifiers are used in appropriate scopes
 4. **Circular Dependency Detection**: Identifies and reports circular rule references
 
-The validator produces a semantic model that captures the meaning of the document, independent of its syntactic representation.
+The validator produces a semantic model that captures the meaning of the spec, independent of its syntactic representation.
 
 ### 6.4 Pure Rust Evaluator
 
@@ -580,7 +580,7 @@ The evaluator provides comprehensive error handling:
 Progressive tax systems are naturally expressed in Lemma:
 
 ```lemma
-doc tax_policy
+spec tax_policy
 
 fact income: 85000
 fact filing_status: "single"
@@ -604,7 +604,7 @@ rule tax_owed: 0
 Complex pricing rules with volume discounts and customer tiers:
 
 ```lemma
-doc pricing
+spec pricing
 
 fact quantity: [number]
 fact customer_tier: "standard"
@@ -631,7 +631,7 @@ rule final_price: quantity * unit_price * (1 - best_discount)
 Determining eligibility based on multiple criteria:
 
 ```lemma
-doc insurance/eligibility
+spec insurance/eligibility
 
 fact age: [number]
 fact pre_existing_conditions: [boolean]
@@ -657,7 +657,7 @@ rule is_eligible: eligible_age and eligible_health and eligible_employment
 Complex shipping calculations with multiple factors:
 
 ```lemma
-doc shipping
+spec shipping
 
 fact order_total: [number]
 type mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
@@ -688,7 +688,7 @@ rule final_shipping: base_rate + weight_surcharge + expedited_fee
 Complex compensation rules with multiple variables:
 
 ```lemma
-doc compensation
+spec compensation
 
 fact base_salary: [number]
 fact years_of_service: [number]
@@ -907,7 +907,7 @@ Key innovations include:
 1. **Natural Language Semantics**: "Last matching wins" logic that mirrors how humans express rules
 2. **Rich Type System**: User-defined types with units, constraints, and automatic conversions
 3. **Type-Aware Arithmetic**: Intelligent handling of operations between different types
-4. **Compositional Design**: Documents reference and extend each other, enabling modular rule libraries
+4. **Compositional Design**: Specs reference and extend each other, enabling modular rule libraries
 5. **Veto Semantics**: Clear distinction between returning false and blocking a rule entirely
 6. **Pure Rust Implementation**: Leveraging Rust's safety and performance for robust execution
 
@@ -944,7 +944,7 @@ cargo install lemma
 
 # Create a rule file
 cat > example.lemma << 'EOF'
-doc example
+spec example
 
 fact age: 25
 fact income: 50000
@@ -973,12 +973,12 @@ Documentation, examples, and source code are available at:
 Here is a complete example demonstrating many of Lemma's features:
 
 ```lemma
-doc employee/compensation
+spec employee/compensation
 """
 Company Compensation Policy
 Effective Date: 2024-01-01
 
-This document encodes the complete compensation rules including
+This spec encodes the complete compensation rules including
 base salary, bonuses, equity, and benefits.
 """
 
@@ -1048,8 +1048,8 @@ lemma run compensation vacation_days \
 Core syntax elements:
 
 ```
-Document:
-  doc <name>
+Spec:
+  spec <name>
   ["""documentation"""]
   <statements>
 

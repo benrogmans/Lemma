@@ -1,4 +1,4 @@
-use crate::parsing::ast::LemmaDoc;
+use crate::parsing::ast::LemmaSpec;
 use crate::parsing::source::Source;
 use crate::registry::RegistryErrorKind;
 use std::fmt;
@@ -10,10 +10,10 @@ pub struct ErrorDetails {
     pub message: String,
     pub source: Option<Source>,
     pub suggestion: Option<String>,
-    /// When the cause involves a referenced document, that temporal version. Displayed as "See document 'X' (active from Y)."
-    pub related_doc: Option<Arc<LemmaDoc>>,
-    /// Document we were planning when this error occurred. Used for display grouping ("In document 'X':").
-    pub document_context: Option<Arc<LemmaDoc>>,
+    /// When the cause involves a referenced spec, that temporal version. Displayed as "See spec 'X' (active from Y)."
+    pub related_spec: Option<Arc<LemmaSpec>>,
+    /// Spec we were planning when this error occurred. Used for display grouping ("In spec 'X':").
+    pub spec_context: Option<Arc<LemmaSpec>>,
 }
 
 /// Error types for the Lemma system with source location tracking
@@ -31,7 +31,7 @@ pub enum Error {
     /// Registry resolution error with source location and structured error kind.
     ///
     /// Produced when an `@...` reference cannot be resolved by the configured Registry
-    /// (e.g. the document was not found, the request was unauthorized, or the network
+    /// (e.g. the spec was not found, the request was unauthorized, or the network
     /// is unreachable).
     Registry {
         details: Box<ErrorDetails>,
@@ -47,11 +47,11 @@ pub enum Error {
         limit_value: String,
         actual_value: String,
         suggestion: String,
-        /// Document we were planning when this limit was exceeded. Used for display grouping.
-        document_context: Option<Arc<LemmaDoc>>,
+        /// Spec we were planning when this limit was exceeded. Used for display grouping.
+        spec_context: Option<Arc<LemmaSpec>>,
     },
 
-    /// Request error: invalid or unsatisfiable API request (e.g. document not found, invalid parameters).
+    /// Request error: invalid or unsatisfiable API request (e.g. spec not found, invalid parameters).
     /// Not a parse/planning failure; the request itself is invalid. Such errors occur *before* any evaluation and *never during* evaluation.
     Request(Box<ErrorDetails>),
 }
@@ -67,8 +67,8 @@ impl Error {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
-            related_doc: None,
-            document_context: None,
+            related_spec: None,
+            spec_context: None,
         }))
     }
 
@@ -91,8 +91,8 @@ impl Error {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
-            related_doc: None,
-            document_context: None,
+            related_spec: None,
+            spec_context: None,
         }))
     }
 
@@ -115,12 +115,12 @@ impl Error {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
-            related_doc: None,
-            document_context: None,
+            related_spec: None,
+            spec_context: None,
         }))
     }
 
-    /// Create a request error (invalid API request, e.g. document not found).
+    /// Create a request error (invalid API request, e.g. spec not found).
     pub fn request(
         message: impl Into<String>,
         source: Option<Source>,
@@ -130,25 +130,25 @@ impl Error {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
-            related_doc: None,
-            document_context: None,
+            related_spec: None,
+            spec_context: None,
         }))
     }
 
-    /// Create a validation error with optional related document (for document-interface errors).
-    /// When related_doc is set, Display shows "See document 'X' (active from Y)."
+    /// Create a validation error with optional related spec (for spec-interface errors).
+    /// When related_spec is set, Display shows "See spec 'X' (active from Y)."
     pub fn validation_with_context(
         message: impl Into<String>,
         source: Option<Source>,
         suggestion: Option<impl Into<String>>,
-        related_doc: Option<Arc<LemmaDoc>>,
+        related_spec: Option<Arc<LemmaSpec>>,
     ) -> Self {
         Self::Validation(Box::new(ErrorDetails {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
-            related_doc,
-            document_context: None,
+            related_spec,
+            spec_context: None,
         }))
     }
 
@@ -165,30 +165,30 @@ impl Error {
                 message: message.into(),
                 source,
                 suggestion: suggestion.map(Into::into),
-                related_doc: None,
-                document_context: None,
+                related_spec: None,
+                spec_context: None,
             }),
             identifier: identifier.into(),
             kind,
         }
     }
 
-    /// Attach document context for display grouping. Returns a new Error with context set.
-    pub fn with_document_context(self, doc: Arc<LemmaDoc>) -> Self {
+    /// Attach spec context for display grouping. Returns a new Error with context set.
+    pub fn with_spec_context(self, spec: Arc<LemmaSpec>) -> Self {
         match self {
             Error::Parsing(details) => {
                 let mut d = *details;
-                d.document_context = Some(doc);
+                d.spec_context = Some(spec.clone());
                 Error::Parsing(Box::new(d))
             }
             Error::Inversion(details) => {
                 let mut d = *details;
-                d.document_context = Some(doc);
+                d.spec_context = Some(spec.clone());
                 Error::Inversion(Box::new(d))
             }
             Error::Validation(details) => {
                 let mut d = *details;
-                d.document_context = Some(doc);
+                d.spec_context = Some(spec.clone());
                 Error::Validation(Box::new(d))
             }
             Error::Registry {
@@ -197,7 +197,7 @@ impl Error {
                 kind,
             } => {
                 let mut d = *details;
-                d.document_context = Some(doc);
+                d.spec_context = Some(spec.clone());
                 Error::Registry {
                     details: Box::new(d),
                     identifier,
@@ -209,31 +209,31 @@ impl Error {
                 limit_value,
                 actual_value,
                 suggestion,
-                document_context: _,
+                spec_context: _,
             } => Error::ResourceLimitExceeded {
                 limit_name,
                 limit_value,
                 actual_value,
                 suggestion,
-                document_context: Some(doc),
+                spec_context: Some(spec.clone()),
             },
             Error::Request(details) => {
                 let mut d = *details;
-                d.document_context = Some(doc);
+                d.spec_context = Some(spec);
                 Error::Request(Box::new(d))
             }
         }
     }
 }
 
-fn format_related_doc(doc: &LemmaDoc) -> String {
-    let effective_from_str = doc
+fn format_related_spec(spec: &LemmaSpec) -> String {
+    let effective_from_str = spec
         .effective_from()
         .map(|d| d.to_string())
         .unwrap_or_else(|| "beginning".to_string());
     format!(
-        "See document '{}' (effective from {}).",
-        doc.name, effective_from_str
+        "See spec '{}' (effective from {}).",
+        spec.name, effective_from_str
     )
 }
 
@@ -249,51 +249,51 @@ fn write_source_location(f: &mut fmt::Formatter<'_>, source: &Option<Source>) ->
     }
 }
 
-fn write_related_doc(f: &mut fmt::Formatter<'_>, details: &ErrorDetails) -> fmt::Result {
-    if let Some(ref related) = details.related_doc {
-        write!(f, " {}", format_related_doc(related))?;
+fn write_related_spec(f: &mut fmt::Formatter<'_>, details: &ErrorDetails) -> fmt::Result {
+    if let Some(ref related) = details.related_spec {
+        write!(f, " {}", format_related_spec(related))?;
     }
     Ok(())
 }
 
-fn write_document_context(f: &mut fmt::Formatter<'_>, doc: &LemmaDoc) -> fmt::Result {
-    write!(f, "In document '{}': ", doc.name)
+fn write_spec_context(f: &mut fmt::Formatter<'_>, spec: &LemmaSpec) -> fmt::Result {
+    write!(f, "In spec '{}': ", spec.name)
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Parsing(details) => {
-                if let Some(ref doc) = details.document_context {
-                    write_document_context(f, doc)?;
+                if let Some(ref spec) = details.spec_context {
+                    write_spec_context(f, spec)?;
                 }
                 write!(f, "Parse error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write_related_doc(f, details)?;
+                write_related_spec(f, details)?;
                 write_source_location(f, &details.source)
             }
             Error::Inversion(details) => {
-                if let Some(ref doc) = details.document_context {
-                    write_document_context(f, doc)?;
+                if let Some(ref spec) = details.spec_context {
+                    write_spec_context(f, spec)?;
                 }
                 write!(f, "Inversion error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write_related_doc(f, details)?;
+                write_related_spec(f, details)?;
                 write_source_location(f, &details.source)
             }
             Error::Validation(details) => {
-                if let Some(ref doc) = details.document_context {
-                    write_document_context(f, doc)?;
+                if let Some(ref spec) = details.spec_context {
+                    write_spec_context(f, spec)?;
                 }
                 write!(f, "Validation error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write_related_doc(f, details)?;
+                write_related_spec(f, details)?;
                 write_source_location(f, &details.source)
             }
             Error::Registry {
@@ -301,8 +301,8 @@ impl fmt::Display for Error {
                 identifier,
                 kind,
             } => {
-                if let Some(ref doc) = details.document_context {
-                    write_document_context(f, doc)?;
+                if let Some(ref spec) = details.spec_context {
+                    write_spec_context(f, spec)?;
                 }
                 write!(
                     f,
@@ -312,7 +312,7 @@ impl fmt::Display for Error {
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write_related_doc(f, details)?;
+                write_related_spec(f, details)?;
                 write_source_location(f, &details.source)
             }
             Error::ResourceLimitExceeded {
@@ -320,10 +320,10 @@ impl fmt::Display for Error {
                 limit_value,
                 actual_value,
                 suggestion,
-                document_context,
+                spec_context,
             } => {
-                if let Some(ref doc) = document_context {
-                    write_document_context(f, doc)?;
+                if let Some(ref spec) = spec_context {
+                    write_spec_context(f, spec)?;
                 }
                 write!(
                     f,
@@ -331,14 +331,14 @@ impl fmt::Display for Error {
                 )
             }
             Error::Request(details) => {
-                if let Some(ref doc) = details.document_context {
-                    write_document_context(f, doc)?;
+                if let Some(ref spec) = details.spec_context {
+                    write_spec_context(f, spec)?;
                 }
                 write!(f, "Request error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write_related_doc(f, details)?;
+                write_related_spec(f, details)?;
                 write_source_location(f, &details.source)
             }
         }
@@ -411,7 +411,7 @@ mod tests {
                 line: 1,
                 col: 15,
             },
-            "test_doc",
+            "test_spec",
             Arc::from("fact amount: 100"),
         )
     }
@@ -431,7 +431,7 @@ mod tests {
                 line: 1,
                 col: 6,
             },
-            "suggestion_doc",
+            "suggestion_spec",
             Arc::from("fact amont: 100"),
         );
 

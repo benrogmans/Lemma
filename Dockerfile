@@ -8,7 +8,7 @@ RUN cargo build --release --package lemma-cli
 
 FROM scratch
 COPY --from=builder /build/target/release/lemma /usr/local/bin/lemma
-WORKDIR /docs
+WORKDIR /specs
 ENTRYPOINT ["lemma"]
 CMD ["--help"]
 EXPOSE 8012

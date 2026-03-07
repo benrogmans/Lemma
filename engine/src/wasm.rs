@@ -32,7 +32,7 @@ impl WasmEngine {
             match result {
                 Ok(()) => Ok(JsValue::from_str(&to_json_response(json!({
                     "success": true,
-                    "message": "Document added successfully"
+                    "message": "Spec added successfully"
                 })))),
                 Err(errs) => {
                     let messages: Vec<String> = errs.iter().map(format_error).collect();
@@ -46,13 +46,13 @@ impl WasmEngine {
     #[wasm_bindgen(js_name = evaluate)]
     pub fn evaluate(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         hash: &str,
         rule_names_json: &str,
         fact_values_json: &str,
     ) -> String {
         self.evaluate_inner(
-            doc_name,
+            spec_name,
             &DateTimeValue::now(),
             hash,
             rule_names_json,
@@ -64,7 +64,7 @@ impl WasmEngine {
     #[wasm_bindgen(js_name = evaluateEffective)]
     pub fn evaluate_effective(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         effective: &str,
         hash: &str,
         rule_names_json: &str,
@@ -75,7 +75,7 @@ impl WasmEngine {
             None => return to_json_error_string(&format!("Invalid effective: '{}'", effective)),
         };
         self.evaluate_inner(
-            doc_name,
+            spec_name,
             &effective_dt,
             hash,
             rule_names_json,
@@ -83,27 +83,27 @@ impl WasmEngine {
         )
     }
 
-    #[wasm_bindgen(js_name = listDocuments)]
-    pub fn list_documents(&self) -> String {
+    #[wasm_bindgen(js_name = listSpecs)]
+    pub fn list_specs(&self) -> String {
         let engine = self.engine.borrow();
-        let docs = engine.list_documents();
+        let specs = engine.list_specs();
         to_json_response(json!({
             "success": true,
-            "documents": docs
+            "specs": specs
         }))
     }
 
     /// Schema at current time.
     #[wasm_bindgen(js_name = getSchema)]
-    pub fn get_schema(&self, doc_name: &str, rule_names_json: &str) -> String {
-        self.get_schema_inner(doc_name, &DateTimeValue::now(), rule_names_json)
+    pub fn get_schema(&self, spec_name: &str, rule_names_json: &str) -> String {
+        self.get_schema_inner(spec_name, &DateTimeValue::now(), rule_names_json)
     }
 
     /// Schema at a specific datetime.
     #[wasm_bindgen(js_name = getSchemaEffective)]
     pub fn get_schema_effective(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         effective: &str,
         rule_names_json: &str,
     ) -> String {
@@ -111,13 +111,13 @@ impl WasmEngine {
             Some(dt) => dt,
             None => return to_json_error_string(&format!("Invalid effective: '{}'", effective)),
         };
-        self.get_schema_inner(doc_name, &effective_dt, rule_names_json)
+        self.get_schema_inner(spec_name, &effective_dt, rule_names_json)
     }
 
     #[wasm_bindgen(js_name = invert)]
     pub fn invert(
         &self,
-        _doc_name: &str,
+        _spec_name: &str,
         _rule_name: &str,
         _target_json: &str,
         _provided_values_json: &str,
@@ -140,7 +140,7 @@ impl WasmEngine {
 impl WasmEngine {
     fn evaluate_inner(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         effective: &DateTimeValue,
         hash: &str,
         rule_names_json: &str,
@@ -166,7 +166,7 @@ impl WasmEngine {
         match self
             .engine
             .borrow()
-            .evaluate_json(doc_name, hash_pin, effective, rule_names, json_bytes)
+            .evaluate_json(spec_name, hash_pin, effective, rule_names, json_bytes)
         {
             Ok(response) => {
                 let response_json = serde_json::to_value(&response).unwrap_or_else(|_| json!({}));
@@ -181,14 +181,14 @@ impl WasmEngine {
 
     fn get_schema_inner(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         effective: &DateTimeValue,
         rule_names_json: &str,
     ) -> String {
         let engine = self.engine.borrow();
-        let plan = match engine.get_execution_plan(doc_name, None, effective) {
+        let plan = match engine.get_execution_plan(spec_name, None, effective) {
             Some(p) => p,
-            None => return to_json_error_string(&format!("Document '{}' not found", doc_name)),
+            None => return to_json_error_string(&format!("Spec '{}' not found", spec_name)),
         };
 
         let rule_names: Vec<String> = match parse_rule_names(rule_names_json) {
@@ -265,7 +265,7 @@ fn format_error(error: &Error) -> String {
             limit_value,
             actual_value,
             suggestion,
-            document_context: _,
+            spec_context: _,
         } => {
             format!(
                 "Resource Limit Exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value}). {suggestion}"

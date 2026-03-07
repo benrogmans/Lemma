@@ -17,7 +17,7 @@ use std::str::FromStr;
 #[test]
 fn in_percent_produces_ratio_and_compares_with_percent_literal() {
     let code = r#"
-doc savings
+spec savings
 fact savings_amount: 75
 fact total_amount: 300
 
@@ -66,7 +66,7 @@ rule is_above_30: savings_ratio > 30%
 #[test]
 fn in_percent_then_chained_comparison_with_multiple_thresholds() {
     let code = r#"
-doc summary
+spec summary
 fact part: 18
 fact whole: 60
 
@@ -95,7 +95,7 @@ rule tier: "low"
 #[test]
 fn in_permille_produces_ratio() {
     let code = r#"
-doc permille_doc
+spec permille_spec
 fact value: 0.025
 
 rule as_permille: value in permille
@@ -107,7 +107,7 @@ rule above_20_permille: as_permille > 20 permille
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("permille_doc", None, &now, vec![], HashMap::new())
+        .evaluate("permille_spec", None, &now, vec![], HashMap::new())
         .unwrap();
     let as_permille = response.results.get("as_permille").expect("as_permille");
     match &as_permille.result {
@@ -131,7 +131,7 @@ rule above_20_permille: as_permille > 20 permille
 #[test]
 fn unknown_unit_in_conversion_fails_planning() {
     let code = r#"
-doc bad
+spec bad
 fact x: 100
 
 rule bad_conv: x in not_a_unit
@@ -151,7 +151,7 @@ rule bad_conv: x in not_a_unit
 #[test]
 fn scale_in_eur_still_works_unchanged() {
     let code = r#"
-doc pricing
+spec pricing
 type money: scale
   -> unit eur 1
   -> unit usd 1.1
@@ -184,7 +184,7 @@ rule in_usd: amount in usd
 #[test]
 fn number_minus_ratio_fact_is_100_times_one_minus_discount() {
     let code = r#"
-doc pricing
+spec pricing
 fact discount: [ratio]
 
 rule price: 100 - discount
@@ -242,7 +242,7 @@ fn ratio_display_with_none_unit_shows_number_only() {
 #[test]
 fn chained_ratio_conversion_and_arithmetic() {
     let code = r#"
-doc chained
+spec chained
 fact a: 10
 fact b: 40
 
@@ -285,9 +285,9 @@ rule compared: plus_five > 25%
 }
 
 #[test]
-fn scale_and_ratio_conversion_in_same_doc() {
+fn scale_and_ratio_conversion_in_same_spec() {
     let code = r#"
-doc mixed
+spec mixed
 type money: scale
   -> unit eur 1
 
@@ -341,7 +341,7 @@ rule share_above_20: share_pct > 20%
 #[test]
 fn ratio_comparison_both_sides_ratio() {
     let code = r#"
-doc compare
+spec compare
 fact discount: 15%
 fact threshold: 10%
 

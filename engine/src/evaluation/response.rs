@@ -15,7 +15,7 @@ pub struct EvaluatedRule {
     pub rule_type: LemmaType,
 }
 
-/// Facts from a specific document (semantics types only).
+/// Facts from a specific spec (semantics types only).
 #[derive(Debug, Clone, Serialize)]
 pub struct Facts {
     pub fact_path: String,
@@ -23,10 +23,10 @@ pub struct Facts {
     pub facts: Vec<Fact>,
 }
 
-/// Response from evaluating a Lemma document
+/// Response from evaluating a Lemma spec
 #[derive(Debug, Clone, Serialize)]
 pub struct Response {
-    pub doc_name: String,
+    pub spec_name: String,
     pub facts: Vec<Facts>,
     pub results: IndexMap<String, RuleResult>,
 }
@@ -75,8 +75,8 @@ mod tests {
                 line: 1,
                 col: 1,
             },
-            "test_doc",
-            std::sync::Arc::from("doc test_doc\nfact x: 1\nrule result: x"),
+            "test_spec",
+            std::sync::Arc::from("spec test_spec\nfact x: 1\nrule result: x"),
         )
     }
 
@@ -111,13 +111,13 @@ mod tests {
             },
         );
         let response = Response {
-            doc_name: "test_doc".to_string(),
+            spec_name: "test_spec".to_string(),
             facts: vec![],
             results,
         };
 
         let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("test_doc"));
+        assert!(json.contains("test_spec"));
         assert!(json.contains("test_rule"));
         assert!(json.contains("results"));
     }
@@ -148,7 +148,7 @@ mod tests {
             },
         );
         let mut response = Response {
-            doc_name: "test_doc".to_string(),
+            spec_name: "test_spec".to_string(),
             facts: vec![],
             results,
         };

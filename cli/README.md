@@ -2,7 +2,7 @@
 
 > **A command-line interface for the Lemma language.**
 
-This package provides the `lemma` CLI for running, inspecting, and serving Lemma docs. It ships alongside the `lemma-engine` crate and exposes the same deterministic, auditable evaluation pipeline from the terminal.
+This package provides the `lemma` CLI for running, inspecting, and serving Lemma specs. It ships alongside the `lemma-engine` crate and exposes the same deterministic, auditable evaluation pipeline from the terminal.
 
 ## Status
 
@@ -19,7 +19,7 @@ After installation the `lemma` binary is available on your PATH.
 ## Common commands
 
 ```bash
-# Evaluate a document (all rules)
+# Evaluate a spec (all rules)
 lemma run shipping
 
 # Evaluate specific rules
@@ -28,13 +28,13 @@ lemma run tax_calculation:tax_owed
 # Provide fact values
 lemma run tax_calculation income=75000 filing_status="married"
 
-# Explore documents interactively
+# Explore specs interactively
 lemma run --interactive
 
-# Show document structure
+# Show spec structure
 lemma show pricing
 
-# List available documents
+# List available specs
 lemma list ./documentation/examples
 
 # Start the HTTP server
@@ -49,8 +49,8 @@ Each command supports `--help` for full usage details.
 ## Features
 
 - **Deterministic evaluations** – same audit trail as the engine library
-- **Interactive mode** – select documents, rules, and facts without typing full paths
-- **HTTP server** – evaluate documents over REST, perfect for integration tests and dashboards
+- **Interactive mode** – select specs, rules, and facts without typing full paths
+- **HTTP server** – evaluate specs over REST, perfect for integration tests and dashboards
 - **MCP server** – expose Lemma to AI assistants via the Model Context Protocol
 - **Machine-readable output** – `--raw` flag for tooling and pipelines
 
@@ -63,7 +63,7 @@ lemma run shipping
 # ┌───────────────┬──────────────────────────────────────────────────────┐
 # │ Rule          ┆ Evaluation                                           │
 # ╞═══════════════╪══════════════════════════════════════════════════════╡
-# │ express_fee   ┆ 4.99                                             │
+# │ express_fee   ┆ 4.99                                                 │
 # │               ┆    ...                                               │
 # └───────────────┴──────────────────────────────────────────────────────┘
 ```

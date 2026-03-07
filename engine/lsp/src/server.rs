@@ -12,8 +12,8 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 use crate::diagnostics;
-use crate::document_links;
 use crate::registry::Registry;
+use crate::spec_links;
 use crate::workspace::WorkspaceModel;
 
 /// Shared mutable state accessed by both the LSP handlers and the debounce background task.
@@ -29,7 +29,7 @@ struct SharedState {
 ///
 /// Implements the LSP protocol for Lemma files:
 /// - Diagnostics (parse errors + planning errors) published on file open/change
-/// - Document links for clickable `@external` Registry references
+/// - Registry links for clickable `@external` spec references
 pub struct LemmaLanguageServer {
     client: Client,
     state: Arc<SharedState>,
@@ -80,7 +80,7 @@ impl LemmaLanguageServer {
     }
 
     /// Discover all `.lemma` files under a directory and add them to the workspace.
-    /// No-op on WASM (no filesystem); the single document is provided via didOpen.
+    /// No-op on WASM (no filesystem); the single spec is provided via didOpen.
     #[cfg(not(target_arch = "wasm32"))]
     async fn discover_workspace_files(&self, root_path: &Path) {
         let lemma_files = find_lemma_files(root_path);
@@ -250,7 +250,7 @@ impl LanguageServer for LemmaLanguageServer {
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri;
 
-        // With FULL sync, the last content change contains the entire document.
+        // With FULL sync, the last content change contains the entire spec.
         if let Some(change) = params.content_changes.into_iter().last() {
             {
                 let mut workspace = self.state.workspace.write().await;
@@ -297,7 +297,7 @@ impl LanguageServer for LemmaLanguageServer {
             Ok(formatted) if formatted == text => Ok(None), // No changes needed
             Ok(formatted) => {
                 let line_count = text.lines().count() as u32;
-                // Replace the entire document with the formatted text.
+                // Replace the entire spec with the formatted text.
                 let edit = TextEdit {
                     range: Range {
                         start: Position::new(0, 0),
@@ -321,7 +321,7 @@ impl LanguageServer for LemmaLanguageServer {
 
         match text {
             Some(text) => {
-                let links = document_links::find_registry_links(&text, self.registry.as_ref());
+                let links = spec_links::find_registry_links(&text, self.registry.as_ref());
                 if links.is_empty() {
                     Ok(None)
                 } else {

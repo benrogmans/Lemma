@@ -16,12 +16,12 @@ fn add_lemma_code(engine: &mut Engine, code: &str, source: &str) -> Result<(), V
 }
 
 #[test]
-fn test_evaluate_document_all_rules() {
+fn test_evaluate_spec_all_rules() {
     let mut engine = Engine::new();
     add_lemma_code(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact x: 10
         fact y: 5
         rule sum: x + y
@@ -68,7 +68,7 @@ fn test_evaluate_empty_facts() {
     add_lemma_code(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact price: 100
         rule total: price * 2
     "#,
@@ -95,7 +95,7 @@ fn test_evaluate_boolean_rule() {
     add_lemma_code(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact age: 25
         rule is_adult: age >= 18
     "#,
@@ -119,7 +119,7 @@ fn test_evaluate_with_unless_clause() {
     add_lemma_code(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact quantity: 15
         rule discount: 0
           unless quantity >= 10 then 10
@@ -141,7 +141,7 @@ fn test_evaluate_with_unless_clause() {
 }
 
 #[test]
-fn test_document_not_found() {
+fn test_spec_not_found() {
     let engine = Engine::new();
     let now = DateTimeValue::now();
     let result = engine.evaluate("nonexistent", None, &now, vec![], HashMap::new());
@@ -149,38 +149,38 @@ fn test_document_not_found() {
     let err = result.unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Request error: Document 'nonexistent' not found"
+        "Request error: Spec 'nonexistent' not found"
     );
 }
 
 #[test]
-fn test_multiple_documents() {
+fn test_multiple_specs() {
     let mut engine = Engine::new();
     add_lemma_code(
         &mut engine,
         r#"
-        doc doc1
+        spec spec1
         fact x: 10
         rule result: x * 2
     "#,
-        "doc1.lemma",
+        "spec1.lemma",
     )
     .unwrap();
 
     add_lemma_code(
         &mut engine,
         r#"
-        doc doc2
+        spec spec2
         fact y: 5
         rule result: y * 3
     "#,
-        "doc2.lemma",
+        "spec2.lemma",
     )
     .unwrap();
 
     let now = DateTimeValue::now();
     let response1 = engine
-        .evaluate("doc1", None, &now, vec![], HashMap::new())
+        .evaluate("spec1", None, &now, vec![], HashMap::new())
         .unwrap();
     assert_eq!(
         response1.results.values().next().unwrap().result,
@@ -190,7 +190,7 @@ fn test_multiple_documents() {
     );
 
     let response2 = engine
-        .evaluate("doc2", None, &now, vec![], HashMap::new())
+        .evaluate("spec2", None, &now, vec![], HashMap::new())
         .unwrap();
     assert_eq!(
         response2.results.values().next().unwrap().result,
@@ -206,7 +206,7 @@ fn test_runtime_error_mapping() {
     add_lemma_code(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact numerator: 10
         fact denominator: 0
         rule division: numerator / denominator
@@ -249,7 +249,7 @@ fn test_rules_sorted_by_source_order() {
     add_lemma_code(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact a: 1
         fact b: 2
         rule z: a + b
@@ -307,7 +307,7 @@ fn test_rules_sorted_by_source_order() {
 fn invalid_parent_type_in_type_definition_should_be_rejected() {
     let mut engine = Engine::new();
     let code = r#"
-doc test
+spec test
 type invalid: nonexistent -> minimum 0
 fact value: [invalid]
 rule result: value
@@ -330,7 +330,7 @@ rule result: value
 fn unknown_type_used_in_fact_type_declaration_should_be_rejected() {
     let mut engine = Engine::new();
     let code = r#"
-doc test
+spec test
 fact value: [invalid_parent_type]
 rule result: value
 "#;
@@ -357,7 +357,7 @@ fn test_rule_filtering_evaluates_dependencies() {
     add_lemma_code(
         &mut engine,
         r#"
-        doc test
+        spec test
         fact base: 100
         rule subtotal: base * 2
         rule tax: subtotal * 10%
@@ -399,8 +399,8 @@ fn test_add_lemma_code_empty_string_is_ok() {
     let result = add_lemma_code(&mut engine, "", "test.lemma");
     assert!(result.is_ok());
     assert!(
-        engine.list_documents().is_empty(),
-        "Empty input should produce no documents"
+        engine.list_specs().is_empty(),
+        "Empty input should produce no specs"
     );
 }
 
@@ -410,34 +410,34 @@ fn test_add_lemma_code_whitespace_only_is_ok() {
     let result = add_lemma_code(&mut engine, "   \n\t  ", "test.lemma");
     assert!(result.is_ok());
     assert!(
-        engine.list_documents().is_empty(),
-        "Whitespace-only input should produce no documents"
+        engine.list_specs().is_empty(),
+        "Whitespace-only input should produce no specs"
     );
 }
 
 #[test]
-fn duplicate_document_names_should_be_rejected() {
-    // Higher-standard behavior: duplicate doc names are an error (no silent overwrites).
+fn duplicate_spec_names_should_be_rejected() {
+    // Higher-standard behavior: duplicate spec names are an error (no silent overwrites).
     let mut engine = Engine::new();
     let code = r#"
-doc test
+spec test
 fact x: 1
 
-doc test
+spec test
 fact x: 2
 "#;
 
     let result = add_lemma_code(&mut engine, code, "test.lemma");
     assert!(
         result.is_err(),
-        "Duplicate document names should be rejected (no silent overwrites)"
+        "Duplicate spec names should be rejected (no silent overwrites)"
     );
     let errs = result.unwrap_err();
     assert!(!errs.is_empty(), "expected at least one error");
     let msg = errs[0].to_string();
     assert!(
-        msg.contains("Duplicate document") && msg.contains("test"),
-        "Error should mention the duplicate document name. Got: {}",
+        msg.contains("Duplicate spec") && msg.contains("test"),
+        "Error should mention the duplicate spec name. Got: {}",
         msg
     );
 }

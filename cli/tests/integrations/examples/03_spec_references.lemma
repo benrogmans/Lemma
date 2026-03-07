@@ -1,6 +1,6 @@
-doc base_employee
+spec base_employee
 """
-Base Employee Document
+Base Employee Spec
 
 Defines basic employee facts that can be referenced and extended.
 """
@@ -19,15 +19,15 @@ rule is_eligible_for_bonus:
   unless employment_duration >= 1 years then true
 
 
-doc specific_employee
+spec specific_employee
 """
-Specific Employee Document
+Specific Employee Spec
 
-References the base employee document and binds specific facts.
-Demonstrates document composition, fact binding, and rule references.
+References the base employee spec and binds specific facts.
+Demonstrates spec composition, fact binding, and rule references.
 """
 
-fact employee:                     doc base_employee
+fact employee:                     spec base_employee
 fact employee.employment_duration: 3 years
 fact employee.monthly_salary:      7500
 fact employee.name:                "Alice Smith"
@@ -41,11 +41,11 @@ rule employee_summary:
   employee.name
 
 
-doc contractor
+spec contractor
 """
-Contractor Document
+Contractor Spec
 
-Shows a different employment model using document references.
+Shows a different employment model using spec references.
 """
 
 type money: scale
@@ -54,7 +54,7 @@ type money: scale
 fact hours_worked: 120 hours
 fact hourly_rate:  [money -> minimum 0 -> default 85 eur]
 
-fact person:              doc base_employee
+fact person:              spec base_employee
 fact person.is_full_time: false
 
 rule total_payment:

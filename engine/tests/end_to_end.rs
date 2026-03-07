@@ -9,7 +9,7 @@ use std::str::FromStr;
 #[test]
 fn test_end_to_end_simple_rule() {
     let code = r#"
-doc test
+spec test
 
 fact quantity: 25
 
@@ -49,7 +49,7 @@ rule discount: 0
 #[test]
 fn test_end_to_end_boolean_rule() {
     let code = r#"
-doc test
+spec test
 
 fact age: 25
 fact has_license: true
@@ -87,7 +87,7 @@ rule can_drive: age >= 18 and has_license
 #[test]
 fn test_end_to_end_arithmetic() {
     let code = r#"
-doc test
+spec test
 
 fact base: 100
 fact multiplier: 2
@@ -125,7 +125,7 @@ rule result: base * multiplier
 #[test]
 fn test_end_to_end_rule_reference() {
     let code = r#"
-doc test
+spec test
 
 fact quantity: 25
 

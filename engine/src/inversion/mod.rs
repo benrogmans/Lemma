@@ -140,7 +140,7 @@ pub fn invert(
 ) -> Result<InversionResponse, Error> {
     let executable_rule = plan.get_rule(rule_name).ok_or_else(|| {
         Error::validation(
-            format!("Rule not found: {}.{}", plan.doc_name, rule_name),
+            format!("Rule not found: {}.{}", plan.spec_name, rule_name),
             None,
             None::<String>,
         )
@@ -519,7 +519,7 @@ mod tests {
         // Regression-style test: rule references should be expanded during inversion,
         // and veto conditions should constrain the domains.
         let code = r#"
-doc example
+spec example
 fact x: [number]
 rule base: x
   unless x > 3 then veto "too much"
@@ -562,7 +562,7 @@ rule another: base
     #[test]
     fn test_invert_strict_no_solution_when_value_is_blocked_by_veto() {
         let code = r#"
-doc example
+spec example
 fact x: [number]
 rule base: x
   unless x > 3 then veto "too much"
@@ -595,7 +595,7 @@ rule another: base
     #[test]
     fn test_invert_strict_veto_target_constrains_domain() {
         let code = r#"
-doc example
+spec example
 fact x: [number]
 rule base: x
   unless x > 3 then veto "too much"
@@ -665,7 +665,7 @@ rule another: base
     #[test]
     fn test_invert_strict_any_veto_target_matches_all_veto_ranges() {
         let code = r#"
-doc example
+spec example
 fact x: [number]
 rule base: x
   unless x > 3 then veto "too much"

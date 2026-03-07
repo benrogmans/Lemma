@@ -17,7 +17,7 @@ fn load_examples() -> Engine {
     let examples = [
         "../cli/tests/integrations/examples/01_simple_facts.lemma",
         "../cli/tests/integrations/examples/02_rules_and_unless.lemma",
-        "../cli/tests/integrations/examples/03_document_references.lemma",
+        "../cli/tests/integrations/examples/03_spec_references.lemma",
         "../cli/tests/integrations/examples/04_unit_conversions.lemma",
         "../cli/tests/integrations/examples/05_date_handling.lemma",
         "../cli/tests/integrations/examples/06_tax_calculation.lemma",
@@ -25,7 +25,7 @@ fn load_examples() -> Engine {
         "../cli/tests/integrations/examples/08_rule_references.lemma",
         "../cli/tests/integrations/examples/09_stress_test.lemma",
         "../cli/tests/integrations/examples/10_compensation_policy.lemma",
-        "../cli/tests/integrations/examples/11_document_composition.lemma",
+        "../cli/tests/integrations/examples/11_spec_composition.lemma",
     ];
 
     for path in examples {
@@ -51,13 +51,13 @@ fn test_01_simple_facts() {
     let engine = load_examples();
     let now = DateTimeValue::now();
 
-    // Document has only facts, no rules - just verify it loads without errors
+    // Spec has only facts, no rules - just verify it loads without errors
     let response = engine
         .evaluate("simple_facts", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "simple_facts");
-    // No rules in this document, just facts
+    assert_eq!(response.spec_name, "simple_facts");
+    // No rules in this spec, just facts
     assert_eq!(response.results.len(), 0);
 }
 #[test]
@@ -75,7 +75,7 @@ fn test_02_rules_and_unless() {
         .evaluate("rules_and_unless", None, &now, vec![], facts)
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "rules_and_unless");
+    assert_eq!(response.spec_name, "rules_and_unless");
 
     let final_total = response.results.get("final_total").unwrap();
     match &final_total.result {
@@ -94,16 +94,16 @@ fn test_02_rules_and_unless() {
 }
 
 #[test]
-fn test_03_document_references() {
+fn test_03_spec_references() {
     let engine = load_examples();
     let now = DateTimeValue::now();
 
-    // Test examples/base_employee document
+    // Test examples/base_employee spec
     let response = engine
         .evaluate("base_employee", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "base_employee");
+    assert_eq!(response.spec_name, "base_employee");
     assert!(response
         .results
         .values()
@@ -113,12 +113,12 @@ fn test_03_document_references() {
         .values()
         .any(|r| r.rule.name == "is_eligible_for_bonus"));
 
-    // Test examples/specific_employee document (references base_employee)
+    // Test examples/specific_employee spec (references base_employee)
     let response = engine
         .evaluate("specific_employee", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "specific_employee");
+    assert_eq!(response.spec_name, "specific_employee");
     let salary_with_bonus = response.results.get("salary_with_bonus").unwrap();
     match &salary_with_bonus.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
@@ -137,12 +137,12 @@ fn test_03_document_references() {
         other => panic!("Expected Value for employee_summary, got {:?}", other),
     }
 
-    // Test examples/contractor document (also references base_employee)
+    // Test examples/contractor spec (also references base_employee)
     let response = engine
         .evaluate("contractor", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "contractor");
+    assert_eq!(response.spec_name, "contractor");
     assert!(response
         .results
         .values()
@@ -158,12 +158,12 @@ fn test_04_unit_conversions() {
     let engine = load_examples();
     let now = DateTimeValue::now();
 
-    // Document has all facts defined, no type annotations needed
+    // Spec has all facts defined, no type annotations needed
     let response = engine
         .evaluate("unit_conversions", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "unit_conversions");
+    assert_eq!(response.spec_name, "unit_conversions");
 
     let duration_hours = response.results.get("duration_hours").unwrap();
     match &duration_hours.result {
@@ -208,8 +208,8 @@ fn test_05_date_handling() {
         .evaluate("date_handling", None, &now, vec![], facts)
         .expect("Evaluation failed");
 
-    // Document evaluates successfully
-    assert_eq!(response.doc_name, "date_handling");
+    // Spec evaluates successfully
+    assert_eq!(response.spec_name, "date_handling");
 
     let probation_end = response.results.get("probation_end_date").unwrap();
     match &probation_end.result {
@@ -245,10 +245,10 @@ fn test_06_tax_calculation() {
         .evaluate("tax_calculation", None, &now, vec![], facts)
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "tax_calculation");
+    assert_eq!(response.spec_name, "tax_calculation");
 
     // Note: Expected values need to be recalculated based on Dutch tax brackets
-    // This test verifies the document loads and evaluates, but exact values may need adjustment
+    // This test verifies the spec loads and evaluates, but exact values may need adjustment
     let total_tax = response.results.get("total_tax").unwrap();
     match &total_tax.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
@@ -306,7 +306,7 @@ fn test_07_shipping_policy() {
         .evaluate("shipping_policy", None, &now, vec![], facts)
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "shipping_policy");
+    assert_eq!(response.spec_name, "shipping_policy");
 
     let final_shipping = response.results.get("final_shipping").unwrap();
     match &final_shipping.result {
@@ -352,12 +352,12 @@ fn test_08_rule_references() {
     let engine = load_examples();
     let now = DateTimeValue::now();
 
-    // Test examples/rule_references document
+    // Test examples/rule_references spec
     let response = engine
         .evaluate("rule_references", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "rule_references");
+    assert_eq!(response.spec_name, "rule_references");
     assert_eq!(
         response.results.get("can_drive_legally").unwrap().result,
         lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
@@ -372,12 +372,12 @@ fn test_08_rule_references() {
         other => panic!("Expected Value for driving_status, got {:?}", other),
     }
 
-    // Test examples/eligibility_check document (also in the same file)
+    // Test examples/eligibility_check spec (also in the same file)
     let response = engine
         .evaluate("eligibility_check", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "eligibility_check");
+    assert_eq!(response.spec_name, "eligibility_check");
     assert_eq!(
         response
             .results
@@ -414,7 +414,7 @@ fn test_09_stress_test() {
         .evaluate("stress_test", None, &now, vec![], facts)
         .expect("Evaluation should succeed");
 
-    assert_eq!(response.doc_name, "stress_test");
+    assert_eq!(response.spec_name, "stress_test");
     assert!(!response.results.is_empty());
 }
 
@@ -423,13 +423,13 @@ fn test_09_stress_test_config() {
     let engine = load_examples();
     let now = DateTimeValue::now();
 
-    // Test the config document (has all facts defined)
+    // Test the config spec (has all facts defined)
     let response = engine
         .evaluate("stress_test_config", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "stress_test_config");
-    // Config doc only has facts, no rules to check
+    assert_eq!(response.spec_name, "stress_test_config");
+    // Config spec only has facts, no rules to check
 }
 
 #[test]
@@ -450,9 +450,9 @@ fn test_09_stress_test_extended() {
 
     let response = engine
         .evaluate("stress_test_extended", None, &now, vec![], facts)
-        .expect("Cross-document rule references now work correctly");
+        .expect("Cross-spec rule references now work correctly");
 
-    assert_eq!(response.doc_name, "stress_test_extended");
+    assert_eq!(response.spec_name, "stress_test_extended");
     assert!(!response.results.is_empty());
 }
 
@@ -461,7 +461,7 @@ fn test_10_compensation_policy() {
     let engine = load_examples();
     let now = DateTimeValue::now();
 
-    // Test base_policy document
+    // Test base_policy spec
     let response = engine
         .evaluate(
             "compensation/base_policy",
@@ -472,13 +472,13 @@ fn test_10_compensation_policy() {
         )
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "compensation/base_policy");
+    assert_eq!(response.spec_name, "compensation/base_policy");
     assert!(response
         .results
         .values()
         .any(|r| r.rule.name == "annual_health_cost"));
 
-    // Test engineering_dept document (has all facts defined)
+    // Test engineering_dept spec (has all facts defined)
     let response = engine
         .evaluate(
             "compensation/engineering_dept",
@@ -489,13 +489,13 @@ fn test_10_compensation_policy() {
         )
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "compensation/engineering_dept");
+    assert_eq!(response.spec_name, "compensation/engineering_dept");
     assert!(response
         .results
         .values()
         .any(|r| r.rule.name == "total_package"));
 
-    // Test senior_engineer document
+    // Test senior_engineer spec
     let response = engine
         .evaluate(
             "compensation/senior_engineer",
@@ -505,10 +505,10 @@ fn test_10_compensation_policy() {
             HashMap::new(),
         )
         .unwrap();
-    assert_eq!(response.doc_name, "compensation/senior_engineer");
+    assert_eq!(response.spec_name, "compensation/senior_engineer");
     assert!(!response.results.is_empty());
 
-    // Test principal_engineer document
+    // Test principal_engineer spec
     let response = engine
         .evaluate(
             "compensation/principal_engineer",
@@ -518,12 +518,12 @@ fn test_10_compensation_policy() {
             HashMap::new(),
         )
         .unwrap();
-    assert_eq!(response.doc_name, "compensation/principal_engineer");
+    assert_eq!(response.spec_name, "compensation/principal_engineer");
     assert!(!response.results.is_empty());
 }
 
 #[test]
-fn test_11_document_composition() {
+fn test_11_spec_composition() {
     let engine = load_examples();
     let now = DateTimeValue::now();
 
@@ -531,7 +531,7 @@ fn test_11_document_composition() {
     let response = engine
         .evaluate("pricing/base_config", None, &now, vec![], HashMap::new())
         .expect("Failed to evaluate base_config");
-    assert_eq!(response.doc_name, "pricing/base_config");
+    assert_eq!(response.spec_name, "pricing/base_config");
     assert!(response
         .results
         .values()
@@ -541,7 +541,7 @@ fn test_11_document_composition() {
     let response = engine
         .evaluate("pricing/wholesale", None, &now, vec![], HashMap::new())
         .expect("Failed to evaluate wholesale");
-    assert_eq!(response.doc_name, "pricing/wholesale");
+    assert_eq!(response.spec_name, "pricing/wholesale");
     assert!(response
         .results
         .values()
@@ -550,8 +550,8 @@ fn test_11_document_composition() {
     // Test multi-level nested references - now works correctly!
     let response = engine
         .evaluate("order/wholesale_order", None, &now, vec![], HashMap::new())
-        .expect("Cross-document rule references now work correctly");
-    assert_eq!(response.doc_name, "order/wholesale_order");
+        .expect("Cross-spec rule references now work correctly");
+    assert_eq!(response.spec_name, "order/wholesale_order");
     let order_total = response
         .results
         .values()
@@ -562,11 +562,11 @@ fn test_11_document_composition() {
         "order_total should have a value"
     );
 
-    // Test comparison document with multiple references
+    // Test comparison spec with multiple references
     let response = engine
         .evaluate("order/comparison", None, &now, vec![], HashMap::new())
         .expect("Evaluation should succeed (but rules will veto)");
-    assert_eq!(response.doc_name, "order/comparison");
+    assert_eq!(response.spec_name, "order/comparison");
     assert!(response
         .results
         .values()
@@ -584,7 +584,7 @@ fn test_11_document_composition() {
     let response = engine
         .evaluate("order/custom_wholesale", None, &now, vec![], HashMap::new())
         .expect("Failed to evaluate custom_wholesale");
-    assert_eq!(response.doc_name, "order/custom_wholesale");
+    assert_eq!(response.spec_name, "order/custom_wholesale");
     assert!(response
         .results
         .values()
@@ -600,7 +600,7 @@ fn test_11_document_composition() {
             HashMap::new(),
         )
         .expect("Failed to evaluate multi_reference");
-    assert_eq!(response.doc_name, "complex/multi_reference");
+    assert_eq!(response.spec_name, "complex/multi_reference");
 
     // Check avg_discount calculation works (tests percentage arithmetic)
     let avg_discount = response
@@ -621,32 +621,32 @@ fn test_all_examples_parse() {
     // This test just ensures all examples can be loaded without errors
     let engine = load_examples();
 
-    // Verify all documents are loaded
-    let docs = engine.list_documents();
+    // Verify all specs are loaded
+    let specs = engine.list_specs();
 
-    // Just verify we have a reasonable number of documents loaded
+    // Just verify we have a reasonable number of specs loaded
     assert!(
-        docs.len() >= 10,
-        "Expected at least 10 documents, found {}. Available: {:?}",
-        docs.len(),
-        docs
+        specs.len() >= 10,
+        "Expected at least 10 specs, found {}. Available: {:?}",
+        specs.len(),
+        specs
     );
 
-    // Verify some key documents exist
-    let key_docs = vec![
+    // Verify some key specs exist
+    let key_specs = vec![
         "simple_facts",
         "rules_and_unless",
         "stress_test",
         "stress_test_extended",
     ];
 
-    let doc_names: Vec<&str> = docs.iter().map(|d| d.name.as_str()).collect();
-    for expected in key_docs {
+    let spec_names: Vec<&str> = specs.iter().map(|d| d.name.as_str()).collect();
+    for expected in key_specs {
         assert!(
-            doc_names.contains(&expected),
-            "Expected document '{}' not found. Available: {:?}",
+            spec_names.contains(&expected),
+            "Expected spec '{}' not found. Available: {:?}",
             expected,
-            doc_names
+            spec_names
         );
     }
 }

@@ -10,7 +10,7 @@ fuzz_target!(|data: &[u8]| {
         let mut engine = Engine::new();
 
         let code = r#"
-doc fuzz_test
+spec fuzz_test
 fact x: [number]
 rule doubled: x * 2
 "#;

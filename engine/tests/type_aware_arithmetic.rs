@@ -9,7 +9,7 @@ fn test_money_minus_percentage() {
     let mut engine = Engine::new();
 
     let code = r#"
-doc test_money_minus_percentage
+spec test_money_minus_percentage
 
 fact base_price: 200
 fact discount_rate: 25%
@@ -47,7 +47,7 @@ fn test_money_plus_percentage() {
     let mut engine = Engine::new();
 
     let code = r#"
-doc test_money_plus_percentage
+spec test_money_plus_percentage
 
 fact base: 100
 fact markup: 10%
@@ -82,7 +82,7 @@ fn test_number_times_percentage() {
     let mut engine = Engine::new();
 
     let code = r#"
-doc test_number_times_percentage
+spec test_number_times_percentage
 
 fact amount: 1000
 fact rate: 15%
@@ -117,7 +117,7 @@ fn test_money_minus_percentage_with_rule_reference() {
     let mut engine = Engine::new();
 
     let code = r#"
-doc test_with_rule_reference
+spec test_with_rule_reference
 
 fact base_price: 200
 fact discount_rate: 25%
@@ -153,7 +153,7 @@ fn test_chained_percentage_operations() {
     let mut engine = Engine::new();
 
     let code = r#"
-doc test_chained_percentages
+spec test_chained_percentages
 
 fact original_price: 100
 fact first_discount: 20%

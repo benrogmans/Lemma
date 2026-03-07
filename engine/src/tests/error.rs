@@ -13,7 +13,7 @@ fn test_source() -> Source {
             line: 1,
             col: 15,
         },
-        "test_doc",
+        "test_spec",
         Arc::from(source_text),
     )
 }
@@ -37,7 +37,7 @@ fn test_error_creation_and_display() {
             line: 1,
             col: 6,
         },
-        "suggestion_doc",
+        "suggestion_spec",
         Arc::from(typo_source_text),
     );
 

@@ -9,15 +9,15 @@ use std::collections::HashMap;
 fn test_proof_generated_during_evaluation() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test_proof
+    let spec = r#"
+spec test_proof
 
 fact base_value: 100
 
 rule doubled: base_value * 2
 "#;
 
-    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .evaluate("test_proof", None, &now, vec![], HashMap::new())
@@ -60,8 +60,8 @@ rule doubled: base_value * 2
 fn test_proof_with_rule_reference() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test_proof_ref
+    let spec = r#"
+spec test_proof_ref
 
 fact base_value: 50
 
@@ -69,7 +69,7 @@ rule doubled: base_value * 2
 rule quadruple: doubled * 2
 "#;
 
-    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .evaluate("test_proof_ref", None, &now, vec![], HashMap::new())
@@ -128,8 +128,8 @@ rule quadruple: doubled * 2
 fn test_proof_with_unless_clauses() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test_unless
+    let spec = r#"
+spec test_unless
 
 fact quantity: 5
 fact is_premium: false
@@ -140,7 +140,7 @@ rule discount_percentage: 0%
   unless is_premium then 15%
 "#;
 
-    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .evaluate("test_unless", None, &now, vec![], HashMap::new())
@@ -199,8 +199,8 @@ rule discount_percentage: 0%
 fn test_proof_with_veto_result() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test_veto
+    let spec = r#"
+spec test_veto
 
 fact age: 17
 
@@ -208,7 +208,7 @@ rule age_validation: accept
   unless age < 18 then veto "Must be 18 or older"
 "#;
 
-    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .evaluate("test_veto", None, &now, vec![], HashMap::new())
@@ -240,23 +240,23 @@ rule age_validation: accept
 }
 
 #[test]
-fn test_proof_with_cross_document_rule_reference() {
+fn test_proof_with_cross_spec_rule_reference() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact value: 100
 rule doubled: value * 2
 "#;
 
-    let main_doc = r#"
-doc main
-fact base_ref: doc base
+    let main_spec = r#"
+spec main
+fact base_ref: spec base
 rule result: base_ref.doubled + 50
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "base.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -278,7 +278,7 @@ rule result: base_ref.doubled + 50
     // Verify proof exists
     let proof = result.proof.as_ref().expect("Proof should be generated");
 
-    // Verify proof tree contains cross-document rule reference
+    // Verify proof tree contains cross-spec rule reference
     match &proof.tree {
         lemma::proof::ProofNode::Computation { operands, .. } => {
             // First operand should be a rule reference to base_ref.doubled
@@ -295,10 +295,10 @@ rule result: base_ref.doubled + 50
                     // Expansion should exist
                     match &**expansion {
                         lemma::proof::ProofNode::Computation { .. } => {
-                            // Good - cross-document rule proof is included
+                            // Good - cross-spec rule proof is included
                         }
                         other => panic!(
-                            "Expected Computation in cross-doc expansion, got {:?}",
+                            "Expected Computation in cross-spec expansion, got {:?}",
                             other
                         ),
                     }
@@ -314,25 +314,25 @@ rule result: base_ref.doubled + 50
 }
 
 #[test]
-fn test_cross_document_proof_has_correct_path() {
+fn test_cross_spec_proof_has_correct_path() {
     // This test specifically validates that proofs stored in context
     // have the correct rule_path including segments
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact value: 100
 rule doubled: value * 2
 "#;
 
-    let main_doc = r#"
-doc main
-fact base_ref: doc base
-rule use_cross_doc: base_ref.doubled + 1
+    let main_spec = r#"
+spec main
+fact base_ref: spec base
+rule use_cross_spec: base_ref.doubled + 1
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "base.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -342,17 +342,17 @@ rule use_cross_doc: base_ref.doubled + 1
     let main_rule = response
         .results
         .values()
-        .find(|r| r.rule.name == "use_cross_doc")
-        .expect("use_cross_doc rule should exist");
+        .find(|r| r.rule.name == "use_cross_spec")
+        .expect("use_cross_spec rule should exist");
 
     let proof = main_rule.proof.as_ref().expect("Proof should exist");
 
     // The main rule's proof should have empty segments (it's local)
-    assert_eq!(proof.rule_path.rule, "use_cross_doc");
+    assert_eq!(proof.rule_path.rule, "use_cross_spec");
     assert_eq!(
         proof.rule_path.segments.len(),
         0,
-        "Main document rule should have no segments"
+        "Main spec rule should have no segments"
     );
 
     // Now check the referenced rule's proof inside the tree
@@ -368,10 +368,10 @@ rule use_cross_doc: base_ref.doubled + 1
                     assert_eq!(
                         ref_path.segments.len(),
                         1,
-                        "Cross-document rule reference MUST have segments showing the path"
+                        "Cross-spec rule reference MUST have segments showing the path"
                     );
                     assert_eq!(ref_path.segments[0].fact, "base_ref");
-                    assert_eq!(ref_path.segments[0].doc, "base");
+                    assert_eq!(ref_path.segments[0].spec, "base");
                 }
                 other => panic!("Expected RuleReference, got {:?}", other),
             }
@@ -381,26 +381,26 @@ rule use_cross_doc: base_ref.doubled + 1
 }
 
 #[test]
-fn test_proof_serialization_preserves_cross_document_paths() {
+fn test_proof_serialization_preserves_cross_spec_paths() {
     // CRITICAL TEST: This catches the bug where Proof.rule_path had empty segments
-    // even for cross-document rules. The buggy code would pass all other tests
+    // even for cross-spec rules. The buggy code would pass all other tests
     // because they only checked the tree structure, not the top-level Proof metadata.
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact value: 50
 rule doubled: value * 2
 "#;
 
-    let main_doc = r#"
-doc main
-fact base_ref: doc base
+    let main_spec = r#"
+spec main
+fact base_ref: spec base
 rule use_doubled: base_ref.doubled + 10
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "base.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -474,7 +474,7 @@ rule use_doubled: base_ref.doubled + 10
     );
 
     // THIS IS THE CRITICAL ASSERTION that would have caught the bug:
-    // The segments array should NOT be empty for a cross-document reference
+    // The segments array should NOT be empty for a cross-spec reference
     let segments = rule_ref_path["segments"].as_array().unwrap_or_else(|| {
         panic!(
             "Expected segments array. Rule ref path JSON:\n{}",
@@ -485,7 +485,7 @@ rule use_doubled: base_ref.doubled + 10
     assert_eq!(
         segments.len(),
         1,
-        "BUG: Cross-document rule reference MUST have segments! \
+        "BUG: Cross-spec rule reference MUST have segments! \
          Empty segments means we lost the path information during proof construction."
     );
 
@@ -495,9 +495,9 @@ rule use_doubled: base_ref.doubled + 10
         "Segment should reference base_ref fact"
     );
     assert_eq!(
-        segments[0]["doc"].as_str().unwrap(),
+        segments[0]["spec"].as_str().unwrap(),
         "base",
-        "Segment should reference base document"
+        "Segment should reference base spec"
     );
 }
 
@@ -505,13 +505,13 @@ rule use_doubled: base_ref.doubled + 10
 fn test_comparison_false_normalized_to_positive_in_proof() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test
+    let spec = r#"
+spec test
 rule out: true
  unless 5 < 3 then false
 "#;
 
-    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .evaluate("test", None, &now, vec![], HashMap::new())
