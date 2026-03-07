@@ -1724,6 +1724,56 @@ impl<'a> GraphBuilder<'a> {
                     None
                 }
             }
+
+            ast::ExpressionKind::Now => Some(Expression {
+                kind: ExpressionKind::Now,
+                source_location: expr.source_location.clone(),
+            }),
+
+            ast::ExpressionKind::DateRelative(kind, date_expr, tolerance) => {
+                let converted_date = self.convert_expression_and_extract_dependencies(
+                    date_expr,
+                    current_doc_arc,
+                    facts_map,
+                    current_segments,
+                    depends_on_rules,
+                    effective_doc_refs,
+                )?;
+                let converted_tolerance = match tolerance {
+                    Some(tol) => Some(Arc::new(self.convert_expression_and_extract_dependencies(
+                        tol,
+                        current_doc_arc,
+                        facts_map,
+                        current_segments,
+                        depends_on_rules,
+                        effective_doc_refs,
+                    )?)),
+                    None => None,
+                };
+                Some(Expression {
+                    kind: ExpressionKind::DateRelative(
+                        *kind,
+                        Arc::new(converted_date),
+                        converted_tolerance,
+                    ),
+                    source_location: expr.source_location.clone(),
+                })
+            }
+
+            ast::ExpressionKind::DateCalendar(kind, unit, date_expr) => {
+                let converted_date = self.convert_expression_and_extract_dependencies(
+                    date_expr,
+                    current_doc_arc,
+                    facts_map,
+                    current_segments,
+                    depends_on_rules,
+                    effective_doc_refs,
+                )?;
+                Some(Expression {
+                    kind: ExpressionKind::DateCalendar(*kind, *unit, Arc::new(converted_date)),
+                    source_location: expr.source_location.clone(),
+                })
+            }
         }
     }
 }
@@ -1905,6 +1955,12 @@ fn infer_expression_type(
         }
 
         ExpressionKind::Veto(_) => LemmaType::veto_type(),
+
+        ExpressionKind::Now => primitive_date().clone(),
+
+        ExpressionKind::DateRelative(..) | ExpressionKind::DateCalendar(..) => {
+            primitive_boolean().clone()
+        }
     }
 }
 
@@ -2553,6 +2609,74 @@ fn check_expression(
         }
 
         ExpressionKind::Veto(_) => {}
+
+        ExpressionKind::Now => {}
+
+        ExpressionKind::DateRelative(_, date_expr, tolerance) => {
+            collect(
+                check_expression(date_expr, graph, inferred_types, resolved_types),
+                &mut errors,
+            );
+
+            let date_type = infer_expression_type(date_expr, graph, inferred_types, resolved_types);
+            if !date_type.is_undetermined() && !date_type.is_date() {
+                let expr_source = expression
+                    .source_location
+                    .as_ref()
+                    .expect("BUG: expression missing source in check_expression");
+                errors.push(engine_error_at(
+                    expr_source,
+                    format!(
+                        "Date sugar 'in past/future' requires a date expression, got type '{}'",
+                        date_type
+                    ),
+                ));
+            }
+
+            if let Some(tol) = tolerance {
+                collect(
+                    check_expression(tol, graph, inferred_types, resolved_types),
+                    &mut errors,
+                );
+
+                let tol_type = infer_expression_type(tol, graph, inferred_types, resolved_types);
+                if !tol_type.is_undetermined() && !tol_type.is_duration() {
+                    let expr_source = expression
+                        .source_location
+                        .as_ref()
+                        .expect("BUG: expression missing source in check_expression");
+                    errors.push(engine_error_at(
+                        expr_source,
+                        format!(
+                            "Tolerance in date sugar must be a duration, got type '{}'",
+                            tol_type
+                        ),
+                    ));
+                }
+            }
+        }
+
+        ExpressionKind::DateCalendar(_, _, date_expr) => {
+            collect(
+                check_expression(date_expr, graph, inferred_types, resolved_types),
+                &mut errors,
+            );
+
+            let date_type = infer_expression_type(date_expr, graph, inferred_types, resolved_types);
+            if !date_type.is_undetermined() && !date_type.is_date() {
+                let expr_source = expression
+                    .source_location
+                    .as_ref()
+                    .expect("BUG: expression missing source in check_expression");
+                errors.push(engine_error_at(
+                    expr_source,
+                    format!(
+                        "Calendar sugar requires a date expression, got type '{}'",
+                        date_type
+                    ),
+                ));
+            }
+        }
     }
 
     if errors.is_empty() {

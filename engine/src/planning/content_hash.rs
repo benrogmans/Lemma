@@ -2,10 +2,10 @@
 //! into bytes and produce an 8-char hex hash. Does NOT traverse graphs.
 
 use crate::parsing::ast::{
-    ArithmeticComputation, BooleanValue, CommandArg, ComparisonComputation, ConversionTarget,
-    DurationUnit, ExpressionKind, FactValue, LemmaDoc, LemmaFact, LemmaRule,
-    MathematicalComputation, MetaField, MetaValue, NegationType, Reference, TypeDef, UnlessClause,
-    Value,
+    ArithmeticComputation, BooleanValue, CalendarUnit, CommandArg, ComparisonComputation,
+    ConversionTarget, DateCalendarKind, DateRelativeKind, DurationUnit, ExpressionKind, FactValue,
+    LemmaDoc, LemmaFact, LemmaRule, MathematicalComputation, MetaField, MetaValue, NegationType,
+    Reference, TypeDef, UnlessClause, Value,
 };
 use sha2::{Digest, Sha256};
 use std::io::Write;
@@ -442,6 +442,38 @@ fn write_expression(buf: &mut Vec<u8>, kind: &ExpressionKind) {
                 w(buf, ":");
                 w(buf, msg);
             }
+        }
+        ExpressionKind::Now => {
+            w(buf, "now");
+        }
+        ExpressionKind::DateRelative(kind, date_expr, tolerance) => {
+            w(buf, "(");
+            write_expression(buf, &date_expr.kind);
+            match kind {
+                DateRelativeKind::InPast => w(buf, " in past"),
+                DateRelativeKind::InFuture => w(buf, " in future"),
+            }
+            if let Some(tol) = tolerance {
+                w(buf, " ");
+                write_expression(buf, &tol.kind);
+            }
+            w(buf, ")");
+        }
+        ExpressionKind::DateCalendar(kind, unit, date_expr) => {
+            w(buf, "(");
+            write_expression(buf, &date_expr.kind);
+            match kind {
+                DateCalendarKind::Current => w(buf, " in calendar"),
+                DateCalendarKind::Past => w(buf, " in past calendar"),
+                DateCalendarKind::Future => w(buf, " in future calendar"),
+                DateCalendarKind::NotIn => w(buf, " not in calendar"),
+            }
+            match unit {
+                CalendarUnit::Year => w(buf, " year"),
+                CalendarUnit::Month => w(buf, " month"),
+                CalendarUnit::Week => w(buf, " week"),
+            }
+            w(buf, ")");
         }
     }
 }

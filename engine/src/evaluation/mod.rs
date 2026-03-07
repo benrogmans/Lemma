@@ -20,15 +20,17 @@ use std::collections::HashMap;
 /// Evaluation context for storing intermediate results
 pub struct EvaluationContext {
     fact_values: HashMap<FactPath, LiteralValue>,
-    rule_results: HashMap<RulePath, OperationResult>,
+    pub(crate) rule_results: HashMap<RulePath, OperationResult>,
     rule_proofs: HashMap<RulePath, crate::evaluation::proof::Proof>,
     operations: Vec<crate::OperationRecord>,
-    sources: HashMap<String, String>,
+    pub(crate) sources: HashMap<String, String>,
     proof_nodes: HashMap<Expression, crate::evaluation::proof::ProofNode>,
+    /// The effective datetime (`now` keyword resolves to this).
+    now: LiteralValue,
 }
 
 impl EvaluationContext {
-    fn new(plan: &ExecutionPlan) -> Self {
+    fn new(plan: &ExecutionPlan, now: LiteralValue) -> Self {
         let fact_values: HashMap<FactPath, LiteralValue> = plan
             .facts
             .iter()
@@ -41,7 +43,12 @@ impl EvaluationContext {
             operations: Vec::new(),
             sources: plan.sources.clone(),
             proof_nodes: HashMap::new(),
+            now,
         }
+    }
+
+    pub fn now(&self) -> &LiteralValue {
+        &self.now
     }
 
     fn get_fact(&self, fact_path: &FactPath) -> Option<&LiteralValue> {
@@ -93,8 +100,8 @@ impl Evaluator {
     /// After planning, evaluation is guaranteed to complete. This function never returns
     /// a Error — runtime issues (division by zero, missing facts, user-defined veto)
     /// produce Vetoes, which are valid evaluation outcomes.
-    pub fn evaluate(&self, plan: &ExecutionPlan) -> Response {
-        let mut context = EvaluationContext::new(plan);
+    pub fn evaluate(&self, plan: &ExecutionPlan, now: LiteralValue) -> Response {
+        let mut context = EvaluationContext::new(plan, now);
 
         let mut response = Response {
             doc_name: plan.doc_name.clone(),

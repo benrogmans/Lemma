@@ -100,7 +100,19 @@ fn collect_unknown_facts(
         | ExpressionKind::MathematicalComputation(_, inner) => {
             collect_unknown_facts(inner, provided_facts, result);
         }
-        ExpressionKind::Literal(_) | ExpressionKind::Veto(_) | ExpressionKind::RulePath(_) => {}
+        ExpressionKind::DateRelative(_, date_expr, tolerance) => {
+            collect_unknown_facts(date_expr, provided_facts, result);
+            if let Some(tol) = tolerance {
+                collect_unknown_facts(tol, provided_facts, result);
+            }
+        }
+        ExpressionKind::DateCalendar(_, _, date_expr) => {
+            collect_unknown_facts(date_expr, provided_facts, result);
+        }
+        ExpressionKind::Literal(_)
+        | ExpressionKind::Veto(_)
+        | ExpressionKind::RulePath(_)
+        | ExpressionKind::Now => {}
     }
 }
 

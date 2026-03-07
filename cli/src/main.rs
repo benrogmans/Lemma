@@ -347,7 +347,7 @@ struct RunOutputJson {
     doc_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     facts: Option<Vec<lemma::Facts>>,
-    results: HashMap<String, response::RuleResultJson>,
+    results: indexmap::IndexMap<String, response::RuleResultJson>,
 }
 
 fn format_response_json(response: &lemma::Response, explain: bool) -> RunOutputJson {

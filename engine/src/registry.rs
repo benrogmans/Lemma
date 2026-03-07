@@ -676,6 +676,7 @@ fact quantity: 42"#,
             hour: 0,
             minute: 0,
             second: 0,
+            microsecond: 0,
             timezone: None,
         };
         let mut registry = TestRegistry::new();
@@ -1056,6 +1057,7 @@ type money: scale
                 hour: 0,
                 minute: 0,
                 second: 0,
+                microsecond: 0,
                 timezone: None,
             };
             let url = registry.source_url("user/workspace/somedoc", Some(&effective));
@@ -1098,6 +1100,7 @@ type money: scale
                 hour: 0,
                 minute: 0,
                 second: 0,
+                microsecond: 0,
                 timezone: None,
             };
             let url = registry.navigation_url("user/workspace/somedoc", Some(&effective));
@@ -1140,6 +1143,7 @@ type money: scale
                 hour: 0,
                 minute: 0,
                 second: 0,
+                microsecond: 0,
                 timezone: None,
             };
             let url = registry.url_for_id("owner/repo/doc", Some(&effective));

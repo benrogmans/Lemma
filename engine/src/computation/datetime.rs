@@ -322,6 +322,7 @@ fn chrono_to_semantic_datetime(dt: DateTime<FixedOffset>) -> SemanticDateTime {
         hour: dt.hour(),
         minute: dt.minute(),
         second: dt.second(),
+        microsecond: dt.nanosecond() / 1000 % 1_000_000,
         timezone: Some(SemanticTimezone {
             offset_hours,
             offset_minutes,
@@ -595,4 +596,214 @@ fn chrono_datetime_to_semantic_time(dt: DateTime<FixedOffset>) -> SemanticTime {
             offset_minutes,
         }),
     }
+}
+
+// =============================================================================
+// Date sugar evaluation helpers
+// =============================================================================
+
+use crate::parsing::ast::{CalendarUnit, DateCalendarKind, DateRelativeKind};
+use crate::planning::semantics::primitive_boolean;
+
+fn bool_result(b: bool) -> OperationResult {
+    OperationResult::Value(Box::new(LiteralValue {
+        value: ValueKind::Boolean(b),
+        lemma_type: primitive_boolean().clone(),
+    }))
+}
+
+/// `X in past [tolerance]` / `X in future [tolerance]`
+pub fn compute_date_relative(
+    kind: &DateRelativeKind,
+    date: &SemanticDateTime,
+    tolerance_duration: Option<(&Decimal, &SemanticDurationUnit)>,
+    now: &SemanticDateTime,
+) -> OperationResult {
+    let date_chrono = match semantic_datetime_to_chrono(date) {
+        Ok(dt) => dt,
+        Err(msg) => return OperationResult::Veto(Some(msg)),
+    };
+    let now_chrono = match semantic_datetime_to_chrono(now) {
+        Ok(dt) => dt,
+        Err(msg) => return OperationResult::Veto(Some(msg)),
+    };
+
+    match kind {
+        DateRelativeKind::InPast => match tolerance_duration {
+            None => bool_result(date_chrono < now_chrono),
+            Some((amount, unit)) => {
+                let dur = match duration_to_chrono(amount, unit) {
+                    Ok(d) => d,
+                    Err(msg) => return OperationResult::Veto(Some(msg)),
+                };
+                let window_start = now_chrono - dur;
+                bool_result(date_chrono >= window_start && date_chrono <= now_chrono)
+            }
+        },
+        DateRelativeKind::InFuture => match tolerance_duration {
+            None => bool_result(date_chrono > now_chrono),
+            Some((amount, unit)) => {
+                let dur = match duration_to_chrono(amount, unit) {
+                    Ok(d) => d,
+                    Err(msg) => return OperationResult::Veto(Some(msg)),
+                };
+                let window_end = now_chrono + dur;
+                bool_result(date_chrono >= now_chrono && date_chrono <= window_end)
+            }
+        },
+    }
+}
+
+fn duration_to_chrono(
+    amount: &Decimal,
+    unit: &SemanticDurationUnit,
+) -> Result<ChronoDuration, String> {
+    let val = amount
+        .to_i64()
+        .ok_or_else(|| format!("Duration value {} cannot be converted to integer", amount))?;
+    match unit {
+        SemanticDurationUnit::Year => Ok(ChronoDuration::days(val * 365)),
+        SemanticDurationUnit::Month => Ok(ChronoDuration::days(val * 30)),
+        SemanticDurationUnit::Week => Ok(ChronoDuration::weeks(val)),
+        SemanticDurationUnit::Day => Ok(ChronoDuration::days(val)),
+        SemanticDurationUnit::Hour => Ok(ChronoDuration::hours(val)),
+        SemanticDurationUnit::Minute => Ok(ChronoDuration::minutes(val)),
+        SemanticDurationUnit::Second => Ok(ChronoDuration::seconds(val)),
+        SemanticDurationUnit::Millisecond => Ok(ChronoDuration::milliseconds(val)),
+        SemanticDurationUnit::Microsecond => Ok(ChronoDuration::microseconds(val)),
+    }
+}
+
+/// Calendar period boundaries
+fn calendar_boundaries(
+    now: &DateTime<FixedOffset>,
+    unit: &CalendarUnit,
+    offset: i32,
+) -> Result<(DateTime<FixedOffset>, DateTime<FixedOffset>), String> {
+    let tz = *now.offset();
+    match unit {
+        CalendarUnit::Year => {
+            let target_year = now.year() + offset;
+            let start = NaiveDate::from_ymd_opt(target_year, 1, 1)
+                .ok_or_else(|| format!("Invalid year: {}", target_year))?
+                .and_hms_opt(0, 0, 0)
+                .ok_or("Invalid start time")?;
+            let end = NaiveDate::from_ymd_opt(target_year, 12, 31)
+                .ok_or_else(|| format!("Invalid year end: {}", target_year))?
+                .and_hms_micro_opt(23, 59, 59, 999_999)
+                .ok_or("Invalid end time")?;
+            let start_dt = tz
+                .from_local_datetime(&start)
+                .single()
+                .ok_or("Ambiguous start datetime")?;
+            let end_dt = tz
+                .from_local_datetime(&end)
+                .single()
+                .ok_or("Ambiguous end datetime")?;
+            Ok((start_dt, end_dt))
+        }
+        CalendarUnit::Month => {
+            let mut target_year = now.year();
+            let mut target_month = now.month() as i32 + offset;
+            while target_month < 1 {
+                target_month += 12;
+                target_year -= 1;
+            }
+            while target_month > 12 {
+                target_month -= 12;
+                target_year += 1;
+            }
+            let tm = target_month as u32;
+            let start = NaiveDate::from_ymd_opt(target_year, tm, 1)
+                .ok_or_else(|| format!("Invalid month start: {}-{}", target_year, tm))?
+                .and_hms_opt(0, 0, 0)
+                .ok_or("Invalid start time")?;
+            let next_month_start = if tm == 12 {
+                NaiveDate::from_ymd_opt(target_year + 1, 1, 1)
+            } else {
+                NaiveDate::from_ymd_opt(target_year, tm + 1, 1)
+            }
+            .ok_or_else(|| format!("Invalid next month: {}-{}", target_year, tm + 1))?;
+            let last_day = next_month_start
+                .pred_opt()
+                .ok_or("Invalid last day of month")?;
+            let end = last_day
+                .and_hms_micro_opt(23, 59, 59, 999_999)
+                .ok_or("Invalid end time")?;
+            let start_dt = tz
+                .from_local_datetime(&start)
+                .single()
+                .ok_or("Ambiguous start datetime")?;
+            let end_dt = tz
+                .from_local_datetime(&end)
+                .single()
+                .ok_or("Ambiguous end datetime")?;
+            Ok((start_dt, end_dt))
+        }
+        CalendarUnit::Week => {
+            let iso_week = now.iso_week();
+            let target_week = iso_week.week() as i32 + offset;
+            let target_year = iso_week.year();
+            let monday = NaiveDate::from_isoywd_opt(
+                target_year,
+                target_week.max(1) as u32,
+                chrono::Weekday::Mon,
+            )
+            .ok_or_else(|| {
+                format!(
+                    "Invalid ISO week: year={}, week={}",
+                    target_year, target_week
+                )
+            })?;
+            let sunday = monday + ChronoDuration::days(6);
+            let start = monday.and_hms_opt(0, 0, 0).ok_or("Invalid start time")?;
+            let end = sunday
+                .and_hms_micro_opt(23, 59, 59, 999_999)
+                .ok_or("Invalid end time")?;
+            let start_dt = tz
+                .from_local_datetime(&start)
+                .single()
+                .ok_or("Ambiguous start datetime")?;
+            let end_dt = tz
+                .from_local_datetime(&end)
+                .single()
+                .ok_or("Ambiguous end datetime")?;
+            Ok((start_dt, end_dt))
+        }
+    }
+}
+
+/// `X in [past|future] calendar year|month|week` / `X not in calendar year|month|week`
+pub fn compute_date_calendar(
+    kind: &DateCalendarKind,
+    unit: &CalendarUnit,
+    date: &SemanticDateTime,
+    now: &SemanticDateTime,
+) -> OperationResult {
+    let date_chrono = match semantic_datetime_to_chrono(date) {
+        Ok(dt) => dt,
+        Err(msg) => return OperationResult::Veto(Some(msg)),
+    };
+    let now_chrono = match semantic_datetime_to_chrono(now) {
+        Ok(dt) => dt,
+        Err(msg) => return OperationResult::Veto(Some(msg)),
+    };
+
+    let offset = match kind {
+        DateCalendarKind::Current | DateCalendarKind::NotIn => 0,
+        DateCalendarKind::Past => -1,
+        DateCalendarKind::Future => 1,
+    };
+
+    let (start, end) = match calendar_boundaries(&now_chrono, unit, offset) {
+        Ok(bounds) => bounds,
+        Err(msg) => return OperationResult::Veto(Some(msg)),
+    };
+
+    let in_period = date_chrono >= start && date_chrono <= end;
+    let result = match kind {
+        DateCalendarKind::NotIn => !in_period,
+        _ => in_period,
+    };
+    bool_result(result)
 }

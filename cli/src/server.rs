@@ -1,7 +1,7 @@
 pub mod http {
     use crate::response;
     use axum::{
-        extract::{Path, Query, State},
+        extract::{Form, Path, Query, State},
         http::{HeaderMap, HeaderValue, StatusCode},
         response::{Html, IntoResponse, Json},
         routing::get,
@@ -438,13 +438,13 @@ pub mod http {
         Ok(response)
     }
 
-    /// `POST /{*path}` — evaluate; path = doc name with optional ~hash. Accept-Datetime for temporal. ?rules= to limit. Body = facts JSON.
+    /// `POST /{*path}` — evaluate; path = doc name with optional ~hash. Accept-Datetime for temporal. ?rules= to limit. Body = form-encoded facts.
     async fn doc_post_evaluate(
         State(state): State<AppState>,
         Path(path): Path<String>,
         Query(q): Query<RulesQuery>,
         headers: HeaderMap,
-        Json(body): Json<serde_json::Value>,
+        Form(fact_values): Form<std::collections::HashMap<String, String>>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let (doc_name, hash_pin) = parse_doc_path(&path);
         if doc_name.is_empty() {
@@ -457,7 +457,6 @@ pub mod http {
         }
         let effective = accept_datetime_from_headers(&headers)?;
         let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
-        let fact_values = lemma_openapi::json_body_to_fact_values(&body);
         let engine = state.engine.read().await;
 
         let doc_arc = hash_pin

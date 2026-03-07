@@ -81,6 +81,15 @@ pub(crate) fn parse_primary(
 ) -> Result<Expression, Error> {
     let rule = pair.as_rule();
     match rule {
+        Rule::now_literal => {
+            return Ok(create_expression_with_location(
+                ExpressionKind::Now,
+                &pair,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            ));
+        }
         Rule::literal
         | Rule::number_literal
         | Rule::text_literal
@@ -129,6 +138,15 @@ pub(crate) fn parse_primary(
 
     for inner in pair.clone().into_inner() {
         match inner.as_rule() {
+            Rule::now_literal => {
+                return Ok(create_expression_with_location(
+                    ExpressionKind::Now,
+                    &inner,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                ));
+            }
             Rule::literal
             | Rule::number_literal
             | Rule::text_literal
@@ -303,6 +321,26 @@ fn parse_expression_impl(
             )
         }
 
+        Rule::date_calendar_expression => {
+            return parse_date_calendar_expression(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            );
+        }
+
+        Rule::date_relative_expression => {
+            return parse_date_relative_expression(
+                pair,
+                depth_tracker,
+                attribute,
+                doc_name,
+                source_text.clone(),
+            );
+        }
+
         Rule::conversion_expression => {
             return parse_conversion_expression(
                 pair,
@@ -378,6 +416,24 @@ fn parse_expression_impl(
                 ));
             }
 
+            Rule::date_calendar_expression => {
+                return parse_date_calendar_expression(
+                    inner_pair,
+                    depth_tracker,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                );
+            }
+            Rule::date_relative_expression => {
+                return parse_date_relative_expression(
+                    inner_pair,
+                    depth_tracker,
+                    attribute,
+                    doc_name,
+                    source_text.clone(),
+                );
+            }
             Rule::conversion_expression => {
                 return parse_conversion_expression(
                     inner_pair,
@@ -482,6 +538,20 @@ fn parse_and_operand(
             source_text.clone(),
         ),
         Rule::comparison_expression => parse_comparison_expression(
+            pair,
+            depth_tracker,
+            attribute,
+            doc_name,
+            source_text.clone(),
+        ),
+        Rule::date_calendar_expression => parse_date_calendar_expression(
+            pair,
+            depth_tracker,
+            attribute,
+            doc_name,
+            source_text.clone(),
+        ),
+        Rule::date_relative_expression => parse_date_relative_expression(
             pair,
             depth_tracker,
             attribute,
@@ -916,6 +986,137 @@ fn parse_comparison_expression(
     Ok(left)
 }
 
+fn parse_date_relative_expression(
+    pair: Pair<Rule>,
+    depth_tracker: &mut DepthTracker,
+    attribute: &str,
+    doc_name: &str,
+    source_text: Arc<str>,
+) -> Result<Expression, Error> {
+    let original_pair = pair.clone();
+    let mut base_expr: Option<Expression> = None;
+    let mut kind: Option<DateRelativeKind> = None;
+    let mut tolerance: Option<Expression> = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::base_expression => {
+                if base_expr.is_none() {
+                    base_expr = Some(parse_base_expression(
+                        inner,
+                        depth_tracker,
+                        attribute,
+                        doc_name,
+                        source_text.clone(),
+                    )?);
+                } else {
+                    tolerance = Some(parse_base_expression(
+                        inner,
+                        depth_tracker,
+                        attribute,
+                        doc_name,
+                        source_text.clone(),
+                    )?);
+                }
+            }
+            Rule::date_relative_kind => {
+                let kind_str = inner.as_str().to_lowercase();
+                kind = Some(match kind_str.as_str() {
+                    "past" => DateRelativeKind::InPast,
+                    "future" => DateRelativeKind::InFuture,
+                    other => {
+                        unreachable!(
+                            "BUG: grammar guarantees date_relative_kind is 'past' or 'future', got '{}'",
+                            other
+                        )
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+
+    let date_expr =
+        base_expr.expect("BUG: grammar guarantees date_relative_expression has base expression");
+    let relative_kind =
+        kind.expect("BUG: grammar guarantees date_relative_expression has date_relative_kind");
+
+    Ok(create_expression_with_location(
+        ExpressionKind::DateRelative(relative_kind, Arc::new(date_expr), tolerance.map(Arc::new)),
+        &original_pair,
+        attribute,
+        doc_name,
+        source_text.clone(),
+    ))
+}
+
+fn parse_date_calendar_expression(
+    pair: Pair<Rule>,
+    depth_tracker: &mut DepthTracker,
+    attribute: &str,
+    doc_name: &str,
+    source_text: Arc<str>,
+) -> Result<Expression, Error> {
+    let original_pair = pair.clone();
+    let full_text = pair.as_str().to_lowercase();
+    let mut base_expr: Option<Expression> = None;
+    let mut calendar_unit: Option<CalendarUnit> = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::base_expression => {
+                if base_expr.is_none() {
+                    base_expr = Some(parse_base_expression(
+                        inner,
+                        depth_tracker,
+                        attribute,
+                        doc_name,
+                        source_text.clone(),
+                    )?);
+                }
+            }
+            Rule::calendar_unit_keyword => {
+                let unit_str = inner.as_str().to_lowercase();
+                calendar_unit = Some(match unit_str.as_str() {
+                    "year" => CalendarUnit::Year,
+                    "month" => CalendarUnit::Month,
+                    "week" => CalendarUnit::Week,
+                    other => {
+                        unreachable!(
+                            "BUG: grammar guarantees calendar_unit_keyword is year/month/week, got '{}'",
+                            other
+                        )
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+
+    let date_expr =
+        base_expr.expect("BUG: grammar guarantees date_calendar_expression has base expression");
+    let unit = calendar_unit
+        .expect("BUG: grammar guarantees date_calendar_expression has calendar_unit_keyword");
+
+    let calendar_kind = if full_text.contains("not") && full_text.contains("in") {
+        DateCalendarKind::NotIn
+    } else if full_text.contains("past") {
+        DateCalendarKind::Past
+    } else if full_text.contains("future") {
+        DateCalendarKind::Future
+    } else {
+        DateCalendarKind::Current
+    };
+
+    Ok(create_expression_with_location(
+        ExpressionKind::DateCalendar(calendar_kind, unit, Arc::new(date_expr)),
+        &original_pair,
+        attribute,
+        doc_name,
+        source_text.clone(),
+    ))
+}
+
 fn parse_not_expression(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
@@ -1341,5 +1542,259 @@ rule effective_tax_rate: total_tax / income in percent"#;
                 result.err()
             );
         }
+    }
+
+    #[test]
+    fn test_now_keyword_parses_as_expression_kind_now() {
+        use crate::parsing::ast::ExpressionKind;
+        let input = "doc test\nrule current_time: now";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse now keyword");
+        let doc = &docs[0];
+        let rule = &doc.rules[0];
+        assert!(
+            matches!(rule.expression.kind, ExpressionKind::Now),
+            "Expected ExpressionKind::Now, got {:?}",
+            rule.expression.kind
+        );
+    }
+
+    #[test]
+    fn test_now_is_reserved_keyword() {
+        let input = "doc test\nfact now: 42";
+        let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
+        assert!(
+            result.is_err(),
+            "'now' should be reserved and not usable as fact name"
+        );
+    }
+
+    #[test]
+    fn test_now_in_comparison() {
+        let input = "doc test\nfact deadline: 2026-03-07\nrule is_overdue: deadline < now";
+        let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
+        assert!(
+            result.is_ok(),
+            "Failed to parse 'now' in comparison: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_now_in_arithmetic() {
+        let input = "doc test\nrule offset: now + 1 days";
+        let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
+        assert!(
+            result.is_ok(),
+            "Failed to parse 'now' in arithmetic: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_now_display_round_trips() {
+        let input = "doc test\nrule current_time: now";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse now keyword");
+        let rule = &docs[0].rules[0];
+        assert_eq!(format!("{}", rule.expression), "now");
+    }
+
+    #[test]
+    fn test_fractional_seconds_parse() {
+        let input = "doc test\nfact ts: 2026-02-26T14:30:00.123456Z";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse fractional seconds");
+        let doc = &docs[0];
+        let fact = &doc.facts[0];
+        match &fact.value {
+            crate::parsing::ast::FactValue::Literal(crate::parsing::ast::Value::Date(dtv)) => {
+                assert_eq!(dtv.microsecond, 123456, "Expected 123456 microseconds");
+                assert_eq!(dtv.second, 0);
+                assert_eq!(dtv.minute, 30);
+                assert_eq!(dtv.hour, 14);
+            }
+            other => panic!("Expected Date literal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_fractional_seconds_three_digits() {
+        let input = "doc test\nfact ts: 2026-02-26T14:30:00.123Z";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse fractional seconds (3 digits)");
+        let doc = &docs[0];
+        let fact = &doc.facts[0];
+        match &fact.value {
+            crate::parsing::ast::FactValue::Literal(crate::parsing::ast::Value::Date(dtv)) => {
+                assert_eq!(
+                    dtv.microsecond, 123000,
+                    "Expected 123000 microseconds for .123"
+                );
+            }
+            other => panic!("Expected Date literal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_date_sugar_in_past() {
+        use crate::parsing::ast::{DateRelativeKind, ExpressionKind};
+        let input = "doc test\nfact deadline: 2026-01-01\nrule overdue: deadline in past";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse 'in past'");
+        let rule = &docs[0].rules[0];
+        match &rule.expression.kind {
+            ExpressionKind::DateRelative(kind, _date, tolerance) => {
+                assert_eq!(*kind, DateRelativeKind::InPast);
+                assert!(tolerance.is_none());
+            }
+            other => panic!("Expected DateRelative, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_date_sugar_in_past_with_tolerance() {
+        use crate::parsing::ast::{DateRelativeKind, ExpressionKind};
+        let input = "doc test\nfact deadline: 2026-01-01\nrule recent: deadline in past 7 days";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse 'in past 7 days'");
+        let rule = &docs[0].rules[0];
+        match &rule.expression.kind {
+            ExpressionKind::DateRelative(kind, _date, tolerance) => {
+                assert_eq!(*kind, DateRelativeKind::InPast);
+                assert!(tolerance.is_some(), "Expected tolerance expression");
+            }
+            other => panic!("Expected DateRelative, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_date_sugar_in_future() {
+        use crate::parsing::ast::{DateRelativeKind, ExpressionKind};
+        let input = "doc test\nfact deadline: 2026-01-01\nrule upcoming: deadline in future";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse 'in future'");
+        let rule = &docs[0].rules[0];
+        match &rule.expression.kind {
+            ExpressionKind::DateRelative(kind, _date, tolerance) => {
+                assert_eq!(*kind, DateRelativeKind::InFuture);
+                assert!(tolerance.is_none());
+            }
+            other => panic!("Expected DateRelative, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_date_sugar_in_future_with_tolerance() {
+        use crate::parsing::ast::{DateRelativeKind, ExpressionKind};
+        let input = "doc test\nfact deadline: 2026-01-01\nrule soon: deadline in future 30 days";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse 'in future 30 days'");
+        let rule = &docs[0].rules[0];
+        match &rule.expression.kind {
+            ExpressionKind::DateRelative(kind, _date, tolerance) => {
+                assert_eq!(*kind, DateRelativeKind::InFuture);
+                assert!(tolerance.is_some(), "Expected tolerance expression");
+            }
+            other => panic!("Expected DateRelative, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_date_sugar_in_calendar_year() {
+        use crate::parsing::ast::{CalendarUnit, DateCalendarKind, ExpressionKind};
+        let input =
+            "doc test\nfact deadline: 2026-01-01\nrule this_year: deadline in calendar year";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse 'in calendar year'");
+        let rule = &docs[0].rules[0];
+        match &rule.expression.kind {
+            ExpressionKind::DateCalendar(kind, unit, _date) => {
+                assert_eq!(*kind, DateCalendarKind::Current);
+                assert_eq!(*unit, CalendarUnit::Year);
+            }
+            other => panic!("Expected DateCalendar, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_date_sugar_in_past_calendar_month() {
+        use crate::parsing::ast::{CalendarUnit, DateCalendarKind, ExpressionKind};
+        let input =
+            "doc test\nfact deadline: 2026-01-01\nrule last_month: deadline in past calendar month";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse 'in past calendar month'");
+        let rule = &docs[0].rules[0];
+        match &rule.expression.kind {
+            ExpressionKind::DateCalendar(kind, unit, _date) => {
+                assert_eq!(*kind, DateCalendarKind::Past);
+                assert_eq!(*unit, CalendarUnit::Month);
+            }
+            other => panic!("Expected DateCalendar, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_date_sugar_in_future_calendar_week() {
+        use crate::parsing::ast::{CalendarUnit, DateCalendarKind, ExpressionKind};
+        let input =
+            "doc test\nfact deadline: 2026-01-01\nrule next_week: deadline in future calendar week";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse 'in future calendar week'");
+        let rule = &docs[0].rules[0];
+        match &rule.expression.kind {
+            ExpressionKind::DateCalendar(kind, unit, _date) => {
+                assert_eq!(*kind, DateCalendarKind::Future);
+                assert_eq!(*unit, CalendarUnit::Week);
+            }
+            other => panic!("Expected DateCalendar, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_date_sugar_not_in_calendar_year() {
+        use crate::parsing::ast::{CalendarUnit, DateCalendarKind, ExpressionKind};
+        let input =
+            "doc test\nfact deadline: 2026-01-01\nrule other_year: deadline not in calendar year";
+        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            .expect("Failed to parse 'not in calendar year'");
+        let rule = &docs[0].rules[0];
+        match &rule.expression.kind {
+            ExpressionKind::DateCalendar(kind, unit, _date) => {
+                assert_eq!(*kind, DateCalendarKind::NotIn);
+                assert_eq!(*unit, CalendarUnit::Year);
+            }
+            other => panic!("Expected DateCalendar, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_unit_conversion_still_works() {
+        let input = "doc test\ntype money: scale\n -> unit eur 1.00\n -> unit usd 1.10\nfact price: 100 eur\nrule converted: price in usd";
+        let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
+        assert!(
+            result.is_ok(),
+            "Unit conversion 'in usd' should still work: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_date_sugar_in_past_and_conjunction() {
+        use crate::parsing::ast::ExpressionKind;
+        let input = "doc test\nfact a: 2026-01-01\nfact b: true\nrule check: a in past and b";
+        let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
+        assert!(
+            result.is_ok(),
+            "Failed to parse 'X in past and Y': {:?}",
+            result.err()
+        );
+        let docs = result.unwrap();
+        let rule = &docs[0].rules[0];
+        assert!(
+            matches!(rule.expression.kind, ExpressionKind::LogicalAnd(..)),
+            "Expected LogicalAnd at top level, got {:?}",
+            rule.expression.kind
+        );
     }
 }
