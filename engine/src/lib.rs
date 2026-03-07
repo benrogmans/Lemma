@@ -27,7 +27,7 @@
 //!     .expect("failed to add files");
 //!
 //! // Evaluate the document (all rules, no fact values)
-//! let response = engine.evaluate("example", vec![], HashMap::new()).unwrap();
+//! let response = engine.evaluate("example", None, &lemma::parsing::ast::DateTimeValue::now(), vec![], HashMap::new()).unwrap();
 //! ```
 //!
 //! ## Core Concepts
@@ -66,7 +66,7 @@ pub mod serialization;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-pub use engine::Engine;
+pub use engine::{Context, Engine};
 pub use error::Error;
 pub use evaluation::operations::{
     ComputationKind, OperationKind, OperationRecord, OperationResult,
@@ -86,12 +86,9 @@ pub use planning::semantics::{
     FactPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit, ScaleUnits,
     SemanticDurationUnit, TypeSpecification, ValueKind,
 };
-pub use planning::{DocumentSchema, ExecutionPlan};
+pub use planning::{DocPlanningResult, DocumentSchema, ExecutionPlan, PlanningResult};
 #[cfg(feature = "registry")]
 pub use registry::LemmaBase;
 pub use registry::{
     resolve_registry_references, Registry, RegistryBundle, RegistryError, RegistryErrorKind,
 };
-
-/// Result type for Lemma operations
-pub type LemmaResult<T> = Result<T, Error>;
