@@ -1,3 +1,4 @@
+use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, LiteralValue, Target};
 mod common;
 use common::add_lemma_code_blocking;
@@ -18,11 +19,13 @@ fn test_inversion_simple_arithmetic() {
         rule total: price * quantity
     "#;
     let engine = setup_engine(code);
+    let now = DateTimeValue::now();
 
     // Invert: total = 100 with no facts provided
     // Should return a solution with shape (price * quantity) = 100
     let result = engine.invert(
         "pricing",
+        &now,
         "total",
         Target::value(LiteralValue::number(100.into())),
         HashMap::new(),
@@ -54,10 +57,12 @@ fn test_inversion_veto_query() {
           unless weight > 100 then veto "too heavy"
     "#;
     let engine = setup_engine(code);
+    let now = DateTimeValue::now();
 
     // Query for "too heavy" veto
     let result = engine.invert(
         "shipping",
+        &now,
         "shipping_cost",
         Target::veto(Some("too heavy".to_string())),
         HashMap::new(),

@@ -5,12 +5,16 @@ use std::{collections::HashMap, str::FromStr};
 use lemma::{Engine, ValueKind};
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 
 /// Get the result of a rule evaluation.
 /// Panics if the rule is not found (test failure).
 /// Returns the OperationResult which must be checked explicitly.
 fn get_rule_result(engine: &mut Engine, doc_name: &str, rule_name: &str) -> lemma::OperationResult {
-    let response = engine.evaluate(doc_name, vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate(doc_name, None, &now, vec![], HashMap::new())
+        .unwrap();
     response
         .results
         .values()
@@ -125,7 +129,8 @@ rule doubled: x * 2
 
         let mut facts: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         facts.insert("x".to_string(), format!("{}", n));
-        let response = engine.evaluate("test", vec![], facts).unwrap();
+        let now = DateTimeValue::now();
+        let response = engine.evaluate("test", None, &now, vec![], facts).unwrap();
 
         let result = response
             .results.values()
@@ -368,28 +373,6 @@ rule and2: b and a
         let v1_result = get_rule_result(&mut engine, "test", "and1");
         let v1 = v1_result.value().expect("Expected value, got veto").clone();
         let v2_result = get_rule_result(&mut engine, "test", "and2");
-        let v2 = v2_result.value().expect("Expected value, got veto").clone();
-
-        if let (ValueKind::Boolean(val1), ValueKind::Boolean(val2)) = (&v1.value, &v2.value) {
-            prop_assert_eq!(val1, val2);
-        }
-    }
-
-    #[test]
-    fn prop_or_commutative(a in prop::bool::ANY, b in prop::bool::ANY) {
-        let mut engine = Engine::new();
-        let code = format!(r#"
-doc test
-fact a: {}
-fact b: {}
-rule or1: a or b
-rule or2: b or a
-"#, a, b);
-        add_lemma_code_blocking(&mut engine, &code, "test").unwrap();
-
-        let v1_result = get_rule_result(&mut engine, "test", "or1");
-        let v1 = v1_result.value().expect("Expected value, got veto").clone();
-        let v2_result = get_rule_result(&mut engine, "test", "or2");
         let v2 = v2_result.value().expect("Expected value, got veto").clone();
 
         if let (ValueKind::Boolean(val1), ValueKind::Boolean(val2)) = (&v1.value, &v2.value) {

@@ -1338,6 +1338,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "sha2",
  "strum",
  "strum_macros",
  "tokio",
@@ -1350,6 +1351,7 @@ name = "lemma-openapi"
 version = "0.7.6"
 dependencies = [
  "lemma-engine",
+ "serde",
  "serde_json",
  "tokio",
 ]

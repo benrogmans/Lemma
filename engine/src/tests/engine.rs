@@ -1,21 +1,18 @@
 use crate::engine::Engine;
+use crate::parsing::ast::DateTimeValue;
 use crate::Error;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
 /// Helper to call the async `add_lemma_files` from synchronous test code.
-fn add_lemma_code(engine: &mut Engine, code: &str, source: &str) -> crate::LemmaResult<()> {
+/// Returns the raw error list; no collapsing.
+fn add_lemma_code(engine: &mut Engine, code: &str, source: &str) -> Result<(), Vec<Error>> {
     let files: HashMap<String, String> =
         std::iter::once((source.to_string(), code.to_string())).collect();
     tokio::runtime::Runtime::new()
         .expect("tokio runtime")
         .block_on(engine.add_lemma_files(files))
-        .map_err(|errs| match errs.len() {
-            0 => unreachable!("add_lemma_files returned Err with empty error list"),
-            1 => errs.into_iter().next().unwrap(),
-            _ => Error::MultipleErrors(errs),
-        })
 }
 
 #[test]
@@ -34,7 +31,10 @@ fn test_evaluate_document_all_rules() {
     )
     .unwrap();
 
-    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test", None, &now, vec![], HashMap::new())
+        .unwrap();
     assert_eq!(response.results.len(), 2);
 
     let sum_result = response
@@ -76,7 +76,10 @@ fn test_evaluate_empty_facts() {
     )
     .unwrap();
 
-    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test", None, &now, vec![], HashMap::new())
+        .unwrap();
     assert_eq!(response.results.len(), 1);
     assert_eq!(
         response.results.values().next().unwrap().result,
@@ -100,7 +103,10 @@ fn test_evaluate_boolean_rule() {
     )
     .unwrap();
 
-    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test", None, &now, vec![], HashMap::new())
+        .unwrap();
     assert_eq!(
         response.results.values().next().unwrap().result,
         crate::OperationResult::Value(Box::new(crate::LiteralValue::from_bool(true)))
@@ -122,7 +128,10 @@ fn test_evaluate_with_unless_clause() {
     )
     .unwrap();
 
-    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test", None, &now, vec![], HashMap::new())
+        .unwrap();
     assert_eq!(
         response.results.values().next().unwrap().result,
         crate::OperationResult::Value(Box::new(crate::LiteralValue::number(
@@ -134,12 +143,13 @@ fn test_evaluate_with_unless_clause() {
 #[test]
 fn test_document_not_found() {
     let engine = Engine::new();
-    let result = engine.evaluate("nonexistent", vec![], HashMap::new());
+    let now = DateTimeValue::now();
+    let result = engine.evaluate("nonexistent", None, &now, vec![], HashMap::new());
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Planning error: Document 'nonexistent' not found"
+        "Request error: Document 'nonexistent' not found"
     );
 }
 
@@ -168,7 +178,10 @@ fn test_multiple_documents() {
     )
     .unwrap();
 
-    let response1 = engine.evaluate("doc1", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response1 = engine
+        .evaluate("doc1", None, &now, vec![], HashMap::new())
+        .unwrap();
     assert_eq!(
         response1.results.values().next().unwrap().result,
         crate::OperationResult::Value(Box::new(crate::LiteralValue::number(
@@ -176,7 +189,9 @@ fn test_multiple_documents() {
         )))
     );
 
-    let response2 = engine.evaluate("doc2", vec![], HashMap::new()).unwrap();
+    let response2 = engine
+        .evaluate("doc2", None, &now, vec![], HashMap::new())
+        .unwrap();
     assert_eq!(
         response2.results.values().next().unwrap().result,
         crate::OperationResult::Value(Box::new(crate::LiteralValue::number(
@@ -200,7 +215,8 @@ fn test_runtime_error_mapping() {
     )
     .unwrap();
 
-    let result = engine.evaluate("test", vec![], HashMap::new());
+    let now = DateTimeValue::now();
+    let result = engine.evaluate("test", None, &now, vec![], HashMap::new());
     // Division by zero returns a Veto (not an error)
     assert!(result.is_ok(), "Evaluation should succeed");
     let response = result.unwrap();
@@ -244,7 +260,10 @@ fn test_rules_sorted_by_source_order() {
     )
     .unwrap();
 
-    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test", None, &now, vec![], HashMap::new())
+        .unwrap();
     assert_eq!(response.results.len(), 3);
 
     assert!(response.results.contains_key("z"));
@@ -297,7 +316,9 @@ rule result: value
     let result = add_lemma_code(&mut engine, code, "test.lemma");
     assert!(result.is_err(), "Engine should reject invalid parent types");
 
-    let msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    assert!(!errs.is_empty(), "expected at least one error");
+    let msg = errs[0].to_string();
     assert!(
         msg.contains("Unknown type: 'nonexistent'"),
         "Error should mention unknown type. Got: {}",
@@ -320,7 +341,9 @@ rule result: value
         "Engine should reject unknown types used in type declarations"
     );
 
-    let msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    assert!(!errs.is_empty(), "expected at least one error");
+    let msg = errs[0].to_string();
     assert!(
         msg.contains("Unknown type: 'invalid_parent_type'"),
         "Error should mention unknown type. Got: {}",
@@ -345,8 +368,15 @@ fn test_rule_filtering_evaluates_dependencies() {
     .unwrap();
 
     // Request only 'total', but it depends on 'subtotal' and 'tax'
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec!["total".to_string()], HashMap::new())
+        .evaluate(
+            "test",
+            None,
+            &now,
+            vec!["total".to_string()],
+            HashMap::new(),
+        )
         .unwrap();
 
     // Only 'total' should be in results
@@ -402,9 +432,11 @@ fact x: 2
         result.is_err(),
         "Duplicate document names should be rejected (no silent overwrites)"
     );
-    let msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    assert!(!errs.is_empty(), "expected at least one error");
+    let msg = errs[0].to_string();
     assert!(
-        msg.contains("Duplicate document name 'test'"),
+        msg.contains("Duplicate document") && msg.contains("test"),
         "Error should mention the duplicate document name. Got: {}",
         msg
     );

@@ -2,6 +2,7 @@
 //!
 //! Ensures all example files in cli/tests/integrations/examples/ are valid and can be evaluated
 
+use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
@@ -30,8 +31,16 @@ fn load_examples() -> Engine {
     for path in examples {
         let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("Failed to read {}: {}", path, e));
-        add_lemma_code_blocking(&mut engine, &content, path)
-            .unwrap_or_else(|e| panic!("Failed to parse {}: {}", path, e));
+        add_lemma_code_blocking(&mut engine, &content, path).unwrap_or_else(|errs| {
+            panic!(
+                "Failed to parse {}: {}",
+                path,
+                errs.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        });
     }
 
     engine
@@ -40,10 +49,11 @@ fn load_examples() -> Engine {
 #[test]
 fn test_01_simple_facts() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     // Document has only facts, no rules - just verify it loads without errors
     let response = engine
-        .evaluate("simple_facts", vec![], HashMap::new())
+        .evaluate("simple_facts", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "simple_facts");
@@ -53,6 +63,7 @@ fn test_01_simple_facts() {
 #[test]
 fn test_02_rules_and_unless() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("base_price".to_string(), "100.00".to_string());
@@ -61,7 +72,7 @@ fn test_02_rules_and_unless() {
     facts.insert("customer_age".to_string(), "17".to_string());
 
     let response = engine
-        .evaluate("rules_and_unless", vec![], facts)
+        .evaluate("rules_and_unless", None, &now, vec![], facts)
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "rules_and_unless");
@@ -85,10 +96,11 @@ fn test_02_rules_and_unless() {
 #[test]
 fn test_03_document_references() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     // Test examples/base_employee document
     let response = engine
-        .evaluate("base_employee", vec![], HashMap::new())
+        .evaluate("base_employee", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "base_employee");
@@ -103,7 +115,7 @@ fn test_03_document_references() {
 
     // Test examples/specific_employee document (references base_employee)
     let response = engine
-        .evaluate("specific_employee", vec![], HashMap::new())
+        .evaluate("specific_employee", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "specific_employee");
@@ -127,7 +139,7 @@ fn test_03_document_references() {
 
     // Test examples/contractor document (also references base_employee)
     let response = engine
-        .evaluate("contractor", vec![], HashMap::new())
+        .evaluate("contractor", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "contractor");
@@ -144,10 +156,11 @@ fn test_03_document_references() {
 #[test]
 fn test_04_unit_conversions() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     // Document has all facts defined, no type annotations needed
     let response = engine
-        .evaluate("unit_conversions", vec![], HashMap::new())
+        .evaluate("unit_conversions", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "unit_conversions");
@@ -186,12 +199,13 @@ fn test_04_unit_conversions() {
 #[test]
 fn test_05_date_handling() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("current_date".to_string(), "2024-06-15".to_string());
 
     let response = engine
-        .evaluate("date_handling", vec![], facts)
+        .evaluate("date_handling", None, &now, vec![], facts)
         .expect("Evaluation failed");
 
     // Document evaluates successfully
@@ -219,6 +233,7 @@ fn test_05_date_handling() {
 #[test]
 fn test_06_tax_calculation() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     let mut facts = HashMap::new();
     facts.insert("income".to_string(), "80000".to_string());
@@ -227,7 +242,7 @@ fn test_06_tax_calculation() {
     facts.insert("filing_status".to_string(), "single".to_string());
 
     let response = engine
-        .evaluate("tax_calculation", vec![], facts)
+        .evaluate("tax_calculation", None, &now, vec![], facts)
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "tax_calculation");
@@ -273,6 +288,7 @@ fn test_06_tax_calculation() {
 #[test]
 fn test_07_shipping_policy() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("order_total".to_string(), "75.00".to_string());
@@ -287,7 +303,7 @@ fn test_07_shipping_policy() {
     facts.insert("is_hazardous".to_string(), "false".to_string());
 
     let response = engine
-        .evaluate("shipping_policy", vec![], facts)
+        .evaluate("shipping_policy", None, &now, vec![], facts)
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "shipping_policy");
@@ -334,10 +350,11 @@ fn test_07_shipping_policy() {
 #[test]
 fn test_08_rule_references() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     // Test examples/rule_references document
     let response = engine
-        .evaluate("rule_references", vec![], HashMap::new())
+        .evaluate("rule_references", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "rule_references");
@@ -357,7 +374,7 @@ fn test_08_rule_references() {
 
     // Test examples/eligibility_check document (also in the same file)
     let response = engine
-        .evaluate("eligibility_check", vec![], HashMap::new())
+        .evaluate("eligibility_check", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "eligibility_check");
@@ -380,6 +397,7 @@ fn test_08_rule_references() {
 #[test]
 fn test_09_stress_test() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("base_price".to_string(), "100.00".to_string());
@@ -393,7 +411,7 @@ fn test_09_stress_test() {
     facts.insert("payment_method".to_string(), "credit".to_string());
 
     let response = engine
-        .evaluate("stress_test", vec![], facts)
+        .evaluate("stress_test", None, &now, vec![], facts)
         .expect("Evaluation should succeed");
 
     assert_eq!(response.doc_name, "stress_test");
@@ -403,10 +421,11 @@ fn test_09_stress_test() {
 #[test]
 fn test_09_stress_test_config() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     // Test the config document (has all facts defined)
     let response = engine
-        .evaluate("stress_test_config", vec![], HashMap::new())
+        .evaluate("stress_test_config", None, &now, vec![], HashMap::new())
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "stress_test_config");
@@ -416,6 +435,7 @@ fn test_09_stress_test_config() {
 #[test]
 fn test_09_stress_test_extended() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("order.base_price".to_string(), "100.00".to_string());
@@ -429,7 +449,7 @@ fn test_09_stress_test_extended() {
     facts.insert("order.payment_method".to_string(), "debit".to_string());
 
     let response = engine
-        .evaluate("stress_test_extended", vec![], facts)
+        .evaluate("stress_test_extended", None, &now, vec![], facts)
         .expect("Cross-document rule references now work correctly");
 
     assert_eq!(response.doc_name, "stress_test_extended");
@@ -439,10 +459,17 @@ fn test_09_stress_test_extended() {
 #[test]
 fn test_10_compensation_policy() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     // Test base_policy document
     let response = engine
-        .evaluate("compensation/base_policy", vec![], HashMap::new())
+        .evaluate(
+            "compensation/base_policy",
+            None,
+            &now,
+            vec![],
+            HashMap::new(),
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "compensation/base_policy");
@@ -453,7 +480,13 @@ fn test_10_compensation_policy() {
 
     // Test engineering_dept document (has all facts defined)
     let response = engine
-        .evaluate("compensation/engineering_dept", vec![], HashMap::new())
+        .evaluate(
+            "compensation/engineering_dept",
+            None,
+            &now,
+            vec![],
+            HashMap::new(),
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "compensation/engineering_dept");
@@ -464,14 +497,26 @@ fn test_10_compensation_policy() {
 
     // Test senior_engineer document
     let response = engine
-        .evaluate("compensation/senior_engineer", vec![], HashMap::new())
+        .evaluate(
+            "compensation/senior_engineer",
+            None,
+            &now,
+            vec![],
+            HashMap::new(),
+        )
         .unwrap();
     assert_eq!(response.doc_name, "compensation/senior_engineer");
     assert!(!response.results.is_empty());
 
     // Test principal_engineer document
     let response = engine
-        .evaluate("compensation/principal_engineer", vec![], HashMap::new())
+        .evaluate(
+            "compensation/principal_engineer",
+            None,
+            &now,
+            vec![],
+            HashMap::new(),
+        )
         .unwrap();
     assert_eq!(response.doc_name, "compensation/principal_engineer");
     assert!(!response.results.is_empty());
@@ -480,10 +525,11 @@ fn test_10_compensation_policy() {
 #[test]
 fn test_11_document_composition() {
     let engine = load_examples();
+    let now = DateTimeValue::now();
 
     // Test base pricing configuration
     let response = engine
-        .evaluate("pricing/base_config", vec![], HashMap::new())
+        .evaluate("pricing/base_config", None, &now, vec![], HashMap::new())
         .expect("Failed to evaluate base_config");
     assert_eq!(response.doc_name, "pricing/base_config");
     assert!(response
@@ -493,7 +539,7 @@ fn test_11_document_composition() {
 
     // Test wholesale pricing with bindings
     let response = engine
-        .evaluate("pricing/wholesale", vec![], HashMap::new())
+        .evaluate("pricing/wholesale", None, &now, vec![], HashMap::new())
         .expect("Failed to evaluate wholesale");
     assert_eq!(response.doc_name, "pricing/wholesale");
     assert!(response
@@ -503,7 +549,7 @@ fn test_11_document_composition() {
 
     // Test multi-level nested references - now works correctly!
     let response = engine
-        .evaluate("order/wholesale_order", vec![], HashMap::new())
+        .evaluate("order/wholesale_order", None, &now, vec![], HashMap::new())
         .expect("Cross-document rule references now work correctly");
     assert_eq!(response.doc_name, "order/wholesale_order");
     let order_total = response
@@ -518,7 +564,7 @@ fn test_11_document_composition() {
 
     // Test comparison document with multiple references
     let response = engine
-        .evaluate("order/comparison", vec![], HashMap::new())
+        .evaluate("order/comparison", None, &now, vec![], HashMap::new())
         .expect("Evaluation should succeed (but rules will veto)");
     assert_eq!(response.doc_name, "order/comparison");
     assert!(response
@@ -536,7 +582,7 @@ fn test_11_document_composition() {
 
     // Test deep nested bindings
     let response = engine
-        .evaluate("order/custom_wholesale", vec![], HashMap::new())
+        .evaluate("order/custom_wholesale", None, &now, vec![], HashMap::new())
         .expect("Failed to evaluate custom_wholesale");
     assert_eq!(response.doc_name, "order/custom_wholesale");
     assert!(response
@@ -546,7 +592,13 @@ fn test_11_document_composition() {
 
     // Test multiple independent references
     let response = engine
-        .evaluate("complex/multi_reference", vec![], HashMap::new())
+        .evaluate(
+            "complex/multi_reference",
+            None,
+            &now,
+            vec![],
+            HashMap::new(),
+        )
         .expect("Failed to evaluate multi_reference");
     assert_eq!(response.doc_name, "complex/multi_reference");
 
@@ -588,12 +640,13 @@ fn test_all_examples_parse() {
         "stress_test_extended",
     ];
 
+    let doc_names: Vec<&str> = docs.iter().map(|d| d.name.as_str()).collect();
     for expected in key_docs {
         assert!(
-            docs.contains(&expected.to_string()),
+            doc_names.contains(&expected),
             "Expected document '{}' not found. Available: {:?}",
             expected,
-            docs
+            doc_names
         );
     }
 }

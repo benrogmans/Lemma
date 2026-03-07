@@ -52,28 +52,25 @@ fn test_error_creation_and_display() {
     );
 
     let engine_error =
-        Error::planning("Something went wrong", Some(source.clone()), None::<String>);
+        Error::validation("Something went wrong", Some(source.clone()), None::<String>);
     assert_eq!(
         format!("{engine_error}"),
-        "Planning error: Something went wrong at test.lemma:1:15"
+        "Validation error: Something went wrong at test.lemma:1:15"
     );
 
-    let circular_dependency_error =
-        Error::circular_dependency("a -> b -> a", Some(source), vec![], None::<String>);
+    let validation_error = Error::validation(
+        "Circular dependency: a -> b -> a",
+        Some(source),
+        None::<String>,
+    );
     assert_eq!(
-        format!("{circular_dependency_error}"),
-        "Circular dependency: a -> b -> a at test.lemma:1:15"
+        format!("{validation_error}"),
+        "Validation error: Circular dependency: a -> b -> a at test.lemma:1:15"
     );
 
-    let engine_error_no_source = Error::planning("No source context", None, None::<String>);
+    let engine_error_no_source = Error::validation("No source context", None, None::<String>);
     assert_eq!(
         format!("{engine_error_no_source}"),
-        "Planning error: No source context"
-    );
-
-    let multiple_errors = Error::MultipleErrors(vec![parse_error, engine_error_no_source]);
-    assert_eq!(
-        format!("{multiple_errors}"),
-        "Multiple errors:\n  1. Parse error: Invalid currency at test.lemma:1:15\n  2. Planning error: No source context"
+        "Validation error: No source context"
     );
 }

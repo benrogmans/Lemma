@@ -1,3 +1,4 @@
+use lemma::parsing::ast::DateTimeValue;
 use lemma::{Bound, Domain, Engine, Error, FactPath, LiteralValue, Target, ValueKind};
 mod common;
 use common::add_lemma_code_blocking;
@@ -15,10 +16,12 @@ rule r: 0
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
 
     let inv = engine
         .invert(
             "t",
+            &now,
             "r",
             Target::veto(Some("too much".to_string())),
             HashMap::new(),
@@ -55,10 +58,12 @@ rule r: 0
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
 
     let inv = engine
         .invert(
             "t",
+            &now,
             "r",
             Target::veto(Some("ok".to_string())),
             HashMap::new(),
@@ -95,10 +100,12 @@ rule r: 0
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
 
     let inv = engine
         .invert(
             "t",
+            &now,
             "r",
             Target::veto(Some("neg".to_string())),
             HashMap::new(),
@@ -136,10 +143,12 @@ rule r: 0
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
 
     let inv = engine
         .invert(
             "t",
+            &now,
             "r",
             Target::veto(Some("too expensive".to_string())),
             HashMap::new(),
@@ -185,10 +194,12 @@ rule r: 0
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
 
     let inv = engine
         .invert(
             "t",
+            &now,
             "r",
             Target::veto(Some("long".to_string())),
             HashMap::new(),
@@ -229,10 +240,12 @@ rule r: 0
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
 
     let err = engine
         .invert(
             "t",
+            &now,
             "r",
             Target::veto(Some("relational".to_string())),
             HashMap::new(),
@@ -253,10 +266,12 @@ rule r: 0
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
 
     let err = engine
         .invert(
             "t",
+            &now,
             "r",
             Target::veto(Some("nonlinear".to_string())),
             HashMap::new(),

@@ -2,10 +2,17 @@ use lemma::{format_source, parse, ResourceLimits};
 
 fn format_and_extract_rule_expr(source: &str) -> String {
     let formatted = format_source(source, "test.lemma").unwrap();
-    for line in formatted.lines() {
+    let lines: Vec<&str> = formatted.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("rule x: ") {
             return rest.to_string();
+        }
+        if trimmed == "rule x:" {
+            let next = lines.get(i + 1).map(|s| s.trim()).unwrap_or("");
+            if !next.is_empty() {
+                return next.to_string();
+            }
         }
     }
     panic!(
@@ -58,18 +65,6 @@ fn precedence_not_binds_tighter_than_and() {
 fn precedence_not_over_and_preserves_parens() {
     let src = "doc test\nfact a: true\nfact b: true\nrule x: not (a and b)";
     assert_eq!(format_and_extract_rule_expr(src), "not (a and b)");
-}
-
-#[test]
-fn precedence_and_binds_tighter_than_or() {
-    let src = "doc test\nfact a: true\nfact b: true\nfact c: true\nrule x: a or b and c";
-    assert_eq!(format_and_extract_rule_expr(src), "a or b and c");
-}
-
-#[test]
-fn precedence_or_inside_and_preserves_parens() {
-    let src = "doc test\nfact a: true\nfact b: true\nfact c: true\nrule x: (a or b) and c";
-    assert_eq!(format_and_extract_rule_expr(src), "(a or b) and c");
 }
 
 #[test]
@@ -318,8 +313,6 @@ fn idempotency_precedence_expressions() {
         "(a + b) + c",
         "not a and b",
         "not (a and b)",
-        "a or b and c",
-        "(a or b) and c",
         "(a + b) * (c - d)",
     ];
     for expr in expressions {

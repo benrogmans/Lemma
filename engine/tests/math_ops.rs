@@ -1,13 +1,17 @@
-use lemma::{Engine, LemmaResult};
+use lemma::parsing::ast::DateTimeValue;
+use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::{collections::HashMap, str::FromStr};
 
-fn run(code: &str, rule: &str) -> LemmaResult<String> {
+fn run(code: &str, rule: &str) -> Result<String, Vec<lemma::Error>> {
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma")?;
-    let resp = engine.evaluate("test", vec![rule.to_string()], HashMap::new())?;
+    let now = DateTimeValue::now();
+    let resp = engine
+        .evaluate("test", None, &now, vec![rule.to_string()], HashMap::new())
+        .map_err(|e| vec![e])?;
     let v = resp
         .results
         .values()
@@ -17,7 +21,7 @@ fn run(code: &str, rule: &str) -> LemmaResult<String> {
     Ok(v.to_string())
 }
 
-fn run_num(code: &str, rule: &str) -> LemmaResult<Decimal> {
+fn run_num(code: &str, rule: &str) -> Result<Decimal, Vec<lemma::Error>> {
     let s = run(code, rule)?;
     Ok(s.parse::<Decimal>()
         .expect("engine result should parse as Decimal"))
@@ -45,7 +49,7 @@ fn tol(scale: u32) -> Decimal {
 }
 
 #[test]
-fn test_exp_and_power() -> LemmaResult<()> {
+fn test_exp_and_power() -> Result<(), Vec<lemma::Error>> {
     let code = r#"
     doc test
     rule a: exp 1
@@ -60,7 +64,7 @@ fn test_exp_and_power() -> LemmaResult<()> {
 }
 
 #[test]
-fn test_abs_floor_ceil_round() -> LemmaResult<()> {
+fn test_abs_floor_ceil_round() -> Result<(), Vec<lemma::Error>> {
     let code = r#"
     doc test
     rule a: abs -3.5
@@ -82,7 +86,7 @@ fn test_abs_floor_ceil_round() -> LemmaResult<()> {
 }
 
 #[test]
-fn test_sqrt_and_log_basic() -> LemmaResult<()> {
+fn test_sqrt_and_log_basic() -> Result<(), Vec<lemma::Error>> {
     let code = r#"
     doc test
     rule a: sqrt 9
@@ -108,7 +112,7 @@ fn test_sqrt_and_log_basic() -> LemmaResult<()> {
 }
 
 #[test]
-fn test_trig_at_zero() -> LemmaResult<()> {
+fn test_trig_at_zero() -> Result<(), Vec<lemma::Error>> {
     let code = r#"
     doc test
     rule s: sin 0
@@ -128,7 +132,7 @@ fn test_trig_at_zero() -> LemmaResult<()> {
 }
 
 #[test]
-fn test_nested_math_ops() -> LemmaResult<()> {
+fn test_nested_math_ops() -> Result<(), Vec<lemma::Error>> {
     let code = r#"
     doc test
     rule a: round (abs -3.6)
@@ -159,10 +163,16 @@ fn test_sqrt_negative_and_log_domain_errors() {
         "test.lemma",
     )
     .unwrap();
+    let now = DateTimeValue::now();
 
-    // Evaluate all rules and expect a Veto result (runtime error)
     let res1 = engine
-        .evaluate("test", vec!["bad_sqrt".to_string()], HashMap::new())
+        .evaluate(
+            "test",
+            None,
+            &now,
+            vec!["bad_sqrt".to_string()],
+            HashMap::new(),
+        )
         .unwrap();
     let rule = res1
         .results
@@ -176,7 +186,13 @@ fn test_sqrt_negative_and_log_domain_errors() {
     );
 
     let res2 = engine
-        .evaluate("test", vec!["bad_log0".to_string()], HashMap::new())
+        .evaluate(
+            "test",
+            None,
+            &now,
+            vec!["bad_log0".to_string()],
+            HashMap::new(),
+        )
         .unwrap();
     let rule = res2
         .results
@@ -190,7 +206,13 @@ fn test_sqrt_negative_and_log_domain_errors() {
     );
 
     let res3 = engine
-        .evaluate("test", vec!["bad_log_neg".to_string()], HashMap::new())
+        .evaluate(
+            "test",
+            None,
+            &now,
+            vec!["bad_log_neg".to_string()],
+            HashMap::new(),
+        )
         .unwrap();
     let rule = res3
         .results
@@ -217,9 +239,16 @@ fn test_inverse_trig_domain_error() {
         "test.lemma",
     )
     .unwrap();
+    let now = DateTimeValue::now();
 
     let response = engine
-        .evaluate("test", vec!["bad_asin".to_string()], HashMap::new())
+        .evaluate(
+            "test",
+            None,
+            &now,
+            vec!["bad_asin".to_string()],
+            HashMap::new(),
+        )
         .unwrap();
 
     let rule = response

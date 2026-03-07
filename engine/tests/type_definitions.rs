@@ -1,3 +1,4 @@
+use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
@@ -31,6 +32,7 @@ rule total: age + adult_age + twenties
 
     add_lemma_code_blocking(&mut engine, age_doc, "age.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, test_types_doc, "test_types.lemma").unwrap();
+    let now = DateTimeValue::now();
 
     let mut facts = HashMap::new();
     facts.insert("age".to_string(), "25".to_string());
@@ -38,7 +40,7 @@ rule total: age + adult_age + twenties
     facts.insert("twenties".to_string(), "25".to_string());
 
     let response = engine
-        .evaluate("test_types", vec![], facts)
+        .evaluate("test_types", None, &now, vec![], facts)
         .expect("Evaluation failed");
 
     assert_eq!(response.doc_name, "test_types");
@@ -74,8 +76,9 @@ fn test_scale_type_default_before_unit_declarations() {
         "pricing.lemma",
     )
     .expect("default before unit should be valid");
+    let now = DateTimeValue::now();
 
-    let plan = engine.get_execution_plan("pricing").unwrap();
+    let plan = engine.get_execution_plan("pricing", None, &now).unwrap();
     let schema = plan.schema();
     assert!(
         schema.facts.contains_key("price"),
@@ -102,8 +105,9 @@ fn test_scale_type_default_after_unit_declarations() {
         "pricing.lemma",
     )
     .expect("default after unit should be valid");
+    let now = DateTimeValue::now();
 
-    let plan = engine.get_execution_plan("pricing").unwrap();
+    let plan = engine.get_execution_plan("pricing", None, &now).unwrap();
     let schema = plan.schema();
     assert!(
         schema.facts.contains_key("price"),
