@@ -13,12 +13,15 @@ missing document would then produce a Registry error.
 
 type money from @lemma/std/finance
 
-fact unit_price: 5 eur
+fact unit_price : 5 eur
 
-fact helper: doc @org/example/helper
+fact helper : doc @org/example/helper
 
-rule helper_value: helper.value
+rule helper_value:
+  helper.value
 
-rule line_total: unit_price * 2
+rule line_total:
+  unit_price * 2
 
-rule formatted: helper_value + 0
+rule formatted:
+  helper_value + 0

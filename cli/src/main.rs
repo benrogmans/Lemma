@@ -8,6 +8,7 @@ mod server;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use formatter::Formatter;
+use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -82,6 +83,26 @@ enum Commands {
         /// Enable interactive mode for document/rule/fact selection
         #[arg(short = 'i', long)]
         interactive: bool,
+        /// Evaluate as of a specific datetime (e.g. 2026, 2026-03, 2026-03-04, 2026-03-04T10:30:00Z)
+        #[arg(long)]
+        effective: Option<String>,
+        /// Verify document content hash before evaluation; fail if mismatch
+        #[arg(long, value_name = "HASH")]
+        hash: Option<String>,
+    },
+    /// Print content hash for a document's plan
+    ///
+    /// Resolves the document by name (and optional --effective), computes the canonical
+    /// content hash of its execution plan and dependency closure, and prints it.
+    Hash {
+        /// Document name (required)
+        doc_name: String,
+        /// Workspace root directory containing .lemma files
+        #[arg(short = 'd', long = "dir", default_value = ".")]
+        workdir: PathBuf,
+        /// Compute hash as of a specific datetime (e.g. 2026, 2026-03-04)
+        #[arg(long)]
+        effective: Option<String>,
     },
     /// Show document structure
     ///
@@ -93,6 +114,9 @@ enum Commands {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
+        /// Show as of a specific datetime (e.g. 2026, 2026-03-04)
+        #[arg(long)]
+        effective: Option<String>,
     },
     /// List all documents with facts and rules counts
     ///
@@ -102,6 +126,9 @@ enum Commands {
         /// Workspace root directory containing .lemma files
         #[arg(default_value = ".")]
         root: PathBuf,
+        /// List as of a specific datetime (e.g. 2026, 2026-03-04)
+        #[arg(long)]
+        effective: Option<String>,
     },
     /// Start HTTP REST API server with auto-generated typed endpoints (default: localhost:8012)
     ///
@@ -164,6 +191,14 @@ enum Commands {
     },
 }
 
+fn resolve_effective(raw: Option<&String>) -> Result<DateTimeValue> {
+    match raw {
+        Some(s) => DateTimeValue::parse(s)
+            .ok_or_else(|| anyhow::anyhow!("Invalid --effective value '{}'. Expected: YYYY, YYYY-MM, YYYY-MM-DD, or full ISO 8601 datetime", s)),
+        None => Ok(DateTimeValue::now()),
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -176,18 +211,30 @@ fn main() {
             output,
             explain,
             interactive,
-            ..
-        } => run_command(
+            effective,
+            hash,
+        } => run_command(RunOptions {
             workdir,
-            doc_name.as_ref(),
+            doc_name: doc_name.as_ref(),
             facts,
-            target.as_ref(),
-            *output,
-            *explain,
-            *interactive,
-        ),
-        Commands::Show { workdir, doc_name } => show_command(workdir, doc_name),
-        Commands::List { root } => list_command(root),
+            target: target.as_ref(),
+            output: *output,
+            explain: *explain,
+            interactive: *interactive,
+            effective_raw: effective.as_ref(),
+            hash: hash.as_deref(),
+        }),
+        Commands::Hash {
+            workdir,
+            doc_name,
+            effective,
+        } => hash_command(workdir, doc_name, effective.as_ref()),
+        Commands::Show {
+            workdir,
+            doc_name,
+            effective,
+        } => show_command(workdir, doc_name, effective.as_ref()),
+        Commands::List { root, effective } => list_command(root, effective.as_ref()),
         Commands::Server {
             workdir,
             host,
@@ -214,20 +261,25 @@ fn main() {
     }
 }
 
-fn run_command(
-    workdir: &Path,
-    doc_name: Option<&String>,
-    facts: &[String],
-    target: Option<&String>,
+struct RunOptions<'a> {
+    workdir: &'a Path,
+    doc_name: Option<&'a String>,
+    facts: &'a [String],
+    target: Option<&'a String>,
     output: OutputFormat,
     explain: bool,
     interactive: bool,
-) -> Result<()> {
-    let mut engine = Engine::new();
-    load_workspace(&mut engine, workdir)?;
+    effective_raw: Option<&'a String>,
+    hash: Option<&'a str>,
+}
 
-    let (doc, rules, final_facts, final_target) = if interactive || doc_name.is_none() {
-        if doc_name.is_none() && !interactive {
+fn run_command(opts: RunOptions<'_>) -> Result<()> {
+    let now = resolve_effective(opts.effective_raw)?;
+    let mut engine = Engine::new();
+    load_workspace(&mut engine, opts.workdir)?;
+
+    let (doc, rules, final_facts, final_target) = if opts.interactive || opts.doc_name.is_none() {
+        if opts.doc_name.is_none() && !opts.interactive {
             eprintln!("Error: No document specified\n");
             eprintln!("Usage: lemma run [DOC[:RULES]] [FACTS...] [OPTIONS]\n");
             eprintln!("Examples:");
@@ -245,15 +297,15 @@ fn run_command(
             std::process::exit(1);
         }
 
-        let (parsed_doc, parsed_rules) = doc_name.map_or((None, None), |name| {
+        let (parsed_doc, parsed_rules) = opts.doc_name.map_or((None, None), |name| {
             let (doc, rules) = parse_doc_and_rules(name);
             (Some(doc), rules)
         });
 
-        let cli_facts: std::collections::HashMap<String, String> = parse_fact_strings(facts);
+        let cli_facts: std::collections::HashMap<String, String> = parse_fact_strings(opts.facts);
 
         let (d, r, interactive_facts, interactive_target) =
-            interactive::run_interactive(&engine, parsed_doc, parsed_rules, &cli_facts)?;
+            interactive::run_interactive(&engine, parsed_doc, parsed_rules, &cli_facts, &now)?;
 
         // Add a blank line after the final interactive prompt so the
         // formatted output sections ("Facts", "Rules", etc.) don't run
@@ -263,27 +315,26 @@ fn run_command(
         let mut all_facts = cli_facts;
         all_facts.extend(interactive_facts);
         (d, r.unwrap_or_default(), all_facts, interactive_target)
-    } else if let Some(name) = doc_name {
+    } else if let Some(name) = opts.doc_name {
         let (doc, rules) = parse_doc_and_rules(name);
-        let fact_values = parse_fact_strings(facts);
+        let fact_values = parse_fact_strings(opts.facts);
         (doc, rules.unwrap_or_default(), fact_values, None)
     } else {
         unreachable!()
     };
 
-    let target_str = target.or(final_target.as_ref());
+    let target_str = opts.target.or(final_target.as_ref());
     if target_str.is_some() {
         return Err(anyhow::anyhow!("Inversion not implemented"));
     }
 
-    // Normal evaluation mode
-    let response = engine.evaluate(&doc, rules, final_facts)?;
+    let response = engine.evaluate(&doc, opts.hash, &now, rules, final_facts)?;
     let formatter = Formatter;
 
-    match output {
-        OutputFormat::Table => print!("{}", formatter.format_response(&response, explain)),
+    match opts.output {
+        OutputFormat::Table => print!("{}", formatter.format_response(&response, opts.explain)),
         OutputFormat::Json => {
-            let json = format_response_json(&response, explain);
+            let json = format_response_json(&response, opts.explain);
             println!("{}", serde_json::to_string_pretty(&json).unwrap());
         }
     }
@@ -322,11 +373,29 @@ fn parse_fact_strings(facts: &[String]) -> HashMap<String, String> {
         .collect()
 }
 
-fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
+fn hash_command(workdir: &Path, doc_name: &str, effective_raw: Option<&String>) -> Result<()> {
+    let now = resolve_effective(effective_raw)?;
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
-    if let Some(plan) = engine.get_execution_plan(doc_name) {
+    match engine.hash_pin(doc_name, &now) {
+        Some(hash) => {
+            println!("{}", hash);
+            Ok(())
+        }
+        None => {
+            eprintln!("Error: Document '{}' not found", doc_name);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn show_command(workdir: &Path, doc_name: &str, effective_raw: Option<&String>) -> Result<()> {
+    let now = resolve_effective(effective_raw)?;
+    let mut engine = Engine::new();
+    load_workspace(&mut engine, workdir)?;
+
+    if let Some(plan) = engine.get_execution_plan(doc_name, None, &now) {
         let formatter = Formatter;
         print!("{}", formatter.format_document_inspection(plan));
     } else {
@@ -337,7 +406,8 @@ fn show_command(workdir: &Path, doc_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn list_command(root: &PathBuf) -> Result<()> {
+fn list_command(root: &PathBuf, effective_raw: Option<&String>) -> Result<()> {
+    let now = resolve_effective(effective_raw)?;
     let mut engine = Engine::new();
 
     let file_count = WalkDir::new(root)
@@ -348,12 +418,13 @@ fn list_command(root: &PathBuf) -> Result<()> {
 
     load_workspace(&mut engine, root)?;
 
-    let mut document_names = engine.list_documents();
-    document_names.sort();
-
-    let schemas: Vec<lemma::DocumentSchema> = document_names
+    let docs = engine.list_documents();
+    let schemas: Vec<lemma::DocumentSchema> = docs
         .iter()
-        .filter_map(|name| engine.get_execution_plan(name))
+        .filter_map(|doc| {
+            let effective = doc.effective_from().cloned().unwrap_or_else(|| now.clone());
+            engine.get_execution_plan(&doc.name, None, &effective)
+        })
         .map(|plan| plan.schema())
         .collect();
 
@@ -426,10 +497,12 @@ fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> 
         }
     }
 
-    tokio::runtime::Runtime::new()?
-        .block_on(engine.add_lemma_files(files))
-        .map_err(lemma::Error::MultipleErrors)?;
-
+    if let Err(errs) = tokio::runtime::Runtime::new()?.block_on(engine.add_lemma_files(files)) {
+        for e in &errs {
+            eprintln!("{}", error_formatter::format_error(e));
+        }
+        anyhow::bail!("Workspace load failed ({} error(s))", errs.len());
+    }
     Ok(())
 }
 
@@ -449,11 +522,12 @@ async fn load_workspace_async(engine: &mut Engine, workdir: &std::path::Path) ->
         }
     }
 
-    engine
-        .add_lemma_files(files)
-        .await
-        .map_err(lemma::Error::MultipleErrors)?;
-
+    if let Err(errs) = engine.add_lemma_files(files).await {
+        for e in &errs {
+            eprintln!("{}", error_formatter::format_error(e));
+        }
+        anyhow::bail!("Workspace load failed ({} error(s))", errs.len());
+    }
     Ok(())
 }
 

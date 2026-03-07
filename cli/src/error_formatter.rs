@@ -47,20 +47,7 @@ pub fn format_error(error: &Error) -> String {
     match error {
         Error::Parsing(details) => format_details("Parse error", details, ""),
         Error::Inversion(details) => format_details("Inversion error", details, ""),
-        Error::Planning(details) => format_details("Planning error", details, ""),
-        Error::MissingFact(details) => format_details("Missing fact", details, ""),
-        Error::CircularDependency { details, cycle } => {
-            let cycle_note = if cycle.is_empty() {
-                String::new()
-            } else {
-                let path: Vec<String> = cycle
-                    .iter()
-                    .map(|s| format!("{}:{}", s.doc_name, s.span.line))
-                    .collect();
-                format!(" [cycle: {}]", path.join(" -> "))
-            };
-            format_details("Circular dependency", details, &cycle_note)
-        }
+        Error::Validation(details) => format_details("Validation error", details, ""),
         Error::Registry {
             details,
             identifier,
@@ -75,14 +62,12 @@ pub fn format_error(error: &Error) -> String {
             limit_value,
             actual_value,
             suggestion,
+            document_context: _,
         } => {
             format!(
                 "Resource limit exceeded: {limit_name}\n  Limit: {limit_value}\n  Actual: {actual_value}\n  {suggestion}"
             )
         }
-        Error::MultipleErrors(errors) => {
-            let formatted: Vec<String> = errors.iter().map(format_error).collect();
-            formatted.join("\n\n")
-        }
+        Error::Request(details) => format_details("Request error", details, ""),
     }
 }

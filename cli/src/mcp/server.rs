@@ -1,5 +1,6 @@
 mod imp {
     use anyhow::Result;
+    use lemma::parsing::ast::DateTimeValue;
     use lemma::Engine;
     use serde::{Deserialize, Serialize};
     use std::io::{self, BufRead, Write};
@@ -76,6 +77,18 @@ mod imp {
                 message,
                 data: None,
             }
+        }
+    }
+
+    fn resolve_effective(args: &serde_json::Value) -> Result<DateTimeValue, McpError> {
+        match args.get("effective").and_then(|v| v.as_str()) {
+            Some(s) if !s.trim().is_empty() => DateTimeValue::parse(s.trim()).ok_or_else(|| {
+                McpError::invalid_params(format!(
+                    "Invalid effective value '{}'. Expected: YYYY, YYYY-MM, YYYY-MM-DD, or ISO 8601 datetime",
+                    s
+                ))
+            }),
+            _ => Ok(DateTimeValue::now()),
         }
     }
 
@@ -171,6 +184,10 @@ mod imp {
                                 "items": { "type": "string" },
                                 "description": "Optional fact values as 'name=value' (e.g. ['price=100', 'quantity=5'])",
                                 "default": []
+                            },
+                            "effective": {
+                                "type": "string",
+                                "description": "Optional: evaluate at a specific effective datetime (e.g. '2026', '2026-03', '2026-03-04', '2026-03-04T10:30:00Z')"
                             }
                         },
                         "required": ["document"]
@@ -181,7 +198,12 @@ mod imp {
                     "description": "List all loaded Lemma documents with their schemas: fact names, types, defaults, and rule names with return types.",
                     "inputSchema": {
                         "type": "object",
-                        "properties": {}
+                        "properties": {
+                            "effective": {
+                                "type": "string",
+                                "description": "Optional: list documents at a specific effective datetime (e.g. '2026', '2026-03-04')"
+                            }
+                        }
                     }
                 }),
                 serde_json::json!({
@@ -197,6 +219,10 @@ mod imp {
                             "rule": {
                                 "type": "string",
                                 "description": "Optional: name of a specific rule. Omit to get the full document schema."
+                            },
+                            "effective": {
+                                "type": "string",
+                                "description": "Optional: get schema at a specific effective datetime"
                             }
                         },
                         "required": ["document"]
@@ -232,6 +258,10 @@ mod imp {
                             "document": {
                                 "type": "string",
                                 "description": "Name of the document"
+                            },
+                            "effective": {
+                                "type": "string",
+                                "description": "Optional: get source at a specific effective datetime"
                             }
                         },
                         "required": ["document"]
@@ -269,7 +299,7 @@ mod imp {
                 "add_document" => self.tool_add_document(arguments),
                 "get_document_source" => self.tool_get_document_source(arguments),
                 "evaluate" => self.tool_evaluate(arguments),
-                "list_documents" => self.tool_list_documents(),
+                "list_documents" => self.tool_list_documents(arguments),
                 "get_schema" => self.tool_get_schema(arguments),
                 _ => Err(McpError::invalid_params(format!(
                     "Unknown tool: {}",
@@ -297,8 +327,12 @@ mod imp {
                 .map(String::from)
                 .unwrap_or_else(|| format!("doc_{}", chrono::Utc::now().timestamp_millis()));
 
-            let docs_before: std::collections::HashSet<String> =
-                self.engine.list_documents().into_iter().collect();
+            let names_before: std::collections::HashSet<String> = self
+                .engine
+                .list_documents()
+                .iter()
+                .map(|d| d.name.clone())
+                .collect();
 
             let files: std::collections::HashMap<String, String> =
                 std::iter::once((source_id.clone(), code.to_string())).collect();
@@ -306,32 +340,39 @@ mod imp {
                 .map_err(|e| McpError::internal_error(e.to_string()))?
                 .block_on(self.engine.add_lemma_files(files))
                 .map_err(|errs| {
-                    let error = match errs.len() {
-                        0 => unreachable!("add_lemma_files returned Err with empty error list"),
-                        1 => errs.into_iter().next().unwrap(),
-                        _ => lemma::Error::MultipleErrors(errs),
-                    };
-                    error!("Failed to add document: {}", error);
-                    McpError::internal_error(format!("Failed to parse document: {error}"))
+                    for e in &errs {
+                        error!("{}", e);
+                    }
+                    let msg = errs
+                        .iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    McpError::internal_error(format!("Failed to parse document: {}", msg))
                 })?;
 
-            let new_docs: Vec<String> = self
+            let new_doc_names: Vec<String> = self
                 .engine
                 .list_documents()
-                .into_iter()
-                .filter(|d| !docs_before.contains(d))
+                .iter()
+                .filter(|d| !names_before.contains(&d.name))
+                .map(|d| d.name.clone())
                 .collect();
 
             let mut output = String::from("Document added successfully.\n\n");
 
-            for doc_name in &new_docs {
-                if let Some(plan) = self.engine.get_execution_plan(doc_name) {
+            let now = DateTimeValue::now();
+            for doc_name in &new_doc_names {
+                if let Some(plan) = self.engine.get_execution_plan(doc_name, None, &now) {
                     output.push_str(&plan.schema().to_string());
                     output.push('\n');
                 }
             }
 
-            info!("Document added from source '{}': {:?}", source_id, new_docs);
+            info!(
+                "Document added from source '{}': {:?}",
+                source_id, new_doc_names
+            );
 
             Ok(serde_json::json!({
                 "content": [{
@@ -349,14 +390,15 @@ mod imp {
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing 'document' field".to_string()))?;
 
-            let doc = self.engine.get_document(doc_name).ok_or_else(|| {
+            let now = resolve_effective(args)?;
+            let doc = self.engine.get_document(doc_name, &now).ok_or_else(|| {
                 McpError::invalid_params(format!(
                     "Document '{}' not found. Use list_documents to see available documents.",
                     doc_name
                 ))
             })?;
 
-            let source = lemma::format_docs(std::slice::from_ref(doc));
+            let source = lemma::format_docs(std::slice::from_ref(doc.as_ref()));
 
             debug!("Returned source for document '{}'", doc_name);
 
@@ -400,9 +442,11 @@ mod imp {
                 })
                 .collect();
 
+            let now = resolve_effective(args)?;
+            let hash_pin = args.get("hash_pin").and_then(|v| v.as_str());
             let response = self
                 .engine
-                .evaluate(document, rule_names, fact_values)
+                .evaluate(document, hash_pin, &now, rule_names, fact_values)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
@@ -450,11 +494,14 @@ mod imp {
             }))
         }
 
-        fn tool_list_documents(&self) -> Result<serde_json::Value, McpError> {
-            let mut documents = self.engine.list_documents();
-            documents.sort();
+        fn tool_list_documents(
+            &self,
+            args: &serde_json::Value,
+        ) -> Result<serde_json::Value, McpError> {
+            let now = resolve_effective(args)?;
+            let docs = self.engine.list_documents_effective(&now);
 
-            let output = if documents.is_empty() {
+            let output = if docs.is_empty() {
                 if self.config.admin {
                     "No documents loaded.\n\nUse the 'add_document' tool to load Lemma code."
                         .to_string()
@@ -462,9 +509,9 @@ mod imp {
                     "No documents loaded.".to_string()
                 }
             } else {
-                let schemas: Vec<lemma::DocumentSchema> = documents
+                let schemas: Vec<lemma::DocumentSchema> = docs
                     .iter()
-                    .filter_map(|name| self.engine.get_execution_plan(name))
+                    .filter_map(|doc| self.engine.get_execution_plan(&doc.name, None, &now))
                     .map(|plan| plan.schema())
                     .collect();
 
@@ -475,7 +522,7 @@ mod imp {
                     .join("\n\n")
             };
 
-            debug!("Listed {} documents", documents.len());
+            debug!("Listed {} documents", docs.len());
 
             Ok(serde_json::json!({
                 "content": [{
@@ -496,12 +543,16 @@ mod imp {
                 ));
             }
 
-            let plan = self.engine.get_execution_plan(document).ok_or_else(|| {
-                McpError::invalid_params(format!(
-                    "Document '{}' not found. Use list_documents to see available documents.",
-                    document
-                ))
-            })?;
+            let now = resolve_effective(args)?;
+            let plan = self
+                .engine
+                .get_execution_plan(document, None, &now)
+                .ok_or_else(|| {
+                    McpError::invalid_params(format!(
+                        "Document '{}' not found. Use list_documents to see available documents.",
+                        document
+                    ))
+                })?;
 
             let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
                 Some(rule) if !rule.trim().is_empty() => vec![rule.trim().to_string()],

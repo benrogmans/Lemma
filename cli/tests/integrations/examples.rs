@@ -33,6 +33,23 @@ fn test_example_01_simple_facts() {
 }
 
 #[test]
+fn test_hash_simple_facts() {
+    let temp_dir = TempDir::new().unwrap();
+    let example_file = examples_dir().join("01_simple_facts.lemma");
+    fs::copy(&example_file, temp_dir.path().join("01_simple_facts.lemma")).unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("hash")
+        .arg("simple_facts")
+        .arg("--dir")
+        .arg(temp_dir.path());
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::is_empty().not());
+}
+
+#[test]
 fn test_example_02_rules_and_unless() {
     let temp_dir = TempDir::new().unwrap();
     let example_file = examples_dir().join("02_rules_and_unless.lemma");
@@ -436,6 +453,76 @@ fn test_example_12_registry_references() {
             stderr
         );
     }
+}
+
+#[test]
+fn test_example_13_temporal_versioning() {
+    let temp_dir = TempDir::new().unwrap();
+    let example_file = examples_dir().join("13_temporal_versioning.lemma");
+
+    fs::copy(
+        &example_file,
+        temp_dir.path().join("13_temporal_versioning.lemma"),
+    )
+    .unwrap();
+
+    let dir = temp_dir.path().to_str().unwrap();
+
+    // 2024: applicant age 28, salary 4000 EUR/month
+    // Under-30 threshold in 2024 is 3672 → qualifies
+    let output_2024 = std::process::Command::new(env!("CARGO_BIN_EXE_lemma"))
+        .args([
+            "run",
+            "ind/kennismigrant/aanvraag",
+            "--dir",
+            dir,
+            "--effective",
+            "2024-06",
+            "applicant_age=28",
+            "gross_monthly_salary=4000 eur",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout_2024 = String::from_utf8_lossy(&output_2024.stdout);
+    assert!(
+        output_2024.status.success(),
+        "2024 eval failed: {}",
+        String::from_utf8_lossy(&output_2024.stderr)
+    );
+    assert!(
+        stdout_2024.contains("meets_salary_requirement") && stdout_2024.contains("true"),
+        "Expected meets_salary_requirement = true in 2024, got: {}",
+        stdout_2024
+    );
+
+    // 2025: same salary, but applicant is now 31
+    // Age 30+ threshold in 2025 is 5331 → does not qualify
+    let output_2025 = std::process::Command::new(env!("CARGO_BIN_EXE_lemma"))
+        .args([
+            "run",
+            "ind/kennismigrant/aanvraag",
+            "--dir",
+            dir,
+            "--effective",
+            "2025-06",
+            "applicant_age=31",
+            "gross_monthly_salary=4000 eur",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout_2025 = String::from_utf8_lossy(&output_2025.stdout);
+    assert!(
+        output_2025.status.success(),
+        "2025 eval failed: {}",
+        String::from_utf8_lossy(&output_2025.stderr)
+    );
+    assert!(
+        stdout_2025.contains("meets_salary_requirement") && stdout_2025.contains("false"),
+        "Expected meets_salary_requirement = false in 2025, got: {}",
+        stdout_2025
+    );
 }
 
 #[test]

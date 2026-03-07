@@ -136,12 +136,14 @@ rule result: x
     }
 
     let client = reqwest::blocking::Client::new();
-    let url = format!("http://127.0.0.1:{}/single_doc?x=42", port);
+    let url = format!("http://127.0.0.1:{}/single_doc", port);
     let resp = client
-        .get(&url)
+        .post(&url)
         .header("x-proofs", "true")
+        .header("Content-Type", "application/json")
+        .body(r#"{"x": "42"}"#)
         .send()
-        .expect("GET request");
+        .expect("POST request");
     let status = resp.status();
     let body: serde_json::Value =
         serde_json::from_str(&resp.text().expect("response body")).expect("JSON body");
@@ -150,12 +152,12 @@ rule result: x
 
     assert!(
         status.is_success(),
-        "GET with x-proofs should return 2xx, got {}",
+        "POST with x-proofs should return 2xx, got {}",
         status
     );
     let result = body
         .get("result")
-        .expect("response should have 'result' key");
+        .expect("response should have 'result' key (rule name)");
     assert!(
         result.get("proof").is_some(),
         "response should include proof when x-proofs header sent: {:?}",

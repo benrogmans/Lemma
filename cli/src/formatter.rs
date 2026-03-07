@@ -4,12 +4,6 @@ use lemma::{DocumentSchema, ExecutionPlan, LiteralValue, OperationResult, Respon
 use std::collections::HashSet;
 use super_table::{presets, Cell, CellAlignment, Table};
 
-struct Row {
-    left: String,
-    unit: String,
-    value: String,
-}
-
 #[derive(Clone, Copy)]
 enum Connector {
     Branch,
@@ -17,7 +11,7 @@ enum Connector {
 }
 
 struct RenderContext<'a> {
-    rows: &'a mut Vec<Row>,
+    rows: &'a mut Vec<String>,
     expanded: &'a mut HashSet<String>,
     indent: &'a str,
 }
@@ -44,13 +38,7 @@ impl Formatter {
 
         if response.results.len() == 1 {
             let result = response.results.values().next().unwrap();
-            let (unit, value) = self.split_result(&result.result);
-            let line = if unit.is_empty() {
-                value
-            } else {
-                format!("{} {}", value, unit)
-            };
-            return format!("{}\n", line);
+            return format!("{}\n", self.format_result_inline(&result.result));
         }
 
         let mut table = Table::new();
@@ -58,15 +46,10 @@ impl Formatter {
         table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
         table.set_style(super_table::TableComponent::HorizontalLines, '─');
         for result in response.results.values() {
-            let (unit, value) = self.split_result(&result.result);
-            let value_cell = if unit.is_empty() {
-                value
-            } else {
-                format!("{} {}", value, unit)
-            };
             table.add_row(vec![
                 Cell::new(&result.rule.name).set_alignment(CellAlignment::Left),
-                Cell::new(&value_cell).set_alignment(CellAlignment::Left),
+                Cell::new(self.format_result_inline(&result.result))
+                    .set_alignment(CellAlignment::Left),
             ]);
         }
         format!("{}\n", table)
@@ -302,7 +285,7 @@ impl Formatter {
     }
 
     fn format_rule_result(&self, result: &RuleResult) -> String {
-        let mut rows: Vec<Row> = Vec::new();
+        let mut rows: Vec<String> = Vec::new();
         let mut expanded: HashSet<String> = HashSet::new();
 
         if let Some(proof) = &result.proof {
@@ -314,37 +297,16 @@ impl Formatter {
         table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
         table.set_style(super_table::TableComponent::HorizontalLines, '─');
 
-        let (unit, value) = self.split_result(&result.result);
-        table.add_row(vec![
-            Cell::new(&result.rule.name).set_alignment(CellAlignment::Left),
-            Cell::new(&value).set_alignment(CellAlignment::Right),
-            Cell::new(&unit).set_alignment(CellAlignment::Left),
-        ]);
+        let header = format!(
+            "{}: {}",
+            result.rule.name,
+            self.format_result_inline(&result.result)
+        );
+        table.add_row(vec![Cell::new(&header).set_alignment(CellAlignment::Left)]);
 
         if !rows.is_empty() {
-            let left_content = rows
-                .iter()
-                .map(|r| r.left.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            let value_content = rows
-                .iter()
-                .map(|r| r.value.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            let unit_content = rows
-                .iter()
-                .map(|r| r.unit.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            table.add_row(vec![
-                Cell::new(left_content).set_alignment(CellAlignment::Left),
-                Cell::new(value_content).set_alignment(CellAlignment::Right),
-                Cell::new(unit_content).set_alignment(CellAlignment::Left),
-            ]);
+            let content = rows.join("\n");
+            table.add_row(vec![Cell::new(content).set_alignment(CellAlignment::Left)]);
         }
 
         let source = &result.rule.source_location;
@@ -352,16 +314,9 @@ impl Formatter {
             "Source: {}:{}:{}",
             source.attribute, source.span.line, source.span.col
         );
-        table.add_row(vec![Cell::new(self.gray(&location))
-            .set_alignment(CellAlignment::Left)
-            .set_colspan(3)]);
-
-        if let Some(last_column) = table.column_mut(2) {
-            use super_table::ColumnConstraint;
-            last_column.set_constraint(ColumnConstraint::UpperBoundary(super_table::Width::Fixed(
-                10,
-            )));
-        }
+        table.add_row(vec![
+            Cell::new(self.gray(&location)).set_alignment(CellAlignment::Left)
+        ]);
 
         table.to_string()
     }
@@ -370,7 +325,7 @@ impl Formatter {
         &self,
         node: &ProofNode,
         indent: &str,
-        rows: &mut Vec<Row>,
+        rows: &mut Vec<String>,
         expanded: &mut HashSet<String>,
     ) {
         let mut ctx = RenderContext {
@@ -425,7 +380,7 @@ impl Formatter {
         node: &ProofNode,
         indent: &str,
         connector: Connector,
-        rows: &mut Vec<Row>,
+        rows: &mut Vec<String>,
         expanded: &mut HashSet<String>,
     ) {
         let mut ctx = RenderContext {
@@ -436,19 +391,19 @@ impl Formatter {
         match node {
             ProofNode::Value { value, source, .. } => {
                 let display = match source {
-                    ValueSource::Fact { fact_ref } => fact_ref.to_string(),
-                    ValueSource::Literal | ValueSource::Computed => value.to_string(),
+                    ValueSource::Fact { fact_ref } => {
+                        format!("{} is {}", fact_ref, self.format_literal_inline(value))
+                    }
+                    ValueSource::Literal | ValueSource::Computed => {
+                        self.format_literal_inline(value)
+                    }
                 };
-                ctx.rows.push(Row {
-                    left: format!(
-                        "{}{} {}",
-                        ctx.indent,
-                        self.connector_str(connector),
-                        display
-                    ),
-                    unit: String::new(),
-                    value: String::new(),
-                });
+                ctx.rows.push(format!(
+                    "{}{} {}",
+                    ctx.indent,
+                    self.connector_str(connector),
+                    display
+                ));
             }
             ProofNode::RuleReference {
                 rule_path,
@@ -466,14 +421,12 @@ impl Formatter {
 
     fn render_value(&self, value: &LiteralValue, source: &ValueSource, ctx: &mut RenderContext) {
         let display = match source {
-            ValueSource::Fact { fact_ref } => fact_ref.to_string(),
-            ValueSource::Literal | ValueSource::Computed => value.to_string(),
+            ValueSource::Fact { fact_ref } => {
+                format!("{} is {}", fact_ref, self.format_literal_inline(value))
+            }
+            ValueSource::Literal | ValueSource::Computed => self.format_literal_inline(value),
         };
-        ctx.rows.push(Row {
-            left: format!("{}└─ {}", ctx.indent, display),
-            unit: String::new(),
-            value: String::new(),
-        });
+        ctx.rows.push(format!("{}└─ {}", ctx.indent, display));
     }
 
     fn render_rule_reference(
@@ -485,17 +438,14 @@ impl Formatter {
         ctx: &mut RenderContext,
     ) {
         let rule_key = rule_path.to_string();
-        let (unit, value) = self.split_result(result);
-        ctx.rows.push(Row {
-            left: format!(
-                "{}{} {}",
-                ctx.indent,
-                self.connector_str(connector),
-                rule_path
-            ),
-            unit,
-            value,
-        });
+        let result_str = self.format_result_inline(result);
+        ctx.rows.push(format!(
+            "{}{} {}: {}",
+            ctx.indent,
+            self.connector_str(connector),
+            rule_path,
+            result_str
+        ));
 
         if ctx.expanded.insert(rule_key) {
             let child_indent = self.child_indent(ctx.indent, connector);
@@ -510,16 +460,9 @@ impl Formatter {
         operands: &[ProofNode],
         ctx: &mut RenderContext,
     ) {
-        ctx.rows.push(Row {
-            left: format!("{}├─ {}", ctx.indent, expression),
-            unit: String::new(),
-            value: String::new(),
-        });
-        ctx.rows.push(Row {
-            left: format!("{}└─ {}", ctx.indent, original_expression),
-            unit: String::new(),
-            value: String::new(),
-        });
+        ctx.rows.push(format!("{}├─ {}", ctx.indent, expression));
+        ctx.rows
+            .push(format!("{}└─ {}", ctx.indent, original_expression));
 
         let child_indent = format!("{}   ", ctx.indent);
         let rule_children: Vec<&ProofNode> = operands
@@ -573,21 +516,29 @@ impl Formatter {
 
         all_branches.sort_by_key(|((is_some, idx), _)| (*is_some, *idx));
 
-        for (_, branch_item) in all_branches {
+        // Collect non-matched branches so we can deduplicate operand expansion across them.
+        let non_matched_branches: Vec<&NonMatchedBranch> = all_branches
+            .iter()
+            .filter_map(|(_, item)| {
+                if let BranchItem::NonMatched(b) = item {
+                    Some(*b)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (_, branch_item) in &all_branches {
             match branch_item {
                 BranchItem::Matched(branch) => {
                     let has_condition = branch.condition.is_some();
 
                     if let Some(condition) = &branch.condition {
-                        ctx.rows.push(Row {
-                            left: format!(
-                                "{}✓ {}",
-                                ctx.indent,
-                                self.extract_condition_text(condition)
-                            ),
-                            unit: String::new(),
-                            value: String::new(),
-                        });
+                        ctx.rows.push(format!(
+                            "{}✓ {}",
+                            ctx.indent,
+                            self.extract_condition_text(condition)
+                        ));
                     }
 
                     if !matches!(&*branch.result, ProofNode::Value { .. }) {
@@ -600,84 +551,74 @@ impl Formatter {
                     }
                 }
                 BranchItem::NonMatched(branch) => {
-                    let condition_result =
-                        Self::extract_condition_result(&branch.condition).unwrap_or_default();
-                    ctx.rows.push(Row {
-                        left: format!(
-                            "{}{}",
-                            ctx.indent,
-                            self.gray(&format!(
-                                "✗ {}",
-                                self.extract_condition_text(&branch.condition)
-                            ))
-                        ),
-                        unit: String::new(),
-                        value: condition_result,
-                    });
-                    let condition_indent = format!("{}  ", ctx.indent);
-                    self.render_condition_operands_only(
-                        &branch.condition,
-                        &condition_indent,
-                        ctx.rows,
-                        ctx.expanded,
-                    );
+                    ctx.rows.push(format!(
+                        "{}→ {}",
+                        ctx.indent,
+                        self.extract_condition_text(&branch.condition)
+                    ));
                 }
+            }
+        }
+
+        // Render operands from all non-matched conditions once, deduplicated by rule path.
+        if !non_matched_branches.is_empty() {
+            let condition_indent = format!("{}  ", ctx.indent);
+            let operands = Self::collect_operands_dedup(
+                non_matched_branches.iter().map(|b| b.condition.as_ref()),
+            );
+            let len = operands.len();
+            for (i, node) in operands.iter().enumerate() {
+                let connector = if i == len - 1 {
+                    Connector::Last
+                } else {
+                    Connector::Branch
+                };
+                self.render_node_with_connector(
+                    node,
+                    &condition_indent,
+                    connector,
+                    ctx.rows,
+                    ctx.expanded,
+                );
             }
         }
     }
 
-    /// Renders only the operands of a condition node (Computation or Condition), skipping the
-    /// redundant expression lines. Used for non-matched branch conditions so we show
-    /// condition text once with the result, then just the rule-reference operands and their expansion.
-    fn render_condition_operands_only(
-        &self,
-        node: &ProofNode,
-        indent: &str,
-        rows: &mut Vec<Row>,
-        expanded: &mut HashSet<String>,
-    ) {
-        let operands: &[ProofNode] = match node {
-            ProofNode::Computation { operands, .. } => operands.as_ref(),
-            ProofNode::Condition { operands, .. } => operands.as_ref(),
-            _ => return,
-        };
-        let rule_children: Vec<&ProofNode> = operands
-            .iter()
-            .filter(|op| matches!(op, ProofNode::RuleReference { .. }))
-            .collect();
-        let len = rule_children.len();
-        for (i, child) in rule_children.iter().enumerate() {
-            let connector = if i == len - 1 {
-                Connector::Last
-            } else {
-                Connector::Branch
+    /// Collect RuleReference operands from condition nodes, deduplicated by rule path (first occurrence order).
+    fn collect_operands_dedup<'a>(
+        condition_nodes: impl Iterator<Item = &'a ProofNode>,
+    ) -> Vec<&'a ProofNode> {
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for node in condition_nodes {
+            let operands: &[ProofNode] = match node {
+                ProofNode::Computation { operands, .. } | ProofNode::Condition { operands, .. } => {
+                    operands.as_ref()
+                }
+                _ => continue,
             };
-            self.render_node_with_connector(child, indent, connector, rows, expanded);
+            for op in operands {
+                if let ProofNode::RuleReference { rule_path, .. } = op {
+                    if seen.insert(rule_path.to_string()) {
+                        out.push(op);
+                    }
+                }
+            }
         }
+        out
     }
 
     fn render_condition(
         &self,
         expression: &str,
         original_expression: &str,
-        result: bool,
+        _result: bool,
         operands: &[ProofNode],
         ctx: &mut RenderContext,
     ) {
-        ctx.rows.push(Row {
-            left: format!("{}├─ {}", ctx.indent, expression),
-            unit: String::new(),
-            value: if result {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            },
-        });
-        ctx.rows.push(Row {
-            left: format!("{}└─ {}", ctx.indent, original_expression),
-            unit: String::new(),
-            value: String::new(),
-        });
+        ctx.rows.push(format!("{}├─ {}", ctx.indent, expression));
+        ctx.rows
+            .push(format!("{}└─ {}", ctx.indent, original_expression));
 
         let child_indent = format!("{}   ", ctx.indent);
         let rule_children: Vec<&ProofNode> = operands
@@ -703,12 +644,11 @@ impl Formatter {
     }
 
     fn render_veto(&self, message: &Option<String>, ctx: &mut RenderContext) {
-        let msg = message.as_deref().unwrap_or("");
-        ctx.rows.push(Row {
-            left: format!("{}└─ veto", ctx.indent),
-            unit: String::new(),
-            value: format!("Veto: {}", msg),
-        });
+        let msg = match message {
+            Some(m) => format!("veto: {}", m),
+            None => "veto".to_string(),
+        };
+        ctx.rows.push(format!("{}└─ {}", ctx.indent, msg));
     }
 
     fn connector_str(&self, connector: Connector) -> &'static str {
@@ -725,27 +665,25 @@ impl Formatter {
         }
     }
 
-    fn split_result(&self, result: &OperationResult) -> (String, String) {
+    fn format_result_inline(&self, result: &OperationResult) -> String {
         match result {
-            OperationResult::Value(v) => self.split_literal(v),
-            OperationResult::Veto(msg) => (
-                String::new(),
-                msg.as_ref()
-                    .map(|m| format!("Veto: {}", m))
-                    .unwrap_or_else(|| "Veto".to_string()),
-            ),
+            OperationResult::Value(v) => self.format_literal_inline(v),
+            OperationResult::Veto(msg) => match msg {
+                Some(m) => format!("Veto: {}", m),
+                None => "Veto".to_string(),
+            },
         }
     }
 
-    fn split_literal(&self, lit: &LiteralValue) -> (String, String) {
+    fn format_literal_inline(&self, lit: &LiteralValue) -> String {
         match &lit.value {
             ValueKind::Number(n) => {
                 let decimals_opt = lit.lemma_type.decimal_places();
-                (String::new(), format_decimal(n, decimals_opt))
+                format_decimal(n, decimals_opt)
             }
             ValueKind::Scale(n, unit) => {
                 let decimals_opt = lit.lemma_type.decimal_places();
-                (unit.clone(), format_decimal(n, decimals_opt))
+                format!("{} {}", format_decimal(n, decimals_opt), unit)
             }
             ValueKind::Ratio(r, unit_opt) => {
                 let decimals_opt = lit.lemma_type.decimal_places();
@@ -763,32 +701,26 @@ impl Formatter {
                             *r
                         };
                         let display_unit = if unit_name == "percent" {
-                            "%".to_string()
+                            "%"
                         } else {
-                            unit_name.to_string()
+                            unit_name
                         };
-                        (display_unit, format_decimal(&display_value, decimals_opt))
+                        format!(
+                            "{}{}",
+                            format_decimal(&display_value, decimals_opt),
+                            display_unit
+                        )
                     }
-                    None => (String::new(), format_decimal(r, decimals_opt)),
+                    None => format_decimal(r, decimals_opt),
                 }
             }
-            ValueKind::Text(s) => (String::new(), s.clone()),
-            ValueKind::Boolean(b) => (String::new(), b.to_string()),
-            ValueKind::Date(d) => (String::new(), d.to_string()),
-            ValueKind::Time(t) => (String::new(), t.to_string()),
-            ValueKind::Duration(value, unit) => (unit.to_string(), format_decimal(value, None)),
-        }
-    }
-
-    /// Returns the condition result as "true"/"false" for the value column, if the node is a boolean condition.
-    fn extract_condition_result(node: &ProofNode) -> Option<String> {
-        match node {
-            ProofNode::Computation { result, .. } => match &result.value {
-                ValueKind::Boolean(b) => Some(b.to_string()),
-                _ => None,
-            },
-            ProofNode::Condition { result, .. } => Some(result.to_string()),
-            _ => None,
+            ValueKind::Text(s) => format!("\"{}\"", s),
+            ValueKind::Boolean(b) => b.to_string(),
+            ValueKind::Date(d) => d.to_string(),
+            ValueKind::Time(t) => t.to_string(),
+            ValueKind::Duration(value, unit) => {
+                format!("{} {}", format_decimal(value, None), unit)
+            }
         }
     }
 
@@ -815,7 +747,7 @@ impl Formatter {
     }
 
     fn gray(&self, text: &str) -> String {
-        format!("\x1b[5;90m{}\x1b[0m", text)
+        format!("\x1b[90m{}\x1b[0m", text)
     }
 }
 

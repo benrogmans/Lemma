@@ -1,0 +1,84 @@
+doc money
+
+type salary: scale
+  -> unit eur 1.00
+  -> decimals 2
+  -> minimum 0 eur
+
+
+doc ind/kennismigrant 2024-01-01
+"""
+Dutch Highly Skilled Migrant (Kennismigrant) salary thresholds — 2024.
+
+The IND publishes updated salary criteria every January. A candidate
+must earn at least the threshold for their age bracket to qualify.
+Source: IND Inkomensnormen 2024.
+"""
+
+type salary from money
+
+fact threshold_age_30_plus : 5008 eur
+fact threshold_under_30    : 3672 eur
+fact application_fee       : 345 eur
+
+rule min_annual_salary_30_plus:
+  threshold_age_30_plus * 12
+
+rule min_annual_salary_under_30:
+  threshold_under_30 * 12
+
+
+doc ind/kennismigrant 2025-01-01
+"""
+Dutch Highly Skilled Migrant (Kennismigrant) salary thresholds — 2025.
+
+Updated thresholds effective 1 January 2025.
+Source: IND Inkomensnormen 2025.
+"""
+
+type salary from money
+
+fact threshold_age_30_plus : 5331 eur
+fact threshold_under_30    : 3909 eur
+fact application_fee       : 365 eur
+
+rule min_annual_salary_30_plus:
+  threshold_age_30_plus * 12
+
+rule min_annual_salary_under_30:
+  threshold_under_30 * 12
+
+
+doc ind/kennismigrant/aanvraag 2024-01-01
+"""
+Kennismigrant Visa Eligibility Check
+
+Determines whether an applicant meets the salary requirement for the
+Dutch highly skilled migrant visa. The applicable thresholds are
+resolved temporally from ind/kennismigrant — the
+version active at evaluation time is used automatically.
+"""
+
+type salary from money
+
+fact applicant_age        : [number -> minimum 18 -> maximum 67]
+fact gross_monthly_salary : [salary]
+
+fact thresholds : doc ind/kennismigrant
+
+rule required_monthly_salary:
+  thresholds.threshold_age_30_plus
+  unless applicant_age < 30
+    then thresholds.threshold_under_30
+
+rule salary_surplus:
+  gross_monthly_salary - required_monthly_salary
+
+rule meets_salary_requirement:
+  gross_monthly_salary >= required_monthly_salary
+
+rule application_fee:
+  thresholds.application_fee
+
+rule eligible:
+  meets_salary_requirement
