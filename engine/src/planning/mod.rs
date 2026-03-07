@@ -5,71 +5,156 @@
 //! - Builds ExecutionPlan from Graph (topologically sorted, ready for evaluation)
 //! - Validates document structure and references
 
+pub mod content_hash;
 pub mod execution_plan;
 pub mod graph;
 pub mod semantics;
+pub mod slice_interface;
+pub mod temporal;
 pub mod types;
 pub mod validation;
-pub mod version_sort;
-
 pub use execution_plan::{Branch, DocumentSchema, ExecutableRule, ExecutionPlan};
 pub use semantics::{
-    ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, Fact, FactData,
-    FactPath, FactValue, LemmaType, LiteralValue, LogicalComputation, MathematicalComputation,
-    NegationType, PathSegment, RulePath, Source, Span, TypeExtends, ValueKind, VetoExpression,
+    negated_comparison, ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind,
+    Fact, FactData, FactPath, FactValue, LemmaType, LiteralValue, LogicalComputation,
+    MathematicalComputation, NegationType, PathSegment, RulePath, Source, Span, TypeExtends,
+    ValueKind, VetoExpression,
 };
-pub use types::TypeRegistry;
+pub use types::TypeResolver;
 
+use crate::engine::Context;
 use crate::parsing::ast::LemmaDoc;
 use crate::Error;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Result of planning a single document: the document, its execution plans (if any), and errors produced while planning it.
+#[derive(Debug, Clone)]
+pub struct DocPlanningResult {
+    /// The document we were planning (the one this result is for).
+    pub document: Arc<LemmaDoc>,
+    /// Execution plans for that document (one per temporal interval; empty if planning failed).
+    pub plans: Vec<ExecutionPlan>,
+    /// All planning errors produced while planning this document.
+    pub errors: Vec<Error>,
+    /// Content hash of this document (hash pin, 8 lowercase hex chars).
+    pub hash_pin: String,
+}
+
+/// Result of running plan() across the context: per-document results and global errors (e.g. temporal coverage).
+#[derive(Debug, Clone)]
+pub struct PlanningResult {
+    /// One result per document we attempted to plan.
+    pub per_document: Vec<DocPlanningResult>,
+    /// Errors not tied to a single document (e.g. from validate_temporal_coverage).
+    pub global_errors: Vec<Error>,
+}
 
 /// Build execution plans for one or more Lemma documents.
 ///
-/// Performs all global work (validation, type registration, type resolution)
-/// **once** across all documents, then builds per-document graphs and
-/// execution plans, collecting all errors in a single pass.
+/// Context is immutable — types are resolved transiently and never stored in
+/// Context. The flow:
+/// 1. TypeResolver registers + resolves named types → HashMap
+/// 2. Per-document Graph::build augments the HashMap with inline types
+/// 3. ExecutionPlan is built from the graph (types baked into facts/rules)
 ///
-/// Returns a tuple of (successful plans, all errors). Partial success is
-/// possible: some documents may produce valid plans while others fail.
-///
-/// `docs_to_plan` is the subset of `all_docs` for which execution plans should
-/// be built. `all_docs` includes every document in the workspace (needed for
-/// cross-document type resolution and doc references).
-///
-/// The `sources` parameter maps source IDs (filenames) to their source code,
-/// needed for extracting original expression text in proofs.
-pub fn plan(
-    docs_to_plan: &[&LemmaDoc],
-    all_docs: &[LemmaDoc],
-    sources: HashMap<String, String>,
-) -> (HashMap<String, ExecutionPlan>, Vec<Error>) {
-    let mut plans = HashMap::new();
-    let mut errors: Vec<Error> = Vec::new();
+/// Returns a PlanningResult: per-document results (document, plans, errors) and global errors.
+/// When displaying errors, iterate per_document and for each with non-empty errors output "In document 'X':" then each error.
+pub fn plan(context: &Context, sources: HashMap<String, String>) -> PlanningResult {
+    let mut global_errors: Vec<Error> = Vec::new();
+    global_errors.extend(temporal::validate_temporal_coverage(context));
 
-    // 1. Prepare types once (registration + named type resolution + spec validation).
-    let (prepared, type_errors) = graph::Graph::prepare_types(all_docs);
-    errors.extend(type_errors);
+    let mut type_resolver = TypeResolver::new();
+    let all_docs: Vec<_> = context.iter().collect();
+    for doc_arc in &all_docs {
+        global_errors.extend(type_resolver.register_all(doc_arc));
+    }
+    let (mut resolved_types, type_errors) = type_resolver.resolve(all_docs.clone());
+    global_errors.extend(type_errors);
 
-    // 2. Per-doc: build graph + execution plan.
-    for doc in docs_to_plan {
-        match graph::Graph::build(doc, all_docs, sources.clone(), &prepared) {
-            Ok(graph) => {
-                let doc_id = doc.full_id();
-                let execution_plan = execution_plan::build_execution_plan(&graph, &doc_id);
-                let value_errors =
-                    execution_plan::validate_literal_facts_against_types(&execution_plan);
-                if value_errors.is_empty() {
-                    plans.insert(doc_id, execution_plan);
-                } else {
-                    errors.extend(value_errors);
-                }
-            }
-            Err(doc_errors) => errors.extend(doc_errors),
-        }
+    let mut per_document: Vec<DocPlanningResult> = Vec::new();
+
+    if !global_errors.is_empty() {
+        return PlanningResult {
+            per_document,
+            global_errors,
+        };
     }
 
-    (plans, errors)
+    // Compute content hashes for all docs (own content only for now).
+    // TODO: bottom-up transitive hashing once dep resolution order is settled.
+    let doc_hashes: graph::DocContentHashes = all_docs
+        .iter()
+        .map(|d| (graph::doc_hash_key(d), content_hash::hash_doc(d, &[])))
+        .collect();
+
+    for doc_arc in &all_docs {
+        let slices = temporal::compute_temporal_slices(doc_arc, context);
+        let mut doc_plans: Vec<ExecutionPlan> = Vec::new();
+        let mut doc_errors: Vec<Error> = Vec::new();
+        let mut slice_resolved_types: Vec<HashMap<Arc<LemmaDoc>, types::ResolvedDocumentTypes>> =
+            Vec::new();
+
+        for slice in &slices {
+            match graph::Graph::build(
+                doc_arc,
+                context,
+                sources.clone(),
+                &type_resolver,
+                &resolved_types,
+                slice.from.clone(),
+                &doc_hashes,
+            ) {
+                Ok((graph, doc_types)) => {
+                    for (arc, types) in &doc_types {
+                        resolved_types.insert(Arc::clone(arc), types.clone());
+                    }
+                    let execution_plan = execution_plan::build_execution_plan(
+                        &graph,
+                        doc_arc.name.as_str(),
+                        slice.from.clone(),
+                        slice.to.clone(),
+                    );
+                    let value_errors =
+                        execution_plan::validate_literal_facts_against_types(&execution_plan);
+                    if value_errors.is_empty() {
+                        doc_plans.push(execution_plan);
+                    } else {
+                        doc_errors.extend(value_errors);
+                    }
+                    slice_resolved_types.push(doc_types);
+                }
+                Err(doc_errors_from_build) => {
+                    doc_errors.extend(doc_errors_from_build);
+                }
+            }
+        }
+
+        if doc_errors.is_empty() && doc_plans.len() > 1 {
+            doc_errors.extend(slice_interface::validate_slice_interfaces(
+                &doc_arc.name,
+                &doc_plans,
+                &slice_resolved_types,
+            ));
+        }
+
+        let hash = doc_hashes
+            .get(&graph::doc_hash_key(doc_arc))
+            .cloned()
+            .unwrap_or_default();
+
+        per_document.push(DocPlanningResult {
+            document: Arc::clone(doc_arc),
+            plans: doc_plans,
+            errors: doc_errors,
+            hash_pin: hash,
+        });
+    }
+
+    PlanningResult {
+        per_document,
+        global_errors,
+    }
 }
 
 // ============================================================================
@@ -79,6 +164,7 @@ pub fn plan(
 #[cfg(test)]
 mod internal_tests {
     use super::plan;
+    use crate::engine::Context;
     use crate::parsing::ast::{FactValue, LemmaDoc, LemmaFact, Reference, Span};
     use crate::parsing::source::Source;
     use crate::planning::execution_plan::ExecutionPlan;
@@ -93,31 +179,57 @@ mod internal_tests {
         all_docs: &[LemmaDoc],
         sources: HashMap<String, String>,
     ) -> Result<ExecutionPlan, Vec<Error>> {
-        let docs_to_plan: Vec<&LemmaDoc> = vec![main_doc];
-        let (mut plans, errors) = plan(&docs_to_plan, all_docs, sources);
-        if !errors.is_empty() {
-            Err(errors)
-        } else {
-            plans.remove(&main_doc.name).map(Ok).unwrap_or_else(|| {
-                Err(vec![Error::planning(
-                    format!(
-                        "No execution plan produced for document '{}'",
-                        main_doc.name
-                    ),
-                    Some(crate::planning::semantics::Source::new(
-                        "<test>",
-                        crate::planning::semantics::Span {
-                            start: 0,
-                            end: 0,
-                            line: 1,
-                            col: 0,
-                        },
-                        main_doc.name.clone(),
-                        std::sync::Arc::from("doc test\nfact x: 1"),
-                    )),
-                    None::<String>,
-                )])
-            })
+        let mut ctx = Context::new();
+        for doc in all_docs {
+            if let Err(e) = ctx.insert_doc(Arc::new(doc.clone())) {
+                return Err(vec![e]);
+            }
+        }
+        let main_doc_arc = ctx
+            .get_doc_effective_from(main_doc.name.as_str(), main_doc.effective_from())
+            .expect("main_doc must be in all_docs");
+        let result = plan(&ctx, sources);
+        let all_errors: Vec<Error> = result
+            .global_errors
+            .into_iter()
+            .chain(
+                result
+                    .per_document
+                    .iter()
+                    .flat_map(|r| r.errors.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .collect();
+        if !all_errors.is_empty() {
+            return Err(all_errors);
+        }
+        match result
+            .per_document
+            .into_iter()
+            .find(|r| Arc::ptr_eq(&r.document, &main_doc_arc))
+        {
+            Some(doc_result) if !doc_result.plans.is_empty() => {
+                let mut plans = doc_result.plans;
+                Ok(plans.remove(0))
+            }
+            _ => Err(vec![Error::validation(
+                format!(
+                    "No execution plan produced for document '{}'",
+                    main_doc.name
+                ),
+                Some(crate::planning::semantics::Source::new(
+                    "<test>",
+                    crate::planning::semantics::Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                    main_doc.name.clone(),
+                    std::sync::Arc::from("doc test\nfact x: 1"),
+                )),
+                None::<String>,
+            )]),
         }
     }
 
@@ -302,7 +414,9 @@ fact contract: doc nonexistent"#;
             .collect::<Vec<_>>()
             .join(", ");
         assert!(
-            error_string.contains("not found") || error_string.contains("Document"),
+            error_string.contains("not found")
+                || error_string.contains("Document")
+                || (error_string.contains("nonexistent") && error_string.contains("depends")),
             "Error should mention document reference issue: {}",
             error_string
         );

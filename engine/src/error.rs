@@ -1,7 +1,8 @@
+use crate::parsing::ast::LemmaDoc;
 use crate::parsing::source::Source;
-use crate::planning::semantics::FactPath;
 use crate::registry::RegistryErrorKind;
 use std::fmt;
+use std::sync::Arc;
 
 /// Detailed error information with optional source location.
 #[derive(Debug, Clone)]
@@ -9,6 +10,10 @@ pub struct ErrorDetails {
     pub message: String,
     pub source: Option<Source>,
     pub suggestion: Option<String>,
+    /// When the cause involves a referenced document, that temporal version. Displayed as "See document 'X' (active from Y)."
+    pub related_doc: Option<Arc<LemmaDoc>>,
+    /// Document we were planning when this error occurred. Used for display grouping ("In document 'X':").
+    pub document_context: Option<Arc<LemmaDoc>>,
 }
 
 /// Error types for the Lemma system with source location tracking
@@ -20,8 +25,8 @@ pub enum Error {
     /// Inversion error (valid Lemma, but unsupported by inversion) with source location
     Inversion(Box<ErrorDetails>),
 
-    /// Planning error with source location
-    Planning(Box<ErrorDetails>),
+    /// Validation error (semantic/planning, including circular dependency) with source location
+    Validation(Box<ErrorDetails>),
 
     /// Registry resolution error with source location and structured error kind.
     ///
@@ -36,25 +41,19 @@ pub enum Error {
         kind: RegistryErrorKind,
     },
 
-    /// Missing fact error during evaluation with source location
-    MissingFact(Box<ErrorDetails>),
-
-    /// Circular dependency error with source location and cycle information
-    CircularDependency {
-        details: Box<ErrorDetails>,
-        cycle: Vec<Source>,
-    },
-
     /// Resource limit exceeded
     ResourceLimitExceeded {
         limit_name: String,
         limit_value: String,
         actual_value: String,
         suggestion: String,
+        /// Document we were planning when this limit was exceeded. Used for display grouping.
+        document_context: Option<Arc<LemmaDoc>>,
     },
 
-    /// Multiple errors collected together
-    MultipleErrors(Vec<Error>),
+    /// Request error: invalid or unsatisfiable API request (e.g. document not found, invalid parameters).
+    /// Not a parse/planning failure; the request itself is invalid. Such errors occur *before* any evaluation and *never during* evaluation.
+    Request(Box<ErrorDetails>),
 }
 
 impl Error {
@@ -68,6 +67,8 @@ impl Error {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
+            related_doc: None,
+            document_context: None,
         }))
     }
 
@@ -90,6 +91,8 @@ impl Error {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
+            related_doc: None,
+            document_context: None,
         }))
     }
 
@@ -102,16 +105,50 @@ impl Error {
         Self::inversion(message, source, Some(suggestion))
     }
 
-    /// Create a planning error with source information
-    pub fn planning(
+    /// Create a validation error with source information (semantic/planning, including circular dependency).
+    pub fn validation(
         message: impl Into<String>,
         source: Option<Source>,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
-        Self::Planning(Box::new(ErrorDetails {
+        Self::Validation(Box::new(ErrorDetails {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
+            related_doc: None,
+            document_context: None,
+        }))
+    }
+
+    /// Create a request error (invalid API request, e.g. document not found).
+    pub fn request(
+        message: impl Into<String>,
+        source: Option<Source>,
+        suggestion: Option<impl Into<String>>,
+    ) -> Self {
+        Self::Request(Box::new(ErrorDetails {
+            message: message.into(),
+            source,
+            suggestion: suggestion.map(Into::into),
+            related_doc: None,
+            document_context: None,
+        }))
+    }
+
+    /// Create a validation error with optional related document (for document-interface errors).
+    /// When related_doc is set, Display shows "See document 'X' (active from Y)."
+    pub fn validation_with_context(
+        message: impl Into<String>,
+        source: Option<Source>,
+        suggestion: Option<impl Into<String>>,
+        related_doc: Option<Arc<LemmaDoc>>,
+    ) -> Self {
+        Self::Validation(Box::new(ErrorDetails {
+            message: message.into(),
+            source,
+            suggestion: suggestion.map(Into::into),
+            related_doc,
+            document_context: None,
         }))
     }
 
@@ -128,41 +165,76 @@ impl Error {
                 message: message.into(),
                 source,
                 suggestion: suggestion.map(Into::into),
+                related_doc: None,
+                document_context: None,
             }),
             identifier: identifier.into(),
             kind,
         }
     }
 
-    /// Create a missing fact error with source information
-    pub fn missing_fact(
-        fact_path: FactPath,
-        source: Option<Source>,
-        suggestion: Option<impl Into<String>>,
-    ) -> Self {
-        Self::MissingFact(Box::new(ErrorDetails {
-            message: format!("Missing fact: {}", fact_path),
-            source,
-            suggestion: suggestion.map(Into::into),
-        }))
-    }
-
-    /// Create a circular dependency error with source information
-    pub fn circular_dependency(
-        message: impl Into<String>,
-        source: Option<Source>,
-        cycle: Vec<Source>,
-        suggestion: Option<impl Into<String>>,
-    ) -> Self {
-        Self::CircularDependency {
-            details: Box::new(ErrorDetails {
-                message: message.into(),
-                source,
-                suggestion: suggestion.map(Into::into),
-            }),
-            cycle,
+    /// Attach document context for display grouping. Returns a new Error with context set.
+    pub fn with_document_context(self, doc: Arc<LemmaDoc>) -> Self {
+        match self {
+            Error::Parsing(details) => {
+                let mut d = *details;
+                d.document_context = Some(doc);
+                Error::Parsing(Box::new(d))
+            }
+            Error::Inversion(details) => {
+                let mut d = *details;
+                d.document_context = Some(doc);
+                Error::Inversion(Box::new(d))
+            }
+            Error::Validation(details) => {
+                let mut d = *details;
+                d.document_context = Some(doc);
+                Error::Validation(Box::new(d))
+            }
+            Error::Registry {
+                details,
+                identifier,
+                kind,
+            } => {
+                let mut d = *details;
+                d.document_context = Some(doc);
+                Error::Registry {
+                    details: Box::new(d),
+                    identifier,
+                    kind,
+                }
+            }
+            Error::ResourceLimitExceeded {
+                limit_name,
+                limit_value,
+                actual_value,
+                suggestion,
+                document_context: _,
+            } => Error::ResourceLimitExceeded {
+                limit_name,
+                limit_value,
+                actual_value,
+                suggestion,
+                document_context: Some(doc),
+            },
+            Error::Request(details) => {
+                let mut d = *details;
+                d.document_context = Some(doc);
+                Error::Request(Box::new(d))
+            }
         }
     }
+}
+
+fn format_related_doc(doc: &LemmaDoc) -> String {
+    let effective_from_str = doc
+        .effective_from()
+        .map(|d| d.to_string())
+        .unwrap_or_else(|| "beginning".to_string());
+    format!(
+        "See document '{}' (effective from {}).",
+        doc.name, effective_from_str
+    )
 }
 
 fn write_source_location(f: &mut fmt::Formatter<'_>, source: &Option<Source>) -> fmt::Result {
@@ -177,28 +249,51 @@ fn write_source_location(f: &mut fmt::Formatter<'_>, source: &Option<Source>) ->
     }
 }
 
+fn write_related_doc(f: &mut fmt::Formatter<'_>, details: &ErrorDetails) -> fmt::Result {
+    if let Some(ref related) = details.related_doc {
+        write!(f, " {}", format_related_doc(related))?;
+    }
+    Ok(())
+}
+
+fn write_document_context(f: &mut fmt::Formatter<'_>, doc: &LemmaDoc) -> fmt::Result {
+    write!(f, "In document '{}': ", doc.name)
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Parsing(details) => {
+                if let Some(ref doc) = details.document_context {
+                    write_document_context(f, doc)?;
+                }
                 write!(f, "Parse error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
+                write_related_doc(f, details)?;
                 write_source_location(f, &details.source)
             }
             Error::Inversion(details) => {
+                if let Some(ref doc) = details.document_context {
+                    write_document_context(f, doc)?;
+                }
                 write!(f, "Inversion error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
+                write_related_doc(f, details)?;
                 write_source_location(f, &details.source)
             }
-            Error::Planning(details) => {
-                write!(f, "Planning error: {}", details.message)?;
+            Error::Validation(details) => {
+                if let Some(ref doc) = details.document_context {
+                    write_document_context(f, doc)?;
+                }
+                write!(f, "Validation error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
+                write_related_doc(f, details)?;
                 write_source_location(f, &details.source)
             }
             Error::Registry {
@@ -206,6 +301,9 @@ impl fmt::Display for Error {
                 identifier,
                 kind,
             } => {
+                if let Some(ref doc) = details.document_context {
+                    write_document_context(f, doc)?;
+                }
                 write!(
                     f,
                     "Registry error ({}): @{}: {}",
@@ -214,20 +312,7 @@ impl fmt::Display for Error {
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
-                write_source_location(f, &details.source)
-            }
-            Error::MissingFact(details) => {
-                write!(f, "Missing fact: {}", details.message)?;
-                if let Some(suggestion) = &details.suggestion {
-                    write!(f, " (suggestion: {suggestion})")?;
-                }
-                write_source_location(f, &details.source)
-            }
-            Error::CircularDependency { details, .. } => {
-                write!(f, "Circular dependency: {}", details.message)?;
-                if let Some(suggestion) = &details.suggestion {
-                    write!(f, " (suggestion: {suggestion})")?;
-                }
+                write_related_doc(f, details)?;
                 write_source_location(f, &details.source)
             }
             Error::ResourceLimitExceeded {
@@ -235,21 +320,26 @@ impl fmt::Display for Error {
                 limit_value,
                 actual_value,
                 suggestion,
+                document_context,
             } => {
+                if let Some(ref doc) = document_context {
+                    write_document_context(f, doc)?;
+                }
                 write!(
                     f,
                     "Resource limit exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value}). {suggestion}"
                 )
             }
-            Error::MultipleErrors(errors) => {
-                writeln!(f, "Multiple errors:")?;
-                for (i, error) in errors.iter().enumerate() {
-                    write!(f, "  {}. {error}", i + 1)?;
-                    if i < errors.len() - 1 {
-                        writeln!(f)?;
-                    }
+            Error::Request(details) => {
+                if let Some(ref doc) = details.document_context {
+                    write_document_context(f, doc)?;
                 }
-                Ok(())
+                write!(f, "Request error: {}", details.message)?;
+                if let Some(suggestion) = &details.suggestion {
+                    write!(f, " (suggestion: {suggestion})")?;
+                }
+                write_related_doc(f, details)?;
+                write_source_location(f, &details.source)
             }
         }
     }
@@ -259,7 +349,7 @@ impl std::error::Error for Error {}
 
 impl From<std::fmt::Error> for Error {
     fn from(err: std::fmt::Error) -> Self {
-        Error::planning(format!("Format error: {err}"), None, None::<String>)
+        Error::validation(format!("Format error: {err}"), None, None::<String>)
     }
 }
 
@@ -269,12 +359,10 @@ impl Error {
         match self {
             Error::Parsing(details)
             | Error::Inversion(details)
-            | Error::Planning(details)
-            | Error::MissingFact(details) => &details.message,
+            | Error::Validation(details)
+            | Error::Request(details) => &details.message,
             Error::Registry { details, .. } => &details.message,
-            Error::CircularDependency { details, .. } => &details.message,
             Error::ResourceLimitExceeded { limit_name, .. } => limit_name,
-            Error::MultipleErrors(_) => "Multiple errors occurred",
         }
     }
 
@@ -283,11 +371,10 @@ impl Error {
         match self {
             Error::Parsing(details)
             | Error::Inversion(details)
-            | Error::Planning(details)
-            | Error::MissingFact(details) => details.source.as_ref(),
+            | Error::Validation(details)
+            | Error::Request(details) => details.source.as_ref(),
             Error::Registry { details, .. } => details.source.as_ref(),
-            Error::CircularDependency { details, .. } => details.source.as_ref(),
-            Error::ResourceLimitExceeded { .. } | Error::MultipleErrors(_) => None,
+            Error::ResourceLimitExceeded { .. } => None,
         }
     }
 
@@ -301,12 +388,10 @@ impl Error {
         match self {
             Error::Parsing(details)
             | Error::Inversion(details)
-            | Error::Planning(details)
-            | Error::MissingFact(details) => details.suggestion.as_deref(),
+            | Error::Validation(details)
+            | Error::Request(details) => details.suggestion.as_deref(),
             Error::Registry { details, .. } => details.suggestion.as_deref(),
-            Error::CircularDependency { details, .. } => details.suggestion.as_deref(),
             Error::ResourceLimitExceeded { suggestion, .. } => Some(suggestion),
-            Error::MultipleErrors(_) => None,
         }
     }
 }
@@ -359,18 +444,13 @@ mod tests {
         assert!(parse_error_with_suggestion_display.contains("Typo in fact name"));
         assert!(parse_error_with_suggestion_display.contains("Did you mean 'amount'?"));
 
-        let engine_error = Error::planning("Something went wrong", None, None::<String>);
-        assert!(format!("{engine_error}").contains("Planning error: Something went wrong"));
+        let engine_error = Error::validation("Something went wrong", None, None::<String>);
+        assert!(format!("{engine_error}").contains("Validation error: Something went wrong"));
         assert!(!format!("{engine_error}").contains(" at "));
 
-        let circular_dependency_error =
-            Error::circular_dependency("a -> b -> a", None, vec![], None::<String>);
-        assert!(format!("{circular_dependency_error}").contains("Circular dependency: a -> b -> a"));
-
-        let multiple_errors = Error::MultipleErrors(vec![parse_error, engine_error]);
-        let multiple_errors_display = format!("{multiple_errors}");
-        assert!(multiple_errors_display.contains("Multiple errors:"));
-        assert!(multiple_errors_display.contains("Parse error: Invalid currency"));
-        assert!(multiple_errors_display.contains("Planning error: Something went wrong"));
+        let validation_error =
+            Error::validation("Circular dependency: a -> b -> a", None, None::<String>);
+        assert!(format!("{validation_error}")
+            .contains("Validation error: Circular dependency: a -> b -> a"));
     }
 }

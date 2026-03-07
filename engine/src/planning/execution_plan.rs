@@ -4,7 +4,7 @@
 //! The plan contains all facts, rules flattened into executable branches,
 //! and execution order - no document structure needed during evaluation.
 
-use crate::parsing::ast::MetaValue;
+use crate::parsing::ast::{DateTimeValue, MetaValue};
 use crate::planning::graph::Graph;
 use crate::planning::semantics;
 use crate::planning::semantics::{
@@ -13,6 +13,7 @@ use crate::planning::semantics::{
 use crate::Error;
 use crate::ResourceLimits;
 use crate::Source;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -25,10 +26,10 @@ pub struct ExecutionPlan {
     /// Main document name
     pub doc_name: String,
 
-    /// Per-fact data: value, type-only, or document reference (aligned with FactData).
+    /// Per-fact data in definition order: value, type-only, or document reference.
     #[serde(serialize_with = "crate::serialization::serialize_resolved_fact_value_map")]
     #[serde(deserialize_with = "crate::serialization::deserialize_resolved_fact_value_map")]
-    pub facts: HashMap<FactPath, FactData>,
+    pub facts: IndexMap<FactPath, FactData>,
 
     /// Rules to execute in topological order (sorted by dependencies)
     pub rules: Vec<ExecutableRule>,
@@ -38,6 +39,12 @@ pub struct ExecutionPlan {
 
     /// Document metadata
     pub meta: HashMap<String, MetaValue>,
+
+    /// Temporal slice start (inclusive). None = -∞.
+    pub valid_from: Option<DateTimeValue>,
+
+    /// Temporal slice end (exclusive). None = +∞.
+    pub valid_to: Option<DateTimeValue>,
 }
 
 /// An executable rule with flattened branches
@@ -83,9 +90,14 @@ pub struct Branch {
     pub source: Source,
 }
 
-/// Builds an execution plan from a Graph.
+/// Builds an execution plan from a Graph for one temporal slice.
 /// Internal implementation detail - only called by plan()
-pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> ExecutionPlan {
+pub(crate) fn build_execution_plan(
+    graph: &Graph,
+    main_doc_name: &str,
+    valid_from: Option<DateTimeValue>,
+    valid_to: Option<DateTimeValue>,
+) -> ExecutionPlan {
     let facts = graph.build_facts();
     let execution_order = graph.execution_order();
 
@@ -123,6 +135,8 @@ pub(crate) fn build_execution_plan(graph: &Graph, main_doc_name: &str) -> Execut
         rules: executable_rules,
         sources: graph.sources().clone(),
         meta: graph.meta().clone(),
+        valid_from,
+        valid_to,
     }
 }
 
@@ -322,7 +336,7 @@ fn format_type_constraints(spec: &TypeSpecification) -> Option<String> {
         TypeSpecification::Boolean { .. }
         | TypeSpecification::Duration { .. }
         | TypeSpecification::Veto { .. }
-        | TypeSpecification::Error => {}
+        | TypeSpecification::Undetermined => {}
     }
 
     if parts.is_empty() {
@@ -333,6 +347,20 @@ fn format_type_constraints(spec: &TypeSpecification) -> Option<String> {
 }
 
 impl ExecutionPlan {
+    /// Resolved document references in this plan.
+    ///
+    /// Iterates facts and collects entries where `FactData::doc_arc()` returns
+    /// `Some`. No data duplication — the `Arc<LemmaDoc>` is already stored in
+    /// `FactData::DocumentRef`.
+    pub fn document_refs(
+        &self,
+    ) -> Vec<(&FactPath, &std::sync::Arc<crate::parsing::ast::LemmaDoc>)> {
+        self.facts
+            .iter()
+            .filter_map(|(path, data)| data.doc_arc().map(|arc| (path, arc)))
+            .collect()
+    }
+
     /// Build a [`DocumentSchema`] summarising **all** of this plan's facts and
     /// rules.
     ///
@@ -382,7 +410,7 @@ impl ExecutionPlan {
 
         for rule_name in rule_names {
             let rule = self.get_rule(rule_name).ok_or_else(|| {
-                Error::planning(
+                Error::validation(
                     format!(
                         "Rule '{}' not found in document '{}'",
                         rule_name, self.doc_name
@@ -450,7 +478,7 @@ impl ExecutionPlan {
         for (name, raw_value) in values {
             let fact_path = self.get_fact_path_by_str(&name).ok_or_else(|| {
                 let available: Vec<String> = self.facts.keys().map(|p| p.input_key()).collect();
-                Error::planning(
+                Error::validation(
                     format!(
                         "Fact '{}' not found. Available facts: {}",
                         name,
@@ -469,7 +497,7 @@ impl ExecutionPlan {
 
             let fact_source = fact_data.source().clone();
             let expected_type = fact_data.schema_type().cloned().ok_or_else(|| {
-                Error::planning(
+                Error::validation(
                     format!(
                         "Fact '{}' is a document reference; cannot provide a value.",
                         name
@@ -486,7 +514,7 @@ impl ExecutionPlan {
                 &fact_source,
             )
             .map_err(|e| {
-                Error::planning(
+                Error::validation(
                     format!(
                         "Failed to parse fact '{}' as {}: {}",
                         name,
@@ -498,7 +526,7 @@ impl ExecutionPlan {
                 )
             })?;
             let semantic_value = semantics::value_to_semantic(&parsed_value).map_err(|e| {
-                Error::planning(
+                Error::validation(
                     format!("Failed to convert fact '{}' value: {}", name, e),
                     Some(fact_source.clone()),
                     None::<String>,
@@ -520,12 +548,13 @@ impl ExecutionPlan {
                         "Reduce the size of fact values to {} bytes or less",
                         limits.max_fact_value_bytes
                     ),
+                    document_context: None,
                 });
             }
 
             // Validate constraints
             validate_value_against_type(&expected_type, &literal_value).map_err(|msg| {
-                Error::planning(
+                Error::validation(
                     format!(
                         "Invalid value for fact {} (expected {}): {}",
                         name,
@@ -637,7 +666,7 @@ pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<
 
         if let Err(msg) = validate_value_against_type(expected_type, lit) {
             let source = fact_data.source().clone();
-            errors.push(Error::planning(
+            errors.push(Error::validation(
                 format!(
                     "Invalid value for fact {} (expected {}): {}",
                     fact_path,
@@ -656,6 +685,7 @@ pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parsing::ast::DateTimeValue;
     use crate::planning::semantics::{
         primitive_boolean, primitive_text, FactPath, LiteralValue, PathSegment, RulePath,
     };
@@ -672,17 +702,12 @@ mod tests {
         engine: &mut Engine,
         code: &str,
         source: &str,
-    ) -> crate::LemmaResult<()> {
+    ) -> Result<(), Vec<crate::Error>> {
         let files: std::collections::HashMap<String, String> =
             std::iter::once((source.to_string(), code.to_string())).collect();
         tokio::runtime::Runtime::new()
             .expect("tokio runtime")
             .block_on(engine.add_lemma_files(files))
-            .map_err(|errs| match errs.len() {
-                0 => unreachable!("add_lemma_files returned Err with empty error list"),
-                1 => errs.into_iter().next().unwrap(),
-                _ => crate::Error::MultipleErrors(errs),
-            })
     }
 
     #[test]
@@ -698,7 +723,11 @@ mod tests {
         )
         .unwrap();
 
-        let plan = engine.get_execution_plan("test").unwrap().clone();
+        let now = DateTimeValue::now();
+        let plan = engine
+            .get_execution_plan("test", None, &now)
+            .unwrap()
+            .clone();
         let fact_path = FactPath::new(vec![], "age".to_string());
 
         let mut values = HashMap::new();
@@ -727,7 +756,11 @@ mod tests {
         )
         .unwrap();
 
-        let plan = engine.get_execution_plan("test").unwrap().clone();
+        let now = DateTimeValue::now();
+        let plan = engine
+            .get_execution_plan("test", None, &now)
+            .unwrap()
+            .clone();
 
         let mut values = HashMap::new();
         values.insert("age".to_string(), "thirty".to_string());
@@ -748,7 +781,11 @@ mod tests {
         )
         .unwrap();
 
-        let plan = engine.get_execution_plan("test").unwrap().clone();
+        let now = DateTimeValue::now();
+        let plan = engine
+            .get_execution_plan("test", None, &now)
+            .unwrap()
+            .clone();
 
         let mut values = HashMap::new();
         values.insert("unknown".to_string(), "30".to_string());
@@ -772,7 +809,11 @@ mod tests {
         )
         .unwrap();
 
-        let plan = engine.get_execution_plan("test").unwrap().clone();
+        let now = DateTimeValue::now();
+        let plan = engine
+            .get_execution_plan("test", None, &now)
+            .unwrap()
+            .clone();
 
         let mut values = HashMap::new();
         values.insert("rules.base_price".to_string(), "100".to_string());
@@ -862,7 +903,7 @@ mod tests {
             "test",
             Arc::from("doc test\nfact x: 1\nrule result: x"),
         );
-        let mut facts = HashMap::new();
+        let mut facts = IndexMap::new();
         facts.insert(
             fact_path.clone(),
             crate::planning::semantics::FactData::Value {
@@ -880,6 +921,8 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         };
 
         let mut values = HashMap::new();
@@ -917,7 +960,7 @@ mod tests {
             "test",
             Arc::from("doc test\nfact x: 1\nrule result: x"),
         );
-        let mut facts = HashMap::new();
+        let mut facts = IndexMap::new();
         facts.insert(
             fact_path.clone(),
             crate::planning::semantics::FactData::Value {
@@ -935,6 +978,8 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         };
 
         let mut values = HashMap::new();
@@ -979,7 +1024,7 @@ mod tests {
             "test",
             Arc::from("doc test\nfact x: 1\nrule result: x"),
         );
-        let mut facts = HashMap::new();
+        let mut facts = IndexMap::new();
         facts.insert(
             fact_path.clone(),
             crate::planning::semantics::FactData::Value {
@@ -998,6 +1043,8 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         };
 
         let mut values = HashMap::new();
@@ -1015,7 +1062,7 @@ mod tests {
             segments: vec![],
             fact: "age".to_string(),
         };
-        let mut facts = HashMap::new();
+        let mut facts = IndexMap::new();
         facts.insert(
             fact_path.clone(),
             crate::planning::semantics::FactData::Value {
@@ -1033,6 +1080,8 @@ mod tests {
                 s
             },
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1049,7 +1098,7 @@ mod tests {
         use crate::planning::semantics::ExpressionKind;
 
         let age_path = FactPath::new(vec![], "age".to_string());
-        let mut facts = HashMap::new();
+        let mut facts = IndexMap::new();
         facts.insert(
             age_path.clone(),
             crate::planning::semantics::FactData::Value {
@@ -1063,6 +1112,8 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         };
 
         let rule = ExecutableRule {
@@ -1113,7 +1164,7 @@ mod tests {
             fact: "salary".to_string(),
         };
 
-        let mut facts = HashMap::new();
+        let mut facts = IndexMap::new();
         facts.insert(
             fact_path.clone(),
             crate::planning::semantics::FactData::Value {
@@ -1127,6 +1178,8 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1145,7 +1198,7 @@ mod tests {
         let age_path = FactPath::new(vec![], "age".to_string());
         let active_path = FactPath::new(vec![], "active".to_string());
 
-        let mut facts = HashMap::new();
+        let mut facts = IndexMap::new();
         facts.insert(
             name_path.clone(),
             crate::planning::semantics::FactData::Value {
@@ -1174,6 +1227,8 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1200,7 +1255,7 @@ mod tests {
         use crate::planning::semantics::ExpressionKind;
 
         let points_path = FactPath::new(vec![], "points".to_string());
-        let mut facts = HashMap::new();
+        let mut facts = IndexMap::new();
         facts.insert(
             points_path.clone(),
             crate::planning::semantics::FactData::Value {
@@ -1214,6 +1269,8 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         };
 
         let rule = ExecutableRule {
@@ -1275,10 +1332,12 @@ mod tests {
     fn test_serialize_deserialize_empty_plan() {
         let plan = ExecutionPlan {
             doc_name: "empty".to_string(),
-            facts: HashMap::new(),
+            facts: IndexMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1295,7 +1354,7 @@ mod tests {
         use crate::planning::semantics::ExpressionKind;
 
         let x_path = FactPath::new(vec![], "x".to_string());
-        let mut facts = HashMap::new();
+        let mut facts = IndexMap::new();
         facts.insert(
             x_path.clone(),
             crate::planning::semantics::FactData::Value {
@@ -1309,6 +1368,8 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         };
 
         let rule = ExecutableRule {
@@ -1362,7 +1423,7 @@ mod tests {
         use crate::planning::semantics::ExpressionKind;
 
         let age_path = FactPath::new(vec![], "age".to_string());
-        let mut facts = HashMap::new();
+        let mut facts = IndexMap::new();
         facts.insert(
             age_path.clone(),
             crate::planning::semantics::FactData::Value {
@@ -1380,6 +1441,8 @@ mod tests {
                 s
             },
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         };
 
         let rule = ExecutableRule {

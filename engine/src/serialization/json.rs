@@ -1,5 +1,6 @@
 use crate::planning::semantics::{FactData, FactPath};
 use crate::Error;
+use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -10,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 /// - All other values are converted to their string representation
 pub fn from_json(json: &[u8]) -> Result<HashMap<String, String>, Error> {
     let map: HashMap<String, Value> = serde_json::from_slice(json)
-        .map_err(|e| Error::planning(format!("JSON parse error: {}", e), None, None::<String>))?;
+        .map_err(|e| Error::validation(format!("JSON parse error: {}", e), None, None::<String>))?;
 
     Ok(map
         .into_iter()
@@ -29,9 +30,9 @@ fn json_value_to_string(value: &Value) -> String {
     }
 }
 
-/// Serializes HashMap<FactPath, FactData> as array of [FactPath, FactData] tuples.
+/// Serializes IndexMap<FactPath, FactData> as array of [FactPath, FactData] tuples.
 pub fn serialize_resolved_fact_value_map<S>(
-    map: &HashMap<FactPath, FactData>,
+    map: &IndexMap<FactPath, FactData>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -41,10 +42,10 @@ where
     entries.serialize(serializer)
 }
 
-/// Deserializes from array of [FactPath, FactData] tuples.
+/// Deserializes from array of [FactPath, FactData] tuples, preserving order.
 pub fn deserialize_resolved_fact_value_map<'de, D>(
     deserializer: D,
-) -> Result<HashMap<FactPath, FactData>, D::Error>
+) -> Result<IndexMap<FactPath, FactData>, D::Error>
 where
     D: Deserializer<'de>,
 {
