@@ -1,10 +1,11 @@
 //! Integration tests for Scale/Number arithmetic behavior.
 //!
-//! Unit-resolution and TypeRegistry behavior tests live in `src/planning/types.rs`.
+//! Unit-resolution and TypeResolver behavior tests live in `src/planning/types.rs`.
 
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 #[test]
@@ -30,8 +31,9 @@ rule quotient: price1 / price2"#;
     facts.insert("price1".to_string(), "10 eur".to_string());
     facts.insert("price2".to_string(), "5 eur".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     // All operations should work
@@ -65,7 +67,12 @@ rule invalid: price + distance"#;
         "Should reject different Scale types in arithmetic"
     );
 
-    let error_msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    let error_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         error_msg.contains("different scale types") || error_msg.contains("Cannot add"),
         "Error should mention different scale types. Got: {}",
@@ -93,8 +100,9 @@ rule divided: price / multiplier"#;
     facts.insert("price".to_string(), "10 eur".to_string());
     facts.insert("multiplier".to_string(), "2".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     assert!(response.results.get("scaled").is_some());
@@ -121,8 +129,9 @@ rule divided: multiplier / price"#;
     facts.insert("multiplier".to_string(), "2".to_string());
     facts.insert("price".to_string(), "10 eur".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     assert!(response.results.get("scaled").is_some());
@@ -145,8 +154,9 @@ rule result: ratio_value * multiplier"#;
     facts.insert("ratio_value".to_string(), "0.5".to_string());
     facts.insert("multiplier".to_string(), "2".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     assert!(response.results.get("result").is_some());
@@ -169,8 +179,9 @@ rule quotient: ratio1 / ratio2"#;
     facts.insert("ratio1".to_string(), "0.5".to_string());
     facts.insert("ratio2".to_string(), "0.25".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     assert!(response.results.get("product").is_some());
@@ -196,8 +207,9 @@ rule result: ratio_value * price"#;
     facts.insert("ratio_value".to_string(), "0.5".to_string());
     facts.insert("price".to_string(), "10 eur".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     assert!(response.results.get("result").is_some());
@@ -222,8 +234,9 @@ rule result: price * ratio_value"#;
     facts.insert("price".to_string(), "10 eur".to_string());
     facts.insert("ratio_value".to_string(), "0.5".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     assert!(response.results.get("result").is_some());
@@ -249,8 +262,9 @@ rule is_equal: price1 == price2"#;
     facts.insert("price1".to_string(), "10 eur".to_string());
     facts.insert("price2".to_string(), "5 eur".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     assert!(response.results.get("is_greater").is_some());
@@ -280,7 +294,12 @@ rule invalid: price > distance"#;
         "Should reject comparison between different Scale types"
     );
 
-    let error_msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    let error_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         error_msg.contains("different scale types") || error_msg.contains("Cannot compare"),
         "Error should mention different scale types. Got: {}",
@@ -334,8 +353,9 @@ rule power: a ^ exponent"#;
     facts.insert("divisor".to_string(), "3".to_string());
     facts.insert("exponent".to_string(), "2".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     // All operations should work for same Scale type (modulo uses Number divisor)
@@ -372,7 +392,12 @@ rule power: price ^ distance"#;
         "Should reject all operations between different Scale types"
     );
 
-    let error_msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    let error_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     // Should mention that different scale types cannot be used
     assert!(
         error_msg.contains("different scale types") || error_msg.contains("Cannot"),
@@ -402,8 +427,9 @@ rule power: a ^ b"#;
     facts.insert("a".to_string(), "10".to_string());
     facts.insert("b".to_string(), "3".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     // All operations should work for Number types
@@ -434,8 +460,9 @@ rule total: price1 + price2"#;
     facts.insert("price1".to_string(), "10 eur".to_string());
     facts.insert("price2".to_string(), "5 eur".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     let total_result = response
@@ -476,8 +503,9 @@ rule result: price * multiplier"#;
     facts.insert("price".to_string(), "10 eur".to_string());
     facts.insert("multiplier".to_string(), "2".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     let result = response.results.get("result").unwrap();
@@ -504,8 +532,9 @@ rule result: ratio_value * multiplier"#;
     facts.insert("ratio_value".to_string(), "0.5".to_string());
     facts.insert("multiplier".to_string(), "2".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     let result = response
@@ -540,8 +569,9 @@ rule result: ratio1 * ratio2"#;
     facts.insert("ratio1".to_string(), "0.5".to_string());
     facts.insert("ratio2".to_string(), "0.25".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     let result = response
@@ -579,8 +609,9 @@ rule result: ratio_value * price"#;
     facts.insert("ratio_value".to_string(), "0.5".to_string());
     facts.insert("price".to_string(), "10 eur".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     let result = response.results.get("result").unwrap();
@@ -616,8 +647,9 @@ rule total: with_tax * quantity"#;
     facts.insert("tax_multiplier".to_string(), "1.2".to_string());
     facts.insert("quantity".to_string(), "5".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     assert!(response.results.get("discounted").is_some());
@@ -646,8 +678,9 @@ rule result: scale_value * number_value"#;
     facts.insert("scale_value".to_string(), "10 eur".to_string());
     facts.insert("number_value".to_string(), "2".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Should evaluate");
 
     assert!(response.results.get("result").is_some());

@@ -1,6 +1,7 @@
 use lemma::{Engine, LiteralValue, OperationResult};
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -17,8 +18,9 @@ rule doubled: base_value * 2
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_proof", vec![], HashMap::new())
+        .evaluate("test_proof", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let doubled_result = response
@@ -68,8 +70,9 @@ rule quadruple: doubled * 2
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_proof_ref", vec![], HashMap::new())
+        .evaluate("test_proof_ref", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let quadruple_result = response
@@ -138,8 +141,9 @@ rule discount_percentage: 0%
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_unless", vec![], HashMap::new())
+        .evaluate("test_unless", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let discount_result = response
@@ -205,8 +209,9 @@ rule age_validation: accept
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_veto", vec![], HashMap::new())
+        .evaluate("test_veto", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let validation_result = response
@@ -253,7 +258,10 @@ rule result: base_ref.doubled + 50
     add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
 
-    let response = engine.evaluate("main", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("main", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let result = response
         .results
@@ -326,7 +334,10 @@ rule use_cross_doc: base_ref.doubled + 1
     add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
 
-    let response = engine.evaluate("main", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("main", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let main_rule = response
         .results
@@ -391,7 +402,10 @@ rule use_doubled: base_ref.doubled + 10
     add_lemma_code_blocking(&mut engine, base_doc, "base.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
 
-    let response = engine.evaluate("main", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("main", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let main_rule = response
         .results
@@ -484,5 +498,64 @@ rule use_doubled: base_ref.doubled + 10
         segments[0]["doc"].as_str().unwrap(),
         "base",
         "Segment should reference base document"
+    );
+}
+
+#[test]
+fn test_comparison_false_normalized_to_positive_in_proof() {
+    let mut engine = Engine::new();
+
+    let doc = r#"
+doc test
+rule out: true
+ unless 5 < 3 then false
+"#;
+
+    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test", None, &now, vec![], HashMap::new())
+        .unwrap();
+
+    let result = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "out")
+        .expect("out rule should exist");
+
+    assert_eq!(
+        result.result,
+        OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
+        "default branch is taken"
+    );
+
+    let proof = result.proof.as_ref().expect("proof should exist");
+    let lemma::proof::ProofNode::Branches { non_matched, .. } = &proof.tree else {
+        panic!("expected Branches at root, got {:?}", proof.tree);
+    };
+    assert_eq!(non_matched.len(), 1, "one unless branch did not match");
+
+    let condition_node = &non_matched[0].condition;
+    let lemma::proof::ProofNode::Computation {
+        original_expression,
+        result: cond_result,
+        ..
+    } = condition_node.as_ref()
+    else {
+        panic!(
+            "expected Computation for condition, got {:?}",
+            condition_node
+        );
+    };
+
+    assert!(
+        original_expression.contains(">="),
+        "negated comparison should show >= not <; got original_expression: {}",
+        original_expression
+    );
+    assert_eq!(
+        cond_result,
+        &LiteralValue::from_bool(true),
+        "normalized condition should have result true"
     );
 }

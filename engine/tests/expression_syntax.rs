@@ -1,6 +1,7 @@
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use lemma::LiteralValue;
 use lemma::ValueKind;
 use std::collections::HashMap;
@@ -24,7 +25,10 @@ rule with_spaces: not  (  x  )
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     // not(x) evaluates to false (since x = true)
     let not_x_rule = response.results.get("not_x").unwrap();

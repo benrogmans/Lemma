@@ -1,3 +1,4 @@
+use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
@@ -5,7 +6,10 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 fn get_rule_value(engine: &Engine, doc_name: &str, rule_name: &str) -> lemma::LiteralValue {
-    let response = engine.evaluate(doc_name, vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate(doc_name, None, &now, vec![], HashMap::new())
+        .unwrap();
     response
         .results
         .values()

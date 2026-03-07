@@ -1,6 +1,7 @@
 use lemma::{Engine, LiteralValue, Target};
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -25,9 +26,11 @@ fn invert_exp_simple() {
     let engine = setup_engine(code);
 
     // y = e^2 ≈ 7.38905609893065
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "math",
+            &now,
             "y",
             Target::value(LiteralValue::number(dec("7.38905609893065"))),
             HashMap::new(),
@@ -45,9 +48,11 @@ fn invert_power_exponent_unknown() {
         rule y: 2 ^ x
     "#;
     let engine = setup_engine(code);
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "math",
+            &now,
             "y",
             Target::value(LiteralValue::number(8.into())),
             HashMap::new(),
@@ -65,9 +70,11 @@ fn invert_power_base_unknown() {
         rule y: x ^ 2
     "#;
     let engine = setup_engine(code);
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "math",
+            &now,
             "y",
             Target::value(LiteralValue::number(9.into())),
             HashMap::new(),

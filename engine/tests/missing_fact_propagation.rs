@@ -1,6 +1,7 @@
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 /// Test that when a rule in a referenced document fails due to missing facts,
@@ -30,9 +31,16 @@ rule total: rules.final_total
     add_lemma_code_blocking(&mut engine, private_doc, "private.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, main_doc, "main.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     // Evaluate with missing quantity fact
     let response = engine
-        .evaluate("examples/rules_and_unless", vec![], HashMap::new())
+        .evaluate(
+            "examples/rules_and_unless",
+            None,
+            &now,
+            vec![],
+            HashMap::new(),
+        )
         .unwrap();
 
     let total_rule = response
@@ -90,8 +98,9 @@ rule total: rules.final_total
     let mut facts = std::collections::HashMap::new();
     facts.insert("rules.base_price".to_string(), "9".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("examples/rules_and_unless", vec![], facts)
+        .evaluate("examples/rules_and_unless", None, &now, vec![], facts)
         .unwrap();
 
     let total_rule = response
@@ -136,8 +145,11 @@ rule total: price * quantity - discount
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     // Evaluate with no facts provided
-    let response = engine.evaluate("test_doc", vec![], HashMap::new()).unwrap();
+    let response = engine
+        .evaluate("test_doc", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let total_rule = response
         .results
@@ -193,7 +205,10 @@ rule message: "Order processed"
     let mut facts = std::collections::HashMap::new();
     facts.insert("price".to_string(), "10".to_string());
 
-    let response = engine.evaluate("test_doc", vec![], facts).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test_doc", None, &now, vec![], facts)
+        .unwrap();
 
     // subtotal should fail due to missing quantity
     let subtotal_rule = response
@@ -206,7 +221,7 @@ rule message: "Order processed"
         "subtotal should be Veto due to missing quantity"
     );
 
-    // message should still evaluate successfully (doesn't depend on missing facts)
+    // message should still evaluate successfully (doesn't depend on missing facts, None)
     let message_rule = response
         .results
         .values()
@@ -256,8 +271,9 @@ rule total: rules.total
     let mut facts = std::collections::HashMap::new();
     facts.insert("rules.base_price".to_string(), "100".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("examples/rules_and_unless", vec![], facts)
+        .evaluate("examples/rules_and_unless", None, &now, vec![], facts)
         .unwrap();
 
     let total_rule = response

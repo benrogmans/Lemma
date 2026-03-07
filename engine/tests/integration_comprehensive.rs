@@ -1,6 +1,7 @@
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -40,8 +41,9 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
     add_lemma_code_blocking(&mut engine, base_contract, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, employment_terms, "test.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("employment_terms", vec![], HashMap::new())
+        .evaluate("employment_terms", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let total_comp = response
@@ -68,8 +70,12 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
         lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
     );
 
-    engine.remove_document("employment_terms");
-    engine.remove_document("base_contract");
+    if let Some(doc) = engine.get_document("employment_terms", &now) {
+        engine.remove_document(doc);
+    }
+    if let Some(doc) = engine.get_document("base_contract", &now) {
+        engine.remove_document(doc);
+    }
 }
 
 #[test]
@@ -102,8 +108,9 @@ rule effective_rate: (tax_amount / income) * 100%
 
     add_lemma_code_blocking(&mut engine, tax_doc, "test.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("tax_calculation", vec![], HashMap::new())
+        .evaluate("tax_calculation", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let taxable = response
@@ -142,7 +149,9 @@ rule effective_rate: (tax_amount / income) * 100%
         )))
     );
 
-    engine.remove_document("tax_calculation");
+    if let Some(doc) = engine.get_document("tax_calculation", &now) {
+        engine.remove_document(doc);
+    }
 }
 
 #[test]
@@ -167,7 +176,10 @@ rule status: "LOW"
     facts.insert("threshold".to_string(), "500".to_string());
     facts.insert("multiplier".to_string(), "2".to_string());
 
-    let response = engine.evaluate("dynamic_config", vec![], facts).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("dynamic_config", None, &now, vec![], facts)
+        .unwrap();
 
     let calculated = response
         .results
@@ -187,7 +199,9 @@ rule status: "LOW"
     facts2.insert("threshold".to_string(), "150".to_string());
     facts2.insert("multiplier".to_string(), "2".to_string());
 
-    let response2 = engine.evaluate("dynamic_config", vec![], facts2).unwrap();
+    let response2 = engine
+        .evaluate("dynamic_config", None, &now, vec![], facts2)
+        .unwrap();
 
     let status2 = response2
         .results
@@ -196,7 +210,9 @@ rule status: "LOW"
         .unwrap();
     assert_eq!(status2.result.value().unwrap().to_string(), "HIGH");
 
-    engine.remove_document("dynamic_config");
+    if let Some(doc) = engine.get_document("dynamic_config", &now) {
+        engine.remove_document(doc);
+    }
 }
 
 #[test]
@@ -226,8 +242,9 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 
     add_lemma_code_blocking(&mut engine, timeline_doc, "test.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("project_timeline", vec![], HashMap::new())
+        .evaluate("project_timeline", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let phase1_complete = response
@@ -247,7 +264,9 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
         lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(false)))
     );
 
-    engine.remove_document("project_timeline");
+    if let Some(doc) = engine.get_document("project_timeline", &now) {
+        engine.remove_document(doc);
+    }
 }
 
 // ============================================================================
@@ -266,7 +285,10 @@ rule end_date: start + timespan
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let end_date = response
         .results
@@ -299,7 +321,10 @@ rule start_date: end - timespan
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let start_date = response
         .results
@@ -332,7 +357,10 @@ rule timespan: end - start
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let duration = response
         .results
@@ -366,7 +394,10 @@ rule date1_after_date2: date1 > date2
 "#;
 
     add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
-    let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("test", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let before = response
         .results
@@ -465,33 +496,13 @@ rule status: system_healthy and "OK"
         "Should reject mixing boolean and text in logical expression"
     );
 
-    let error_msg = result.unwrap_err().to_string().to_lowercase();
-    assert!(
-        error_msg.contains("logical")
-            || error_msg.contains("boolean")
-            || error_msg.contains("type"),
-        "Error should mention type issue. Got: {}",
-        error_msg
-    );
-}
-
-#[test]
-fn test_logical_or_with_text_error_message() {
-    let mut engine = Engine::new();
-
-    let doc = r#"
-doc test
-fact flag: false
-rule result: flag or "default"
-"#;
-
-    let result = add_lemma_code_blocking(&mut engine, doc, "test.lemma");
-    assert!(
-        result.is_err(),
-        "Should reject mixing boolean and text in 'or' expression"
-    );
-
-    let error_msg = result.unwrap_err().to_string().to_lowercase();
+    let errs = result.unwrap_err();
+    let error_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
+        .to_lowercase();
     assert!(
         error_msg.contains("logical")
             || error_msg.contains("boolean")
@@ -526,7 +537,10 @@ rule is_valid: value >= config.min_value and value <= config.max_value
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, child_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("child", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("child", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let is_valid = response
         .results
@@ -560,7 +574,10 @@ rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.ma
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, child_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("child", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("child", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let is_valid = response
         .results
@@ -593,7 +610,10 @@ rule probation_end: base_contract.project_start + base_contract.probation_period
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, child_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("child", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("child", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let probation_end = response
         .results

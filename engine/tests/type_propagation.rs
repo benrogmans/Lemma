@@ -1,5 +1,6 @@
 //! Tests for type propagation through arithmetic operations
 
+use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
@@ -18,9 +19,15 @@ fn test_money_plus_number_preserves_money() {
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
 
-    // Verify evaluation succeeds
-    let result = engine.evaluate("test", vec!["total".to_string()], HashMap::new());
+    let result = engine.evaluate(
+        "test",
+        None,
+        &now,
+        vec!["total".to_string()],
+        HashMap::new(),
+    );
     assert!(result.is_ok(), "Evaluation should succeed");
 }
 
@@ -37,8 +44,15 @@ fn test_number_plus_money_preserves_money() {
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
 
-    let result = engine.evaluate("test", vec!["total".to_string()], HashMap::new());
+    let result = engine.evaluate(
+        "test",
+        None,
+        &now,
+        vec!["total".to_string()],
+        HashMap::new(),
+    );
     assert!(result.is_ok(), "Evaluation should succeed");
 }
 
@@ -55,8 +69,15 @@ fn test_money_plus_money_preserves_money() {
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
 
-    let result = engine.evaluate("test", vec!["total".to_string()], HashMap::new());
+    let result = engine.evaluate(
+        "test",
+        None,
+        &now,
+        vec!["total".to_string()],
+        HashMap::new(),
+    );
     assert!(result.is_ok(), "Evaluation should succeed");
 }
 
@@ -75,10 +96,17 @@ fn test_different_custom_types_same_base() {
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    let now = DateTimeValue::now();
 
     // This should succeed - both extend number (dimensionless), so they're compatible
     // Result type should be money (left operand)
-    let result = engine.evaluate("test", vec!["total".to_string()], HashMap::new());
+    let result = engine.evaluate(
+        "test",
+        None,
+        &now,
+        vec!["total".to_string()],
+        HashMap::new(),
+    );
     assert!(
         result.is_ok(),
         "Evaluation should succeed for compatible types (both Number, no units)"
@@ -106,7 +134,12 @@ fn test_incompatible_types_error() {
     );
 
     // Verify the error message mentions incompatible types
-    let error_msg = format!("{}", result.unwrap_err());
+    let errs = result.unwrap_err();
+    let error_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         error_msg.contains("Cannot apply"),
         "Error message should mention invalid operation. Got: {}",
@@ -138,7 +171,12 @@ fn test_different_scale_types_are_incompatible() {
     );
 
     // Verify the error message mentions incompatible Scale types
-    let error_msg = format!("{}", parse_result.unwrap_err());
+    let errs = parse_result.unwrap_err();
+    let error_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         error_msg.to_lowercase().contains("scale")
             || error_msg.to_lowercase().contains("different"),

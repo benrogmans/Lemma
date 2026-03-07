@@ -1,6 +1,7 @@
 use lemma::{Engine, LiteralValue, Target};
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 #[test]
@@ -24,9 +25,11 @@ fn bdd_consensus_rule_simplifies_three_terms_to_two() {
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "shop_consensus",
+            &now,
             "target",
             Target::value(LiteralValue::number(1.into())),
             HashMap::new(),

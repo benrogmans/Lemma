@@ -1,6 +1,7 @@
 use lemma::{Engine, LiteralValue, Target};
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -21,9 +22,11 @@ fn discount_multiple_paths_to_same_value() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Query: "What gives me 30% discount?"
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "shop",
+            &now,
             "discount",
             Target::value(LiteralValue::number(
                 Decimal::from_str_exact("0.30").unwrap(),
