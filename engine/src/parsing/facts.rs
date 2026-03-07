@@ -10,12 +10,12 @@ use std::sync::Arc;
 pub(crate) fn parse_fact_definition(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<LemmaFact, Error> {
     let span = Span::from_pest_span(pair.as_span());
     let attribute_str = attribute;
-    let doc_name_str = doc_name;
+    let spec_name_str = spec_name;
     let mut fact_name = None;
     let mut fact_value = None;
 
@@ -26,7 +26,7 @@ pub(crate) fn parse_fact_definition(
                 fact_value = Some(parse_fact_value(
                     inner_pair,
                     attribute_str,
-                    doc_name_str,
+                    spec_name_str,
                     source_text.clone(),
                 )?)
             }
@@ -44,7 +44,7 @@ pub(crate) fn parse_fact_definition(
         Source::new(
             attribute.to_string(),
             span,
-            doc_name.to_string(),
+            spec_name.to_string(),
             source_text.clone(),
         ),
     );
@@ -54,12 +54,12 @@ pub(crate) fn parse_fact_definition(
 pub(crate) fn parse_fact_binding(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<LemmaFact, Error> {
     let span = Span::from_pest_span(pair.as_span());
     let attribute_str = attribute;
-    let doc_name_str = doc_name;
+    let spec_name_str = spec_name;
     let mut fact_reference_path = None;
     let mut fact_value = None;
 
@@ -69,7 +69,7 @@ pub(crate) fn parse_fact_binding(
                 fact_reference_path = Some(parse_fact_reference_path(
                     inner_pair,
                     attribute_str,
-                    doc_name_str,
+                    spec_name_str,
                     source_text.clone(),
                 )?)
             }
@@ -77,7 +77,7 @@ pub(crate) fn parse_fact_binding(
                 fact_value = Some(parse_fact_value(
                     inner_pair,
                     attribute_str,
-                    doc_name_str,
+                    spec_name_str,
                     source_text.clone(),
                 )?)
             }
@@ -96,7 +96,7 @@ pub(crate) fn parse_fact_binding(
         Source::new(
             attribute.to_string(),
             span,
-            doc_name.to_string(),
+            spec_name.to_string(),
             source_text.clone(),
         ),
     );
@@ -106,7 +106,7 @@ pub(crate) fn parse_fact_binding(
 fn parse_fact_reference_path(
     pair: Pair<Rule>,
     _attribute: &str,
-    _doc_name: &str,
+    _spec_name: &str,
     _source_text: Arc<str>,
 ) -> Result<Vec<String>, Error> {
     let text = pair.as_str();
@@ -121,37 +121,42 @@ fn parse_fact_reference_path(
 fn parse_fact_value(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<FactValue, Error> {
     for inner_pair in pair.into_inner() {
         match inner_pair.as_rule() {
             Rule::type_declaration => {
-                return parse_type_declaration(inner_pair, attribute, doc_name, source_text.clone())
+                return parse_type_declaration(
+                    inner_pair,
+                    attribute,
+                    spec_name,
+                    source_text.clone(),
+                )
             }
             Rule::inline_type_definition => {
                 return parse_inline_type_definition(
                     inner_pair,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )
             }
-            Rule::doc_reference => {
-                return parse_fact_document_reference(
+            Rule::spec_reference => {
+                return parse_fact_spec_reference(
                     inner_pair,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )
             }
             Rule::literal => {
-                return parse_fact_literal(inner_pair, attribute, doc_name, source_text.clone())
+                return parse_fact_literal(inner_pair, attribute, spec_name, source_text.clone())
             }
             _ => {}
         }
     }
-    unreachable!("BUG: grammar guarantees fact_value contains literal, type_declaration, inline_type_definition, or doc_reference")
+    unreachable!("BUG: grammar guarantees fact_value contains literal, type_declaration, inline_type_definition, or spec_reference")
 }
 
 /// Parse a type declaration: `[type_name]` - a reference to a named type
@@ -161,7 +166,7 @@ fn parse_fact_value(
 fn parse_type_declaration(
     pair: Pair<Rule>,
     _attribute: &str,
-    _doc_name: &str,
+    _spec_name: &str,
     _source_text: Arc<str>,
 ) -> Result<FactValue, Error> {
     let type_name_def = pair
@@ -185,7 +190,7 @@ fn parse_type_declaration(
 fn parse_inline_type_definition(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<FactValue, Error> {
     let type_arrow_chain = pair
@@ -193,44 +198,44 @@ fn parse_inline_type_definition(
         .next()
         .expect("BUG: grammar guarantees inline_type_definition has type_arrow_chain");
 
-    let (parent_name, inline_constraints, from_doc) = types::parse_type_arrow_chain_with_commands(
+    let (parent_name, inline_constraints, from_spec) = types::parse_type_arrow_chain_with_commands(
         type_arrow_chain,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     )?;
 
     Ok(FactValue::TypeDeclaration {
         base: parent_name,
         constraints: inline_constraints,
-        from: from_doc,
+        from: from_spec,
     })
 }
 
-fn parse_fact_document_reference(
+fn parse_fact_spec_reference(
     pair: Pair<Rule>,
     _attribute: &str,
-    _doc_name: &str,
+    _spec_name: &str,
     _source_text: Arc<str>,
 ) -> Result<FactValue, Error> {
-    let mut doc_ref: Option<DocRef> = None;
+    let mut spec_ref: Option<SpecRef> = None;
     let mut hash: Option<String> = None;
     let mut effective: Option<DateTimeValue> = None;
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
-            Rule::doc_name => {
-                doc_ref = Some(parse_doc_name_pair(inner)?);
+            Rule::spec_name => {
+                spec_ref = Some(parse_spec_name_pair(inner)?);
             }
-            Rule::doc_ref_hash => {
+            Rule::spec_ref_hash => {
                 hash = Some(inner.as_str().to_string());
             }
-            Rule::doc_ref_datetime => {
+            Rule::spec_ref_datetime => {
                 let s = inner.as_str();
                 let dt = DateTimeValue::parse(s).ok_or_else(|| {
                     Error::validation(
                         format!(
-                            "Invalid datetime in doc reference: '{}'. Expected YYYY-MM-DD or ISO 8601 datetime.",
+                            "Invalid datetime in spec reference: '{}'. Expected YYYY-MM-DD or ISO 8601 datetime.",
                             s
                         ),
                         None,
@@ -240,36 +245,36 @@ fn parse_fact_document_reference(
                 effective = Some(dt);
             }
             _ => unreachable!(
-                "BUG: unexpected rule in doc_reference: {:?}",
+                "BUG: unexpected rule in spec_reference: {:?}",
                 inner.as_rule()
             ),
         }
     }
 
-    let mut dr = doc_ref.expect("BUG: grammar guarantees doc_reference has doc_name");
+    let mut dr = spec_ref.expect("BUG: grammar guarantees spec_reference has spec_name");
     dr.hash_pin = hash;
     dr.effective = effective;
-    Ok(FactValue::DocumentReference(dr))
+    Ok(FactValue::SpecReference(dr))
 }
 
-/// Extract a `DocRef` from a `doc_name` grammar pair by reading its named inner pairs.
-pub(crate) fn parse_doc_name_pair(pair: Pair<Rule>) -> Result<DocRef, Error> {
+/// Extract a `SpecRef` from a `spec_name` grammar pair by reading its named inner pairs.
+pub(crate) fn parse_spec_name_pair(pair: Pair<Rule>) -> Result<SpecRef, Error> {
     let mut is_registry = false;
     let mut name = String::new();
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
-            Rule::doc_name_at => {
+            Rule::spec_name_at => {
                 is_registry = true;
             }
-            Rule::doc_name_base => {
+            Rule::spec_name_base => {
                 name = inner.as_str().to_string();
             }
             _ => {}
         }
     }
 
-    Ok(DocRef {
+    Ok(SpecRef {
         name,
         is_registry,
         hash_pin: None,
@@ -280,7 +285,7 @@ pub(crate) fn parse_doc_name_pair(pair: Pair<Rule>) -> Result<DocRef, Error> {
 fn parse_fact_literal(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<FactValue, Error> {
     let mut inner = pair.into_inner();
@@ -291,7 +296,7 @@ fn parse_fact_literal(
     let literal_value = crate::parsing::literals::parse_literal(
         literal_pair,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     )?;
     Ok(FactValue::Literal(literal_value))
@@ -303,30 +308,30 @@ mod tests {
     use crate::FactValue;
 
     #[test]
-    fn test_parse_simple_document_reference() {
-        let input = r#"doc person
+    fn test_parse_simple_spec_reference() {
+        let input = r#"spec person
 fact name: "John"
-fact contract: doc employment_contract"#;
+fact contract: spec employment_contract"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].facts.len(), 2);
 
-        if let FactValue::DocumentReference(doc_ref) = &result[0].facts[1].value {
-            assert_eq!(doc_ref.name, "employment_contract");
-            assert!(!doc_ref.is_registry);
+        if let FactValue::SpecReference(spec_ref) = &result[0].facts[1].value {
+            assert_eq!(spec_ref.name, "employment_contract");
+            assert!(!spec_ref.is_registry);
         } else {
-            panic!("Expected DocumentReference");
+            panic!("Expected SpecReference");
         }
     }
 
     #[test]
     fn test_parse_fact_bindings() {
-        let input = r#"doc person
-fact contract: doc employment_contract
+        let input = r#"spec person
+fact contract: spec employment_contract
 fact contract.start_date: 2024-02-01
 fact contract.end_date: [date]
 fact contract.employment_type: "contractor"
-fact contract.base: doc base_contract
+fact contract.base: spec base_contract
 fact contract.base.rate: 100"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
@@ -336,11 +341,11 @@ fact contract.base.rate: 100"#;
             result[0].facts[0].reference,
             crate::Reference::from_path(vec!["contract".to_string()])
         );
-        if let FactValue::DocumentReference(doc_ref) = &result[0].facts[0].value {
-            assert_eq!(doc_ref.name, "employment_contract");
-            assert!(!doc_ref.is_registry);
+        if let FactValue::SpecReference(spec_ref) = &result[0].facts[0].value {
+            assert_eq!(spec_ref.name, "employment_contract");
+            assert!(!spec_ref.is_registry);
         } else {
-            panic!("Expected DocumentReference");
+            panic!("Expected SpecReference");
         }
 
         assert_eq!(
@@ -387,11 +392,11 @@ fact contract.base.rate: 100"#;
             result[0].facts[4].reference,
             crate::Reference::from_path(vec!["contract".to_string(), "base".to_string()])
         );
-        if let FactValue::DocumentReference(doc_ref) = &result[0].facts[4].value {
-            assert_eq!(doc_ref.name, "base_contract");
-            assert!(!doc_ref.is_registry);
+        if let FactValue::SpecReference(spec_ref) = &result[0].facts[4].value {
+            assert_eq!(spec_ref.name, "base_contract");
+            assert!(!spec_ref.is_registry);
         } else {
-            panic!("Expected DocumentReference");
+            panic!("Expected SpecReference");
         }
 
         assert_eq!(
@@ -415,7 +420,7 @@ fact contract.base.rate: 100"#;
 
     #[test]
     fn parse_type_annotations_in_facts_collects_all_facts() {
-        let input = r#"doc test
+        let input = r#"spec test
 fact name: [text]
 fact age: [number]
 fact birth_date: [date]
@@ -430,7 +435,7 @@ fact duration: [duration]"#;
 
     #[test]
     fn parse_primitive_type_annotations_in_facts_collects_all_facts() {
-        let input = r#"doc test
+        let input = r#"spec test
 fact duration: [duration]
 fact number: [number]
 fact text: [text]
@@ -443,10 +448,10 @@ fact percentage: [percent]"#;
         assert_eq!(result[0].facts.len(), 6);
     }
 
-    /// Fact value "1 eur" (number_unit_literal) should parse and resolve via document's scale type.
+    /// Fact value "1 eur" (number_unit_literal) should parse and resolve via spec's scale type.
     #[test]
     fn parse_fact_with_number_unit_literal_resolves_unit() {
-        let input = r#"doc pricing
+        let input = r#"spec pricing
 type money: scale
   -> unit eur 1
   -> unit usd 1.19

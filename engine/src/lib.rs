@@ -16,7 +16,7 @@
 //! // Load Lemma code
 //! let mut files = HashMap::new();
 //! files.insert("example.lemma".to_string(), r#"
-//!     doc example
+//!     spec example
 //!     fact price: 100
 //!     fact quantity: 5
 //!     rule total: price * quantity
@@ -26,15 +26,15 @@
 //!     .block_on(engine.add_lemma_files(files))
 //!     .expect("failed to add files");
 //!
-//! // Evaluate the document (all rules, no fact values)
+//! // Evaluate the spec (all rules, no fact values)
 //! let response = engine.evaluate("example", None, &lemma::parsing::ast::DateTimeValue::now(), vec![], HashMap::new()).unwrap();
 //! ```
 //!
 //! ## Core Concepts
 //!
-//! ### Documents
-//! A document is a collection of facts and rules. Documents can reference
-//! other documents to build composable logic.
+//! ### Specs
+//! A spec is a collection of facts and rules. Specs can reference
+//! other specs to build composable logic.
 //!
 //! ### Facts
 //! Facts are named values: numbers, text, dates, booleans, or typed units
@@ -73,7 +73,7 @@ pub use evaluation::operations::{
 };
 pub use evaluation::proof;
 pub use evaluation::response::{Facts, Response, RuleResult};
-pub use formatting::{format_docs, format_source};
+pub use formatting::{format_source, format_specs};
 pub use inversion::{
     invert, Bound, DerivedExpression, Domain, InversionResponse, Solution, Target, TargetOp,
 };
@@ -86,7 +86,7 @@ pub use planning::semantics::{
     FactPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit, ScaleUnits,
     SemanticDurationUnit, TypeSpecification, ValueKind,
 };
-pub use planning::{DocPlanningResult, DocumentSchema, ExecutionPlan, PlanningResult};
+pub use planning::{ExecutionPlan, PlanningResult, SpecPlanningResult, SpecSchema};
 #[cfg(feature = "registry")]
 pub use registry::LemmaBase;
 pub use registry::{

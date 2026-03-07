@@ -10,7 +10,7 @@ use std::collections::HashMap;
 fn parentheses_syntax_evaluates_correctly() {
     // Integration test: parentheses syntax is accepted by parser and behaves correctly in evaluation.
     let code = r#"
-doc test
+spec test
 fact x: true
 fact y: false
 fact num: 16

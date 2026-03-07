@@ -37,22 +37,22 @@ enum OutputFormat {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Evaluate rules and display results (try: doc:rule1,rule2)
+    /// Evaluate rules and display results (try: spec:rule1,rule2)
     ///
-    /// Loads all .lemma files from the workspace, evaluates the specified doc with optional fact values,
+    /// Loads all .lemma files from the workspace, evaluates the specified spec with optional fact values,
     /// and displays the computed results. Use this for command-line evaluation and testing.
     ///
-    /// Syntax: doc or doc:rule1,rule2,rule3
+    /// Syntax: spec or spec:rule1,rule2,rule3
     Run {
-        /// Doc and optional rules to evaluate (format: doc or doc:rule1,rule2)
+        /// Spec and optional rules to evaluate (format: spec or spec:rule1,rule2)
         ///
         /// Examples:
-        ///   pricing              - evaluate all rules in pricing doc
+        ///   pricing              - evaluate all rules in pricing spec
         ///   pricing:total        - evaluate only the total rule
         ///   pricing:total,tax    - evaluate total and tax rules
-        #[arg(value_name = "[DOC[:RULES]]")]
-        doc_name: Option<String>,
-        /// Fact values to provide (format: name=value or ref_doc.fact=value)
+        #[arg(value_name = "[SPEC[:RULES]]")]
+        spec_name: Option<String>,
+        /// Fact values to provide (format: name=value or ref_spec.fact=value)
         ///
         /// Examples: price=100, quantity=5, config.tax_rate=0.21
         facts: Vec<String>,
@@ -80,23 +80,23 @@ enum Commands {
         /// Include facts and proof trees (table) or proof objects (json)
         #[arg(short = 'x', long)]
         explain: bool,
-        /// Enable interactive mode for document/rule/fact selection
+        /// Enable interactive mode for spec/rule/fact selection
         #[arg(short = 'i', long)]
         interactive: bool,
         /// Evaluate as of a specific datetime (e.g. 2026, 2026-03, 2026-03-04, 2026-03-04T10:30:00Z)
         #[arg(long)]
         effective: Option<String>,
-        /// Verify document content hash before evaluation; fail if mismatch
+        /// Verify spec content hash before evaluation; fail if mismatch
         #[arg(long, value_name = "HASH")]
         hash: Option<String>,
     },
-    /// Print content hash for a document's plan
+    /// Print content hash for a spec's plan
     ///
-    /// Resolves the document by name (and optional --effective), computes the canonical
+    /// Resolves the spec by name (and optional --effective), computes the canonical
     /// content hash of its execution plan and dependency closure, and prints it.
     Hash {
-        /// Document name (required)
-        doc_name: String,
+        /// Spec name (required)
+        spec_name: String,
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
@@ -104,13 +104,13 @@ enum Commands {
         #[arg(long)]
         effective: Option<String>,
     },
-    /// Show document structure
+    /// Show spec structure
     ///
-    /// Shows all facts and rules in a document.
-    /// Useful for understanding document structure and dependencies.
+    /// Shows all facts and rules in a spec.
+    /// Useful for understanding spec structure and dependencies.
     Show {
-        /// Name of the document to show
-        doc_name: String,
+        /// Name of the spec to show
+        spec_name: String,
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
@@ -118,9 +118,9 @@ enum Commands {
         #[arg(long)]
         effective: Option<String>,
     },
-    /// List all documents with facts and rules counts
+    /// List all specs with facts and rules counts
     ///
-    /// Scans the workspace for .lemma files and displays all available documents
+    /// Scans the workspace for .lemma files and displays all available specs
     /// with their facts and rules counts. Use this to explore a Lemma project.
     List {
         /// Workspace root directory containing .lemma files
@@ -133,14 +133,14 @@ enum Commands {
     /// Start HTTP REST API server with auto-generated typed endpoints (default: localhost:8012)
     ///
     /// Loads all .lemma files from the workspace and generates typed REST API endpoints
-    /// for each document. Interactive OpenAPI documentation is available at /docs.
+    /// for each spec. Interactive OpenAPI documentation is available at /docs.
     ///
     /// Routes:
-    ///   GET  /{doc}              — evaluate all rules (facts as query params)
-    ///   POST /{doc}              — evaluate all rules (facts as JSON body)
-    ///   GET  /{doc}/{rules}      — evaluate specific rules (comma-separated)
-    ///   POST /{doc}/{rules}      — evaluate specific rules (JSON body)
-    ///   GET  /                   — list all documents
+    ///   GET  /{spec}              — evaluate all rules (facts as query params)
+    ///   POST /{spec}              — evaluate all rules (facts as JSON body)
+    ///   GET  /{spec}/{rules}      — evaluate specific rules (comma-separated)
+    ///   POST /{spec}/{rules}      — evaluate specific rules (JSON body)
+    ///   GET  /                   — list all specs
     ///   GET  /docs               — interactive API documentation
     ///   GET  /openapi.json       — OpenAPI 3.1 specification
     ///   GET  /health             — health check
@@ -164,13 +164,13 @@ enum Commands {
     /// Start MCP server for AI assistant integration (stdio)
     ///
     /// Runs an MCP server over stdio for AI assistant integration.
-    /// The server provides tools for adding documents, evaluating rules, and inspecting documents.
+    /// The server provides tools for adding specs, evaluating rules, and inspecting specs.
     /// Designed for use with AI coding assistants and agents.
     Mcp {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
-        /// Enable admin tools: add_document, get_document_source (read-only by default)
+        /// Enable admin tools: add_spec, get_spec_source (read-only by default)
         #[arg(long)]
         admin: bool,
     },
@@ -205,7 +205,7 @@ fn main() {
     let result = match &cli.command {
         Commands::Run {
             workdir,
-            doc_name,
+            spec_name,
             facts,
             target,
             output,
@@ -215,7 +215,7 @@ fn main() {
             hash,
         } => run_command(RunOptions {
             workdir,
-            doc_name: doc_name.as_ref(),
+            spec_name: spec_name.as_ref(),
             facts,
             target: target.as_ref(),
             output: *output,
@@ -226,14 +226,14 @@ fn main() {
         }),
         Commands::Hash {
             workdir,
-            doc_name,
+            spec_name,
             effective,
-        } => hash_command(workdir, doc_name, effective.as_ref()),
+        } => hash_command(workdir, spec_name, effective.as_ref()),
         Commands::Show {
             workdir,
-            doc_name,
+            spec_name,
             effective,
-        } => show_command(workdir, doc_name, effective.as_ref()),
+        } => show_command(workdir, spec_name, effective.as_ref()),
         Commands::List { root, effective } => list_command(root, effective.as_ref()),
         Commands::Server {
             workdir,
@@ -263,7 +263,7 @@ fn main() {
 
 struct RunOptions<'a> {
     workdir: &'a Path,
-    doc_name: Option<&'a String>,
+    spec_name: Option<&'a String>,
     facts: &'a [String],
     target: Option<&'a String>,
     output: OutputFormat,
@@ -278,34 +278,34 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
     let mut engine = Engine::new();
     load_workspace(&mut engine, opts.workdir)?;
 
-    let (doc, rules, final_facts, final_target) = if opts.interactive || opts.doc_name.is_none() {
-        if opts.doc_name.is_none() && !opts.interactive {
-            eprintln!("Error: No document specified\n");
-            eprintln!("Usage: lemma run [DOC[:RULES]] [FACTS...] [OPTIONS]\n");
+    let (spec, rules, final_facts, final_target) = if opts.interactive || opts.spec_name.is_none() {
+        if opts.spec_name.is_none() && !opts.interactive {
+            eprintln!("Error: No spec specified\n");
+            eprintln!("Usage: lemma run [SPEC[:RULES]] [FACTS...] [OPTIONS]\n");
             eprintln!("Examples:");
             eprintln!(
-                "  lemma run pricing                    - Evaluate all rules in 'pricing' document"
+                "  lemma run pricing                    - Evaluate all rules in 'pricing' spec"
             );
             eprintln!("  lemma run pricing:total              - Evaluate only 'total' rule");
             eprintln!("  lemma run pricing:total,tax          - Evaluate 'total' and 'tax' rules");
             eprintln!("  lemma run pricing price=100 qty=5    - Evaluate with fact values");
             eprintln!("  lemma run --interactive              - Interactive mode for selection\n");
-            eprintln!("To see available documents:");
+            eprintln!("To see available specs:");
             eprintln!("  lemma list\n");
             eprintln!("For more information:");
             eprintln!("  lemma run --help");
             std::process::exit(1);
         }
 
-        let (parsed_doc, parsed_rules) = opts.doc_name.map_or((None, None), |name| {
-            let (doc, rules) = parse_doc_and_rules(name);
-            (Some(doc), rules)
+        let (parsed_spec, parsed_rules) = opts.spec_name.map_or((None, None), |name| {
+            let (spec, rules) = parse_spec_and_rules(name);
+            (Some(spec), rules)
         });
 
         let cli_facts: std::collections::HashMap<String, String> = parse_fact_strings(opts.facts);
 
-        let (d, r, interactive_facts, interactive_target) =
-            interactive::run_interactive(&engine, parsed_doc, parsed_rules, &cli_facts, &now)?;
+        let (s, r, interactive_facts, interactive_target) =
+            interactive::run_interactive(&engine, parsed_spec, parsed_rules, &cli_facts, &now)?;
 
         // Add a blank line after the final interactive prompt so the
         // formatted output sections ("Facts", "Rules", etc.) don't run
@@ -314,11 +314,11 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
 
         let mut all_facts = cli_facts;
         all_facts.extend(interactive_facts);
-        (d, r.unwrap_or_default(), all_facts, interactive_target)
-    } else if let Some(name) = opts.doc_name {
-        let (doc, rules) = parse_doc_and_rules(name);
+        (s, r.unwrap_or_default(), all_facts, interactive_target)
+    } else if let Some(name) = opts.spec_name {
+        let (spec, rules) = parse_spec_and_rules(name);
         let fact_values = parse_fact_strings(opts.facts);
-        (doc, rules.unwrap_or_default(), fact_values, None)
+        (spec, rules.unwrap_or_default(), fact_values, None)
     } else {
         unreachable!()
     };
@@ -328,7 +328,7 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
         return Err(anyhow::anyhow!("Inversion not implemented"));
     }
 
-    let response = engine.evaluate(&doc, opts.hash, &now, rules, final_facts)?;
+    let response = engine.evaluate(&spec, opts.hash, &now, rules, final_facts)?;
     let formatter = Formatter;
 
     match opts.output {
@@ -344,7 +344,7 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
 
 #[derive(Serialize)]
 struct RunOutputJson {
-    doc_name: String,
+    spec_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     facts: Option<Vec<lemma::Facts>>,
     results: indexmap::IndexMap<String, response::RuleResultJson>,
@@ -352,7 +352,7 @@ struct RunOutputJson {
 
 fn format_response_json(response: &lemma::Response, explain: bool) -> RunOutputJson {
     RunOutputJson {
-        doc_name: response.doc_name.clone(),
+        spec_name: response.spec_name.clone(),
         facts: if explain {
             Some(response.facts.clone())
         } else {
@@ -373,33 +373,33 @@ fn parse_fact_strings(facts: &[String]) -> HashMap<String, String> {
         .collect()
 }
 
-fn hash_command(workdir: &Path, doc_name: &str, effective_raw: Option<&String>) -> Result<()> {
+fn hash_command(workdir: &Path, spec_name: &str, effective_raw: Option<&String>) -> Result<()> {
     let now = resolve_effective(effective_raw)?;
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
-    match engine.hash_pin(doc_name, &now) {
+    match engine.hash_pin(spec_name, &now) {
         Some(hash) => {
             println!("{}", hash);
             Ok(())
         }
         None => {
-            eprintln!("Error: Document '{}' not found", doc_name);
+            eprintln!("Error: Spec '{}' not found", spec_name);
             std::process::exit(1);
         }
     }
 }
 
-fn show_command(workdir: &Path, doc_name: &str, effective_raw: Option<&String>) -> Result<()> {
+fn show_command(workdir: &Path, spec_name: &str, effective_raw: Option<&String>) -> Result<()> {
     let now = resolve_effective(effective_raw)?;
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
-    if let Some(plan) = engine.get_execution_plan(doc_name, None, &now) {
+    if let Some(plan) = engine.get_execution_plan(spec_name, None, &now) {
         let formatter = Formatter;
-        print!("{}", formatter.format_document_inspection(plan));
+        print!("{}", formatter.format_spec_inspection(plan));
     } else {
-        eprintln!("Error: Document '{}' not found", doc_name);
+        eprintln!("Error: Spec '{}' not found", spec_name);
         std::process::exit(1);
     }
 
@@ -418,12 +418,15 @@ fn list_command(root: &PathBuf, effective_raw: Option<&String>) -> Result<()> {
 
     load_workspace(&mut engine, root)?;
 
-    let docs = engine.list_documents();
-    let schemas: Vec<lemma::DocumentSchema> = docs
+    let specs = engine.list_specs();
+    let schemas: Vec<lemma::SpecSchema> = specs
         .iter()
-        .filter_map(|doc| {
-            let effective = doc.effective_from().cloned().unwrap_or_else(|| now.clone());
-            engine.get_execution_plan(&doc.name, None, &effective)
+        .filter_map(|spec| {
+            let effective = spec
+                .effective_from()
+                .cloned()
+                .unwrap_or_else(|| now.clone());
+            engine.get_execution_plan(&spec.name, None, &effective)
         })
         .map(|plan| plan.schema())
         .collect();
@@ -444,12 +447,9 @@ fn server_command(workdir: &Path, host: &str, port: u16, watch: bool, proofs: bo
         let mut engine = Engine::new();
         load_workspace_async(&mut engine, workdir).await?;
 
-        let document_names = engine.list_documents();
-        let document_count = document_names.len();
-        println!(
-            "Starting HTTP server with {} document(s) loaded...",
-            document_count
-        );
+        let spec_names = engine.list_specs();
+        let spec_count = spec_names.len();
+        println!("Starting HTTP server with {} spec(s) loaded...", spec_count);
         server::http::start_server(engine, host, port, watch, proofs, workdir.to_path_buf()).await
     })?;
     Ok(())
@@ -464,8 +464,8 @@ fn mcp_command(workdir: &Path, admin: bool) -> Result<()> {
         let config = mcp::McpConfig { admin };
 
         println!(
-            "Starting MCP server with {} document(s) loaded",
-            engine.list_documents().len()
+            "Starting MCP server with {} spec(s) loaded",
+            engine.list_specs().len()
         );
         mcp::server::start_server(engine, config)?;
     }
@@ -531,13 +531,13 @@ async fn load_workspace_async(engine: &mut Engine, workdir: &std::path::Path) ->
     Ok(())
 }
 
-/// Parse "doc:rule1,rule2" format into document name and optional rule list
-fn parse_doc_and_rules(input: &str) -> (String, Option<Vec<String>>) {
+/// Parse "spec:rule1,rule2" format into spec name and optional rule list
+fn parse_spec_and_rules(input: &str) -> (String, Option<Vec<String>>) {
     if let Some(colon_pos) = input.find(':') {
-        let doc = &input[..colon_pos];
+        let spec = &input[..colon_pos];
         let rules_str = &input[colon_pos + 1..];
         let rules: Vec<String> = rules_str.split(',').map(|s| s.trim().to_string()).collect();
-        (doc.to_string(), Some(rules))
+        (spec.to_string(), Some(rules))
     } else {
         (input.to_string(), None)
     }

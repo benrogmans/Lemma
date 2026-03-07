@@ -13,7 +13,7 @@ fn setup_engine(code: &str) -> Engine {
 #[test]
 fn test_inversion_simple_arithmetic() {
     let code = r#"
-        doc pricing
+        spec pricing
         fact price: [number]
         fact quantity: [number]
         rule total: price * quantity
@@ -48,7 +48,7 @@ fn test_inversion_simple_arithmetic() {
 #[test]
 fn test_inversion_veto_query() {
     let code = r#"
-        doc shipping
+        spec shipping
         fact weight: [number]
         rule shipping_cost: 5
           unless weight >= 10 then 10

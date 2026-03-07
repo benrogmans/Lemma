@@ -8,12 +8,12 @@ use std::sync::Arc;
 pub(crate) fn parse_type_definition(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<TypeDef, Error> {
     let span = Span::from_pest_span(pair.as_span());
     let source_location =
-        crate::Source::new(attribute, span.clone(), doc_name, source_text.clone());
+        crate::Source::new(attribute, span.clone(), spec_name, source_text.clone());
     let mut type_name = None;
     let mut type_arrow_chain = None;
 
@@ -38,7 +38,7 @@ pub(crate) fn parse_type_definition(
     let (parent, constraints, _from) = parse_type_arrow_chain_with_commands(
         arrow_chain_pair,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     )?;
     // Regular types don't support 'from' - it's only for imports and inline types
@@ -54,12 +54,12 @@ pub(crate) fn parse_type_definition(
 pub(crate) fn parse_type_import(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<TypeDef, Error> {
     let span = Span::from_pest_span(pair.as_span());
     let source_location =
-        crate::Source::new(attribute, span.clone(), doc_name, source_text.clone());
+        crate::Source::new(attribute, span.clone(), spec_name, source_text.clone());
     // The pair is type_import, which contains type_import_def
     let type_import_def = pair
         .into_inner()
@@ -67,7 +67,7 @@ pub(crate) fn parse_type_import(
         .expect("BUG: grammar guarantees type_import contains type_import_def");
 
     let mut type_names = Vec::new();
-    let mut imported_doc_name = None;
+    let mut imported_spec_ref = None;
     let mut hash: Option<String> = None;
 
     for inner_pair in type_import_def.into_inner() {
@@ -75,19 +75,19 @@ pub(crate) fn parse_type_import(
             Rule::type_name_def => {
                 type_names.push(inner_pair.as_str().to_string());
             }
-            Rule::doc_name => {
-                imported_doc_name = Some(super::facts::parse_doc_name_pair(inner_pair)?);
+            Rule::spec_name => {
+                imported_spec_ref = Some(super::facts::parse_spec_name_pair(inner_pair)?);
             }
-            Rule::doc_ref_hash => {
+            Rule::spec_ref_hash => {
                 hash = Some(inner_pair.as_str().to_string());
             }
             _ => {}
         }
     }
 
-    let mut imported_doc_name =
-        imported_doc_name.expect("BUG: grammar guarantees type_import has doc_name");
-    imported_doc_name.hash_pin = hash;
+    let mut imported_spec_ref =
+        imported_spec_ref.expect("BUG: grammar guarantees type_import has spec_name");
+    imported_spec_ref.hash_pin = hash;
 
     assert!(
         !type_names.is_empty(),
@@ -106,7 +106,7 @@ pub(crate) fn parse_type_import(
         source_location,
         name: final_type_name,
         source_type: source_type_name,
-        from: imported_doc_name,
+        from: imported_spec_ref,
         constraints: None,
     })
 }
@@ -114,13 +114,13 @@ pub(crate) fn parse_type_import(
 type TypeArrowChainResult = (
     String,
     Option<Vec<(String, Vec<CommandArg>)>>,
-    Option<super::ast::DocRef>,
+    Option<super::ast::SpecRef>,
 );
 
 pub(crate) fn parse_type_arrow_chain_with_commands(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<TypeArrowChainResult, Error> {
     let mut inner = pair.into_inner();
@@ -134,7 +134,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
     fn parse_type_name_def_pair(
         pair: &Pair<Rule>,
         _attribute: &str,
-        _doc_name: &str,
+        _spec_name: &str,
         _source_text: Arc<str>,
     ) -> Result<String, Error> {
         let mut inner = pair.clone().into_inner();
@@ -151,15 +151,15 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
         }
     }
 
-    let (parent_name, from_doc) = match first.as_rule() {
+    let (parent_name, from_spec) = match first.as_rule() {
         Rule::type_name_def => (
-            parse_type_name_def_pair(&first, attribute, doc_name, source_text.clone())?,
+            parse_type_name_def_pair(&first, attribute, spec_name, source_text.clone())?,
             None,
         ),
         Rule::type_import_def => {
             let inner = first.clone().into_inner();
             let mut type_name_def = None;
-            let mut imported_doc_name = None;
+            let mut imported_spec_ref = None;
             let mut hash: Option<String> = None;
 
             for item in inner {
@@ -168,14 +168,14 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
                         type_name_def = Some(parse_type_name_def_pair(
                             &item,
                             attribute,
-                            doc_name,
+                            spec_name,
                             source_text.clone(),
                         )?);
                     }
-                    Rule::doc_name => {
-                        imported_doc_name = Some(super::facts::parse_doc_name_pair(item)?);
+                    Rule::spec_name => {
+                        imported_spec_ref = Some(super::facts::parse_spec_name_pair(item)?);
                     }
-                    Rule::doc_ref_hash => {
+                    Rule::spec_ref_hash => {
                         hash = Some(item.as_str().to_string());
                     }
                     _ => {}
@@ -186,7 +186,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
                 type_name_def.expect("BUG: grammar guarantees type_import_def has type_name_def");
 
             let mut from =
-                imported_doc_name.expect("BUG: grammar guarantees type_import_def has doc_name");
+                imported_spec_ref.expect("BUG: grammar guarantees type_import_def has spec_name");
             from.hash_pin = hash;
 
             (source_type, Some(from))
@@ -213,7 +213,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
                     "BUG: grammar guarantees command follows arrow_symbol"
                 );
                 let (command_name, args) =
-                    parse_command(item, attribute, doc_name, source_text.clone())?;
+                    parse_command(item, attribute, spec_name, source_text.clone())?;
                 commands.push((command_name, args));
                 expecting_command = false;
             }
@@ -237,7 +237,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
         Some(commands)
     };
 
-    Ok((parent_name, constraints, from_doc))
+    Ok((parent_name, constraints, from_spec))
 }
 
 /// Returns a typed `CommandArg` preserving which grammar alternative matched.
@@ -277,7 +277,7 @@ fn command_arg_value(pair: Pair<Rule>) -> CommandArg {
 fn parse_command(
     pair: Pair<Rule>,
     _attribute: &str,
-    _doc_name: &str,
+    _spec_name: &str,
     _source_text: Arc<str>,
 ) -> Result<(String, Vec<CommandArg>), Error> {
     let mut command_name = None;
@@ -312,17 +312,17 @@ mod tests {
 
     #[test]
     fn type_definition_parsing_produces_regular_typedef_with_constraints() {
-        let code = r#"doc test
+        let code = r#"spec test
 type dice: number -> minimum 0 -> maximum 6"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        assert_eq!(docs.len(), 1);
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(specs.len(), 1);
 
-        let doc = &docs[0];
-        assert_eq!(doc.name, "test");
-        assert_eq!(doc.types.len(), 1);
+        let spec = &specs[0];
+        assert_eq!(spec.name, "test");
+        assert_eq!(spec.types.len(), 1);
 
-        let type_def = &doc.types[0];
+        let type_def = &spec.types[0];
         match type_def {
             crate::TypeDef::Regular {
                 name,
@@ -347,9 +347,9 @@ type dice: number -> minimum 0 -> maximum 6"#;
 
     #[test]
     fn parser_produces_command_arg_number_for_number_literals() {
-        let code = "doc test\nfact x: [number -> minimum 5 -> maximum 100 -> default 42]";
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let fact = &docs[0].facts[0];
+        let code = "spec test\nfact x: [number -> minimum 5 -> maximum 100 -> default 42]";
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let fact = &specs[0].facts[0];
         match &fact.value {
             FactValue::TypeDeclaration { constraints, .. } => {
                 let constraints = constraints.as_ref().unwrap();
@@ -369,10 +369,10 @@ type dice: number -> minimum 0 -> maximum 6"#;
 
     #[test]
     fn parser_produces_command_arg_text_for_text_literals() {
-        let code = r#"doc test
+        let code = r#"spec test
 fact x: [text -> help "Enter your name" -> default "Alice"]"#;
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let fact = &docs[0].facts[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let fact = &specs[0].facts[0];
         match &fact.value {
             FactValue::TypeDeclaration { constraints, .. } => {
                 let constraints = constraints.as_ref().unwrap();
@@ -393,9 +393,9 @@ fact x: [text -> help "Enter your name" -> default "Alice"]"#;
 
     #[test]
     fn parser_produces_command_arg_boolean_for_boolean_literals() {
-        let code = "doc test\nfact x: [boolean -> default true]";
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let fact = &docs[0].facts[0];
+        let code = "spec test\nfact x: [boolean -> default true]";
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let fact = &specs[0].facts[0];
         match &fact.value {
             FactValue::TypeDeclaration { constraints, .. } => {
                 let constraints = constraints.as_ref().unwrap();
@@ -411,9 +411,9 @@ fact x: [text -> help "Enter your name" -> default "Alice"]"#;
 
     #[test]
     fn parser_produces_command_arg_label_for_unit_names() {
-        let code = "doc test\ntype money: scale -> unit eur 1.00 -> unit usd 1.10";
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let type_def = &docs[0].types[0];
+        let code = "spec test\ntype money: scale -> unit eur 1.00 -> unit usd 1.10";
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let type_def = &specs[0].types[0];
         match type_def {
             crate::TypeDef::Regular { constraints, .. } => {
                 let constraints = constraints.as_ref().unwrap();
@@ -440,10 +440,10 @@ fact x: [text -> help "Enter your name" -> default "Alice"]"#;
 
     #[test]
     fn parser_produces_command_arg_text_for_option_values() {
-        let code = r#"doc test
+        let code = r#"spec test
 type status: text -> option "active" -> option "inactive""#;
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let type_def = &docs[0].types[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let type_def = &specs[0].types[0];
         match type_def {
             crate::TypeDef::Regular { constraints, .. } => {
                 let constraints = constraints.as_ref().unwrap();
@@ -466,10 +466,10 @@ type status: text -> option "active" -> option "inactive""#;
     fn parser_distinguishes_text_literal_from_number_literal() {
         // "10" is a text_literal; 10 is a number_literal.
         // The parser must produce different CommandArg variants.
-        let code_text = r#"doc test
+        let code_text = r#"spec test
 fact x: [number -> default "10"]"#;
-        let docs_text = parse(code_text, "test.lemma", &ResourceLimits::default()).unwrap();
-        let fact_text = &docs_text[0].facts[0];
+        let specs_text = parse(code_text, "test.lemma", &ResourceLimits::default()).unwrap();
+        let fact_text = &specs_text[0].facts[0];
         match &fact_text.value {
             FactValue::TypeDeclaration { constraints, .. } => {
                 let constraints = constraints.as_ref().unwrap();
@@ -478,9 +478,9 @@ fact x: [number -> default "10"]"#;
             other => panic!("Expected TypeDeclaration, got {:?}", other),
         }
 
-        let code_number = "doc test\nfact x: [number -> default 10]";
-        let docs_number = parse(code_number, "test.lemma", &ResourceLimits::default()).unwrap();
-        let fact_number = &docs_number[0].facts[0];
+        let code_number = "spec test\nfact x: [number -> default 10]";
+        let specs_number = parse(code_number, "test.lemma", &ResourceLimits::default()).unwrap();
+        let fact_number = &specs_number[0].facts[0];
         match &fact_number.value {
             FactValue::TypeDeclaration { constraints, .. } => {
                 let constraints = constraints.as_ref().unwrap();

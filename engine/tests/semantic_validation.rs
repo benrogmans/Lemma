@@ -7,7 +7,7 @@ fn test_reference_to_rule_succeeds() {
     let mut engine = Engine::new();
 
     let lemma_code = r#"
-doc test_validation
+spec test_validation
 
 fact base: 100
 
@@ -29,7 +29,7 @@ fn test_reference_to_fact_succeeds() {
     let mut engine = Engine::new();
 
     let lemma_code = r#"
-doc test_validation
+spec test_validation
 
 fact base: 100
 fact multiplier: 2
@@ -50,7 +50,7 @@ fn test_reference_in_unless_to_rule_succeeds() {
     let mut engine = Engine::new();
 
     let lemma_code = r#"
-doc test_validation
+spec test_validation
 
 fact amount: 100
 
@@ -69,23 +69,23 @@ rule discount: 0%
 }
 
 #[test]
-fn test_cross_doc_reference_to_rule_succeeds() {
+fn test_cross_spec_reference_to_rule_succeeds() {
     let mut engine = Engine::new();
 
     let lemma_code = r#"
-doc base_doc
+spec base_spec
 fact salary: 5000
 rule annual: salary * 12
 
-doc main_doc
-fact employee: doc base_doc
+spec main_spec
+fact employee: spec base_spec
 rule total: employee.annual + 1000
 "#;
 
     let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
     assert!(
         result.is_ok(),
-        "Cross-document reference to rule should succeed: {:?}",
+        "Cross-spec reference to rule should succeed: {:?}",
         result
     );
 }
@@ -95,7 +95,7 @@ fn test_reference_not_found_fails() {
     let mut engine = Engine::new();
 
     let lemma_code = r#"
-doc test_validation
+spec test_validation
 
 fact base: 100
 
@@ -125,7 +125,7 @@ fn test_ambiguous_fact_and_rule_fails() {
     let mut engine = Engine::new();
 
     let lemma_code = r#"
-doc test_validation
+spec test_validation
 
 fact ambiguous: 10
 rule ambiguous: 20

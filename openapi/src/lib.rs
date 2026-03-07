@@ -1,18 +1,18 @@
-//! OpenAPI 3.1 specification generator for Lemma documents.
+//! OpenAPI 3.1 specification generator for Lemma specs.
 //!
 //! Takes a Lemma `Engine` and produces a complete OpenAPI specification as JSON.
 //! Used by both `lemma server` (CLI) and LemmaBase.com for consistent API docs.
 //!
 //! ## Temporal versioning
 //!
-//! Lemma documents can have multiple temporal versions (e.g. `doc pricing 2024-01-01`
-//! and `doc pricing 2025-01-01`) with potentially different interfaces (facts, rules,
+//! Lemma specs can have multiple temporal versions (e.g. `spec pricing 2024-01-01`
+//! and `spec pricing 2025-01-01`) with potentially different interfaces (facts, rules,
 //! types). The OpenAPI spec must reflect the interface active at a specific point in
 //! time. Use [`generate_openapi_effective`] with an explicit `DateTimeValue` to get the
 //! spec for a given instant. [`generate_openapi`] is a convenience wrapper that uses
 //! the current time.
 //!
-//! For Scalar multi-document rendering, [`temporal_api_sources`] returns the list of
+//! For Scalar multi-spec rendering, [`temporal_api_sources`] returns the list of
 //! temporal version boundaries so the Scalar UI can offer a source selector.
 
 use lemma::parsing::ast::DateTimeValue;
@@ -33,24 +33,24 @@ pub struct ApiSource {
 /// Compute the list of Scalar multi-source entries for temporal versioning.
 ///
 /// Returns one [`ApiSource`] per distinct temporal version boundary across all
-/// loaded documents, plus one "current" source that uses no `effective` (i.e. the
+/// loaded specs, plus one "current" source that uses no `effective` (i.e. the
 /// latest version). The sources are ordered from oldest to newest, with "current"
 /// last.
 ///
-/// If there are no temporal version boundaries (all documents are unversioned),
+/// If there are no temporal version boundaries (all specs are unversioned),
 /// returns a single "current" entry.
 pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
     let mut all_boundaries: std::collections::BTreeSet<DateTimeValue> =
         std::collections::BTreeSet::new();
 
-    let all_docs = engine.list_documents();
+    let all_specs = engine.list_specs();
     let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for doc in &all_docs {
-        if seen_names.insert(doc.name.clone()) {
-            // Collect all version boundaries for this document name.
-            // list_documents() returns all temporal versions; we extract effective_from dates.
-            for d in all_docs.iter().filter(|d| d.name == doc.name) {
-                if let Some(af) = d.effective_from() {
+    for spec in &all_specs {
+        if seen_names.insert(spec.name.clone()) {
+            // Collect all version boundaries for this spec name.
+            // list_specs() returns all temporal versions; we extract effective_from dates.
+            for s in all_specs.iter().filter(|s| s.name == spec.name) {
+                if let Some(af) = s.effective_from() {
                     all_boundaries.insert(af.clone());
                 }
             }
@@ -89,7 +89,7 @@ pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
 /// Generate a complete OpenAPI 3.1 specification using the current time.
 ///
 /// Convenience wrapper around [`generate_openapi_effective`]. The spec reflects
-/// only the documents and interfaces active at `DateTimeValue::now()`.
+/// only the specs and interfaces active at `DateTimeValue::now()`.
 pub fn generate_openapi(engine: &Engine, proofs_enabled: bool) -> Value {
     generate_openapi_effective(engine, proofs_enabled, &DateTimeValue::now(), false)
 }
@@ -97,16 +97,16 @@ pub fn generate_openapi(engine: &Engine, proofs_enabled: bool) -> Value {
 /// Generate a complete OpenAPI 3.1 specification for a specific point in time.
 ///
 /// The specification includes:
-/// - Document endpoints (`/{doc_name}/{rules}` where `rules` is optional)
+/// - Spec endpoints (`/{spec_name}/{rules}` where `rules` is optional)
 /// - GET operations with query parameters (including `effective` and `hash_pin`)
 /// - POST operations with JSON request bodies (including `effective` and `hash_pin`)
 /// - Response schemas with rule result shapes
 /// - Meta routes (`/`, `/health`, `/openapi.json`, `/docs`)
 ///
 /// When `proofs_enabled` is true, the spec adds the `x-proofs` header parameter
-/// to evaluation endpoints and documents the optional `proof` object in responses.
+/// to evaluation endpoints and describes the optional `proof` object in responses.
 ///
-/// The `effective` parameter determines which temporal version of each document is
+/// The `effective` parameter determines which temporal version of each spec is
 /// visible. When `use_permalink_paths` is true (e.g. for a specific temporal version),
 /// paths use ~hash (e.g. /pricing~abc1234); otherwise bare paths (e.g. /pricing).
 pub fn generate_openapi_effective(
@@ -118,25 +118,25 @@ pub fn generate_openapi_effective(
     let mut paths = Map::new();
     let mut components_schemas = Map::new();
 
-    let active_docs = engine.list_documents_effective(effective);
-    let unique_doc_names: Vec<String> = active_docs.iter().map(|d| d.name.clone()).collect();
+    let active_specs = engine.list_specs_effective(effective);
+    let unique_spec_names: Vec<String> = active_specs.iter().map(|s| s.name.clone()).collect();
 
-    for doc_name in &unique_doc_names {
-        if let Some(plan) = engine.get_execution_plan(doc_name, None, effective) {
+    for spec_name in &unique_spec_names {
+        if let Some(plan) = engine.get_execution_plan(spec_name, None, effective) {
             let schema = plan.schema();
             let facts = collect_input_facts_from_schema(&schema);
             let rule_names: Vec<String> = schema.rules.keys().cloned().collect();
 
-            let doc_path = if use_permalink_paths {
+            let spec_path = if use_permalink_paths {
                 engine
-                    .hash_pin(doc_name, effective)
-                    .map(|h| format!("{}~{}", doc_name, h))
-                    .unwrap_or_else(|| doc_name.clone())
+                    .hash_pin(spec_name, effective)
+                    .map(|h| format!("{}~{}", spec_name, h))
+                    .unwrap_or_else(|| spec_name.clone())
             } else {
-                doc_name.clone()
+                spec_name.clone()
             };
 
-            let safe_name = doc_name.replace('/', "_");
+            let safe_name = spec_name.replace('/', "_");
             let response_schema_name = format!("{}_response", safe_name);
             components_schemas.insert(
                 response_schema_name.clone(),
@@ -149,11 +149,11 @@ pub fn generate_openapi_effective(
                 build_post_request_schema(&facts),
             );
 
-            let path = format!("/{}", doc_path);
+            let path = format!("/{}", spec_path);
             paths.insert(
                 path,
-                build_document_path_item(
-                    doc_name,
+                build_spec_path_item(
+                    spec_name,
                     &facts,
                     &response_schema_name,
                     &post_body_schema_name,
@@ -166,21 +166,21 @@ pub fn generate_openapi_effective(
 
     paths.insert(
         "/".to_string(),
-        index_path_item(&unique_doc_names, engine, effective),
+        index_path_item(&unique_spec_names, engine, effective),
     );
     paths.insert("/health".to_string(), health_path_item());
     paths.insert("/openapi.json".to_string(), openapi_json_path_item());
 
     let mut tags = vec![json!({
-        "name": "Documents",
-        "description": "Simple API to retrieve the list of Lemma documents"
+        "name": "Specs",
+        "description": "Simple API to retrieve the list of Lemma specs"
     })];
-    for doc_name in &unique_doc_names {
-        let safe_tag = doc_name.replace('/', "_");
+    for spec_name in &unique_spec_names {
+        let safe_tag = spec_name.replace('/', "_");
         tags.push(json!({
             "name": safe_tag,
-            "x-displayName": doc_name,
-            "description": format!("GET schema or POST evaluate for document '{}'. Use ?rules= to scope.", doc_name)
+            "x-displayName": spec_name,
+            "description": format!("GET schema or POST evaluate for spec '{}'. Use ?rules= to scope.", spec_name)
         }));
     }
     tags.push(json!({
@@ -188,14 +188,14 @@ pub fn generate_openapi_effective(
         "description": "Server metadata and introspection endpoints"
     }));
 
-    let doc_tags: Vec<Value> = unique_doc_names
+    let spec_tags: Vec<Value> = unique_spec_names
         .iter()
         .map(|n| Value::String(n.replace('/', "_")))
         .collect();
 
     let tag_groups = vec![
-        json!({ "name": "Overview", "tags": ["Documents"] }),
-        json!({ "name": "Documents", "tags": doc_tags }),
+        json!({ "name": "Overview", "tags": ["Specs"] }),
+        json!({ "name": "Specs", "tags": spec_tags }),
         json!({ "name": "Meta", "tags": ["Meta"] }),
     ];
 
@@ -223,16 +223,16 @@ struct InputFact {
     name: String,
     /// The resolved Lemma type for this fact.
     lemma_type: LemmaType,
-    /// The fact's literal value if defined in the document (e.g. `fact quantity: 10`).
+    /// The fact's literal value if defined in the spec (e.g. `fact quantity: 10`).
     /// None for type-only facts (e.g. `fact quantity: [number]`).
     default_value: Option<lemma::LiteralValue>,
 }
 
 /// Collect all local input facts from a pre-built schema.
 ///
-/// Only includes facts local to the document (no dot-separated cross-document
+/// Only includes facts local to the spec (no dot-separated cross-spec
 /// paths like `calc.price`). Already sorted alphabetically by `schema()`.
-fn collect_input_facts_from_schema(schema: &lemma::DocumentSchema) -> Vec<InputFact> {
+fn collect_input_facts_from_schema(schema: &lemma::SpecSchema) -> Vec<InputFact> {
     schema
         .facts
         .iter()
@@ -249,8 +249,8 @@ fn collect_input_facts_from_schema(schema: &lemma::DocumentSchema) -> Vec<InputF
 // Meta route path items
 // ---------------------------------------------------------------------------
 
-fn index_path_item(document_names: &[String], engine: &Engine, effective: &DateTimeValue) -> Value {
-    let doc_items: Vec<Value> = document_names
+fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeValue) -> Value {
+    let spec_items: Vec<Value> = spec_names
         .iter()
         .map(|name| {
             let (facts_count, rules_count) = engine
@@ -272,12 +272,12 @@ fn index_path_item(document_names: &[String], engine: &Engine, effective: &DateT
 
     json!({
         "get": {
-            "operationId": "listDocuments",
-            "summary": "List all available documents",
-            "tags": ["Documents"],
+            "operationId": "listSpecs",
+            "summary": "List all available specs",
+            "tags": ["Specs"],
             "responses": {
                 "200": {
-                    "description": "List of loaded Lemma documents",
+                    "description": "List of loaded Lemma specs",
                     "content": {
                         "application/json": {
                             "schema": {
@@ -292,7 +292,7 @@ fn index_path_item(document_names: &[String], engine: &Engine, effective: &DateT
                                     "required": ["name", "facts", "rules"]
                                 }
                             },
-                            "example": doc_items
+                            "example": spec_items
                         }
                     }
                 }
@@ -372,7 +372,7 @@ fn error_response_schema() -> Value {
 
 fn not_found_response_schema() -> Value {
     json!({
-        "description": "Document not found",
+        "description": "Spec not found",
         "content": {
             "application/json": {
                 "schema": {
@@ -388,7 +388,7 @@ fn not_found_response_schema() -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Document path items
+// Spec path items
 // ---------------------------------------------------------------------------
 
 fn x_proofs_header_parameter() -> Value {
@@ -406,14 +406,14 @@ fn accept_datetime_header_parameter() -> Value {
         "name": "Accept-Datetime",
         "in": "header",
         "required": false,
-        "description": "RFC 7089 (Memento): resolve the document version active at this datetime. Omit for current. Use path with ~hash for a permalink to a specific version.",
+        "description": "RFC 7089 (Memento): resolve the spec version active at this datetime. Omit for current. Use path with ~hash for a permalink to a specific version.",
         "schema": { "type": "string", "format": "date-time" },
         "example": "Sat, 01 Jan 2025 00:00:00 GMT"
     })
 }
 
-fn build_document_path_item(
-    doc_name: &str,
+fn build_spec_path_item(
+    spec_name: &str,
     _facts: &[InputFact],
     response_schema_name: &str,
     post_body_schema_name: &str,
@@ -427,7 +427,7 @@ fn build_document_path_item(
         "$ref": format!("#/components/schemas/{}", post_body_schema_name)
     });
 
-    let tag = doc_name.replace('/', "_");
+    let tag = spec_name.replace('/', "_");
 
     let rules_example = if rule_names.is_empty() {
         String::new()
@@ -450,10 +450,10 @@ fn build_document_path_item(
         get_parameters.push(x_proofs_header_parameter());
     }
 
-    let get_summary = "Schema of resolved version (doc, facts, rules, meta, versions)".to_string();
+    let get_summary = "Schema of resolved version (spec, facts, rules, meta, versions)".to_string();
     let post_summary = "Evaluate".to_string();
-    let get_operation_id = format!("get_{}", doc_name);
-    let post_operation_id = format!("post_{}", doc_name);
+    let get_operation_id = format!("get_{}", spec_name);
+    let post_operation_id = format!("post_{}", spec_name);
 
     let mut post_parameters: Vec<Value> = vec![rules_param];
     post_parameters.push(accept_datetime_header_parameter());
@@ -469,7 +469,7 @@ fn build_document_path_item(
             "parameters": get_parameters,
             "responses": {
                 "200": {
-                    "description": "Schema of resolved version (doc, effective_from, facts, rules, meta, versions). Headers: ETag, Memento-Datetime, Vary.",
+                    "description": "Schema of resolved version (spec, effective_from, facts, rules, meta, versions). Headers: ETag, Memento-Datetime, Vary.",
                     "content": {
                         "application/json": {
                             "schema": response_ref
@@ -627,7 +627,7 @@ fn build_post_type_schema(lemma_type: &LemmaType) -> Value {
 // ---------------------------------------------------------------------------
 
 fn build_response_schema(
-    schema: &lemma::DocumentSchema,
+    schema: &lemma::SpecSchema,
     rule_names: &[String],
     proofs_enabled: bool,
 ) -> Value {
@@ -779,7 +779,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_has_required_fields() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         assert_eq!(spec["openapi"], "3.1.0");
@@ -792,18 +792,18 @@ mod tests {
     #[test]
     fn test_generate_openapi_tags_order() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         let tags = spec["tags"].as_array().expect("tags should be array");
         let tag_names: Vec<&str> = tags.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(tag_names, vec!["Documents", "pricing", "Meta"]);
+        assert_eq!(tag_names, vec!["Specs", "pricing", "Meta"]);
     }
 
     #[test]
     fn test_generate_openapi_x_tag_groups() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         let groups = spec["x-tagGroups"]
@@ -811,32 +811,32 @@ mod tests {
             .expect("x-tagGroups should be array");
         assert_eq!(groups.len(), 3);
         assert_eq!(groups[0]["name"], "Overview");
-        assert_eq!(groups[0]["tags"], json!(["Documents"]));
-        assert_eq!(groups[1]["name"], "Documents");
+        assert_eq!(groups[0]["tags"], json!(["Specs"]));
+        assert_eq!(groups[1]["name"], "Specs");
         assert_eq!(groups[1]["tags"], json!(["pricing"]));
         assert_eq!(groups[2]["name"], "Meta");
         assert_eq!(groups[2]["tags"], json!(["Meta"]));
     }
 
     #[test]
-    fn test_index_endpoint_uses_documents_tag() {
+    fn test_index_endpoint_uses_specs_tag() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         let index_tag = &spec["paths"]["/"]["get"]["tags"][0];
-        assert_eq!(index_tag, "Documents");
+        assert_eq!(index_tag, "Specs");
     }
 
     #[test]
-    fn test_doc_path_has_get_and_post() {
+    fn test_spec_path_has_get_and_post() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         assert!(
             spec["paths"]["/pricing"].is_object(),
-            "single doc path /pricing"
+            "single spec path /pricing"
         );
         assert!(spec["paths"]["/pricing"]["get"].is_object());
         assert!(spec["paths"]["/pricing"]["post"].is_object());
@@ -869,9 +869,9 @@ mod tests {
     }
 
     #[test]
-    fn test_doc_endpoint_has_accept_datetime_and_rules() {
+    fn test_spec_endpoint_has_accept_datetime_and_rules() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         let get_params = &spec["paths"]["/pricing"]["get"]["parameters"];
@@ -885,7 +885,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_meta_routes() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         assert!(spec["paths"]["/"].is_object());
@@ -895,9 +895,9 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_openapi_document_routes() {
+    fn test_generate_openapi_spec_routes() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         assert!(spec["paths"]["/pricing"].is_object());
@@ -908,7 +908,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_schemas() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         assert!(spec["components"]["schemas"]["pricing_response"].is_object());
@@ -918,7 +918,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_proofs_enabled_adds_x_proofs_and_proof_schema() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, true);
 
         let get_params = &spec["paths"]["/pricing"]["get"]["parameters"];
@@ -931,15 +931,15 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_openapi_multiple_documents() {
+    fn test_generate_openapi_multiple_specs() {
         let engine = create_engine_with_files(vec![
             (
                 "pricing.lemma",
-                "doc pricing\nfact quantity: 10\nrule total: quantity * 2",
+                "spec pricing\nfact quantity: 10\nrule total: quantity * 2",
             ),
             (
                 "shipping.lemma",
-                "doc shipping\nfact weight: 5\nrule cost: weight * 3",
+                "spec shipping\nfact weight: 5\nrule cost: weight * 3",
             ),
         ]);
         let spec = generate_openapi(&engine, false);
@@ -949,8 +949,8 @@ mod tests {
     }
 
     #[test]
-    fn test_nested_doc_path_schema_refs_are_valid() {
-        let engine = create_engine_with_code("doc a/b/c\nfact x: [number]\nrule result: x");
+    fn test_nested_spec_path_schema_refs_are_valid() {
+        let engine = create_engine_with_code("spec a/b/c\nfact x: [number]\nrule result: x");
         let spec = generate_openapi(&engine, false);
 
         assert!(spec["paths"]["/a/b/c"]["post"].is_object());
@@ -964,9 +964,9 @@ mod tests {
     }
 
     #[test]
-    fn test_document_endpoint_has_accept_datetime_header() {
+    fn test_spec_endpoint_has_accept_datetime_header() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, false);
 
         let get_params = &spec["paths"]["/pricing"]["get"]["parameters"];
@@ -992,7 +992,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_effective_reflects_specific_time() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let effective = date(2025, 6, 15);
         let spec = generate_openapi_effective(&engine, false, &effective, true);
 
@@ -1010,11 +1010,11 @@ mod tests {
         let engine = create_engine_with_files(vec![(
             "policy.lemma",
             r#"
-doc policy
+spec policy
 fact base: 100
 rule discount: 10
 
-doc policy 2025-06-01
+spec policy 2025-06-01
 fact base: 200
 fact premium: [boolean]
 rule discount: 20
@@ -1070,11 +1070,11 @@ rule surcharge: 5
         let engine = create_engine_with_files(vec![(
             "policy.lemma",
             r#"
-doc policy
+spec policy
 fact base: 100
 rule discount: 10
 
-doc policy 2025-06-01
+spec policy 2025-06-01
 fact base: 200
 rule discount: 20
 rule surcharge: 5
@@ -1111,11 +1111,11 @@ rule surcharge: 5
         let engine = create_engine_with_files(vec![(
             "policy.lemma",
             r#"
-doc policy
+spec policy
 fact base: 100
 rule discount: 10
 
-doc policy 2025-06-01
+spec policy 2025-06-01
 fact base: 200
 rule discount: 20
 rule surcharge: 5
@@ -1150,7 +1150,7 @@ rule surcharge: 5
     #[test]
     fn test_temporal_sources_unversioned_returns_single_current() {
         let engine =
-            create_engine_with_code("doc pricing\nfact quantity: 10\nrule total: quantity * 2");
+            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let sources = temporal_api_sources(&engine);
 
         assert_eq!(sources.len(), 1);
@@ -1164,11 +1164,11 @@ rule surcharge: 5
         let engine = create_engine_with_files(vec![(
             "policy.lemma",
             r#"
-doc policy
+spec policy
 fact base: 100
 rule discount: 10
 
-doc policy 2025-06-01
+spec policy 2025-06-01
 fact base: 200
 rule discount: 20
 "#,
@@ -1188,16 +1188,16 @@ rule discount: 20
     }
 
     #[test]
-    fn test_temporal_sources_multiple_documents_merged_boundaries() {
+    fn test_temporal_sources_multiple_specs_merged_boundaries() {
         let engine = create_engine_with_files(vec![
             (
                 "policy.lemma",
                 r#"
-doc policy
+spec policy
 fact base: 100
 rule discount: 10
 
-doc policy 2025-06-01
+spec policy 2025-06-01
 fact base: 200
 rule discount: 20
 "#,
@@ -1205,15 +1205,15 @@ rule discount: 20
             (
                 "rates.lemma",
                 r#"
-doc rates
+spec rates
 fact rate: 5
 rule total: rate * 2
 
-doc rates 2025-03-01
+spec rates 2025-03-01
 fact rate: 7
 rule total: rate * 2
 
-doc rates 2025-06-01
+spec rates 2025-06-01
 fact rate: 9
 rule total: rate * 2
 "#,
@@ -1240,15 +1240,15 @@ rule total: rate * 2
         let engine = create_engine_with_files(vec![(
             "policy.lemma",
             r#"
-doc policy
+spec policy
 fact base: 100
 rule discount: 10
 
-doc policy 2024-01-01
+spec policy 2024-01-01
 fact base: 50
 rule discount: 5
 
-doc policy 2025-06-01
+spec policy 2025-06-01
 fact base: 200
 rule discount: 20
 "#,
@@ -1266,7 +1266,7 @@ rule discount: 20
     #[test]
     fn test_post_schema_text_with_options_has_enum() {
         let engine = create_engine_with_code(
-            "doc test\nfact product: [text -> option \"A\" -> option \"B\"]\nrule result: product",
+            "spec test\nfact product: [text -> option \"A\" -> option \"B\"]\nrule result: product",
         );
         let spec = generate_openapi(&engine, false);
 
@@ -1281,7 +1281,7 @@ rule discount: 20
     #[test]
     fn test_post_schema_boolean_is_string_with_enum() {
         let engine =
-            create_engine_with_code("doc test\nfact is_active: [boolean]\nrule result: is_active");
+            create_engine_with_code("spec test\nfact is_active: [boolean]\nrule result: is_active");
         let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
@@ -1293,7 +1293,7 @@ rule discount: 20
     #[test]
     fn test_post_schema_number_is_string() {
         let engine =
-            create_engine_with_code("doc test\nfact quantity: [number]\nrule result: quantity");
+            create_engine_with_code("spec test\nfact quantity: [number]\nrule result: quantity");
         let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
@@ -1303,7 +1303,7 @@ rule discount: 20
     #[test]
     fn test_post_schema_date_is_string() {
         let engine =
-            create_engine_with_code("doc test\nfact deadline: [date]\nrule result: deadline");
+            create_engine_with_code("spec test\nfact deadline: [date]\nrule result: deadline");
         let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
@@ -1313,7 +1313,7 @@ rule discount: 20
     #[test]
     fn test_fact_with_default_is_not_required() {
         let engine = create_engine_with_code(
-            "doc test\nfact quantity: 10\nfact name: [text]\nrule result: quantity",
+            "spec test\nfact quantity: 10\nfact name: [text]\nrule result: quantity",
         );
         let spec = generate_openapi(&engine, false);
 
@@ -1329,7 +1329,7 @@ rule discount: 20
     #[test]
     fn test_help_and_default_in_openapi() {
         let engine = create_engine_with_code(
-            r#"doc test
+            r#"spec test
 fact quantity: [number -> help "Number of items to order" -> default 10]
 fact active: [boolean -> help "Whether the feature is enabled" -> default true]
 rule result: quantity

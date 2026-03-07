@@ -6,7 +6,7 @@ use lemma::parsing::ast::DateTimeValue;
 #[test]
 fn piecewise_value_guard_pruning_equality() {
     let code = r#"
-        doc shipping
+        spec shipping
         fact weight: [number]
 
         rule shipping_cost: 5
@@ -38,7 +38,7 @@ fn piecewise_value_guard_pruning_equality() {
 #[test]
 fn piecewise_value_guard_pruning_inequality() {
     let code = r#"
-        doc shipping
+        spec shipping
         fact weight: [number]
 
         rule shipping_cost: 5

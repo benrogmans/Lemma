@@ -126,7 +126,7 @@ export class LspClient {
     }
 
     /**
-     * Notify the server that a document was opened.
+     * Notify the server that a file was opened.
      */
     didOpen(uri, languageId, version, text) {
         this.sendNotification('textDocument/didOpen', {
@@ -135,7 +135,7 @@ export class LspClient {
     }
 
     /**
-     * Notify the server that a document changed (full sync).
+     * Notify the server that a file changed (full sync).
      */
     didChange(uri, version, text) {
         this.sendNotification('textDocument/didChange', {

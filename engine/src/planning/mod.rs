@@ -1,9 +1,9 @@
-//! Planning module for Lemma documents
+//! Planning module for Lemma specs
 //!
 //! This module performs complete static analysis and builds execution plans:
 //! - Builds Graph with facts and rules (validated, with types computed)
 //! - Builds ExecutionPlan from Graph (topologically sorted, ready for evaluation)
-//! - Validates document structure and references
+//! - Validates spec structure and references
 
 pub mod content_hash;
 pub mod execution_plan;
@@ -13,7 +13,7 @@ pub mod slice_interface;
 pub mod temporal;
 pub mod types;
 pub mod validation;
-pub use execution_plan::{Branch, DocumentSchema, ExecutableRule, ExecutionPlan};
+pub use execution_plan::{Branch, ExecutableRule, ExecutionPlan, SpecSchema};
 pub use semantics::{
     negated_comparison, ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind,
     Fact, FactData, FactPath, FactValue, LemmaType, LiteralValue, LogicalComputation,
@@ -23,136 +23,136 @@ pub use semantics::{
 pub use types::TypeResolver;
 
 use crate::engine::Context;
-use crate::parsing::ast::LemmaDoc;
+use crate::parsing::ast::LemmaSpec;
 use crate::Error;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Result of planning a single document: the document, its execution plans (if any), and errors produced while planning it.
+/// Result of planning a single spec: the spec, its execution plans (if any), and errors produced while planning it.
 #[derive(Debug, Clone)]
-pub struct DocPlanningResult {
-    /// The document we were planning (the one this result is for).
-    pub document: Arc<LemmaDoc>,
-    /// Execution plans for that document (one per temporal interval; empty if planning failed).
+pub struct SpecPlanningResult {
+    /// The spec we were planning (the one this result is for).
+    pub spec: Arc<LemmaSpec>,
+    /// Execution plans for that spec (one per temporal interval; empty if planning failed).
     pub plans: Vec<ExecutionPlan>,
-    /// All planning errors produced while planning this document.
+    /// All planning errors produced while planning this spec.
     pub errors: Vec<Error>,
-    /// Content hash of this document (hash pin, 8 lowercase hex chars).
+    /// Content hash of this spec (hash pin, 8 lowercase hex chars).
     pub hash_pin: String,
 }
 
-/// Result of running plan() across the context: per-document results and global errors (e.g. temporal coverage).
+/// Result of running plan() across the context: per-spec results and global errors (e.g. temporal coverage).
 #[derive(Debug, Clone)]
 pub struct PlanningResult {
-    /// One result per document we attempted to plan.
-    pub per_document: Vec<DocPlanningResult>,
-    /// Errors not tied to a single document (e.g. from validate_temporal_coverage).
+    /// One result per spec we attempted to plan.
+    pub per_spec: Vec<SpecPlanningResult>,
+    /// Errors not tied to a single spec (e.g. from validate_temporal_coverage).
     pub global_errors: Vec<Error>,
 }
 
-/// Build execution plans for one or more Lemma documents.
+/// Build execution plans for one or more Lemma specs.
 ///
 /// Context is immutable — types are resolved transiently and never stored in
 /// Context. The flow:
 /// 1. TypeResolver registers + resolves named types → HashMap
-/// 2. Per-document Graph::build augments the HashMap with inline types
+/// 2. Per-spec Graph::build augments the HashMap with inline types
 /// 3. ExecutionPlan is built from the graph (types baked into facts/rules)
 ///
-/// Returns a PlanningResult: per-document results (document, plans, errors) and global errors.
-/// When displaying errors, iterate per_document and for each with non-empty errors output "In document 'X':" then each error.
+/// Returns a PlanningResult: per-spec results (spec, plans, errors) and global errors.
+/// When displaying errors, iterate per_spec and for each with non-empty errors output "In spec 'X':" then each error.
 pub fn plan(context: &Context, sources: HashMap<String, String>) -> PlanningResult {
     let mut global_errors: Vec<Error> = Vec::new();
     global_errors.extend(temporal::validate_temporal_coverage(context));
 
     let mut type_resolver = TypeResolver::new();
-    let all_docs: Vec<_> = context.iter().collect();
-    for doc_arc in &all_docs {
-        global_errors.extend(type_resolver.register_all(doc_arc));
+    let all_specs: Vec<_> = context.iter().collect();
+    for spec_arc in &all_specs {
+        global_errors.extend(type_resolver.register_all(spec_arc));
     }
-    let (mut resolved_types, type_errors) = type_resolver.resolve(all_docs.clone());
+    let (mut resolved_types, type_errors) = type_resolver.resolve(all_specs.clone());
     global_errors.extend(type_errors);
 
-    let mut per_document: Vec<DocPlanningResult> = Vec::new();
+    let mut per_spec: Vec<SpecPlanningResult> = Vec::new();
 
     if !global_errors.is_empty() {
         return PlanningResult {
-            per_document,
+            per_spec,
             global_errors,
         };
     }
 
-    // Compute content hashes for all docs (own content only for now).
+    // Compute content hashes for all specs (own content only for now).
     // TODO: bottom-up transitive hashing once dep resolution order is settled.
-    let doc_hashes: graph::DocContentHashes = all_docs
+    let spec_hashes: graph::SpecContentHashes = all_specs
         .iter()
-        .map(|d| (graph::doc_hash_key(d), content_hash::hash_doc(d, &[])))
+        .map(|s| (graph::spec_hash_key(s), content_hash::hash_spec(s, &[])))
         .collect();
 
-    for doc_arc in &all_docs {
-        let slices = temporal::compute_temporal_slices(doc_arc, context);
-        let mut doc_plans: Vec<ExecutionPlan> = Vec::new();
-        let mut doc_errors: Vec<Error> = Vec::new();
-        let mut slice_resolved_types: Vec<HashMap<Arc<LemmaDoc>, types::ResolvedDocumentTypes>> =
+    for spec_arc in &all_specs {
+        let slices = temporal::compute_temporal_slices(spec_arc, context);
+        let mut spec_plans: Vec<ExecutionPlan> = Vec::new();
+        let mut spec_errors: Vec<Error> = Vec::new();
+        let mut slice_resolved_types: Vec<HashMap<Arc<LemmaSpec>, types::ResolvedSpecTypes>> =
             Vec::new();
 
         for slice in &slices {
             match graph::Graph::build(
-                doc_arc,
+                spec_arc,
                 context,
                 sources.clone(),
                 &type_resolver,
                 &resolved_types,
                 slice.from.clone(),
-                &doc_hashes,
+                &spec_hashes,
             ) {
-                Ok((graph, doc_types)) => {
-                    for (arc, types) in &doc_types {
+                Ok((graph, slice_types)) => {
+                    for (arc, types) in &slice_types {
                         resolved_types.insert(Arc::clone(arc), types.clone());
                     }
                     let execution_plan = execution_plan::build_execution_plan(
                         &graph,
-                        doc_arc.name.as_str(),
+                        spec_arc.name.as_str(),
                         slice.from.clone(),
                         slice.to.clone(),
                     );
                     let value_errors =
                         execution_plan::validate_literal_facts_against_types(&execution_plan);
                     if value_errors.is_empty() {
-                        doc_plans.push(execution_plan);
+                        spec_plans.push(execution_plan);
                     } else {
-                        doc_errors.extend(value_errors);
+                        spec_errors.extend(value_errors);
                     }
-                    slice_resolved_types.push(doc_types);
+                    slice_resolved_types.push(slice_types);
                 }
-                Err(doc_errors_from_build) => {
-                    doc_errors.extend(doc_errors_from_build);
+                Err(build_errors) => {
+                    spec_errors.extend(build_errors);
                 }
             }
         }
 
-        if doc_errors.is_empty() && doc_plans.len() > 1 {
-            doc_errors.extend(slice_interface::validate_slice_interfaces(
-                &doc_arc.name,
-                &doc_plans,
+        if spec_errors.is_empty() && spec_plans.len() > 1 {
+            spec_errors.extend(slice_interface::validate_slice_interfaces(
+                &spec_arc.name,
+                &spec_plans,
                 &slice_resolved_types,
             ));
         }
 
-        let hash = doc_hashes
-            .get(&graph::doc_hash_key(doc_arc))
+        let hash = spec_hashes
+            .get(&graph::spec_hash_key(spec_arc))
             .cloned()
             .unwrap_or_default();
 
-        per_document.push(DocPlanningResult {
-            document: Arc::clone(doc_arc),
-            plans: doc_plans,
-            errors: doc_errors,
+        per_spec.push(SpecPlanningResult {
+            spec: Arc::clone(spec_arc),
+            plans: spec_plans,
+            errors: spec_errors,
             hash_pin: hash,
         });
     }
 
     PlanningResult {
-        per_document,
+        per_spec,
         global_errors,
     }
 }
@@ -165,7 +165,7 @@ pub fn plan(context: &Context, sources: HashMap<String, String>) -> PlanningResu
 mod internal_tests {
     use super::plan;
     use crate::engine::Context;
-    use crate::parsing::ast::{FactValue, LemmaDoc, LemmaFact, Reference, Span};
+    use crate::parsing::ast::{FactValue, LemmaFact, LemmaSpec, Reference, Span};
     use crate::parsing::source::Source;
     use crate::planning::execution_plan::ExecutionPlan;
     use crate::planning::semantics::{FactPath, PathSegment};
@@ -173,28 +173,28 @@ mod internal_tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    /// Test helper: plan a single document and return its execution plan.
+    /// Test helper: plan a single spec and return its execution plan.
     fn plan_single(
-        main_doc: &LemmaDoc,
-        all_docs: &[LemmaDoc],
+        main_spec: &LemmaSpec,
+        all_specs: &[LemmaSpec],
         sources: HashMap<String, String>,
     ) -> Result<ExecutionPlan, Vec<Error>> {
         let mut ctx = Context::new();
-        for doc in all_docs {
-            if let Err(e) = ctx.insert_doc(Arc::new(doc.clone())) {
+        for spec in all_specs {
+            if let Err(e) = ctx.insert_spec(Arc::new(spec.clone())) {
                 return Err(vec![e]);
             }
         }
-        let main_doc_arc = ctx
-            .get_doc_effective_from(main_doc.name.as_str(), main_doc.effective_from())
-            .expect("main_doc must be in all_docs");
+        let main_spec_arc = ctx
+            .get_spec_effective_from(main_spec.name.as_str(), main_spec.effective_from())
+            .expect("main_spec must be in all_specs");
         let result = plan(&ctx, sources);
         let all_errors: Vec<Error> = result
             .global_errors
             .into_iter()
             .chain(
                 result
-                    .per_document
+                    .per_spec
                     .iter()
                     .flat_map(|r| r.errors.clone())
                     .collect::<Vec<_>>(),
@@ -204,19 +204,16 @@ mod internal_tests {
             return Err(all_errors);
         }
         match result
-            .per_document
+            .per_spec
             .into_iter()
-            .find(|r| Arc::ptr_eq(&r.document, &main_doc_arc))
+            .find(|r| Arc::ptr_eq(&r.spec, &main_spec_arc))
         {
-            Some(doc_result) if !doc_result.plans.is_empty() => {
-                let mut plans = doc_result.plans;
+            Some(spec_result) if !spec_result.plans.is_empty() => {
+                let mut plans = spec_result.plans;
                 Ok(plans.remove(0))
             }
             _ => Err(vec![Error::validation(
-                format!(
-                    "No execution plan produced for document '{}'",
-                    main_doc.name
-                ),
+                format!("No execution plan produced for spec '{}'", main_spec.name),
                 Some(crate::planning::semantics::Source::new(
                     "<test>",
                     crate::planning::semantics::Span {
@@ -225,8 +222,8 @@ mod internal_tests {
                         line: 1,
                         col: 0,
                     },
-                    main_doc.name.clone(),
-                    std::sync::Arc::from("doc test\nfact x: 1"),
+                    main_spec.name.clone(),
+                    std::sync::Arc::from("spec test\nfact x: 1"),
                 )),
                 None::<String>,
             )]),
@@ -235,18 +232,18 @@ mod internal_tests {
 
     #[test]
     fn test_basic_validation() {
-        let input = r#"doc person
+        let input = r#"spec person
 fact name: "John"
 fact age: 25
 rule is_adult: age >= 18"#;
 
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        for doc in &docs {
-            let result = plan_single(doc, &docs, sources.clone());
+        for spec in &specs {
+            let result = plan_single(spec, &specs, sources.clone());
             assert!(
                 result.is_ok(),
                 "Basic validation should pass: {:?}",
@@ -257,16 +254,16 @@ rule is_adult: age >= 18"#;
 
     #[test]
     fn test_duplicate_facts() {
-        let input = r#"doc person
+        let input = r#"spec person
 fact name: "John"
 fact name: "Jane""#;
 
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan_single(&docs[0], &docs, sources);
+        let result = plan_single(&specs[0], &specs, sources);
 
         assert!(
             result.is_err(),
@@ -288,17 +285,17 @@ fact name: "Jane""#;
 
     #[test]
     fn test_duplicate_rules() {
-        let input = r#"doc person
+        let input = r#"spec person
 fact age: 25
 rule is_adult: age >= 18
 rule is_adult: age >= 21"#;
 
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan_single(&docs[0], &docs, sources);
+        let result = plan_single(&specs[0], &specs, sources);
 
         assert!(
             result.is_err(),
@@ -320,16 +317,16 @@ rule is_adult: age >= 21"#;
 
     #[test]
     fn test_circular_dependency() {
-        let input = r#"doc test
+        let input = r#"spec test
 rule a: b
 rule b: a"#;
 
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan_single(&docs[0], &docs, sources);
+        let result = plan_single(&specs[0], &specs, sources);
 
         assert!(
             result.is_err(),
@@ -346,18 +343,18 @@ rule b: a"#;
 
     #[test]
     fn test_unified_references_work() {
-        let input = r#"doc test
+        let input = r#"spec test
 fact age: 25
 rule is_adult: age >= 18
 rule test1: age
 rule test2: is_adult"#;
 
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan_single(&docs[0], &docs, sources);
+        let result = plan_single(&specs[0], &specs, sources);
 
         assert!(
             result.is_ok(),
@@ -367,45 +364,45 @@ rule test2: is_adult"#;
     }
 
     #[test]
-    fn test_multiple_documents() {
-        let input = r#"doc person
+    fn test_multiple_specs() {
+        let input = r#"spec person
 fact name: "John"
 fact age: 25
 
-doc company
+spec company
 fact name: "Acme Corp"
-fact employee: doc person"#;
+fact employee: spec person"#;
 
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan_single(&docs[0], &docs, sources);
+        let result = plan_single(&specs[0], &specs, sources);
 
         assert!(
             result.is_ok(),
-            "Multiple documents should validate successfully: {:?}",
+            "Multiple specs should validate successfully: {:?}",
             result.err()
         );
     }
 
     #[test]
-    fn test_invalid_document_reference() {
-        let input = r#"doc person
+    fn test_invalid_spec_reference() {
+        let input = r#"spec person
 fact name: "John"
-fact contract: doc nonexistent"#;
+fact contract: spec nonexistent"#;
 
-        let docs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
 
-        let result = plan_single(&docs[0], &docs, sources);
+        let result = plan_single(&specs[0], &specs, sources);
 
         assert!(
             result.is_err(),
-            "Invalid document reference should cause validation error"
+            "Invalid spec reference should cause validation error"
         );
         let errors = result.unwrap_err();
         let error_string = errors
@@ -415,9 +412,9 @@ fact contract: doc nonexistent"#;
             .join(", ");
         assert!(
             error_string.contains("not found")
-                || error_string.contains("Document")
+                || error_string.contains("Spec")
                 || (error_string.contains("nonexistent") && error_string.contains("depends")),
-            "Error should mention document reference issue: {}",
+            "Error should mention spec reference issue: {}",
             error_string
         );
         assert!(error_string.contains("nonexistent"));
@@ -425,7 +422,7 @@ fact contract: doc nonexistent"#;
 
     #[test]
     fn test_type_declaration_empty_base_returns_lemma_error() {
-        let mut doc = LemmaDoc::new("test".to_string());
+        let mut spec = LemmaSpec::new("test".to_string());
         let source = Source::new(
             "test.lemma",
             Span {
@@ -437,7 +434,7 @@ fact contract: doc nonexistent"#;
             "test",
             Arc::from("fact x: []"),
         );
-        doc.facts.push(LemmaFact::new(
+        spec.facts.push(LemmaFact::new(
             Reference {
                 segments: vec![],
                 name: "x".to_string(),
@@ -450,11 +447,14 @@ fact contract: doc nonexistent"#;
             source,
         ));
 
-        let docs = vec![doc.clone()];
+        let specs = vec![spec.clone()];
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), "doc test\nfact x: []".to_string());
+        sources.insert(
+            "test.lemma".to_string(),
+            "spec test\nfact x: []".to_string(),
+        );
 
-        let result = plan_single(&doc, &docs, sources);
+        let result = plan_single(&spec, &specs, sources);
         assert!(
             result.is_err(),
             "TypeDeclaration with empty base should fail planning"
@@ -473,40 +473,41 @@ fact contract: doc nonexistent"#;
     }
 
     #[test]
-    fn test_fact_binding_with_custom_type_resolves_in_correct_document_context() {
+    fn test_fact_binding_with_custom_type_resolves_in_correct_spec_context() {
         // This is a planning-level test: ensure fact bindings resolve custom types correctly
-        // when the type is defined in a different document than the binding.
+        // when the type is defined in a different spec than the binding.
         //
-        // doc one:
+        // spec one:
         //   type money: number
         //   fact x: [money]
-        // doc two:
-        //   fact one: doc one
+        // spec two:
+        //   fact one: spec one
         //   fact one.x: 7
         //   rule getx: one.x
         let code = r#"
-doc one
+spec one
 type money: number
 fact x: [money]
 
-doc two
-fact one: doc one
+spec two
+fact one: spec one
 fact one.x: 7
 rule getx: one.x
 "#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc_two = docs.iter().find(|d| d.name == "two").unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec_two = specs.iter().find(|d| d.name == "two").unwrap();
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
-        let execution_plan = plan_single(doc_two, &docs, sources).expect("planning should succeed");
+        let execution_plan =
+            plan_single(spec_two, &specs, sources).expect("planning should succeed");
 
-        // Verify that one.x has type 'money' (resolved from doc one)
+        // Verify that one.x has type 'money' (resolved from spec one)
         let one_x_path = FactPath {
             segments: vec![PathSegment {
                 fact: "one".to_string(),
-                doc: "one".to_string(),
+                spec: "one".to_string(),
             }],
             fact: "x".to_string(),
         };
@@ -527,18 +528,18 @@ rule getx: one.x
     }
 
     #[test]
-    fn test_plan_with_registry_style_doc_names() {
-        let source = r#"doc user/workspace/somedoc
+    fn test_plan_with_registry_style_spec_names() {
+        let source = r#"spec user/workspace/somespec
 fact quantity: 10
 
-doc user/workspace/example
-fact inventory: doc @user/workspace/somedoc
+spec user/workspace/example
+fact inventory: spec @user/workspace/somespec
 rule total_quantity: inventory.quantity"#;
 
-        let docs = parse(source, "registry_bundle.lemma", &ResourceLimits::default()).unwrap();
-        assert_eq!(docs.len(), 2);
+        let specs = parse(source, "registry_bundle.lemma", &ResourceLimits::default()).unwrap();
+        assert_eq!(specs.len(), 2);
 
-        let example_doc = docs
+        let example_spec = specs
             .iter()
             .find(|d| d.name == "user/workspace/example")
             .expect("should find user/workspace/example");
@@ -546,30 +547,30 @@ rule total_quantity: inventory.quantity"#;
         let mut sources = HashMap::new();
         sources.insert("registry_bundle.lemma".to_string(), source.to_string());
 
-        let result = plan_single(example_doc, &docs, sources);
+        let result = plan_single(example_spec, &specs, sources);
         assert!(
             result.is_ok(),
-            "Planning with @... document names should succeed: {:?}",
+            "Planning with @... spec names should succeed: {:?}",
             result.err()
         );
     }
 
     #[test]
     fn test_multiple_independent_errors_are_all_reported() {
-        // A document referencing a non-existing type import AND a non-existing
-        // document should report errors for BOTH, not just stop at the first.
-        let source = r#"doc demo
+        // A spec referencing a non-existing type import AND a non-existing
+        // spec should report errors for BOTH, not just stop at the first.
+        let source = r#"spec demo
 type money from nonexistent_type_source
-fact helper: doc nonexistent_doc
+fact helper: spec nonexistent_spec
 fact price: 10
 rule total: helper.value + price"#;
 
-        let docs = parse(source, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(source, "test.lemma", &ResourceLimits::default()).unwrap();
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), source.to_string());
 
-        let result = plan_single(&docs[0], &docs, sources);
+        let result = plan_single(&specs[0], &specs, sources);
         assert!(result.is_err(), "Planning should fail with multiple errors");
 
         let errors = result.unwrap_err();
@@ -583,14 +584,14 @@ rule total: helper.value + price"#;
             combined
         );
 
-        // Must also report the document reference error (not just the type error)
+        // Must also report the spec reference error (not just the type error)
         assert!(
-            combined.contains("nonexistent_doc"),
-            "Should report doc reference error for 'nonexistent_doc'. Got:\n{}",
+            combined.contains("nonexistent_spec"),
+            "Should report spec reference error for 'nonexistent_spec'. Got:\n{}",
             combined
         );
 
-        // Should have at least 2 distinct kinds of errors (type + doc ref)
+        // Should have at least 2 distinct kinds of errors (type + spec ref)
         assert!(
             errors.len() >= 2,
             "Expected at least 2 errors, got {}: {}",
@@ -600,21 +601,21 @@ rule total: helper.value + price"#;
     }
 
     #[test]
-    fn test_type_error_does_not_suppress_cross_doc_fact_error() {
-        // When a type import fails, errors about cross-document fact references
-        // (e.g. ext.some_fact where ext is a doc ref to a non-existing doc)
+    fn test_type_error_does_not_suppress_cross_spec_fact_error() {
+        // When a type import fails, errors about cross-spec fact references
+        // (e.g. ext.some_fact where ext is a spec ref to a non-existing spec)
         // must still be reported.
-        let source = r#"doc demo
-type currency from missing_doc
-fact ext: doc also_missing
+        let source = r#"spec demo
+type currency from missing_spec
+fact ext: spec also_missing
 rule val: ext.some_fact"#;
 
-        let docs = parse(source, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(source, "test.lemma", &ResourceLimits::default()).unwrap();
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), source.to_string());
 
-        let result = plan_single(&docs[0], &docs, sources);
+        let result = plan_single(&specs[0], &specs, sources);
         assert!(result.is_err());
 
         let errors = result.unwrap_err();
@@ -631,7 +632,7 @@ rule val: ext.some_fact"#;
             combined
         );
 
-        // The document reference error about 'also_missing' should ALSO be reported
+        // The spec reference error about 'also_missing' should ALSO be reported
         assert!(
             combined.contains("also_missing"),
             "Should report error about 'also_missing'. Got:\n{}",

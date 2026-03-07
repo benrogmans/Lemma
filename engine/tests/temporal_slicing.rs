@@ -1,6 +1,6 @@
 //! Integration tests for temporal slicing of execution plans.
 //!
-//! When a document's active range spans dependency version boundaries,
+//! When a spec's active range spans dependency version boundaries,
 //! planning must produce one ExecutionPlan per temporal slice and each
 //! slice must independently validate.
 //!
@@ -25,15 +25,15 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
     }
 }
 
-fn eval(engine: &Engine, doc: &str, effective: &DateTimeValue) -> lemma::Response {
+fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .evaluate(doc, None, effective, vec![], HashMap::new())
+        .evaluate(spec_name, None, effective, vec![], HashMap::new())
         .unwrap()
 }
 
 fn eval_with(
     engine: &Engine,
-    doc: &str,
+    spec_name: &str,
     effective: &DateTimeValue,
     facts: Vec<(&str, &str)>,
 ) -> lemma::Response {
@@ -41,7 +41,9 @@ fn eval_with(
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    engine.evaluate(doc, None, effective, vec![], map).unwrap()
+    engine
+        .evaluate(spec_name, None, effective, vec![], map)
+        .unwrap()
 }
 
 fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
@@ -73,7 +75,7 @@ fn single_unversioned_dependency() {
 
     add_lemma_code_blocking(
         &mut engine,
-        "doc config\nfact base_rate: 100",
+        "spec config\nfact base_rate: 100",
         "config.lemma",
     )
     .unwrap();
@@ -81,8 +83,8 @@ fn single_unversioned_dependency() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc pricing 2025-01-01
-fact cfg: doc config
+spec pricing 2025-01-01
+fact cfg: spec config
 rule rate: cfg.base_rate * 2
 "#,
         "pricing.lemma",
@@ -105,10 +107,10 @@ fn one_boundary_produces_two_slices() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc config
+spec config
 fact base_rate: 100
 
-doc config 2025-04-01
+spec config 2025-04-01
 fact base_rate: 200
 "#,
         "config.lemma",
@@ -118,8 +120,8 @@ fact base_rate: 200
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc pricing 2025-01-01
-fact cfg: doc config
+spec pricing 2025-01-01
+fact cfg: spec config
 rule rate: cfg.base_rate
 "#,
         "pricing.lemma",
@@ -133,16 +135,16 @@ rule rate: cfg.base_rate
 }
 
 #[test]
-fn boundary_exactly_at_doc_effective_from_no_split() {
+fn boundary_exactly_at_spec_effective_from_no_split() {
     let mut engine = Engine::new();
 
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc config
+spec config
 fact rate: 50
 
-doc config 2025-01-01
+spec config 2025-01-01
 fact rate: 75
 "#,
         "config.lemma",
@@ -152,8 +154,8 @@ fact rate: 75
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc pricing 2025-01-01
-fact cfg: doc config
+spec pricing 2025-01-01
+fact cfg: spec config
 rule rate: cfg.rate
 "#,
         "pricing.lemma",
@@ -175,13 +177,13 @@ fn three_versions_produce_three_slices() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc rates
+spec rates
 fact rate: 10
 
-doc rates 2025-03-01
+spec rates 2025-03-01
 fact rate: 20
 
-doc rates 2025-07-01
+spec rates 2025-07-01
 fact rate: 30
 "#,
         "rates.lemma",
@@ -191,8 +193,8 @@ fact rate: 30
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc pricing 2025-01-01
-fact r: doc rates
+spec pricing 2025-01-01
+fact r: spec rates
 fact quantity: [number]
 rule total: quantity * r.rate
 "#,
@@ -222,16 +224,16 @@ fn four_versions_only_two_boundaries_inside_range() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc rates
+spec rates
 fact rate: 10
 
-doc rates 2025-03-01
+spec rates 2025-03-01
 fact rate: 20
 
-doc rates 2025-06-01
+spec rates 2025-06-01
 fact rate: 30
 
-doc rates 2025-09-01
+spec rates 2025-09-01
 fact rate: 40
 "#,
         "rates.lemma",
@@ -242,8 +244,8 @@ fact rate: 40
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc pricing 2025-04-01
-fact r: doc rates
+spec pricing 2025-04-01
+fact r: spec rates
 rule rate: r.rate
 "#,
         "pricing.lemma",
@@ -268,10 +270,10 @@ fn two_deps_boundaries_at_different_times() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc tax_rates
+spec tax_rates
 fact vat: 19
 
-doc tax_rates 2025-04-01
+spec tax_rates 2025-04-01
 fact vat: 21
 "#,
         "tax_rates.lemma",
@@ -282,10 +284,10 @@ fact vat: 21
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc shipping_rates
+spec shipping_rates
 fact fee: 5
 
-doc shipping_rates 2025-07-01
+spec shipping_rates 2025-07-01
 fact fee: 8
 "#,
         "shipping_rates.lemma",
@@ -296,9 +298,9 @@ fact fee: 8
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc invoice 2025-01-01
-fact tax: doc tax_rates
-fact shipping: doc shipping_rates
+spec invoice 2025-01-01
+fact tax: spec tax_rates
+fact shipping: spec shipping_rates
 fact price: [number]
 rule vat_amount: price * tax.vat / 100
 rule shipping_fee: shipping.fee
@@ -350,10 +352,10 @@ fn two_deps_boundaries_at_same_time() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc tax_rates
+spec tax_rates
 fact vat: 19
 
-doc tax_rates 2025-04-01
+spec tax_rates 2025-04-01
 fact vat: 21
 "#,
         "tax_rates.lemma",
@@ -363,10 +365,10 @@ fact vat: 21
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc shipping_rates
+spec shipping_rates
 fact fee: 5
 
-doc shipping_rates 2025-04-01
+spec shipping_rates 2025-04-01
 fact fee: 8
 "#,
         "shipping_rates.lemma",
@@ -376,9 +378,9 @@ fact fee: 8
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc invoice 2025-01-01
-fact tax: doc tax_rates
-fact shipping: doc shipping_rates
+spec invoice 2025-01-01
+fact tax: spec tax_rates
+fact shipping: spec shipping_rates
 rule combined: tax.vat + shipping.fee
 "#,
         "invoice.lemma",
@@ -405,7 +407,7 @@ fn one_dep_versioned_one_dep_unversioned() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc constants
+spec constants
 fact pi: 3
 "#,
         "constants.lemma",
@@ -415,10 +417,10 @@ fact pi: 3
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc rates
+spec rates
 fact multiplier: 2
 
-doc rates 2025-06-01
+spec rates 2025-06-01
 fact multiplier: 4
 "#,
         "rates.lemma",
@@ -428,9 +430,9 @@ fact multiplier: 4
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc calc 2025-01-01
-fact c: doc constants
-fact r: doc rates
+spec calc 2025-01-01
+fact c: spec constants
+fact r: spec rates
 rule result: c.pi * r.multiplier
 "#,
         "calc.lemma",
@@ -449,26 +451,26 @@ rule result: c.pi * r.multiplier
 fn transitive_two_levels_deep() {
     let mut engine = Engine::new();
 
-    // DocC: two versions
+    // SpecC: two versions
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc base_rates
+spec base_rates
 fact multiplier: 2
 
-doc base_rates 2025-06-01
+spec base_rates 2025-06-01
 fact multiplier: 3
 "#,
         "base_rates.lemma",
     )
     .unwrap();
 
-    // DocB: unversioned, depends on DocC
+    // SpecB: unversioned, depends on SpecC
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc intermediate
-fact base: doc base_rates
+spec intermediate
+fact base: spec base_rates
 fact value: 10
 rule adjusted: value * base.multiplier
 "#,
@@ -476,12 +478,12 @@ rule adjusted: value * base.multiplier
     )
     .unwrap();
 
-    // DocA: depends on DocB → transitively on DocC
+    // SpecA: depends on SpecB → transitively on SpecC
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc top 2025-01-01
-fact mid: doc intermediate
+spec top 2025-01-01
+fact mid: spec intermediate
 rule result: mid.adjusted
 "#,
         "top.lemma",
@@ -496,31 +498,31 @@ rule result: mid.adjusted
 fn transitive_both_levels_versioned() {
     let mut engine = Engine::new();
 
-    // DocC: boundary at June
+    // SpecC: boundary at June
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc deep
+spec deep
 fact factor: 2
 
-doc deep 2025-06-01
+spec deep 2025-06-01
 fact factor: 5
 "#,
         "deep.lemma",
     )
     .unwrap();
 
-    // DocB: boundary at April, depends on DocC
+    // SpecB: boundary at April, depends on SpecC
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc middle
-fact d: doc deep
+spec middle
+fact d: spec deep
 fact base: 10
 rule value: base * d.factor
 
-doc middle 2025-04-01
-fact d: doc deep
+spec middle 2025-04-01
+fact d: spec deep
 fact base: 100
 rule value: base * d.factor
 "#,
@@ -528,12 +530,12 @@ rule value: base * d.factor
     )
     .unwrap();
 
-    // DocA: active from Jan → boundaries at {April, June} → three slices
+    // SpecA: active from Jan → boundaries at {April, June} → three slices
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc top 2025-01-01
-fact m: doc middle
+spec top 2025-01-01
+fact m: spec middle
 rule result: m.value
 "#,
         "top.lemma",
@@ -556,22 +558,22 @@ fn diamond_dependency_single_boundary() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc shared
+spec shared
 fact value: 10
 
-doc shared 2025-06-01
+spec shared 2025-06-01
 fact value: 20
 "#,
         "shared.lemma",
     )
     .unwrap();
 
-    // Two intermediate docs both depend on shared
+    // Two intermediate specs both depend on shared
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc left_branch
-fact s: doc shared
+spec left_branch
+fact s: spec shared
 rule doubled: s.value * 2
 "#,
         "left.lemma",
@@ -581,8 +583,8 @@ rule doubled: s.value * 2
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc right_branch
-fact s: doc shared
+spec right_branch
+fact s: spec shared
 rule tripled: s.value * 3
 "#,
         "right.lemma",
@@ -593,9 +595,9 @@ rule tripled: s.value * 3
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc top 2025-01-01
-fact l: doc left_branch
-fact r: doc right_branch
+spec top 2025-01-01
+fact l: spec left_branch
+fact r: spec right_branch
 rule total: l.doubled + r.tripled
 "#,
         "top.lemma",
@@ -616,10 +618,10 @@ fn diamond_dependency_boundaries_at_different_levels() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc shared
+spec shared
 fact base: 10
 
-doc shared 2025-08-01
+spec shared 2025-08-01
 fact base: 50
 "#,
         "shared.lemma",
@@ -630,13 +632,13 @@ fact base: 50
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc left
-fact s: doc shared
+spec left
+fact s: spec shared
 fact add: 1
 rule result: s.base + add
 
-doc left 2025-04-01
-fact s: doc shared
+spec left 2025-04-01
+fact s: spec shared
 fact add: 2
 rule result: s.base + add
 "#,
@@ -648,8 +650,8 @@ rule result: s.base + add
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc right
-fact s: doc shared
+spec right
+fact s: spec shared
 rule result: s.base * 2
 "#,
         "right.lemma",
@@ -660,9 +662,9 @@ rule result: s.base * 2
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc top 2025-01-01
-fact l: doc left
-fact r: doc right
+spec top 2025-01-01
+fact l: spec left
+fact r: spec right
 rule total: l.result + r.result
 "#,
         "top.lemma",
@@ -682,16 +684,16 @@ rule total: l.result + r.result
 // ============================================================================
 
 #[test]
-fn unranged_doc_sliced_by_versioned_dep() {
+fn unranged_spec_sliced_by_versioned_dep() {
     let mut engine = Engine::new();
 
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc rates
+spec rates
 fact tax: 19
 
-doc rates 2026-01-01
+spec rates 2026-01-01
 fact tax: 21
 "#,
         "rates.lemma",
@@ -701,8 +703,8 @@ fact tax: 21
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc calculator
-fact r: doc rates
+spec calculator
+fact r: spec rates
 fact income: [number]
 rule tax_amount: income * r.tax / 100
 "#,
@@ -737,14 +739,14 @@ rule tax_amount: income * r.tax / 100
 // ============================================================================
 
 #[test]
-fn dependency_not_yet_active_at_doc_start() {
+fn dependency_not_yet_active_at_spec_start() {
     let mut engine = Engine::new();
 
     // config only starts in June
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc config 2025-06-01
+spec config 2025-06-01
 fact rate: 100
 "#,
         "config.lemma",
@@ -754,8 +756,8 @@ fact rate: 100
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc pricing 2025-01-01
-fact cfg: doc config
+spec pricing 2025-01-01
+fact cfg: spec config
 rule rate: cfg.rate
 "#,
         "pricing.lemma",
@@ -768,27 +770,27 @@ rule rate: cfg.rate
 }
 
 #[test]
-fn unbounded_doc_depending_on_bounded_dep_rejected() {
+fn unbounded_spec_depending_on_bounded_dep_rejected() {
     let mut engine = Engine::new();
 
     // dep only active from June onward
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc regulations 2025-06-01
+spec regulations 2025-06-01
 fact max_amount: 500
 "#,
         "regulations.lemma",
     )
     .unwrap();
 
-    // unbounded doc [-∞, +∞) depends on dep [Jun, +∞) → planning error
-    // dep's coverage is narrower than the doc's range
+    // unbounded spec [-∞, +∞) depends on dep [Jun, +∞) → planning error
+    // dep's coverage is narrower than the spec's range
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc contract
-fact reg: doc regulations
+spec contract
+fact reg: spec regulations
 fact amount: [number]
 rule is_valid: amount <= reg.max_amount
 "#,
@@ -797,7 +799,7 @@ rule is_valid: amount <= reg.max_amount
 
     assert!(
         result.is_err(),
-        "Must reject: unbounded doc can't depend on a dep that doesn't cover [-∞, +∞)"
+        "Must reject: unbounded spec can't depend on a dep that doesn't cover [-∞, +∞)"
     );
 }
 
@@ -808,13 +810,13 @@ fn three_versions_seamlessly_chained() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc policy 2025-01-01
+spec policy 2025-01-01
 fact limit: 1000
 
-doc policy 2025-04-01
+spec policy 2025-04-01
 fact limit: 2000
 
-doc policy 2025-08-01
+spec policy 2025-08-01
 fact limit: 3000
 "#,
         "policy.lemma",
@@ -824,8 +826,8 @@ fact limit: 3000
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc contract 2025-01-01
-fact p: doc policy
+spec contract 2025-01-01
+fact p: spec policy
 fact amount: [number]
 rule under_limit: amount < p.limit
 "#,
@@ -877,17 +879,17 @@ fn hash_pinned_ref_resolves_correct_version() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc config
+spec config
 fact rate: 100
 
-doc config 2025-04-01
+spec config 2025-04-01
 fact rate: 999
 "#,
         "config.lemma",
     )
     .unwrap();
 
-    // Get the hash of the first (unversioned) config doc
+    // Get the hash of the first (unversioned) config spec
     let v1_hash = engine
         .all_hash_pins()
         .iter()
@@ -897,7 +899,7 @@ fact rate: 999
 
     // Use the hash pin to always resolve config v1
     let pricing_src = format!(
-        "doc pricing 2025-01-01\nfact cfg: doc config~{}\nrule rate: cfg.rate",
+        "spec pricing 2025-01-01\nfact cfg: spec config~{}\nrule rate: cfg.rate",
         v1_hash
     );
     add_lemma_code_blocking(&mut engine, &pricing_src, "pricing.lemma").unwrap();
@@ -910,11 +912,11 @@ fact rate: 999
 fn hash_pinned_ref_wrong_hash_fails_planning() {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(&mut engine, "doc config\nfact rate: 100", "config.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, "spec config\nfact rate: 100", "config.lemma").unwrap();
 
     let result = add_lemma_code_blocking(
         &mut engine,
-        "doc consumer\nfact cfg: doc config~deadbeef\nrule r: cfg.rate",
+        "spec consumer\nfact cfg: spec config~deadbeef\nrule r: cfg.rate",
         "consumer.lemma",
     );
 
@@ -927,7 +929,7 @@ fn hash_pinned_ref_wrong_hash_fails_planning() {
         .join("\n");
     assert!(
         err_str.contains("config"),
-        "error should mention the doc name: {}",
+        "error should mention the spec name: {}",
         err_str
     );
 }
@@ -939,7 +941,7 @@ fn hash_pinned_type_import_resolves() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc finance
+spec finance
 type money: scale
  -> unit eur 1.00
  -> unit usd 1.10
@@ -956,7 +958,7 @@ fact base_price: 50.00 eur
         .to_string();
 
     let consumer_src = format!(
-        "doc consumer\ntype money from finance {}\nfact price: 100.00 eur\nrule double: price * 2",
+        "spec consumer\ntype money from finance {}\nfact price: 100.00 eur\nrule double: price * 2",
         finance_hash
     );
     add_lemma_code_blocking(&mut engine, &consumer_src, "consumer.lemma").unwrap();
@@ -979,10 +981,10 @@ fn evaluate_at_boundary_instant_uses_new_version() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc dep
+spec dep
 fact val: 1
 
-doc dep 2025-06-01
+spec dep 2025-06-01
 fact val: 2
 "#,
         "dep.lemma",
@@ -992,8 +994,8 @@ fact val: 2
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc main
-fact d: doc dep
+spec main
+fact d: spec dep
 rule result: d.val
 "#,
         "main.lemma",
@@ -1006,45 +1008,45 @@ rule result: d.val
 }
 
 // ============================================================================
-// 10. DEPENDENT DOC (DocC) REFERENCES VERSIONED DOC (DocB)
+// 10. DEPENDENT SPEC (SpecC) REFERENCES VERSIONED SPEC (SpecB)
 // ============================================================================
 
 #[test]
-fn third_level_doc_depends_on_versioned_doc() {
+fn third_level_spec_depends_on_versioned_spec() {
     let mut engine = Engine::new();
 
-    // DocB: versioned
+    // SpecB: versioned
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc rates
+spec rates
 fact base: 100
 
-doc rates 2025-05-01
+spec rates 2025-05-01
 fact base: 200
 "#,
         "rates.lemma",
     )
     .unwrap();
 
-    // DocA: unversioned, depends on DocB
+    // SpecA: unversioned, depends on SpecB
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc policy
-fact r: doc rates
+spec policy
+fact r: spec rates
 rule threshold: r.base * 2
 "#,
         "policy.lemma",
     )
     .unwrap();
 
-    // DocC: depends on DocA (which transitively depends on DocB)
+    // SpecC: depends on SpecA (which transitively depends on SpecB)
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc contract 2025-01-01
-fact p: doc policy
+spec contract 2025-01-01
+fact p: spec policy
 fact amount: [number]
 rule is_over_threshold: amount > p.threshold
 "#,
@@ -1088,10 +1090,10 @@ fn realistic_tax_and_labor_law_scenario() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc tax_law
+spec tax_law
 fact income_tax_rate: 30
 
-doc tax_law 2025-04-01
+spec tax_law 2025-04-01
 fact income_tax_rate: 32
 "#,
         "tax.lemma",
@@ -1102,11 +1104,11 @@ fact income_tax_rate: 32
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc labor_law
+spec labor_law
 fact min_wage_hourly: 12
 fact max_weekly_hours: 40
 
-doc labor_law 2025-07-01
+spec labor_law 2025-07-01
 fact min_wage_hourly: 15
 fact max_weekly_hours: 38
 "#,
@@ -1118,9 +1120,9 @@ fact max_weekly_hours: 38
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc employment 2025-01-01
-fact tax: doc tax_law
-fact labor: doc labor_law
+spec employment 2025-01-01
+fact tax: spec tax_law
+fact labor: spec labor_law
 fact hourly_rate: [number]
 fact weekly_hours: [number]
 
@@ -1162,17 +1164,17 @@ rule meets_minimum: annual_gross >= min_annual_gross
 // ============================================================================
 
 #[test]
-fn both_doc_and_dep_are_versioned() {
+fn both_spec_and_dep_are_versioned() {
     let mut engine = Engine::new();
 
     // dep: boundary at June
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc dep
+spec dep
 fact val: 10
 
-doc dep 2025-06-01
+spec dep 2025-06-01
 fact val: 20
 "#,
         "dep.lemma",
@@ -1185,13 +1187,13 @@ fact val: 20
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc main 2025-01-01
-fact d: doc dep
+spec main 2025-01-01
+fact d: spec dep
 fact multiplier: 2
 rule result: d.val * multiplier
 
-doc main 2025-04-01
-fact d: doc dep
+spec main 2025-04-01
+fact d: spec dep
 fact multiplier: 3
 rule result: d.val * multiplier
 "#,
@@ -1212,7 +1214,7 @@ rule result: d.val * multiplier
 // ============================================================================
 // Different versions of a dependency CAN have different interfaces.
 // Every slice must resolve to a version that satisfies what the
-// dependent doc actually references (per-slice interface validation).
+// dependent spec actually references (per-slice interface validation).
 
 #[test]
 fn dep_version_removes_referenced_fact_rejected() {
@@ -1222,10 +1224,10 @@ fn dep_version_removes_referenced_fact_rejected() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc config
+spec config
 fact base_rate: 100
 
-doc config 2025-04-01
+spec config 2025-04-01
 fact cost: 200
 "#,
         "config.lemma",
@@ -1236,8 +1238,8 @@ fact cost: 200
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc pricing 2025-01-01
-fact cfg: doc config
+spec pricing 2025-01-01
+fact cfg: spec config
 rule rate: cfg.base_rate
 "#,
         "pricing.lemma",
@@ -1265,11 +1267,11 @@ fn dep_version_removes_referenced_rule_rejected() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc policy
+spec policy
 fact threshold: 100
 rule discount: 10
 
-doc policy 2025-06-01
+spec policy 2025-06-01
 fact threshold: 200
 "#,
         "policy.lemma",
@@ -1280,8 +1282,8 @@ fact threshold: 200
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc contract 2025-01-01
-fact p: doc policy
+spec contract 2025-01-01
+fact p: spec policy
 rule applied_discount: p.discount
 "#,
         "contract.lemma",
@@ -1305,10 +1307,10 @@ fn dep_version_changes_fact_type_rejected() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc config
+spec config
 fact rate: 100
 
-doc config 2025-04-01
+spec config 2025-04-01
 fact rate: "high"
 "#,
         "config.lemma",
@@ -1319,8 +1321,8 @@ fact rate: "high"
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc pricing 2025-01-01
-fact cfg: doc config
+spec pricing 2025-01-01
+fact cfg: spec config
 rule total: cfg.rate * 2
 "#,
         "pricing.lemma",
@@ -1339,11 +1341,11 @@ fn dep_version_changes_rule_type_rejected() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc policy
+spec policy
 fact base: 100
 rule discount: 10
 
-doc policy 2025-04-01
+spec policy 2025-04-01
 fact base: 200
 rule discount: "fixed"
 "#,
@@ -1355,8 +1357,8 @@ rule discount: "fixed"
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc contract 2025-01-01
-fact p: doc policy
+spec contract 2025-01-01
+fact p: spec policy
 rule total: p.base - p.discount
 "#,
         "contract.lemma",
@@ -1396,10 +1398,10 @@ fn dep_versions_with_compatible_interface_accepted() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc config
+spec config
 fact base_rate: 100
 
-doc config 2025-04-01
+spec config 2025-04-01
 fact base_rate: 200
 fact extra_field: 999
 "#,
@@ -1410,8 +1412,8 @@ fact extra_field: 999
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc pricing 2025-01-01
-fact cfg: doc config
+spec pricing 2025-01-01
+fact cfg: spec config
 rule rate: cfg.base_rate
 "#,
         "pricing.lemma",
@@ -1423,17 +1425,17 @@ rule rate: cfg.base_rate
 }
 
 #[test]
-fn dep_version_adds_rule_that_other_doc_doesnt_use_accepted() {
+fn dep_version_adds_rule_that_other_spec_doesnt_use_accepted() {
     let mut engine = Engine::new();
 
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc policy
+spec policy
 fact base: 100
 rule discount: 10
 
-doc policy 2025-06-01
+spec policy 2025-06-01
 fact base: 200
 rule discount: 20
 rule bonus: 5
@@ -1446,8 +1448,8 @@ rule bonus: 5
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc contract 2025-01-01
-fact p: doc policy
+spec contract 2025-01-01
+fact p: spec policy
 rule applied_discount: p.discount
 "#,
         "contract.lemma",
@@ -1474,10 +1476,10 @@ fn transitive_interface_incompatibility_rejected() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc deep
+spec deep
 fact factor: 2
 
-doc deep 2025-06-01
+spec deep 2025-06-01
 fact multiplier: 5
 "#,
         "deep.lemma",
@@ -1488,8 +1490,8 @@ fact multiplier: 5
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc middle
-fact d: doc deep
+spec middle
+fact d: spec deep
 rule value: d.factor
 "#,
         "middle.lemma",
@@ -1513,10 +1515,10 @@ fn slice_compat_same_fact_type_different_values() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc rates
+spec rates
 fact base: 50
 
-doc rates 2025-07-01
+spec rates 2025-07-01
 fact base: 75
 "#,
         "rates.lemma",
@@ -1526,8 +1528,8 @@ fact base: 75
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc consumer 2025-01-01
-fact r: doc rates
+spec consumer 2025-01-01
+fact r: spec rates
 rule val: r.base
 "#,
         "consumer.lemma",
@@ -1545,10 +1547,10 @@ fn slice_compat_dep_adds_unreferenced_facts() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc settings
+spec settings
 fact limit: 10
 
-doc settings 2025-05-01
+spec settings 2025-05-01
 fact limit: 20
 fact description: "updated settings"
 fact extra_number: 999
@@ -1560,8 +1562,8 @@ fact extra_number: 999
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc app 2025-01-01
-fact s: doc settings
+spec app 2025-01-01
+fact s: spec settings
 rule max: s.limit
 "#,
         "app.lemma",
@@ -1579,10 +1581,10 @@ fn slice_compat_dep_adds_unreferenced_rules() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc calc
+spec calc
 rule base_fee: 100
 
-doc calc 2025-04-01
+spec calc 2025-04-01
 rule base_fee: 150
 rule surcharge: 25
 "#,
@@ -1593,8 +1595,8 @@ rule surcharge: 25
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc invoice 2025-01-01
-fact c: doc calc
+spec invoice 2025-01-01
+fact c: spec calc
 rule fee: c.base_fee
 "#,
         "invoice.lemma",
@@ -1612,11 +1614,11 @@ fn slice_compat_dep_adds_both_facts_and_rules_unreferenced() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc lib
+spec lib
 fact a: 1
 rule x: a
 
-doc lib 2025-06-01
+spec lib 2025-06-01
 fact a: 2
 fact b: 99
 rule x: a
@@ -1629,8 +1631,8 @@ rule y: b
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc caller 2025-01-01
-fact l: doc lib
+spec caller 2025-01-01
+fact l: spec lib
 rule result: l.x
 "#,
         "caller.lemma",
@@ -1648,7 +1650,7 @@ fn slice_compat_single_dep_version_no_comparison() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc dep
+spec dep
 fact val: 42
 "#,
         "dep.lemma",
@@ -1658,8 +1660,8 @@ fact val: 42
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc main
-fact d: doc dep
+spec main
+fact d: spec dep
 rule answer: d.val
 "#,
         "main.lemma",
@@ -1676,10 +1678,10 @@ fn slice_compat_hash_pinned_ref_bypasses_interface_check() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc dep
+spec dep
 fact x: 10
 
-doc dep 2025-06-01
+spec dep 2025-06-01
 fact x: "text_now"
 "#,
         "dep.lemma",
@@ -1693,8 +1695,8 @@ fact x: "text_now"
 
     let pinned_code = format!(
         r#"
-doc pinned_caller
-fact d: doc dep~{}
+spec pinned_caller
+fact d: spec dep~{}
 rule val: d.x
 "#,
         hash
@@ -1716,13 +1718,13 @@ fn slice_compat_three_dep_versions_all_compatible() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc params
+spec params
 fact rate: 10
 
-doc params 2025-04-01
+spec params 2025-04-01
 fact rate: 20
 
-doc params 2025-08-01
+spec params 2025-08-01
 fact rate: 30
 "#,
         "params.lemma",
@@ -1732,8 +1734,8 @@ fact rate: 30
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc consumer 2025-01-01
-fact p: doc params
+spec consumer 2025-01-01
+fact p: spec params
 rule r: p.rate
 "#,
         "consumer.lemma",
@@ -1752,10 +1754,10 @@ fn slice_compat_two_deps_both_stable() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc tax
+spec tax
 fact rate: 21
 
-doc tax 2025-06-01
+spec tax 2025-06-01
 fact rate: 25
 "#,
         "tax.lemma",
@@ -1765,10 +1767,10 @@ fact rate: 25
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc shipping
+spec shipping
 fact cost: 5
 
-doc shipping 2025-06-01
+spec shipping 2025-06-01
 fact cost: 8
 "#,
         "shipping.lemma",
@@ -1778,9 +1780,9 @@ fact cost: 8
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc order 2025-01-01
-fact t: doc tax
-fact s: doc shipping
+spec order 2025-01-01
+fact t: spec tax
+fact s: spec shipping
 rule total_overhead: t.rate + s.cost
 "#,
         "order.lemma",
@@ -1806,10 +1808,10 @@ fn slice_compat_dep_rule_value_changes_but_type_same() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc policy
+spec policy
 rule discount: 10
 
-doc policy 2025-05-01
+spec policy 2025-05-01
 rule discount: 25
 "#,
         "policy.lemma",
@@ -1819,8 +1821,8 @@ rule discount: 25
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc shop 2025-01-01
-fact p: doc policy
+spec shop 2025-01-01
+fact p: spec policy
 rule d: p.discount
 "#,
         "shop.lemma",
@@ -1838,10 +1840,10 @@ fn slice_compat_dep_fact_type_annotation_identical() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc cfg
+spec cfg
 fact threshold: [number]
 
-doc cfg 2025-04-01
+spec cfg 2025-04-01
 fact threshold: [number]
 "#,
         "cfg.lemma",
@@ -1851,8 +1853,8 @@ fact threshold: [number]
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc consumer 2025-01-01
-fact c: doc cfg
+spec consumer 2025-01-01
+fact c: spec cfg
 fact c.threshold: 50
 rule t: c.threshold
 "#,
@@ -1875,10 +1877,10 @@ fn slice_incompat_fact_type_passthrough_changes() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc cfg
+spec cfg
 fact mode: 1
 
-doc cfg 2025-04-01
+spec cfg 2025-04-01
 fact mode: "turbo"
 "#,
         "cfg.lemma",
@@ -1890,8 +1892,8 @@ fact mode: "turbo"
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc consumer 2025-01-01
-fact c: doc cfg
+spec consumer 2025-01-01
+fact c: spec cfg
 rule m: c.mode
 "#,
         "consumer.lemma",
@@ -1918,10 +1920,10 @@ fn slice_incompat_rule_return_type_changes() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc svc
+spec svc
 rule status: true
 
-doc svc 2025-05-01
+spec svc 2025-05-01
 rule status: "active"
 "#,
         "svc.lemma",
@@ -1931,8 +1933,8 @@ rule status: "active"
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc client 2025-01-01
-fact s: doc svc
+spec client 2025-01-01
+fact s: spec svc
 rule is_ok: s.status
 "#,
         "client.lemma",
@@ -1953,16 +1955,16 @@ rule is_ok: s.status
 }
 
 #[test]
-fn slice_incompat_document_ref_fact_changes_target() {
+fn slice_incompat_spec_ref_fact_changes_target() {
     let mut engine = Engine::new();
 
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc target_a
+spec target_a
 rule val: 1
 
-doc target_b
+spec target_b
 rule val: 2
 "#,
         "targets.lemma",
@@ -1972,11 +1974,11 @@ rule val: 2
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc bridge
-fact nested: doc target_a
+spec bridge
+fact nested: spec target_a
 
-doc bridge 2025-06-01
-fact nested: doc target_b
+spec bridge 2025-06-01
+fact nested: spec target_b
 "#,
         "bridge.lemma",
     )
@@ -1985,8 +1987,8 @@ fact nested: doc target_b
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc consumer 2025-01-01
-fact b: doc bridge
+spec consumer 2025-01-01
+fact b: spec bridge
 rule v: b.nested.val
 "#,
         "consumer.lemma",
@@ -1994,7 +1996,7 @@ rule v: b.nested.val
 
     assert!(
         result.is_err(),
-        "Must reject: bridge.nested changes from doc target_a to doc target_b"
+        "Must reject: bridge.nested changes from spec target_a to spec target_b"
     );
     let errs = result.unwrap_err();
     let msgs: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
@@ -2007,16 +2009,16 @@ rule v: b.nested.val
 }
 
 #[test]
-fn slice_incompat_document_ref_target_incompatible_rule_type() {
+fn slice_incompat_spec_ref_target_incompatible_rule_type() {
     let mut engine = Engine::new();
 
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc target_a
+spec target_a
 rule val: 1
 
-doc target_b
+spec target_b
 rule val: "now text"
 "#,
         "targets.lemma",
@@ -2026,11 +2028,11 @@ rule val: "now text"
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc bridge 2024-01-01
-fact nested: doc target_a
+spec bridge 2024-01-01
+fact nested: spec target_a
 
-doc bridge 2025-06-01
-fact nested: doc target_b
+spec bridge 2025-06-01
+fact nested: spec target_b
 "#,
         "bridge.lemma",
     )
@@ -2039,8 +2041,8 @@ fact nested: doc target_b
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc consumer 2024-01-01
-fact b: doc bridge
+spec consumer 2024-01-01
+fact b: spec bridge
 rule v: b.nested.val
 "#,
         "consumer.lemma",
@@ -2070,13 +2072,13 @@ fn slice_incompat_type_definition_changes() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc finance
+spec finance
 type money: scale
  -> unit eur 1.00
  -> decimals 2
 fact price: [money]
 
-doc finance 2025-06-01
+spec finance 2025-06-01
 type money: scale
  -> unit eur 1.00
  -> unit usd 1.10
@@ -2090,8 +2092,8 @@ fact price: [money]
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc shop 2025-01-01
-fact f: doc finance
+spec shop 2025-01-01
+fact f: spec finance
 rule p: f.price
 "#,
         "shop.lemma",
@@ -2115,13 +2117,13 @@ rule p: f.price
 }
 
 #[test]
-fn slice_incompat_value_to_docref_caught_by_per_slice() {
+fn slice_incompat_value_to_spec_ref_caught_by_per_slice() {
     let mut engine = Engine::new();
 
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc other
+spec other
 rule answer: 99
 "#,
         "other.lemma",
@@ -2131,23 +2133,23 @@ rule answer: 99
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc provider
+spec provider
 fact data: 100
 
-doc provider 2025-06-01
-fact data: doc other
+spec provider 2025-06-01
+fact data: spec other
 "#,
         "provider.lemma",
     )
     .unwrap();
 
-    // When a fact changes from value to DocumentRef, the access pattern
+    // When a fact changes from value to spec reference (FactData::SpecRef), the access pattern
     // breaks within the affected slice. Per-slice graph building catches this.
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc consumer 2025-01-01
-fact p: doc provider
+spec consumer 2025-01-01
+fact p: spec provider
 rule val: p.data
 "#,
         "consumer.lemma",
@@ -2155,7 +2157,7 @@ rule val: p.data
 
     assert!(
         result.is_err(),
-        "Must reject: provider.data changes from value to document reference"
+        "Must reject: provider.data changes from value to spec reference"
     );
     let errs = result.unwrap_err();
     let joined = errs
@@ -2164,7 +2166,7 @@ rule val: p.data
         .collect::<Vec<_>>()
         .join(" | ");
     assert!(
-        joined.contains("document reference") || joined.contains("data"),
+        joined.contains("spec reference") || joined.contains("data"),
         "Per-slice error should mention the problematic fact. Got: {}",
         joined
     );
@@ -2177,13 +2179,13 @@ fn slice_incompat_three_versions_middle_breaks() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc cfg
+spec cfg
 fact flag: true
 
-doc cfg 2025-04-01
+spec cfg 2025-04-01
 fact flag: "yes"
 
-doc cfg 2025-08-01
+spec cfg 2025-08-01
 fact flag: true
 "#,
         "cfg.lemma",
@@ -2193,8 +2195,8 @@ fact flag: true
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc consumer 2025-01-01
-fact c: doc cfg
+spec consumer 2025-01-01
+fact c: spec cfg
 rule f: c.flag
 "#,
         "consumer.lemma",
@@ -2224,10 +2226,10 @@ fn slice_incompat_multiple_deps_one_unstable() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc stable_dep
+spec stable_dep
 fact x: 10
 
-doc stable_dep 2025-06-01
+spec stable_dep 2025-06-01
 fact x: 20
 "#,
         "stable.lemma",
@@ -2237,10 +2239,10 @@ fact x: 20
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc unstable_dep
+spec unstable_dep
 fact y: 5
 
-doc unstable_dep 2025-06-01
+spec unstable_dep 2025-06-01
 fact y: "five"
 "#,
         "unstable.lemma",
@@ -2250,9 +2252,9 @@ fact y: "five"
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc consumer 2025-01-01
-fact a: doc stable_dep
-fact b: doc unstable_dep
+spec consumer 2025-01-01
+fact a: spec stable_dep
+fact b: spec unstable_dep
 rule sx: a.x
 rule sy: b.y
 "#,
@@ -2292,11 +2294,11 @@ fn slice_edge_fact_referenced_only_in_unless_branch() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc dep
+spec dep
 fact main_val: 10
 fact alt_val: 20
 
-doc dep 2025-06-01
+spec dep 2025-06-01
 fact main_val: "ten"
 fact alt_val: "twenty"
 "#,
@@ -2310,8 +2312,8 @@ fact alt_val: "twenty"
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc caller 2025-01-01
-fact d: doc dep
+spec caller 2025-01-01
+fact d: spec dep
 fact use_alt: [boolean]
 rule result: d.main_val
  unless use_alt then d.alt_val
@@ -2343,10 +2345,10 @@ fn slice_edge_fact_in_both_condition_and_expression() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc data
+spec data
 fact amount: 100
 
-doc data 2025-05-01
+spec data 2025-05-01
 fact amount: 200
 "#,
         "data.lemma",
@@ -2357,8 +2359,8 @@ fact amount: 200
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc calc 2025-01-01
-fact d: doc data
+spec calc 2025-01-01
+fact d: spec data
 rule result: 0
  unless d.amount > 50 then d.amount * 2
 "#,
@@ -2377,11 +2379,11 @@ fn slice_edge_error_message_contains_diff_info() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc dep
+spec dep
 fact score: 100
 rule grade: 1
 
-doc dep 2025-06-01
+spec dep 2025-06-01
 fact score: "A+"
 rule grade: "first"
 "#,
@@ -2392,8 +2394,8 @@ rule grade: "first"
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc caller 2025-01-01
-fact d: doc dep
+spec caller 2025-01-01
+fact d: spec dep
 rule s: d.score
 rule g: d.grade
 "#,
@@ -2406,12 +2408,12 @@ rule g: d.grade
     let joined = msgs.join(" | ");
     assert!(
         joined.contains("dep"),
-        "Error should name the referenced document 'dep'. Got: {}",
+        "Error should name the referenced spec 'dep'. Got: {}",
         joined
     );
     assert!(
         joined.contains("caller"),
-        "Error should name the calling document 'caller'. Got: {}",
+        "Error should name the calling spec 'caller'. Got: {}",
         joined
     );
 }
@@ -2423,11 +2425,11 @@ fn slice_edge_dep_removes_bound_fact_caught_by_per_slice() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc dep
+spec dep
 fact x: [number]
 rule doubled: x * 2
 
-doc dep 2025-06-01
+spec dep 2025-06-01
 rule doubled: 0
 "#,
         "dep.lemma",
@@ -2439,8 +2441,8 @@ rule doubled: 0
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc caller 2025-01-01
-fact d: doc dep
+spec caller 2025-01-01
+fact d: spec dep
 fact d.x: 5
 rule val: d.doubled
 "#,
@@ -2471,10 +2473,10 @@ fn slice_edge_dep_removes_referenced_rule_caught_by_per_slice() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc svc
+spec svc
 rule compute: 42
 
-doc svc 2025-06-01
+spec svc 2025-06-01
 rule other_compute: 99
 "#,
         "svc.lemma",
@@ -2484,8 +2486,8 @@ rule other_compute: 99
     let result = add_lemma_code_blocking(
         &mut engine,
         r#"
-doc caller 2025-01-01
-fact s: doc svc
+spec caller 2025-01-01
+fact s: spec svc
 rule val: s.compute
 "#,
         "caller.lemma",

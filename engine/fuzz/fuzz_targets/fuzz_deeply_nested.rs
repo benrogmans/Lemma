@@ -15,7 +15,7 @@ fuzz_target!(|depth: u8| {
     }
     
     let code = format!(r#"
-doc fuzz_nested
+spec fuzz_nested
 fact x: 1
 rule deeply_nested: {}
 "#, expr);

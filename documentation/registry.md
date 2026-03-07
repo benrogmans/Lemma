@@ -1,6 +1,6 @@
 # Registry
 
-A **Registry** in Lemma resolves external `@...` references to Lemma source text. The engine calls the registry when it encounters `doc @identifier` or `type ... from @identifier` so that documents and types can be loaded from outside the current workspace.
+A **Registry** in Lemma resolves external `@...` references to Lemma source text. The engine calls the registry when it encounters `spec @identifier` or `type ... from @identifier` so that specs and types can be loaded from outside the current workspace.
 
 A Registry can fetch Lemma docs and types from anywhere: in-memory maps, filesystem lookups, databases, or remote APIs. The only contract is the **Registry trait**: given an identifier (the part after `@`), return a bundle of Lemma source or an error. By default Lemma uses the LemmaBase.com Registry, but you are invited to compile Lemma without a registry for complete isolation, or implement your own private Registry.
 
@@ -10,8 +10,8 @@ Note: authentication and authorization is not part of the Registry API yet but i
 
 ## When the engine uses a Registry
 
-- **Document references:** `fact helper: doc @org/example/helper` — the engine needs the Lemma source for the document named by `@org/example/helper`.
-- **Type imports:** `type money from @lemma/std/finance` — the engine needs the Lemma source for the document that defines the imported types.
+- **Spec references:** `fact helper: spec @org/example/helper` — the engine needs the Lemma source for the spec named by `@org/example/helper`.
+- **Type imports:** `type money from @lemma/std/finance` — the engine needs the Lemma source for the spec that defines the imported types.
 
 Resolution happens during `add_lemma_files`, after parsing and before planning. The engine collects all unresolved `@...` identifiers, calls the registry for each, parses the returned source, and repeats until no unresolved references remain. If the registry returns an error, the engine reports a `Error::Registry` and does not proceed.
 
@@ -19,14 +19,14 @@ Resolution happens during `add_lemma_files`, after parsing and before planning. 
 
 ## The Registry trait
 
-Implement the `lemma::Registry` trait. All methods receive the **identifier without** the leading `@` (e.g. `"user/workspace/somedoc"` for `doc @user/workspace/somedoc`).
+Implement the `lemma::Registry` trait. All methods receive the **identifier without** the leading `@` (e.g. `"user/workspace/somespec"` for `spec @user/workspace/somespec`).
 
 ### Methods
 
 | Method | Purpose |
 |--------|--------|
-| `resolve_doc(&self, identifier: &str) -> Result<RegistryBundle, RegistryError>` | Resolve a `doc @...` reference. Return Lemma source for the requested document (and optionally its dependencies). |
-| `resolve_type(&self, identifier: &str) -> Result<RegistryBundle, RegistryError>` | Resolve a `type ... from @...` reference. Return Lemma source for the doc(s) that define the imported types. |
+| `resolve_spec(&self, identifier: &str) -> Result<RegistryBundle, RegistryError>` | Resolve a `spec @...` reference. Return Lemma source for the requested spec (and optionally its dependencies). |
+| `resolve_type(&self, identifier: &str) -> Result<RegistryBundle, RegistryError>` | Resolve a `type ... from @...` reference. Return Lemma source for the spec(s) that define the imported types. |
 | `url_for_id(&self, identifier: &str) -> Option<String>` | Optional: return a URL for editor navigation (e.g. "open in browser"). Return `None` if no URL is available. |
 
 The trait is **async** and requires `Send + Sync` so the engine can use it across threads. On WASM the async future is `?Send` (e.g. for `fetch()`).
@@ -34,13 +34,13 @@ The trait is **async** and requires `Send + Sync` so the engine can use it acros
 ### Types you work with
 
 - **`RegistryBundle`** — what you return on success:
-  - `lemma_source: String` — raw Lemma source (one or more `doc ...` blocks). Doc names in the source are **without** `@` (e.g. `doc org/example/helper`).
+  - `lemma_source: String` — raw Lemma source (one or more `spec ...` blocks). Spec names in the source are **without** `@` (e.g. `spec org/example/helper`).
   - `attribute: String` — source identifier for diagnostics and proofs, typically `"@"` + identifier (e.g. `"@org/example/helper"`).
 
 - **`RegistryError`** — what you return on failure:
   - `message: String` — human-readable description.
   - `kind: RegistryErrorKind` — so the engine can give appropriate suggestions:
-    - `NotFound` — document or type not found (e.g. HTTP 404).
+    - `NotFound` — spec or type not found (e.g. HTTP 404).
     - `Unauthorized` — access denied (e.g. HTTP 401, 403).
     - `NetworkError` — transport failure (DNS, timeout, connection refused).
     - `ServerError` — server-side error (e.g. HTTP 5xx).
@@ -57,7 +57,7 @@ You can implement the trait in any way. Examples:
 - **HTTP:** Call a REST or other API; map status codes to `RegistryErrorKind` (404 → `NotFound`, 401/403 → `Unauthorized`, 5xx → `ServerError`, transport failure → `NetworkError`).
 - **Database or other backend:** Query by identifier and return Lemma source (or an error) however you like.
 
-The engine does not care how you obtain the source; it only calls `resolve_doc` and `resolve_type` and uses the returned bundles or errors.
+The engine does not care how you obtain the source; it only calls `fetch_specs` and `fetch_types` and uses the returned bundles or errors.
 
 ### Minimal in-memory example
 
@@ -89,22 +89,22 @@ impl InMemoryRegistry {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl Registry for InMemoryRegistry {
-    async fn resolve_doc(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
-        self.bundles.get(identifier).cloned().ok_or(RegistryError {
-            message: format!("not found: {}", identifier),
+    async fn fetch_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+        self.bundles.get(name).cloned().ok_or(RegistryError {
+            message: format!("not found: {}", name),
             kind: RegistryErrorKind::NotFound,
         })
     }
 
-    async fn resolve_type(&self, identifier: &str) -> Result<RegistryBundle, RegistryError> {
-        self.bundles.get(identifier).cloned().ok_or(RegistryError {
-            message: format!("not found: {}", identifier),
+    async fn fetch_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+        self.bundles.get(name).cloned().ok_or(RegistryError {
+            message: format!("not found: {}", name),
             kind: RegistryErrorKind::NotFound,
         })
     }
 
-    fn url_for_id(&self, identifier: &str) -> Option<String> {
-        Some(format!("https://my-registry/{}", identifier))
+    fn url_for_id(&self, name: &str, _effective: Option<&lemma::DateTimeValue>) -> Option<String> {
+        Some(format!("https://my-registry/{}", name))
     }
 }
 ```
@@ -126,8 +126,8 @@ let mut engine = Engine::new().with_registry(my_registry);
 
 let mut files = HashMap::new();
 files.insert("app.lemma".into(), r#"
-    doc app
-    fact helper: doc @my/helper
+    spec app
+    fact helper: spec @my/helper
     rule value: helper.x
 "#.into());
 
@@ -150,7 +150,7 @@ When the `registry` feature is enabled, the default registry is **LemmaBase**, w
 
 | Goal | What to do |
 |------|------------|
-| Implement a Registry | Implement the `Registry` trait: `resolve_doc`, `resolve_type`, and optionally `url_for_id`. |
+| Implement a Registry | Implement the `Registry` trait: `fetch_specs`, `fetch_types`, and optionally `url_for_id`. |
 | Use your Registry | Build the engine with `Engine::new().with_registry(Arc::new(your_registry))`, then call `add_lemma_files` as usual. |
 | Use no registry | Use an engine built with `registry: None` so that `@...` references are not resolved (they will fail). |
 | Rely on default | Use `Engine::new()` with the `registry` feature enabled to use LemmaBase. |

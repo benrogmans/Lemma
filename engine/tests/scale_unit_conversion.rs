@@ -10,7 +10,7 @@ use std::collections::HashMap;
 #[test]
 fn scale_comparison_converts_units_before_comparing() {
     let code = r#"
-doc pricing
+spec pricing
 type money: scale
     -> unit eur 1
     -> unit usd 1.19
@@ -50,7 +50,7 @@ rule check: accept
 #[test]
 fn scale_comparison_accepts_when_conversion_makes_value_smaller() {
     let code = r#"
-doc pricing
+spec pricing
 type money: scale
     -> unit eur 1
     -> unit usd 1.19
@@ -91,7 +91,7 @@ rule check: accept
 #[test]
 fn scale_fact_value_requires_unit() {
     let code = r#"
-doc pricing
+spec pricing
 type money: scale
     -> unit eur 1
     -> unit usd 1.19
@@ -125,7 +125,7 @@ rule check: accept
 #[test]
 fn scale_fact_value_rejects_unknown_unit() {
     let code = r#"
-doc pricing
+spec pricing
 type money: scale
     -> unit eur 1
     -> unit usd 1.19
@@ -156,7 +156,7 @@ rule check: accept
 #[test]
 fn scale_in_operator_converts_units() {
     let code = r#"
-doc pricing
+spec pricing
 type money: scale
     -> unit eur 1
     -> unit usd 1.19
@@ -199,7 +199,7 @@ rule price_usd: 100 eur in usd
 #[test]
 fn scale_in_operator_rejects_unknown_unit() {
     let code = r#"
-doc pricing
+spec pricing
 type money: scale
     -> unit eur 1
     -> unit usd 1.19
@@ -225,7 +225,7 @@ fn named_scale_type_comparison_with_unit_literal() {
     // "Cannot compare different scale types: scale and weight" because it
     // used strict name equality instead of same_scale_family.
     let code = r#"
-doc shipping
+spec shipping
 
 type weight: scale -> unit kilogram 1.0
 
@@ -267,7 +267,7 @@ fn named_scale_type_arithmetic_within_same_family() {
     // Regression: planning rejected arithmetic between values of the same
     // scale family when their type names differed (e.g. "scale" vs "weight").
     let code = r#"
-doc shipping
+spec shipping
 
 type money: scale -> unit USD 1.00
 

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 #[test]
 fn test_scale_op_scale_same_type_allowed() {
     // Test that Scale op Scale with same type is allowed
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
   -> unit usd 1.19
@@ -46,7 +46,7 @@ rule quotient: price1 / price2"#;
 #[test]
 fn test_scale_op_scale_different_types_rejected() {
     // Test that Scale op Scale with different types is rejected
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -83,7 +83,7 @@ rule invalid: price + distance"#;
 #[test]
 fn test_scale_op_number_allowed() {
     // Test that Scale op Number is allowed
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -112,7 +112,7 @@ rule divided: price / multiplier"#;
 #[test]
 fn test_number_op_scale_allowed() {
     // Test that Number op Scale is allowed
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -141,7 +141,7 @@ rule divided: multiplier / price"#;
 #[test]
 fn test_ratio_op_number_allowed() {
     // Test that Ratio op Number is allowed (result is Number)
-    let code = r#"doc test
+    let code = r#"spec test
 fact ratio_value: [ratio]
 fact multiplier: [number]
 
@@ -165,7 +165,7 @@ rule result: ratio_value * multiplier"#;
 #[test]
 fn test_ratio_op_ratio_allowed() {
     // Test that Ratio op Ratio is allowed (result is Ratio)
-    let code = r#"doc test
+    let code = r#"spec test
 fact ratio1: [ratio]
 fact ratio2: [ratio]
 
@@ -191,7 +191,7 @@ rule quotient: ratio1 / ratio2"#;
 #[test]
 fn test_ratio_op_scale_allowed() {
     // Test that Ratio op Scale is allowed (result is Scale)
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -218,7 +218,7 @@ rule result: ratio_value * price"#;
 #[test]
 fn test_scale_op_ratio_allowed() {
     // Test that Scale op Ratio is allowed (result is Scale)
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -245,7 +245,7 @@ rule result: price * ratio_value"#;
 #[test]
 fn test_scale_comparison_same_type_allowed() {
     // Test that comparing same Scale types is allowed
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -274,7 +274,7 @@ rule is_equal: price1 == price2"#;
 #[test]
 fn test_scale_comparison_different_types_rejected() {
     // Test that comparing different Scale types is rejected
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -310,7 +310,7 @@ rule invalid: price > distance"#;
 #[test]
 fn test_scale_comparison_with_number_rejected() {
     // Comparing Scale with Number is ambiguous (Number has no unit) and must be rejected.
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -328,7 +328,7 @@ rule is_above: price > threshold"#;
 fn test_all_arithmetic_operators_scale_same_type() {
     // Test all arithmetic operators with same Scale type
     // Note: Modulo requires Number divisor, so we test it separately
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -370,7 +370,7 @@ rule power: a ^ exponent"#;
 #[test]
 fn test_all_arithmetic_operators_scale_different_types_rejected() {
     // Test that all arithmetic operators reject different Scale types
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale -> unit eur 1.00
 type length: scale -> unit meter 1.0
 
@@ -409,7 +409,7 @@ rule power: price ^ distance"#;
 #[test]
 fn test_number_operations_all_operators() {
     // Test all arithmetic operators with Number types
-    let code = r#"doc test
+    let code = r#"spec test
 fact a: [number]
 fact b: [number]
 
@@ -444,7 +444,7 @@ rule power: a ^ b"#;
 #[test]
 fn test_scale_result_type_preservation() {
     // Test that Scale op Scale (same type) preserves the Scale type
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -487,7 +487,7 @@ rule total: price1 + price2"#;
 #[test]
 fn test_scale_number_result_inherits_scale() {
     // Test that Scale op Number results in Scale type
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -519,7 +519,7 @@ rule result: price * multiplier"#;
 #[test]
 fn test_ratio_number_result_is_number() {
     // Test that Ratio op Number results in Number type
-    let code = r#"doc test
+    let code = r#"spec test
 fact ratio_value: [ratio]
 fact multiplier: [number]
 
@@ -556,7 +556,7 @@ rule result: ratio_value * multiplier"#;
 #[test]
 fn test_ratio_ratio_result_is_ratio() {
     // Test that Ratio op Ratio results in Ratio type
-    let code = r#"doc test
+    let code = r#"spec test
 fact ratio1: [ratio]
 fact ratio2: [ratio]
 
@@ -593,7 +593,7 @@ rule result: ratio1 * ratio2"#;
 #[test]
 fn test_ratio_scale_result_is_scale() {
     // Test that Ratio op Scale results in Scale type
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -625,7 +625,7 @@ rule result: ratio_value * price"#;
 #[test]
 fn test_complex_mixed_operations() {
     // Test complex expressions with mixed types
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
 
@@ -661,7 +661,7 @@ rule total: with_tax * quantity"#;
 fn test_primitive_scale_and_number_types() {
     // Scale types must declare at least one unit; scale values are unitful.
     // This test uses a proper scale type (money) and unitful fact value.
-    let code = r#"doc test
+    let code = r#"spec test
 type money: scale
   -> unit eur 1.00
   -> minimum 0 eur

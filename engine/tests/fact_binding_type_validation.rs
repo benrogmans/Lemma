@@ -1,7 +1,7 @@
 /// Comprehensive tests for fact binding type validation
 ///
 /// These tests ensure that the engine correctly validates that fact bindings
-/// match the expected types declared in the document, preventing type confusion bugs.
+/// match the expected types declared in the spec, preventing type confusion bugs.
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 #[test]
 fn test_number_type_validation_rejects_text() {
     let code = r#"
-doc test
+spec test
 fact age: [number]
 rule doubled: age * 2
 "#;
@@ -37,7 +37,7 @@ rule doubled: age * 2
 #[test]
 fn test_multiple_type_validations() {
     let code = r#"
-doc test
+spec test
 fact price: [number]
 fact quantity: [number]
 fact active: [boolean]
@@ -96,7 +96,7 @@ rule total: price * quantity
 #[test]
 fn test_literal_fact_type_validation() {
     let code = r#"
-doc test
+spec test
 fact base_price: 50
 rule total: base_price * 1.2
 "#;
@@ -125,7 +125,7 @@ rule total: base_price * 1.2
 #[test]
 fn test_unknown_fact_binding_rejected() {
     let code = r#"
-doc test
+spec test
 fact price: [number]
 rule total: price * 1.1
 "#;
@@ -146,12 +146,12 @@ rule total: price * 1.1
 #[test]
 fn test_fact_binding_with_type_definition_should_fail() {
     let code = r#"
-doc base
+spec base
 fact quantity: [number -> minimum 0 -> default 10]
 rule total: quantity * 2
 
-doc test
-fact line: doc base
+spec test
+fact line: spec base
 fact line.quantity: [number -> minimum 0 -> default 5]
 rule result: line.total
 "#;

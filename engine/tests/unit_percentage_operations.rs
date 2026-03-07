@@ -14,7 +14,7 @@ fn test_unit_subtract_percentage() -> Result<(), Vec<lemma::Error>> {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc pricing
+        spec pricing
 
         fact quantity: 10
         fact is_vip: false
@@ -82,7 +82,7 @@ fn test_unit_add_percentage() -> Result<(), Vec<lemma::Error>> {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc tax_calculation
+        spec tax_calculation
 
         fact base_price: 100
         fact tax_rate: 8.5%
@@ -133,7 +133,7 @@ fn test_various_unit_percentage_operations() -> Result<(), Vec<lemma::Error>> {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc unit_percentage_ops
+        spec unit_percentage_ops
 
         fact price: 50
         fact increase: 20%
@@ -233,7 +233,7 @@ fn test_complex_discount_scenario() -> Result<(), Vec<lemma::Error>> {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc complex_pricing
+        spec complex_pricing
 
         fact base_price: 1000
         fact bulk_discount: 15%
@@ -314,7 +314,7 @@ fn test_percentage_arithmetic() -> Result<(), Vec<lemma::Error>> {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc percentage_ops
+        spec percentage_ops
 
         fact discount_a: 5%
         fact discount_b: 10%
@@ -458,7 +458,7 @@ fn test_averaging_percentages() -> Result<(), Vec<lemma::Error>> {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc avg_percentages
+        spec avg_percentages
 
         fact rate_a: 10%
         fact rate_b: 20%

@@ -1,4 +1,4 @@
-doc tax_calculation
+spec tax_calculation
 """
 Progressive Tax Calculation
 

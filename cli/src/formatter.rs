@@ -1,6 +1,6 @@
 use lemma::evaluation::proof::{NonMatchedBranch, ProofNode, ValueSource};
 use lemma::planning::semantics::{FactPath, FactValue, TypeSpecification, ValueKind};
-use lemma::{DocumentSchema, ExecutionPlan, LiteralValue, OperationResult, Response, RuleResult};
+use lemma::{ExecutionPlan, LiteralValue, OperationResult, Response, RuleResult, SpecSchema};
 use std::collections::HashSet;
 use super_table::{presets, Cell, CellAlignment, Table};
 
@@ -59,7 +59,7 @@ impl Formatter {
         let mut output = String::new();
         if !response.facts.is_empty() {
             output.push_str("Facts\n");
-            output.push_str(&self.format_facts_tree(&response.facts, &response.doc_name));
+            output.push_str(&self.format_facts_tree(&response.facts, &response.spec_name));
             output.push('\n');
         }
         if !response.results.is_empty() {
@@ -72,7 +72,7 @@ impl Formatter {
         output
     }
 
-    pub fn format_document_inspection(&self, plan: &ExecutionPlan) -> String {
+    pub fn format_spec_inspection(&self, plan: &ExecutionPlan) -> String {
         let local_fact_paths: Vec<&FactPath> = plan
             .facts
             .keys()
@@ -85,7 +85,7 @@ impl Formatter {
         table.set_style(super_table::TableComponent::HorizontalLines, '─');
 
         table.add_row(vec![
-            Cell::new(&plan.doc_name).set_alignment(CellAlignment::Left)
+            Cell::new(&plan.spec_name).set_alignment(CellAlignment::Left)
         ]);
 
         let mut content_lines = Vec::new();
@@ -121,22 +121,14 @@ impl Formatter {
         format!("{}\n", table)
     }
 
-    pub fn format_workspace_summary(
-        &self,
-        file_count: usize,
-        schemas: &[DocumentSchema],
-    ) -> String {
+    pub fn format_workspace_summary(&self, file_count: usize, schemas: &[SpecSchema]) -> String {
         let mut output = String::new();
-        let doc_count = schemas.len();
+        let spec_count = schemas.len();
         let file_word = if file_count == 1 { "file" } else { "files" };
-        let doc_word = if doc_count == 1 {
-            "document"
-        } else {
-            "documents"
-        };
+        let spec_word = if spec_count == 1 { "spec" } else { "specs" };
         output.push_str(&format!(
             "Found {} {} in {} {}\n",
-            doc_count, doc_word, file_count, file_word
+            spec_count, spec_word, file_count, file_word
         ));
 
         for schema in schemas {
@@ -153,7 +145,7 @@ impl Formatter {
             table.set_style(super_table::TableComponent::HorizontalLines, '─');
 
             table.set_header(vec![
-                Cell::new(&schema.doc).set_alignment(CellAlignment::Left),
+                Cell::new(&schema.spec).set_alignment(CellAlignment::Left),
                 Cell::new(""),
                 Cell::new(""),
             ]);
@@ -212,7 +204,7 @@ impl Formatter {
         output
     }
 
-    fn format_facts_tree(&self, facts_groups: &[lemma::Facts], doc_name: &str) -> String {
+    fn format_facts_tree(&self, facts_groups: &[lemma::Facts], spec_name: &str) -> String {
         let mut output = String::new();
 
         for group in facts_groups {
@@ -226,7 +218,7 @@ impl Formatter {
             table.set_style(super_table::TableComponent::HorizontalLines, '─');
 
             table.add_row(vec![
-                Cell::new(doc_name.to_string()).set_alignment(CellAlignment::Left),
+                Cell::new(spec_name.to_string()).set_alignment(CellAlignment::Left),
                 Cell::new("").set_alignment(CellAlignment::Left),
                 Cell::new("").set_alignment(CellAlignment::Left),
             ]);
@@ -254,7 +246,7 @@ impl Formatter {
         for fact in &group.facts {
             let value_str = match &fact.value {
                 FactValue::Literal(lit) => self.format_literal(lit),
-                FactValue::DocumentReference(doc_name) => format!("doc {}", doc_name),
+                FactValue::SpecReference(spec_ref) => format!("spec {}", spec_ref),
                 FactValue::TypeDeclaration { .. } => String::new(),
             };
             name_lines.push(fact.path.to_string());
@@ -273,7 +265,7 @@ impl Formatter {
         match value {
             FactValue::Literal(lit) => lit.lemma_type.name(),
             FactValue::TypeDeclaration { resolved_type } => resolved_type.name(),
-            FactValue::DocumentReference(doc_name) => format!("doc {}", doc_name),
+            FactValue::SpecReference(spec_ref) => format!("spec {}", spec_ref),
         }
     }
 

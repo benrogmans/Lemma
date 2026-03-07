@@ -5,7 +5,7 @@ use common::add_lemma_code_blocking;
 #[test]
 fn test_logical_and_requires_boolean_operands() {
     let code = r#"
-doc test
+spec test
 rule result: 5 and true
 "#;
 
@@ -19,7 +19,7 @@ rule result: 5 and true
 #[test]
 fn test_unless_condition_must_be_boolean() {
     let code = r#"
-doc test
+spec test
 rule result: 10
   unless 5 then 20
 "#;
@@ -32,7 +32,7 @@ rule result: 10
 #[test]
 fn test_percentage_literal_type() {
     let code = r#"
-doc test
+spec test
 fact rate: 15%
 rule doubled: rate
   unless rate > 10% then 20%
@@ -50,7 +50,7 @@ rule doubled: rate
 #[test]
 fn test_text_number_comparison_allowed() {
     let code = r#"
-doc test
+spec test
 fact name: "Alice"
 fact age: 30
 rule check: name == "Bob" and age > 25
@@ -68,7 +68,7 @@ rule check: name == "Bob" and age > 25
 #[test]
 fn test_date_comparison() {
     let code = r#"
-doc test
+spec test
 fact start: 2024-01-01
 fact end: 2024-12-31
 rule is_valid_range: end > start
@@ -87,7 +87,7 @@ rule is_valid_range: end > start
 fn test_duration_conversion() {
     // Duration is the only remaining built-in unit type
     let code = r#"
-doc test
+spec test
 fact value: 60
 rule converted: (value * 60) in seconds
 "#;
@@ -104,7 +104,7 @@ rule converted: (value * 60) in seconds
 #[test]
 fn test_percentage_conversion_from_number() {
     let code = r#"
-doc test
+spec test
 fact ratio: 0.25
 rule as_percentage: ratio in percent
 "#;
@@ -121,7 +121,7 @@ rule as_percentage: ratio in percent
 #[test]
 fn test_veto_type_is_compatible_with_other_types() {
     let code = r#"
-doc test
+spec test
 fact age: 15
 rule result: 100
   unless age < 18 then veto "Too young"
@@ -140,7 +140,7 @@ rule result: 100
 #[test]
 fn test_mixed_text_and_number_not_allowed() {
     let code = r#"
-doc test
+spec test
 fact flag: true
 rule value: "default"
   unless flag then 42
@@ -168,7 +168,7 @@ rule value: "default"
 #[test]
 fn test_mixed_date_and_number_not_allowed() {
     let code = r#"
-doc test
+spec test
 fact use_date: true
 rule value: 2024-01-01
   unless use_date then 100
@@ -196,7 +196,7 @@ rule value: 2024-01-01
 #[test]
 fn test_boolean_consistency() {
     let code = r#"
-doc test
+spec test
 fact x: 5
 fact y: 10
 rule check: x < y
@@ -215,7 +215,7 @@ rule check: x < y
 #[test]
 fn test_arithmetic_result_type_inference() {
     let code = r#"
-doc test
+spec test
 fact a: 10
 fact b: 20
 rule sum: a + b
@@ -234,7 +234,7 @@ rule sum: a + b
 #[test]
 fn test_multiple_unless_clauses_type_consistency() {
     let code = r#"
-doc test
+spec test
 fact x: 5
 rule value: 10
   unless x < 0 then 0
@@ -254,7 +254,7 @@ rule value: 10
 #[test]
 fn test_multiple_unless_clauses_type_inconsistency() {
     let code = r#"
-doc test
+spec test
 fact x: 5
 rule value: 10
   unless x < 0 then 0
@@ -280,7 +280,7 @@ rule value: 10
 #[test]
 fn test_rule_reference_type_propagation() {
     let code = r#"
-doc test
+spec test
 fact base: 100
 rule derived: base * 2
 rule another: derived
@@ -299,7 +299,7 @@ rule another: derived
 #[test]
 fn test_time_type_validation() {
     let code = r#"
-doc test
+spec test
 fact meeting_time: 14:30:00
 rule is_afternoon: meeting_time > 12:00:00
 "#;
@@ -316,7 +316,7 @@ rule is_afternoon: meeting_time > 12:00:00
 #[test]
 fn test_time_cannot_use_in_logical_operators() {
     let code = r#"
-doc test
+spec test
 fact time1: 14:30:00
 fact time2: 15:00:00
 rule result: time1 and time2
@@ -335,7 +335,7 @@ rule result: time1 and time2
 #[test]
 fn test_mixed_time_and_number_not_allowed() {
     let code = r#"
-doc test
+spec test
 fact use_time: true
 rule value: 14:30:00
   unless use_time then 100

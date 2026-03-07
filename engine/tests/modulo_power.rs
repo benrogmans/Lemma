@@ -12,7 +12,7 @@ fn test_modulo_simple() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc test
+spec test
 fact a: 10
 fact b: 3
 rule remainder: a % b
@@ -45,7 +45,7 @@ fn test_power_simple() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc test
+spec test
 fact base: 2
 fact exponent: 3
 rule result: base ^ exponent
@@ -78,7 +78,7 @@ fn test_modulo_in_expression() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc test
+spec test
 fact value: 17
 rule is_even: (value % 2) == 0
 rule is_odd: (value % 2) == 1
@@ -111,7 +111,7 @@ fn test_power_with_fractions() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc test
+spec test
 fact base: 4
 rule square_root: base ^ 0.5
 "#,
@@ -143,7 +143,7 @@ fn test_combined_operations() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-doc test
+spec test
 fact x: 10
 fact y: 3
 rule calculation: (x % y) + (2 ^ 3)

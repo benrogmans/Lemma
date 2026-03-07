@@ -11,7 +11,7 @@ fn bdd_unification_simplifies_to_single_atom() {
     // Branches with same outcome (1): (A & B) and (A & !B)
     // After last-wins and unification, condition should simplify to A.
     let code = r#"
-        doc shop_bdd
+        spec shop_bdd
         fact discount_code: [text]
         fact member_level: [text]
 

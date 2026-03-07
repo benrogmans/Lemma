@@ -11,7 +11,7 @@ fn test_employee_contract_comprehensive() {
     let mut engine = Engine::new();
 
     let base_contract = r#"
-doc base_contract
+spec base_contract
 fact min_salary: 30000
 fact max_salary: 200000
 fact standard_vacation_days: 20 days
@@ -20,8 +20,8 @@ fact min_age: 18 years
 "#;
 
     let employment_terms = r#"
-doc employment_terms
-fact base: doc base_contract
+spec employment_terms
+fact base: spec base_contract
 fact salary: 75000
 fact bonus_percentage: 10%
 fact start_date: 2024-01-15
@@ -70,11 +70,11 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
         lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
     );
 
-    if let Some(doc) = engine.get_document("employment_terms", &now) {
-        engine.remove_document(doc);
+    if let Some(spec) = engine.get_spec("employment_terms", &now) {
+        engine.remove_spec(spec);
     }
-    if let Some(doc) = engine.get_document("base_contract", &now) {
-        engine.remove_document(doc);
+    if let Some(spec) = engine.get_spec("base_contract", &now) {
+        engine.remove_spec(spec);
     }
 }
 
@@ -82,8 +82,8 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
 fn test_tax_calculation_with_percentages() {
     let mut engine = Engine::new();
 
-    let tax_doc = r#"
-doc tax_calculation
+    let tax_spec = r#"
+spec tax_calculation
 fact income: 80000
 fact deductions: 10000
 fact tax_rate_low: 10%
@@ -106,7 +106,7 @@ rule net_income: income - tax_amount
 rule effective_rate: (tax_amount / income) * 100%
 "#;
 
-    add_lemma_code_blocking(&mut engine, tax_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, tax_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -149,8 +149,8 @@ rule effective_rate: (tax_amount / income) * 100%
         )))
     );
 
-    if let Some(doc) = engine.get_document("tax_calculation", &now) {
-        engine.remove_document(doc);
+    if let Some(spec) = engine.get_spec("tax_calculation", &now) {
+        engine.remove_spec(spec);
     }
 }
 
@@ -158,8 +158,8 @@ rule effective_rate: (tax_amount / income) * 100%
 fn test_cli_fact_values_integration() {
     let mut engine = Engine::new();
 
-    let config_doc = r#"
-doc dynamic_config
+    let config_spec = r#"
+spec dynamic_config
 fact threshold: [number]
 fact multiplier: [number]
 fact base_value: 100
@@ -170,7 +170,7 @@ rule status: "LOW"
   unless exceeds_threshold then "HIGH"
 "#;
 
-    add_lemma_code_blocking(&mut engine, config_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, config_spec, "test.lemma").unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("threshold".to_string(), "500".to_string());
@@ -210,8 +210,8 @@ rule status: "LOW"
         .unwrap();
     assert_eq!(status2.result.value().unwrap().to_string(), "HIGH");
 
-    if let Some(doc) = engine.get_document("dynamic_config", &now) {
-        engine.remove_document(doc);
+    if let Some(spec) = engine.get_spec("dynamic_config", &now) {
+        engine.remove_spec(spec);
     }
 }
 
@@ -219,8 +219,8 @@ rule status: "LOW"
 fn test_date_arithmetic_comprehensive() {
     let mut engine = Engine::new();
 
-    let timeline_doc = r#"
-doc project_timeline
+    let timeline_spec = r#"
+spec project_timeline
 fact project_start: 2024-01-15
 fact phase1_duration: 30 days
 fact phase2_duration: 45 days
@@ -240,7 +240,7 @@ rule is_phase2_complete: today > phase2_end
 rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 "#;
 
-    add_lemma_code_blocking(&mut engine, timeline_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, timeline_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -264,8 +264,8 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
         lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(false)))
     );
 
-    if let Some(doc) = engine.get_document("project_timeline", &now) {
-        engine.remove_document(doc);
+    if let Some(spec) = engine.get_spec("project_timeline", &now) {
+        engine.remove_spec(spec);
     }
 }
 
@@ -277,14 +277,14 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 fn test_date_plus_duration() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test
+    let spec = r#"
+spec test
 fact start: 2024-01-15
 fact timespan: 30 days
 rule end_date: start + timespan
 "#;
 
-    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .evaluate("test", None, &now, vec![], HashMap::new())
@@ -313,14 +313,14 @@ rule end_date: start + timespan
 fn test_date_minus_duration() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test
+    let spec = r#"
+spec test
 fact end: 2024-02-14
 fact timespan: 30 days
 rule start_date: end - timespan
 "#;
 
-    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .evaluate("test", None, &now, vec![], HashMap::new())
@@ -349,14 +349,14 @@ rule start_date: end - timespan
 fn test_date_minus_date() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test
+    let spec = r#"
+spec test
 fact start: 2024-01-15
 fact end: 2024-02-14
 rule timespan: end - start
 "#;
 
-    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .evaluate("test", None, &now, vec![], HashMap::new())
@@ -385,15 +385,15 @@ rule timespan: end - start
 fn test_date_comparison() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test
+    let spec = r#"
+spec test
 fact date1: 2024-01-15
 fact date2: 2024-02-14
 rule date1_before_date2: date1 < date2
 rule date1_after_date2: date1 > date2
 "#;
 
-    add_lemma_code_blocking(&mut engine, doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .evaluate("test", None, &now, vec![], HashMap::new())
@@ -428,13 +428,13 @@ rule date1_after_date2: date1 > date2
 fn test_type_validation_boolean_and_number() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test
+    let spec = r#"
+spec test
 fact flag: true
 rule result_true: flag and 100 or 50
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, doc, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, spec, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing boolean and number in logical expression"
@@ -445,13 +445,13 @@ rule result_true: flag and 100 or 50
 fn test_type_validation_boolean_and_money() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test
+    let spec = r#"
+spec test
 fact needs_extra: true
 rule extra_charge: needs_extra and 10 or 0
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, doc, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, spec, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing boolean and money in logical expression"
@@ -462,14 +462,14 @@ rule extra_charge: needs_extra and 10 or 0
 fn test_type_validation_comparison_and_number() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test
+    let spec = r#"
+spec test
 fact value: 100
 rule multiplier: value > 50 and 2 or 1
 rule result: value * multiplier
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, doc, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, spec, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing boolean comparison result and numbers in logical expression"
@@ -484,13 +484,13 @@ rule result: value * multiplier
 fn test_logical_operator_with_text_error_message() {
     let mut engine = Engine::new();
 
-    let doc = r#"
-doc test
+    let spec = r#"
+spec test
 fact system_healthy: true
 rule status: system_healthy and "OK"
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, doc, "test.lemma");
+    let result = add_lemma_code_blocking(&mut engine, spec, "test.lemma");
     assert!(
         result.is_err(),
         "Should reject mixing boolean and text in logical expression"
@@ -513,29 +513,29 @@ rule status: system_healthy and "OK"
 }
 
 // ============================================================================
-// Document Reference Field Access Tests
+// Spec reference field access tests
 // ============================================================================
 
 #[test]
-fn test_doc_ref_field_access_simple() {
+fn test_spec_ref_field_access_simple() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact min_value: 100
 fact max_value: 1000
 "#;
 
-    let child_doc = r#"
-doc child
-fact config: doc base
+    let child_spec = r#"
+spec child
+fact config: spec base
 fact value: 500
 
 rule is_valid: value >= config.min_value and value <= config.max_value
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, child_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, child_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -554,25 +554,25 @@ rule is_valid: value >= config.min_value and value <= config.max_value
 }
 
 #[test]
-fn test_doc_ref_field_access_with_units() {
+fn test_spec_ref_field_access_with_units() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact min_salary: 30000
 fact max_salary: 200000
 "#;
 
-    let child_doc = r#"
-doc child
-fact base_contract: doc base
+    let child_spec = r#"
+spec child
+fact base_contract: spec base
 fact salary: 75000
 
 rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.max_salary
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, child_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, child_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -591,24 +591,24 @@ rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.ma
 }
 
 #[test]
-fn test_doc_ref_field_access_arithmetic() {
+fn test_spec_ref_field_access_arithmetic() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact project_start: 2024-01-15
 fact probation_period: 90 days
 "#;
 
-    let child_doc = r#"
-doc child
-fact base_contract: doc base
+    let child_spec = r#"
+spec child
+fact base_contract: spec base
 
 rule probation_end: base_contract.project_start + base_contract.probation_period
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, child_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, child_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine

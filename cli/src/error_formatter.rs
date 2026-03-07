@@ -14,8 +14,8 @@ fn format_details(error_type: &str, details: &ErrorDetails, label_message: &str)
     let mut output = Vec::new();
 
     let header = format!(
-        "{}: {} (in doc '{}', file {}:{})",
-        error_type, details.message, src.doc_name, src.attribute, src.span.line
+        "{}: {} (in spec '{}', file {}:{})",
+        error_type, details.message, src.spec_name, src.attribute, src.span.line
     );
 
     let mut report = Report::build(ReportKind::Error, &src.attribute, src.span.start)
@@ -62,7 +62,7 @@ pub fn format_error(error: &Error) -> String {
             limit_value,
             actual_value,
             suggestion,
-            document_context: _,
+            spec_context: _,
         } => {
             format!(
                 "Resource limit exceeded: {limit_name}\n  Limit: {limit_value}\n  Actual: {actual_value}\n  {suggestion}"

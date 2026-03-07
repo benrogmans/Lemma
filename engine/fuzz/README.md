@@ -25,8 +25,8 @@ cargo +nightly fuzz run fuzz_parser -- -max_total_time=3600
 
 ### Available Targets
 
-1. **fuzz_parser** - Full document parsing with random input
-2. **fuzz_expressions** - Expression parsing within valid document context
+1. **fuzz_parser** - Full spec parsing with random input
+2. **fuzz_expressions** - Expression parsing within valid spec context
 3. **fuzz_literals** - Literal value parsing (numbers, strings, units)
 4. **fuzz_deeply_nested** - Nested expressions to test stack limits
 5. **fuzz_fact_bindings** - Fact binding parsing and evaluation

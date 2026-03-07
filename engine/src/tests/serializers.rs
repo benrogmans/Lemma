@@ -17,8 +17,8 @@ fn dummy_source() -> Source {
             line: 1,
             col: 1,
         },
-        "test_doc",
-        Arc::from("doc test_doc\nrule dummy: true"),
+        "test_spec",
+        Arc::from("spec test_spec\nrule dummy: true"),
     )
 }
 
@@ -53,14 +53,14 @@ fn test_response_serialization() {
         },
     );
     let response = Response {
-        doc_name: "test_doc".to_string(),
+        spec_name: "test_spec".to_string(),
         facts: vec![],
         results,
     };
 
     let json = serde_json::to_string(&response).unwrap();
     let deserialized: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized["doc_name"], "test_doc");
+    assert_eq!(deserialized["spec_name"], "test_spec");
     assert!(deserialized["results"]
         .as_object()
         .unwrap()
@@ -97,7 +97,7 @@ fn test_response_filter_rules() {
         },
     );
     let mut response = Response {
-        doc_name: "test_doc".to_string(),
+        spec_name: "test_spec".to_string(),
         facts: vec![],
         results,
     };

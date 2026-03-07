@@ -13,7 +13,7 @@ Lemma is still early-stage and **not yet recommended for production use**. Expec
 - **Readable by business stakeholders** – rules look like the policies people already write
 - **Deterministic and auditable** – every evaluation returns a full trace explaining the result
 - **Type-aware** – dates, percentages, units, and automatic conversions are first-class
-- **Composable** – documents extend and reference each other without boilerplate
+- **Composable** – specs extend and reference each other without boilerplate
 - **Multi-platform** – use the engine from Rust, power the CLI/HTTP server, or ship via WebAssembly
 
 ## Quick start
@@ -34,7 +34,7 @@ use std::collections::HashMap;
 let mut engine = Engine::new();
 
 engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
-    doc compensation
+    spec compensation
     fact base_salary: 60000
     fact bonus_rate: 10%
     rule bonus: base_salary * bonus_rate
@@ -59,7 +59,7 @@ use std::collections::HashMap;
 let mut engine = Engine::new();
 
 engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
-    doc shipping
+    spec shipping
 
     fact weight: 5 kilogram
     fact destination: "domestic"
@@ -94,7 +94,7 @@ use rust_decimal::Decimal;
 let mut engine = Engine::new();
 
 engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
-    doc pricing
+    spec pricing
     fact quantity: [number]
     fact is_vip: false
 
@@ -120,7 +120,7 @@ let response = engine.invert(
 
 **1. `invert()` - String-based values (user-friendly)**
 
-Accepts string values that are automatically parsed based on document types:
+Accepts string values that are automatically parsed based on spec types:
 
 ```rust
 let mut values = HashMap::new();
@@ -204,7 +204,7 @@ for (var, domain) in &response.solutions {
 
 - **Rich type system** – percentages, mass, length, duration, temperature, pressure, power, energy, frequency, and data sizes
 - **Automatic unit conversions** – convert between units inside expressions without extra code
-- **Document composition** – extend documents, bind facts, and reuse rules across modules
+- **Spec composition** – extend specs, bind facts, and reuse rules across modules
 - **Audit trail** – every evaluation returns the operations that led to each result
 - **Inverse reasoning** – find what inputs produce desired outputs
 - **WebAssembly build** – `npm install @benrogmans/lemma-engine` to run Lemma in browsers and at the edge

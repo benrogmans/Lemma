@@ -1,5 +1,5 @@
 use crate::evaluation::Evaluator;
-use crate::parsing::ast::{DateTimeValue, LemmaDoc};
+use crate::parsing::ast::{DateTimeValue, LemmaSpec};
 use crate::registry::Registry;
 use crate::{parse, Error, ResourceLimits, Response};
 use std::collections::{BTreeSet, HashMap};
@@ -78,26 +78,26 @@ impl TemporalBound {
     }
 }
 
-// ─── Document store with temporal resolution ─────────────────────────
+// ─── Spec store with temporal resolution ──────────────────────────────
 
-/// Ordered set of documents with temporal versioning.
+/// Ordered set of specs with temporal versioning.
 ///
-/// Documents with the same name are ordered by effective_from.
+/// Specs with the same name are ordered by effective_from.
 /// A temporal version's end is derived from the next temporal version's effective_from, or +inf.
 #[derive(Debug, Default)]
 pub struct Context {
-    docs: BTreeSet<Arc<LemmaDoc>>,
+    specs: BTreeSet<Arc<LemmaSpec>>,
 }
 
 impl Context {
     pub fn new() -> Self {
         Self {
-            docs: BTreeSet::new(),
+            specs: BTreeSet::new(),
         }
     }
 
-    pub(crate) fn docs_for_name(&self, name: &str) -> Vec<Arc<LemmaDoc>> {
-        self.docs
+    pub(crate) fn specs_for_name(&self, name: &str) -> Vec<Arc<LemmaSpec>> {
+        self.specs
             .iter()
             .filter(|a| a.name == name)
             .cloned()
@@ -106,31 +106,31 @@ impl Context {
 
     /// Exact identity lookup by (name, effective_from).
     ///
-    /// None matches documents without temporal versioning.
+    /// None matches specs without temporal versioning.
     /// Some(d) matches the temporal version whose effective_from equals d.
-    pub fn get_doc_effective_from(
+    pub fn get_spec_effective_from(
         &self,
         name: &str,
         effective_from: Option<&DateTimeValue>,
-    ) -> Option<Arc<LemmaDoc>> {
-        self.docs_for_name(name)
+    ) -> Option<Arc<LemmaSpec>> {
+        self.specs_for_name(name)
             .into_iter()
-            .find(|doc| doc.effective_from() == effective_from)
+            .find(|s| s.effective_from() == effective_from)
     }
 
     /// Temporal range resolution: find the temporal version of `name` that is active at `effective`.
     ///
-    /// A doc is active at `effective` when:
+    /// A spec is active at `effective` when:
     ///   effective_from <= effective < effective_to
     /// where effective_to is the next temporal version's effective_from, or +inf if no successor.
-    pub fn get_doc(&self, name: &str, effective: &DateTimeValue) -> Option<Arc<LemmaDoc>> {
-        let versions = self.docs_for_name(name);
+    pub fn get_spec(&self, name: &str, effective: &DateTimeValue) -> Option<Arc<LemmaSpec>> {
+        let versions = self.specs_for_name(name);
         if versions.is_empty() {
             return None;
         }
 
-        for (i, doc) in versions.iter().enumerate() {
-            let from_ok = doc
+        for (i, spec) in versions.iter().enumerate() {
+            let from_ok = spec
                 .effective_from()
                 .map(|f| *effective >= *f)
                 .unwrap_or(true);
@@ -143,70 +143,70 @@ impl Context {
             let to_ok = effective_to.map(|end| *effective < *end).unwrap_or(true);
 
             if to_ok {
-                return Some(doc.clone());
+                return Some(spec.clone());
             }
         }
 
         None
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = Arc<LemmaDoc>> + '_ {
-        self.docs.iter().cloned()
+    pub fn iter(&self) -> impl Iterator<Item = Arc<LemmaSpec>> + '_ {
+        self.specs.iter().cloned()
     }
 
-    /// Insert a document. Validates no duplicate (name, effective_from).
-    pub fn insert_doc(&mut self, doc: Arc<LemmaDoc>) -> Result<(), Error> {
-        let existing = self.docs_for_name(&doc.name);
+    /// Insert a spec. Validates no duplicate (name, effective_from).
+    pub fn insert_spec(&mut self, spec: Arc<LemmaSpec>) -> Result<(), Error> {
+        let existing = self.specs_for_name(&spec.name);
 
         if existing
             .iter()
-            .any(|o| o.effective_from() == doc.effective_from())
+            .any(|o| o.effective_from() == spec.effective_from())
         {
             return Err(Error::validation(
                 format!(
-                    "Duplicate document '{}' (same name and effective_from already in context)",
-                    doc.name
+                    "Duplicate spec '{}' (same name and effective_from already in context)",
+                    spec.name
                 ),
                 None,
                 None::<String>,
             ));
         }
 
-        self.docs.insert(doc);
+        self.specs.insert(spec);
         Ok(())
     }
 
-    pub fn remove_doc(&mut self, doc: &Arc<LemmaDoc>) -> bool {
-        self.docs.remove(doc)
+    pub fn remove_spec(&mut self, spec: &Arc<LemmaSpec>) -> bool {
+        self.specs.remove(spec)
     }
 
     pub fn len(&self) -> usize {
-        self.docs.len()
+        self.specs.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.docs.is_empty()
+        self.specs.is_empty()
     }
 
     // ─── Temporal helpers ────────────────────────────────────────────
 
-    /// Returns the effective range `[from, to)` for a document in this context.
+    /// Returns the effective range `[from, to)` for a spec in this context.
     ///
-    /// - `from`: `doc.effective_from()` (None = -∞)
+    /// - `from`: `spec.effective_from()` (None = -∞)
     /// - `to`: next temporal version's `effective_from`, or None (+∞) if no successor.
     pub fn effective_range(
         &self,
-        doc: &Arc<LemmaDoc>,
+        spec: &Arc<LemmaSpec>,
     ) -> (Option<DateTimeValue>, Option<DateTimeValue>) {
-        let from = doc.effective_from().cloned();
-        let versions = self.docs_for_name(&doc.name);
+        let from = spec.effective_from().cloned();
+        let versions = self.specs_for_name(&spec.name);
         let pos = versions
             .iter()
-            .position(|v| Arc::ptr_eq(v, doc))
+            .position(|v| Arc::ptr_eq(v, spec))
             .unwrap_or_else(|| {
                 unreachable!(
-                    "BUG: effective_range called with doc '{}' not in context",
-                    doc.name
+                    "BUG: effective_range called with spec '{}' not in context",
+                    spec.name
                 )
             });
         let to = versions
@@ -218,9 +218,9 @@ impl Context {
     /// Returns all `effective_from` dates for temporal versions of `name`, sorted ascending.
     /// Temporal versions without `effective_from` are excluded (they represent -∞).
     pub fn version_boundaries(&self, name: &str) -> Vec<DateTimeValue> {
-        self.docs_for_name(name)
+        self.specs_for_name(name)
             .iter()
-            .filter_map(|doc| doc.effective_from().cloned())
+            .filter_map(|s| s.effective_from().cloned())
             .collect()
     }
 
@@ -235,7 +235,7 @@ impl Context {
         required_from: Option<&DateTimeValue>,
         required_to: Option<&DateTimeValue>,
     ) -> Vec<(Option<DateTimeValue>, Option<DateTimeValue>)> {
-        let versions = self.docs_for_name(dep_name);
+        let versions = self.specs_for_name(dep_name);
         if versions.is_empty() {
             return vec![(required_from.cloned(), required_to.cloned())];
         }
@@ -317,28 +317,28 @@ fn find_slice_plan<'a>(
 
 /// Engine for evaluating Lemma rules
 ///
-/// Pure Rust implementation that evaluates Lemma docs directly from the AST.
+/// Pure Rust implementation that evaluates Lemma specs directly from the AST.
 /// Uses pre-built execution plans that are self-contained and ready for evaluation.
 ///
 /// An optional Registry can be configured to resolve external `@...` references.
 /// When a Registry is set, `add_lemma_files` will automatically resolve `@...`
 /// references by fetching source text from the Registry, parsing it, and including
-/// the resulting Lemma docs in the document set before planning.
+/// the resulting Lemma specs in the spec set before planning.
 pub struct Engine {
-    execution_plans: HashMap<Arc<LemmaDoc>, Vec<crate::planning::ExecutionPlan>>,
-    documents: Context,
+    execution_plans: HashMap<Arc<LemmaSpec>, Vec<crate::planning::ExecutionPlan>>,
+    specs: Context,
     sources: HashMap<String, String>,
     evaluator: Evaluator,
     limits: ResourceLimits,
     registry: Option<Arc<dyn Registry>>,
-    hash_pins: HashMap<Arc<LemmaDoc>, String>,
+    hash_pins: HashMap<Arc<LemmaSpec>, String>,
 }
 
 impl Default for Engine {
     fn default() -> Self {
         Self {
             execution_plans: HashMap::new(),
-            documents: Context::new(),
+            specs: Context::new(),
             sources: HashMap::new(),
             evaluator: Evaluator,
             limits: ResourceLimits::default(),
@@ -377,7 +377,7 @@ impl Engine {
     pub fn with_limits(limits: ResourceLimits) -> Self {
         Self {
             execution_plans: HashMap::new(),
-            documents: Context::new(),
+            specs: Context::new(),
             sources: HashMap::new(),
             evaluator: Evaluator,
             limits,
@@ -396,45 +396,41 @@ impl Engine {
     }
 
     /// Get the content hash (hash pin) for the temporal version active at `effective`.
-    pub fn hash_pin(&self, doc_name: &str, effective: &DateTimeValue) -> Option<&str> {
-        let doc_arc = self.get_document(doc_name, effective)?;
-        self.hash_pin_for_doc(&doc_arc)
+    pub fn hash_pin(&self, spec_name: &str, effective: &DateTimeValue) -> Option<&str> {
+        let spec_arc = self.get_spec(spec_name, effective)?;
+        self.hash_pin_for_spec(&spec_arc)
     }
 
-    /// Get the content hash for a specific document (by arc). Used when the resolved doc is already known.
-    pub fn hash_pin_for_doc(&self, doc: &Arc<LemmaDoc>) -> Option<&str> {
-        self.hash_pins.get(doc).map(|s| s.as_str())
+    /// Get the content hash for a specific spec (by arc). Used when the resolved spec is already known.
+    pub fn hash_pin_for_spec(&self, spec: &Arc<LemmaSpec>) -> Option<&str> {
+        self.hash_pins.get(spec).map(|s| s.as_str())
     }
 
-    /// Get all hash pins as (doc_name, effective_from_display, hash) triples.
+    /// Get all hash pins as (spec_name, effective_from_display, hash) triples.
     pub fn all_hash_pins(&self) -> Vec<(&str, Option<String>, &str)> {
         self.hash_pins
             .iter()
-            .map(|(doc, hash)| {
+            .map(|(spec, hash)| {
                 (
-                    doc.name.as_str(),
-                    doc.effective_from().map(|af| af.to_string()),
+                    spec.name.as_str(),
+                    spec.effective_from().map(|af| af.to_string()),
                     hash.as_str(),
                 )
             })
             .collect()
     }
 
-    /// Get the document with the given name whose content hash matches `hash_pin`.
-    /// Returns `None` if no such document exists or if multiple versions match (hash collision).
-    pub fn get_document_by_hash_pin(
-        &self,
-        doc_name: &str,
-        hash_pin: &str,
-    ) -> Option<Arc<LemmaDoc>> {
-        let mut matched: Option<Arc<LemmaDoc>> = None;
-        for doc in self.documents.docs_for_name(doc_name) {
-            let computed = self.hash_pins.get(&doc).map(|s| s.as_str()).unwrap_or("");
+    /// Get the spec with the given name whose content hash matches `hash_pin`.
+    /// Returns `None` if no such spec exists or if multiple versions match (hash collision).
+    pub fn get_spec_by_hash_pin(&self, spec_name: &str, hash_pin: &str) -> Option<Arc<LemmaSpec>> {
+        let mut matched: Option<Arc<LemmaSpec>> = None;
+        for spec in self.specs.specs_for_name(spec_name) {
+            let computed = self.hash_pins.get(&spec).map(|s| s.as_str()).unwrap_or("");
             if crate::planning::content_hash::content_hash_matches(hash_pin, computed) {
                 if matched.is_some() {
                     return None;
                 }
-                matched = Some(doc);
+                matched = Some(spec);
             }
         }
         matched
@@ -442,8 +438,8 @@ impl Engine {
 
     /// Add Lemma source files and (when a registry is configured) resolve any `@...` references.
     ///
-    /// - Resolves registry references **once** for all documents
-    /// - Validates and resolves types **once** across all documents
+    /// - Resolves registry references **once** for all specs
+    /// - Validates and resolves types **once** across all specs
     /// - Collects **all** errors across all files (parse, registry, planning) instead of aborting on the first
     ///
     /// `files` maps source identifiers (e.g. file paths) to source code.
@@ -456,14 +452,14 @@ impl Engine {
 
         for (source_id, code) in &files {
             match parse(code, source_id, &self.limits) {
-                Ok(new_docs) => {
+                Ok(new_specs) => {
                     let source_text: Arc<str> = Arc::from(code.as_str());
-                    for doc in new_docs {
-                        let attribute = doc.attribute.clone().unwrap_or_else(|| doc.name.clone());
-                        let start_line = doc.start_line;
-                        let doc_name = doc.name.clone();
+                    for spec in new_specs {
+                        let attribute = spec.attribute.clone().unwrap_or_else(|| spec.name.clone());
+                        let start_line = spec.start_line;
+                        let spec_name = spec.name.clone();
 
-                        match self.documents.insert_doc(Arc::new(doc)) {
+                        match self.specs.insert_spec(Arc::new(spec)) {
                             Ok(()) => {
                                 self.sources.insert(attribute, code.clone());
                             }
@@ -476,7 +472,7 @@ impl Engine {
                                         line: start_line,
                                         col: 0,
                                     },
-                                    &doc_name,
+                                    &spec_name,
                                     Arc::clone(&source_text),
                                 );
                                 errors.push(Error::validation(
@@ -494,7 +490,7 @@ impl Engine {
 
         if let Some(registry) = &self.registry {
             if let Err(registry_errors) = crate::registry::resolve_registry_references(
-                &mut self.documents,
+                &mut self.specs,
                 &mut self.sources,
                 registry.as_ref(),
                 &self.limits,
@@ -505,19 +501,17 @@ impl Engine {
             }
         }
 
-        let planning_result = crate::planning::plan(&self.documents, self.sources.clone());
-        for doc_result in &planning_result.per_document {
+        let planning_result = crate::planning::plan(&self.specs, self.sources.clone());
+        for spec_result in &planning_result.per_spec {
             self.execution_plans
-                .insert(Arc::clone(&doc_result.document), doc_result.plans.clone());
-            self.hash_pins.insert(
-                Arc::clone(&doc_result.document),
-                doc_result.hash_pin.clone(),
-            );
+                .insert(Arc::clone(&spec_result.spec), spec_result.plans.clone());
+            self.hash_pins
+                .insert(Arc::clone(&spec_result.spec), spec_result.hash_pin.clone());
         }
         errors.extend(planning_result.global_errors);
-        for doc_result in planning_result.per_document {
-            for err in doc_result.errors {
-                errors.push(err.with_document_context(Arc::clone(&doc_result.document)));
+        for spec_result in planning_result.per_spec {
+            for err in spec_result.errors {
+                errors.push(err.with_spec_context(Arc::clone(&spec_result.spec)));
             }
         }
 
@@ -528,25 +522,25 @@ impl Engine {
         }
     }
 
-    pub fn remove_document(&mut self, doc: Arc<LemmaDoc>) {
-        self.execution_plans.remove(&doc);
-        self.documents.remove_doc(&doc);
+    pub fn remove_spec(&mut self, spec: Arc<LemmaSpec>) {
+        self.execution_plans.remove(&spec);
+        self.specs.remove_spec(&spec);
     }
 
-    /// All documents, all temporal versions, ordered by (name, effective_from).
-    pub fn list_documents(&self) -> Vec<Arc<LemmaDoc>> {
-        self.documents.iter().collect()
+    /// All specs, all temporal versions, ordered by (name, effective_from).
+    pub fn list_specs(&self) -> Vec<Arc<LemmaSpec>> {
+        self.specs.iter().collect()
     }
 
-    /// Documents active at `effective` (one per name).
-    pub fn list_documents_effective(&self, effective: &DateTimeValue) -> Vec<Arc<LemmaDoc>> {
+    /// Specs active at `effective` (one per name).
+    pub fn list_specs_effective(&self, effective: &DateTimeValue) -> Vec<Arc<LemmaSpec>> {
         let mut seen_names = std::collections::HashSet::new();
         let mut result = Vec::new();
-        for doc in self.documents.iter() {
-            if seen_names.contains(&doc.name) {
+        for spec in self.specs.iter() {
+            if seen_names.contains(&spec.name) {
                 continue;
             }
-            if let Some(active) = self.documents.get_doc(&doc.name, effective) {
+            if let Some(active) = self.specs.get_spec(&spec.name, effective) {
                 if seen_names.insert(active.name.clone()) {
                     result.push(active);
                 }
@@ -556,41 +550,41 @@ impl Engine {
         result
     }
 
-    /// All temporal slice plans for a specific temporal version (of the main document).
+    /// All temporal slice plans for a specific temporal version (of the main spec).
     pub fn get_execution_plans(
         &self,
-        doc: &Arc<LemmaDoc>,
+        spec: &Arc<LemmaSpec>,
     ) -> Option<&[crate::planning::ExecutionPlan]> {
-        self.execution_plans.get(doc).map(|v| v.as_slice())
+        self.execution_plans.get(spec).map(|v| v.as_slice())
     }
 
-    /// Get document by name at a specific time.
-    pub fn get_document(
+    /// Get spec by name at a specific time.
+    pub fn get_spec(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         effective: &DateTimeValue,
-    ) -> Option<std::sync::Arc<LemmaDoc>> {
-        self.documents.get_doc(doc_name, effective)
+    ) -> Option<std::sync::Arc<LemmaSpec>> {
+        self.specs.get_spec(spec_name, effective)
     }
 
     /// Build a "not found" error that includes the effective date and lists
-    /// available temporal versions when the document name exists but no temporal version
+    /// available temporal versions when the spec name exists but no temporal version
     /// matches the requested time.
-    fn doc_not_found_error(&self, doc_name: &str, effective: &DateTimeValue) -> Error {
-        let versions = self.documents.docs_for_name(doc_name);
+    fn spec_not_found_error(&self, spec_name: &str, effective: &DateTimeValue) -> Error {
+        let versions = self.specs.specs_for_name(spec_name);
         let msg = if versions.is_empty() {
-            format!("Document '{}' not found", doc_name)
+            format!("Spec '{}' not found", spec_name)
         } else {
             let version_list: Vec<String> = versions
                 .iter()
-                .map(|d| match d.effective_from() {
-                    Some(dt) => format!("  {} (effective from {})", d.name, dt),
-                    None => format!("  {} (no effective_from)", d.name),
+                .map(|s| match s.effective_from() {
+                    Some(dt) => format!("  {} (effective from {})", s.name, dt),
+                    None => format!("  {} (no effective_from)", s.name),
                 })
                 .collect();
             format!(
-                "Document '{}' not found for effective {}. Available temporal versions:\n{}",
-                doc_name,
+                "Spec '{}' not found for effective {}. Available temporal versions:\n{}",
+                spec_name,
                 effective,
                 version_list.join("\n")
             )
@@ -598,69 +592,69 @@ impl Engine {
         Error::request(msg, None, None::<String>)
     }
 
-    /// Get the execution plan for a document.
+    /// Get the execution plan for a spec.
     ///
-    /// When `hash_pin` is `Some`, resolves the document by content hash for that name,
+    /// When `hash_pin` is `Some`, resolves the spec by content hash for that name,
     /// then returns the slice plan that covers `effective`. When `hash_pin` is `None`,
     /// resolves the temporal version active at `effective` then finds the covering slice plan.
-    /// Returns `None` when the document does not exist or has no matching plan.
+    /// Returns `None` when the spec does not exist or has no matching plan.
     pub fn get_execution_plan(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         hash_pin: Option<&str>,
         effective: &DateTimeValue,
     ) -> Option<&crate::planning::ExecutionPlan> {
         let arc = if let Some(pin) = hash_pin {
-            self.get_document_by_hash_pin(doc_name, pin)?
+            self.get_spec_by_hash_pin(spec_name, pin)?
         } else {
-            self.get_document(doc_name, effective)?
+            self.get_spec(spec_name, effective)?
         };
         let slice_plans = self.execution_plans.get(&arc)?;
         let plan = find_slice_plan(slice_plans, effective);
         if plan.is_none() && !slice_plans.is_empty() {
             unreachable!(
-                "BUG: document '{}' has {} slice plans but none covers effective={} — slice partition is broken",
-                doc_name, slice_plans.len(), effective
+                "BUG: spec '{}' has {} slice plans but none covers effective={} — slice partition is broken",
+                spec_name, slice_plans.len(), effective
             );
         }
         plan
     }
 
-    pub fn get_document_rules(
+    pub fn get_spec_rules(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         effective: &DateTimeValue,
     ) -> Result<Vec<crate::LemmaRule>, Error> {
         let arc = self
-            .get_document(doc_name, effective)
-            .ok_or_else(|| self.doc_not_found_error(doc_name, effective))?;
+            .get_spec(spec_name, effective)
+            .ok_or_else(|| self.spec_not_found_error(spec_name, effective))?;
         Ok(arc.rules.clone())
     }
 
-    /// Evaluate rules in a document with JSON values for facts.
+    /// Evaluate rules in a spec with JSON values for facts.
     ///
     /// This is a convenience method that accepts JSON directly and converts it
-    /// to typed values using the document's fact type declarations.
+    /// to typed values using the spec's fact type declarations.
     ///
     /// If `rule_names` is empty, evaluates all rules.
     /// Otherwise, only returns results for the specified rules (dependencies still computed).
     ///
     /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
-    /// They are automatically parsed to the expected type based on the document schema.
+    /// They are automatically parsed to the expected type based on the spec schema.
     ///
-    /// When `hash_pin` is `Some`, the document is resolved by that content hash; otherwise
+    /// When `hash_pin` is `Some`, the spec is resolved by that content hash; otherwise
     /// by temporal resolution at `effective`. Evaluation uses the resolved plan.
     pub fn evaluate_json(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         hash_pin: Option<&str>,
         effective: &DateTimeValue,
         rule_names: Vec<String>,
         json: &[u8],
     ) -> Result<Response, Error> {
         let base_plan = self
-            .get_execution_plan(doc_name, hash_pin, effective)
-            .ok_or_else(|| self.doc_not_found_error(doc_name, effective))?;
+            .get_execution_plan(spec_name, hash_pin, effective)
+            .ok_or_else(|| self.spec_not_found_error(spec_name, effective))?;
 
         let values = crate::serialization::from_json(json)?;
         let plan = base_plan.clone().with_fact_values(values, &self.limits)?;
@@ -668,31 +662,31 @@ impl Engine {
         self.evaluate_plan(plan, rule_names, effective)
     }
 
-    /// Evaluate rules in a document with string values for facts.
+    /// Evaluate rules in a spec with string values for facts.
     ///
     /// This is the user-friendly API that accepts raw string values and parses them
-    /// to the appropriate types based on the document's fact type declarations.
+    /// to the appropriate types based on the spec's fact type declarations.
     /// Use this for CLI, HTTP APIs, and other user-facing interfaces.
     ///
     /// If `rule_names` is empty, evaluates all rules.
     /// Otherwise, only returns results for the specified rules (dependencies still computed).
     ///
     /// Fact values are provided as name -> value string pairs (e.g., "type" -> "latte").
-    /// They are automatically parsed to the expected type based on the document schema.
+    /// They are automatically parsed to the expected type based on the spec schema.
     ///
-    /// When `hash_pin` is `Some`, the document is resolved by that content hash; otherwise
+    /// When `hash_pin` is `Some`, the spec is resolved by that content hash; otherwise
     /// by temporal resolution at `effective`. Evaluation uses the resolved plan.
     pub fn evaluate(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         hash_pin: Option<&str>,
         effective: &DateTimeValue,
         rule_names: Vec<String>,
         fact_values: HashMap<String, String>,
     ) -> Result<Response, Error> {
         let base_plan = self
-            .get_execution_plan(doc_name, hash_pin, effective)
-            .ok_or_else(|| self.doc_not_found_error(doc_name, effective))?;
+            .get_execution_plan(spec_name, hash_pin, effective)
+            .ok_or_else(|| self.spec_not_found_error(spec_name, effective))?;
 
         let plan = base_plan
             .clone()
@@ -704,34 +698,34 @@ impl Engine {
     /// Invert a rule to find input domains that produce a desired outcome with JSON values.
     ///
     /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
-    /// They are automatically parsed to the expected type based on the document schema.
+    /// They are automatically parsed to the expected type based on the spec schema.
     pub fn invert_json(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         effective: &DateTimeValue,
         rule_name: &str,
         target: crate::inversion::Target,
         json: &[u8],
     ) -> Result<crate::InversionResponse, Error> {
         let values = crate::serialization::from_json(json)?;
-        self.invert(doc_name, effective, rule_name, target, values)
+        self.invert(spec_name, effective, rule_name, target, values)
     }
 
     /// Invert a rule to find input domains that produce a desired outcome.
     ///
     /// Values are provided as name -> value string pairs (e.g., "quantity" -> "5").
-    /// They are automatically parsed to the expected type based on the document schema.
+    /// They are automatically parsed to the expected type based on the spec schema.
     pub fn invert(
         &self,
-        doc_name: &str,
+        spec_name: &str,
         effective: &DateTimeValue,
         rule_name: &str,
         target: crate::inversion::Target,
         values: HashMap<String, String>,
     ) -> Result<crate::InversionResponse, Error> {
         let base_plan = self
-            .get_execution_plan(doc_name, None, effective)
-            .ok_or_else(|| self.doc_not_found_error(doc_name, effective))?;
+            .get_execution_plan(spec_name, None, effective)
+            .ok_or_else(|| self.spec_not_found_error(spec_name, effective))?;
 
         let plan = base_plan.clone().with_fact_values(values, &self.limits)?;
         let provided_facts: std::collections::HashSet<_> = plan
@@ -784,14 +778,14 @@ mod tests {
         }
     }
 
-    fn make_doc(name: &str) -> LemmaDoc {
-        LemmaDoc::new(name.to_string())
+    fn make_spec(name: &str) -> LemmaSpec {
+        LemmaSpec::new(name.to_string())
     }
 
-    fn make_doc_with_range(name: &str, effective_from: Option<DateTimeValue>) -> LemmaDoc {
-        let mut doc = LemmaDoc::new(name.to_string());
-        doc.effective_from = effective_from;
-        doc
+    fn make_spec_with_range(name: &str, effective_from: Option<DateTimeValue>) -> LemmaSpec {
+        let mut spec = LemmaSpec::new(name.to_string());
+        spec.effective_from = effective_from;
+        spec
     }
 
     // ─── Context::effective_range tests ──────────────────────────────
@@ -799,10 +793,10 @@ mod tests {
     #[test]
     fn effective_range_unbounded_single_version() {
         let mut ctx = Context::new();
-        let doc = Arc::new(make_doc("a"));
-        ctx.insert_doc(Arc::clone(&doc)).unwrap();
+        let spec = Arc::new(make_spec("a"));
+        ctx.insert_spec(Arc::clone(&spec)).unwrap();
 
-        let (from, to) = ctx.effective_range(&doc);
+        let (from, to) = ctx.effective_range(&spec);
         assert_eq!(from, None);
         assert_eq!(to, None);
     }
@@ -810,10 +804,10 @@ mod tests {
     #[test]
     fn effective_range_soft_end_from_next_version() {
         let mut ctx = Context::new();
-        let v1 = Arc::new(make_doc_with_range("a", Some(date(2025, 1, 1))));
-        let v2 = Arc::new(make_doc_with_range("a", Some(date(2025, 6, 1))));
-        ctx.insert_doc(Arc::clone(&v1)).unwrap();
-        ctx.insert_doc(Arc::clone(&v2)).unwrap();
+        let v1 = Arc::new(make_spec_with_range("a", Some(date(2025, 1, 1))));
+        let v2 = Arc::new(make_spec_with_range("a", Some(date(2025, 6, 1))));
+        ctx.insert_spec(Arc::clone(&v1)).unwrap();
+        ctx.insert_spec(Arc::clone(&v2)).unwrap();
 
         let (from, to) = ctx.effective_range(&v1);
         assert_eq!(from, Some(date(2025, 1, 1)));
@@ -827,10 +821,10 @@ mod tests {
     #[test]
     fn effective_range_unbounded_start_with_successor() {
         let mut ctx = Context::new();
-        let v1 = Arc::new(make_doc("a"));
-        let v2 = Arc::new(make_doc_with_range("a", Some(date(2025, 3, 1))));
-        ctx.insert_doc(Arc::clone(&v1)).unwrap();
-        ctx.insert_doc(Arc::clone(&v2)).unwrap();
+        let v1 = Arc::new(make_spec("a"));
+        let v2 = Arc::new(make_spec_with_range("a", Some(date(2025, 3, 1))));
+        ctx.insert_spec(Arc::clone(&v1)).unwrap();
+        ctx.insert_spec(Arc::clone(&v2)).unwrap();
 
         let (from, to) = ctx.effective_range(&v1);
         assert_eq!(from, None);
@@ -842,7 +836,7 @@ mod tests {
     #[test]
     fn version_boundaries_single_unversioned() {
         let mut ctx = Context::new();
-        ctx.insert_doc(Arc::new(make_doc("a"))).unwrap();
+        ctx.insert_spec(Arc::new(make_spec("a"))).unwrap();
 
         assert!(ctx.version_boundaries("a").is_empty());
     }
@@ -850,10 +844,10 @@ mod tests {
     #[test]
     fn version_boundaries_multiple_versions() {
         let mut ctx = Context::new();
-        ctx.insert_doc(Arc::new(make_doc("a"))).unwrap();
-        ctx.insert_doc(Arc::new(make_doc_with_range("a", Some(date(2025, 3, 1)))))
+        ctx.insert_spec(Arc::new(make_spec("a"))).unwrap();
+        ctx.insert_spec(Arc::new(make_spec_with_range("a", Some(date(2025, 3, 1)))))
             .unwrap();
-        ctx.insert_doc(Arc::new(make_doc_with_range("a", Some(date(2025, 6, 1)))))
+        ctx.insert_spec(Arc::new(make_spec_with_range("a", Some(date(2025, 6, 1)))))
             .unwrap();
 
         let boundaries = ctx.version_boundaries("a");
@@ -879,7 +873,7 @@ mod tests {
     #[test]
     fn dep_coverage_single_unbounded_version_covers_everything() {
         let mut ctx = Context::new();
-        ctx.insert_doc(Arc::new(make_doc("dep"))).unwrap();
+        ctx.insert_spec(Arc::new(make_spec("dep"))).unwrap();
 
         let gaps = ctx.dep_coverage_gaps("dep", None, None);
         assert!(gaps.is_empty());
@@ -891,8 +885,11 @@ mod tests {
     #[test]
     fn dep_coverage_single_version_with_from_leaves_leading_gap() {
         let mut ctx = Context::new();
-        ctx.insert_doc(Arc::new(make_doc_with_range("dep", Some(date(2025, 3, 1)))))
-            .unwrap();
+        ctx.insert_spec(Arc::new(make_spec_with_range(
+            "dep",
+            Some(date(2025, 3, 1)),
+        )))
+        .unwrap();
 
         let gaps = ctx.dep_coverage_gaps("dep", None, None);
         assert_eq!(gaps, vec![(None, Some(date(2025, 3, 1)))]);
@@ -901,10 +898,16 @@ mod tests {
     #[test]
     fn dep_coverage_continuous_versions_no_gaps() {
         let mut ctx = Context::new();
-        ctx.insert_doc(Arc::new(make_doc_with_range("dep", Some(date(2025, 1, 1)))))
-            .unwrap();
-        ctx.insert_doc(Arc::new(make_doc_with_range("dep", Some(date(2025, 6, 1)))))
-            .unwrap();
+        ctx.insert_spec(Arc::new(make_spec_with_range(
+            "dep",
+            Some(date(2025, 1, 1)),
+        )))
+        .unwrap();
+        ctx.insert_spec(Arc::new(make_spec_with_range(
+            "dep",
+            Some(date(2025, 6, 1)),
+        )))
+        .unwrap();
 
         let gaps = ctx.dep_coverage_gaps("dep", Some(&date(2025, 1, 1)), Some(&date(2025, 12, 1)));
         assert!(gaps.is_empty());
@@ -913,8 +916,11 @@ mod tests {
     #[test]
     fn dep_coverage_dep_starts_after_required_start() {
         let mut ctx = Context::new();
-        ctx.insert_doc(Arc::new(make_doc_with_range("dep", Some(date(2025, 6, 1)))))
-            .unwrap();
+        ctx.insert_spec(Arc::new(make_spec_with_range(
+            "dep",
+            Some(date(2025, 6, 1)),
+        )))
+        .unwrap();
 
         let gaps = ctx.dep_coverage_gaps("dep", Some(&date(2025, 1, 1)), Some(&date(2025, 12, 1)));
         assert_eq!(gaps, vec![(Some(date(2025, 1, 1)), Some(date(2025, 6, 1)))]);
@@ -923,8 +929,11 @@ mod tests {
     #[test]
     fn dep_coverage_unbounded_required_range() {
         let mut ctx = Context::new();
-        ctx.insert_doc(Arc::new(make_doc_with_range("dep", Some(date(2025, 6, 1)))))
-            .unwrap();
+        ctx.insert_spec(Arc::new(make_spec_with_range(
+            "dep",
+            Some(date(2025, 6, 1)),
+        )))
+        .unwrap();
 
         let gaps = ctx.dep_coverage_gaps("dep", None, None);
         assert_eq!(gaps, vec![(None, Some(date(2025, 6, 1)))]);
@@ -943,12 +952,12 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_document_all_rules() {
+    fn test_evaluate_spec_all_rules() {
         let mut engine = Engine::new();
         add_lemma_code_blocking(
             &mut engine,
             r#"
-        doc test
+        spec test
         fact x: 10
         fact y: 5
         rule sum: x + y
@@ -995,7 +1004,7 @@ mod tests {
         add_lemma_code_blocking(
             &mut engine,
             r#"
-        doc test
+        spec test
         fact price: 100
         rule total: price * 2
     "#,
@@ -1022,7 +1031,7 @@ mod tests {
         add_lemma_code_blocking(
             &mut engine,
             r#"
-        doc test
+        spec test
         fact age: 25
         rule is_adult: age >= 18
     "#,
@@ -1046,7 +1055,7 @@ mod tests {
         add_lemma_code_blocking(
             &mut engine,
             r#"
-        doc test
+        spec test
         fact quantity: 15
         rule discount: 0
           unless quantity >= 10 then 10
@@ -1068,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn test_document_not_found() {
+    fn test_spec_not_found() {
         let engine = Engine::new();
         let now = DateTimeValue::now();
         let result = engine.evaluate("nonexistent", None, &now, vec![], HashMap::new());
@@ -1077,33 +1086,33 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_documents() {
+    fn test_multiple_specs() {
         let mut engine = Engine::new();
         add_lemma_code_blocking(
             &mut engine,
             r#"
-        doc doc1
+        spec spec1
         fact x: 10
         rule result: x * 2
     "#,
-            "doc1.lemma",
+            "spec 1.lemma",
         )
         .unwrap();
 
         add_lemma_code_blocking(
             &mut engine,
             r#"
-        doc doc2
+        spec spec2
         fact y: 5
         rule result: y * 3
     "#,
-            "doc2.lemma",
+            "spec 2.lemma",
         )
         .unwrap();
 
         let now = DateTimeValue::now();
         let response1 = engine
-            .evaluate("doc1", None, &now, vec![], HashMap::new())
+            .evaluate("spec1", None, &now, vec![], HashMap::new())
             .unwrap();
         assert_eq!(
             response1.results[0].result,
@@ -1113,7 +1122,7 @@ mod tests {
         );
 
         let response2 = engine
-            .evaluate("doc2", None, &now, vec![], HashMap::new())
+            .evaluate("spec2", None, &now, vec![], HashMap::new())
             .unwrap();
         assert_eq!(
             response2.results[0].result,
@@ -1129,7 +1138,7 @@ mod tests {
         add_lemma_code_blocking(
             &mut engine,
             r#"
-        doc test
+        spec test
         fact numerator: 10
         fact denominator: 0
         rule division: numerator / denominator
@@ -1172,7 +1181,7 @@ mod tests {
         add_lemma_code_blocking(
             &mut engine,
             r#"
-        doc test
+        spec test
         fact a: 1
         fact b: 2
         rule z: a + b
@@ -1228,7 +1237,7 @@ mod tests {
         add_lemma_code_blocking(
             &mut engine,
             r#"
-        doc test
+        spec test
         fact base: 100
         rule subtotal: base * 2
         rule tax: subtotal * 10%
@@ -1296,7 +1305,7 @@ mod tests {
     #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
     #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
     impl Registry for EngineTestRegistry {
-        async fn fetch_docs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+        async fn fetch_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             self.bundles.get(name).cloned().ok_or(RegistryError {
                 message: format!("not found: {}", name),
                 kind: crate::registry::RegistryErrorKind::NotFound,
@@ -1326,7 +1335,7 @@ mod tests {
     fn engine_without_registry() -> Engine {
         Engine {
             execution_plans: HashMap::new(),
-            documents: Context::new(),
+            specs: Context::new(),
             sources: HashMap::new(),
             evaluator: Evaluator,
             limits: ResourceLimits::default(),
@@ -1336,27 +1345,27 @@ mod tests {
     }
 
     #[test]
-    fn add_lemma_files_with_registry_resolves_and_evaluates_external_doc() {
+    fn add_lemma_files_with_registry_resolves_and_evaluates_external_spec() {
         let mut registry = EngineTestRegistry::new();
         registry.add(
             "org/project/helper",
-            "doc org/project/helper\nfact quantity: 42",
+            "spec org/project/helper\nfact quantity: 42",
         );
 
         let mut engine = engine_without_registry().with_registry(Arc::new(registry));
 
         add_lemma_code_blocking(
             &mut engine,
-            r#"doc main_doc
-fact external: doc @org/project/helper
+            r#"spec main_spec
+fact external: spec @org/project/helper
 rule value: external.quantity"#,
             "main.lemma",
         )
-        .expect("add_lemma_files should succeed with registry resolving the external doc");
+        .expect("add_lemma_files should succeed with registry resolving the external spec");
 
         let now = DateTimeValue::now();
         let response = engine
-            .evaluate("main_doc", None, &now, vec![], HashMap::new())
+            .evaluate("main_spec", None, &now, vec![], HashMap::new())
             .expect("evaluate should succeed");
 
         let value_result = response
@@ -1377,7 +1386,7 @@ rule value: external.quantity"#,
 
         add_lemma_code_blocking(
             &mut engine,
-            r#"doc local_only
+            r#"spec local_only
 fact price: 100
 rule doubled: price * 2"#,
             "local.lemma",
@@ -1400,8 +1409,8 @@ rule doubled: price * 2"#,
 
         let result = add_lemma_code_blocking(
             &mut engine,
-            r#"doc main_doc
-fact external: doc @org/project/missing
+            r#"spec main_spec
+fact external: spec @org/project/missing
 rule value: external.quantity"#,
             "main.lemma",
         );
@@ -1413,6 +1422,43 @@ rule value: external.quantity"#,
     }
 
     #[test]
+    fn add_lemma_files_with_registry_resolves_spec_and_type_refs() {
+        let mut registry = EngineTestRegistry::new();
+        registry.add(
+            "org/example/helper",
+            "spec org/example/helper\nfact value: 42",
+        );
+        registry.add(
+            "lemma/std/finance",
+            r#"spec lemma/std/finance
+type money: scale
+ -> unit eur 1.00
+ -> decimals 2"#,
+        );
+
+        let mut engine = engine_without_registry().with_registry(Arc::new(registry));
+
+        let main_content = r#"spec registry_demo
+type money from @lemma/std/finance
+fact unit_price: 5 eur
+fact helper: spec @org/example/helper
+rule helper_value: helper.value
+rule line_total: unit_price * 2
+rule formatted: helper_value + 0"#;
+
+        add_lemma_code_blocking(&mut engine, main_content, "main.lemma")
+            .expect("add_lemma_files with registry should resolve @ refs");
+
+        let now = DateTimeValue::now();
+        let response = engine
+            .evaluate("registry_demo", None, &now, vec![], HashMap::new())
+            .expect("evaluate should succeed");
+
+        assert!(response.results.contains_key("helper_value"));
+        assert!(response.results.contains_key("formatted"));
+    }
+
+    #[test]
     fn add_lemma_files_with_registry_error_propagates_as_registry_error() {
         // Empty registry — every lookup returns "not found"
         let registry = EngineTestRegistry::new();
@@ -1421,8 +1467,8 @@ rule value: external.quantity"#,
 
         let result = add_lemma_code_blocking(
             &mut engine,
-            r#"doc main_doc
-fact external: doc @org/project/missing
+            r#"spec main_spec
+fact external: spec @org/project/missing
 rule value: external.quantity"#,
             "main.lemma",
         );
@@ -1466,14 +1512,14 @@ rule value: external.quantity"#,
     #[test]
     fn with_registry_replaces_default_registry() {
         let mut registry = EngineTestRegistry::new();
-        registry.add("custom/doc", "doc custom/doc\nfact x: 99");
+        registry.add("custom/spec", "spec custom/spec\nfact x: 99");
 
         let mut engine = Engine::new().with_registry(Arc::new(registry));
 
         add_lemma_code_blocking(
             &mut engine,
-            r#"doc main_doc
-fact ext: doc @custom/doc
+            r#"spec main_spec
+fact ext: spec @custom/spec
 rule val: ext.x"#,
             "main.lemma",
         )
@@ -1481,7 +1527,7 @@ rule val: ext.x"#,
 
         let now = DateTimeValue::now();
         let response = engine
-            .evaluate("main_doc", None, &now, vec![], HashMap::new())
+            .evaluate("main_spec", None, &now, vec![], HashMap::new())
             .expect("evaluate should succeed");
 
         let val_result = response
@@ -1498,16 +1544,16 @@ rule val: ext.x"#,
 
     #[test]
     fn add_lemma_files_returns_all_errors_not_just_first() {
-        // When a document has multiple independent errors (type import from
-        // non-existing doc AND doc reference to non-existing doc), the Engine
+        // When a spec has multiple independent errors (type import from
+        // non-existing spec AND spec reference to non-existing spec), the Engine
         // should surface all of them, not just the first one.
         let mut engine = engine_without_registry();
 
         let result = add_lemma_code_blocking(
             &mut engine,
-            r#"doc demo
+            r#"spec demo
 type money from nonexistent_type_source
-fact helper: doc nonexistent_doc
+fact helper: spec nonexistent_spec
 fact price: 10
 rule total: helper.value + price"#,
             "test.lemma",
@@ -1517,7 +1563,7 @@ rule total: helper.value + price"#,
         let errs = result.unwrap_err();
         assert!(
             errs.len() >= 2,
-            "expected at least 2 errors (type + doc ref), got {}",
+            "expected at least 2 errors (type + spec ref), got {}",
             errs.len()
         );
         let error_message = errs
@@ -1532,8 +1578,8 @@ rule total: helper.value + price"#,
             error_message
         );
         assert!(
-            error_message.contains("nonexistent_doc"),
-            "Should mention doc reference error about 'nonexistent_doc'. Got:\n{}",
+            error_message.contains("nonexistent_spec"),
+            "Should mention spec reference error about 'nonexistent_spec'. Got:\n{}",
             error_message
         );
     }
@@ -1548,7 +1594,7 @@ rule total: helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x: [number -> default \"10 $$\"]\nrule r: x",
+            "spec t\nfact x: [number -> default \"10 $$\"]\nrule r: x",
             "t.lemma",
         );
         assert!(
@@ -1566,7 +1612,7 @@ rule total: helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x: [number -> default \"10\"]\nrule r: x",
+            "spec t\nfact x: [number -> default \"10\"]\nrule r: x",
             "t.lemma",
         );
         assert!(
@@ -1580,7 +1626,7 @@ rule total: helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x: [boolean -> default \"maybe\"]\nrule r: x",
+            "spec t\nfact x: [boolean -> default \"maybe\"]\nrule r: x",
             "t.lemma",
         );
         assert!(
@@ -1595,7 +1641,7 @@ rule total: helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\ntype custom: number -> minimum 0\nfact x: [custom -> default \"abc\"]\nrule r: x",
+            "spec t\ntype custom: number -> minimum 0\nfact x: [custom -> default \"abc\"]\nrule r: x",
             "t.lemma",
         );
         assert!(
@@ -1609,7 +1655,7 @@ rule total: helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x: [number -> default 10]\nrule r: x",
+            "spec t\nfact x: [number -> default 10]\nrule r: x",
             "t.lemma",
         );
         assert!(result.is_ok(), "must accept valid number default");
@@ -1620,7 +1666,7 @@ rule total: helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x: [boolean -> default true]\nrule r: x",
+            "spec t\nfact x: [boolean -> default true]\nrule r: x",
             "t.lemma",
         );
         assert!(result.is_ok(), "must accept valid boolean default");
@@ -1631,7 +1677,7 @@ rule total: helper.value + price"#,
         let mut engine = Engine::new();
         let result = add_lemma_code_blocking(
             &mut engine,
-            "doc t\nfact x: [text -> default \"hello\"]\nrule r: x",
+            "spec t\nfact x: [text -> default \"hello\"]\nrule r: x",
             "t.lemma",
         );
         assert!(result.is_ok(), "must accept valid text default");

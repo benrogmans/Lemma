@@ -6,9 +6,9 @@ use lemma::{DateTimeValue, Engine};
 fn test_meta_fields_parsing_and_planning() {
     let mut engine = Engine::new();
     let code = r#"
-doc meta_test 2025-01-01
+spec meta_test 2025-01-01
 
-meta title: "Test Document"
+meta title: "Test Spec"
 meta version: v1.2.3
 meta author: "Alice"
 
@@ -36,7 +36,7 @@ fact x: 1
     // Note: Display for Text literal is unquoted in Value::Display
     assert_eq!(
         plan.meta.get("title").map(|v| v.to_string()),
-        Some("Test Document".to_string())
+        Some("Test Spec".to_string())
     );
     assert_eq!(
         plan.meta.get("version").map(|v| v.to_string()),
@@ -52,7 +52,7 @@ fact x: 1
 fn test_meta_fields_validation_errors() {
     let mut engine = Engine::new();
     let code = r#"
-doc meta_error
+spec meta_error
 
 meta title: 123
 "#;
@@ -72,7 +72,7 @@ meta title: 123
 fn test_duplicate_meta_key() {
     let mut engine = Engine::new();
     let code = r#"
-doc meta_dup
+spec meta_dup
 
 meta title: "First"
 meta title: "Second"
@@ -90,24 +90,24 @@ meta title: "Second"
 }
 
 #[test]
-fn test_later_doc_version_can_evolve_interface() {
-    // With temporal slicing, later versions of a document CAN have different
+fn test_later_spec_version_can_evolve_interface() {
+    // With temporal slicing, later versions of a spec CAN have different
     // facts/rules. The constraint is per-dependent-per-slice, not global.
-    // Since no other document depends on pricing's "total" rule here, the
+    // Since no other spec depends on pricing's "total" rule here, the
     // second version without it is valid.
     let mut engine = Engine::new();
     let code = r#"
-doc pricing 2024-01-01
+spec pricing 2024-01-01
 fact x: 10
 rule total: x
 
-doc pricing 2025-01-01
+spec pricing 2025-01-01
 fact x: 20
 "#;
     let result = add_lemma_code_blocking(&mut engine, code, "pricing.lemma");
     assert!(
         result.is_ok(),
-        "later doc with different interface should be accepted when no dependent requires the old interface: {:?}",
+        "later spec with different interface should be accepted when no dependent requires the old interface: {:?}",
         result.err()
     );
 }

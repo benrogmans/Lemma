@@ -73,56 +73,56 @@ fact workweek: 40 hours
 rule workweek_days: workweek in days  // Converts to ~1.67 days
 ```
 
-## Document References
+## Spec References
 
-Reference other documents with `fact name: doc other_doc`. The document name is
+Reference other specs with `fact name: spec other_spec`. The spec name is
 **required**. You may optionally add a datetime (effective, for temporal version resolution) and/or a content
-hash for verification. Syntax: `doc name`, `doc name datetime`, `doc name datetime hash`,
-or `doc name hash`. A document name may carry an optional `.version_tag` suffix
-(document base names cannot contain a period).
+hash for verification. Syntax: `spec name`, `spec name datetime`, `spec name datetime hash`,
+or `spec name hash`. A spec name may carry an optional `.version_tag` suffix
+(spec base names cannot contain a period).
 
 ### Versioned names
 
 ```lemma
-doc pricing.v1
+spec pricing.v1
 fact base_price: 100 eur
 
-doc pricing.v2
+spec pricing.v2
 fact base_price: 120 eur
 
-doc order
-fact pricing: doc pricing.v1
+spec order
+fact pricing: spec pricing.v1
 rule total: pricing.base_price
 ```
 
-`doc pricing.v1` and `doc pricing.v2` are distinct documents; they do not share
+`spec pricing.v1` and `spec pricing.v2` are distinct specs; they do not share
 facts, rules, or state.
 
 ### Version resolution
 
-- A **versioned** reference (`doc pricing.v1`) resolves by exact match.
-- An **unversioned** reference (`doc pricing`) resolves to the document with the
-  highest version tag among all loaded documents with that base name, using
+- A **versioned** reference (`spec pricing.v1`) resolves by exact match.
+- An **unversioned** reference (`spec pricing`) resolves to the spec with the
+  highest version tag among all loaded specs with that base name, using
   natural sort order (numeric segments compared numerically, so `v10` > `v2`).
-  If only an unversioned document exists, it resolves to that.
+  If only an unversioned spec exists, it resolves to that.
 
 ### Temporal version resolution and content hash
 
-- **Datetime:** `fact x: doc pricing 2025` resolves the document as of 2025-01-01T00:00:00.
+- **Datetime:** `fact x: spec pricing 2025` resolves the spec as of 2025-01-01T00:00:00.
   Use when you need a specific temporal version (see temporal versioning).
-- **Content hash:** `fact x: doc pricing a1b2c3d4` or `fact x: doc pricing 2025 a1b2c3d4`
-  verifies that the resolved document’s content hash equals the given value (8 hex chars, e.g. `a1b2c3d4`).
+- **Content hash:** `fact x: spec pricing a1b2c3d4` or `fact x: spec pricing 2025 a1b2c3d4`
+  verifies that the resolved spec’s content hash equals the given value (8 hex chars, e.g. `a1b2c3d4`).
   Hash is **verification only**; resolution is always by (name, effective). Mismatch ⇒ validation error.
-  Compute the hash with `lemma hash <doc> [--effective T]`.
+  Compute the hash with `lemma hash <spec> [--effective T]`.
 
 ### Self-reference restriction
 
-A document cannot reference any temporal version of itself (same base name). This is a
+A spec cannot reference any temporal version of itself (same base name). This is a
 semantic error caught during planning:
 
 ```lemma
-doc pricing.v2
-fact old: doc pricing.v1
+spec pricing.v2
+fact old: spec pricing.v1
 ```
 
 ### Version tag syntax
@@ -135,7 +135,7 @@ and `.` — for example `v1`, `v2`, `1.2.3`, `rc.1`, `2024-01`. Document base na
 Registry references use the `@` prefix and also support version tags:
 
 ```lemma
-fact finance: doc @lemma/std/finance.v2
+fact finance: spec @lemma/std/finance.v2
 type money from @lemma/std/finance.v2
 ```
 
@@ -205,7 +205,7 @@ type money: scale
 
 ### Type Imports
 
-Import types from other documents:
+Import types from other specs:
 
 ```lemma
 type currency from base_types

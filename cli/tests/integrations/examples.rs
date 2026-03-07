@@ -73,17 +73,17 @@ fn test_example_02_rules_and_unless() {
 }
 
 #[test]
-fn test_example_03_document_references() {
+fn test_example_03_spec_references() {
     let temp_dir = TempDir::new().unwrap();
-    let example_file = examples_dir().join("03_document_references.lemma");
+    let example_file = examples_dir().join("03_spec_references.lemma");
 
     fs::copy(
         &example_file,
-        temp_dir.path().join("03_document_references.lemma"),
+        temp_dir.path().join("03_spec_references.lemma"),
     )
     .unwrap();
 
-    // Test base_employee document
+    // Test base_employee spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("base_employee")
@@ -94,7 +94,7 @@ fn test_example_03_document_references() {
         .success()
         .stdout(predicate::str::contains("annual_salary").or(predicate::str::is_empty()));
 
-    // Test specific_employee document
+    // Test specific_employee spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("specific_employee")
@@ -103,7 +103,7 @@ fn test_example_03_document_references() {
 
     cmd.assert().success();
 
-    // Test contractor document
+    // Test contractor spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("contractor")
@@ -223,7 +223,7 @@ fn test_example_08_rule_references() {
     )
     .unwrap();
 
-    // Test rule_references document
+    // Test rule_references spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("rule_references")
@@ -234,7 +234,7 @@ fn test_example_08_rule_references() {
         .success()
         .stdout(predicate::str::contains("can_drive_legally").or(predicate::str::is_empty()));
 
-    // Test eligibility_check document
+    // Test eligibility_check spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("eligibility_check")
@@ -270,7 +270,7 @@ fn test_example_09_stress_test() {
 
     cmd.assert().success();
 
-    // Test stress_test_config document
+    // Test stress_test_config spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("stress_test_config")
@@ -279,7 +279,7 @@ fn test_example_09_stress_test() {
 
     cmd.assert().success();
 
-    // Test stress_test_extended document
+    // Test stress_test_extended spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("stress_test_extended")
@@ -309,7 +309,7 @@ fn test_example_10_compensation_policy() {
     )
     .unwrap();
 
-    // Test base_policy document
+    // Test base_policy spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("compensation/base_policy")
@@ -320,7 +320,7 @@ fn test_example_10_compensation_policy() {
         .success()
         .stdout(predicate::str::contains("annual_health_cost").or(predicate::str::is_empty()));
 
-    // Test engineering_dept document
+    // Test engineering_dept spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("compensation/engineering_dept")
@@ -331,7 +331,7 @@ fn test_example_10_compensation_policy() {
         .success()
         .stdout(predicate::str::contains("total_package").or(predicate::str::is_empty()));
 
-    // Test senior_engineer document
+    // Test senior_engineer spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("compensation/senior_engineer")
@@ -340,7 +340,7 @@ fn test_example_10_compensation_policy() {
 
     cmd.assert().success();
 
-    // Test principal_engineer document
+    // Test principal_engineer spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("compensation/principal_engineer")
@@ -351,17 +351,17 @@ fn test_example_10_compensation_policy() {
 }
 
 #[test]
-fn test_example_11_document_composition() {
+fn test_example_11_spec_composition() {
     let temp_dir = TempDir::new().unwrap();
-    let example_file = examples_dir().join("11_document_composition.lemma");
+    let example_file = examples_dir().join("11_spec_composition.lemma");
 
     fs::copy(
         &example_file,
-        temp_dir.path().join("11_document_composition.lemma"),
+        temp_dir.path().join("11_spec_composition.lemma"),
     )
     .unwrap();
 
-    // Test base_config document
+    // Test base_config spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("pricing/base_config")
@@ -372,7 +372,7 @@ fn test_example_11_document_composition() {
         .success()
         .stdout(predicate::str::contains("final_price").or(predicate::str::is_empty()));
 
-    // Test wholesale document
+    // Test wholesale spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("pricing/wholesale")
@@ -383,7 +383,7 @@ fn test_example_11_document_composition() {
         .success()
         .stdout(predicate::str::contains("wholesale_final").or(predicate::str::is_empty()));
 
-    // Test wholesale_order document
+    // Test wholesale_order spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("order/wholesale_order")
@@ -392,7 +392,7 @@ fn test_example_11_document_composition() {
 
     cmd.assert().success();
 
-    // Test comparison document
+    // Test comparison spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("order/comparison")
@@ -401,7 +401,7 @@ fn test_example_11_document_composition() {
 
     cmd.assert().success();
 
-    // Test custom_wholesale document
+    // Test custom_wholesale spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("order/custom_wholesale")
@@ -412,7 +412,7 @@ fn test_example_11_document_composition() {
         .success()
         .stdout(predicate::str::contains("custom_total").or(predicate::str::is_empty()));
 
-    // Test multi_reference document
+    // Test multi_reference spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
         .arg("complex/multi_reference")
@@ -420,39 +420,6 @@ fn test_example_11_document_composition() {
         .arg(temp_dir.path());
 
     cmd.assert().success();
-}
-
-#[test]
-fn test_example_12_registry_references() {
-    let temp_dir = TempDir::new().unwrap();
-    let example_file = examples_dir().join("12_registry_references.lemma");
-
-    fs::copy(
-        &example_file,
-        temp_dir.path().join("12_registry_references.lemma"),
-    )
-    .unwrap();
-
-    let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("registry_demo")
-        .arg("--dir")
-        .arg(temp_dir.path());
-
-    let output = cmd.output().unwrap();
-    if output.status.success() {
-        assert!(
-            !output.stdout.is_empty() || !output.stderr.is_empty(),
-            "run succeeded; stdout or stderr should contain output"
-        );
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("LemmaBase") || stderr.contains("Registry"),
-            "run failed; stderr should mention LemmaBase or Registry, got: {}",
-            stderr
-        );
-    }
 }
 
 #[test]

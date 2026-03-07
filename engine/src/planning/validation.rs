@@ -1,9 +1,9 @@
-//! Semantic validation for Lemma documents
+//! Semantic validation for Lemma specs
 //!
-//! Validates document structure and type declarations
+//! Validates spec structure and type declarations
 //! to catch errors early with clear messages.
 
-use crate::parsing::ast::{DateTimeValue, LemmaDoc, TimeValue};
+use crate::parsing::ast::{DateTimeValue, LemmaSpec, TimeValue};
 use crate::planning::semantics::{
     Expression, ExpressionKind, FactPath, LemmaType, RulePath, SemanticConversionTarget,
     TypeSpecification,
@@ -598,10 +598,10 @@ fn compare_time_values(left: &TimeValue, right: &TimeValue) -> Ordering {
 }
 
 // -----------------------------------------------------------------------------
-// Document interface validation (required rule names + rule result types)
+// Spec interface validation (required rule names + rule result types)
 // -----------------------------------------------------------------------------
 
-/// Rule data needed to validate document interfaces (avoids validation depending on graph).
+/// Rule data needed to validate spec interfaces (avoids validation depending on graph).
 pub struct RuleEntryForBindingCheck {
     pub rule_type: LemmaType,
     pub depends_on_rules: std::collections::BTreeSet<RulePath>,
@@ -622,7 +622,7 @@ enum ExpectedRuleTypeConstraint {
 }
 
 /// Map a rule's result type to the strictest ExpectedRuleTypeConstraint it satisfies,
-/// for document interface type checking.
+/// for spec interface type checking.
 fn lemma_type_to_expected_constraint(lemma_type: &LemmaType) -> ExpectedRuleTypeConstraint {
     if lemma_type.is_boolean() {
         return ExpectedRuleTypeConstraint::Boolean;
@@ -786,30 +786,30 @@ fn expected_constraint_name(c: ExpectedRuleTypeConstraint) -> &'static str {
     }
 }
 
-fn document_interface_error(
+fn spec_interface_error(
     source: &Source,
     message: impl Into<String>,
-    related_doc: Option<Arc<LemmaDoc>>,
+    related_spec: Option<Arc<LemmaSpec>>,
 ) -> Error {
     Error::validation_with_context(
         message.into(),
         Some(source.clone()),
         None::<String>,
-        related_doc,
+        related_spec,
     )
 }
 
-/// Validate that every doc-ref fact path's referenced document has the required rules
+/// Validate that every spec-ref fact path's referenced spec has the required rules
 /// and that each such rule's result type satisfies what the referencing rules expect.
-/// Type errors are reported at the binding fact's source when a binding changed the doc ref.
-pub fn validate_document_interfaces(
+/// Type errors are reported at the binding fact's source when a binding changed the spec ref.
+pub fn validate_spec_interfaces(
     referenced_rules: &HashMap<Vec<String>, HashSet<String>>,
-    doc_ref_facts: &[(FactPath, Arc<LemmaDoc>, Source)],
+    spec_ref_facts: &[(FactPath, Arc<LemmaSpec>, Source)],
     rule_entries: &IndexMap<RulePath, RuleEntryForBindingCheck>,
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
 
-    for (fact_path, doc_arc, fact_source) in doc_ref_facts {
+    for (fact_path, spec_arc, fact_source) in spec_ref_facts {
         let mut full_path: Vec<String> =
             fact_path.segments.iter().map(|s| s.fact.clone()).collect();
         full_path.push(fact_path.fact.clone());
@@ -818,18 +818,18 @@ pub fn validate_document_interfaces(
             continue;
         };
 
-        let doc = doc_arc.as_ref();
-        let doc_rule_names: HashSet<&str> = doc.rules.iter().map(|r| r.name.as_str()).collect();
+        let spec = spec_arc.as_ref();
+        let spec_rule_names: HashSet<&str> = spec.rules.iter().map(|r| r.name.as_str()).collect();
 
         for required_rule in required_rules {
-            if !doc_rule_names.contains(required_rule.as_str()) {
-                errors.push(document_interface_error(
+            if !spec_rule_names.contains(required_rule.as_str()) {
+                errors.push(spec_interface_error(
                     fact_source,
                     format!(
-                        "Document '{}' referenced by '{}' is missing required rule '{}'",
-                        doc.name, fact_path, required_rule
+                        "Spec '{}' referenced by '{}' is missing required rule '{}'",
+                        spec.name, fact_path, required_rule
                     ),
-                    Some(Arc::clone(doc_arc)),
+                    Some(Arc::clone(spec_arc)),
                 ));
                 continue;
             }
@@ -867,17 +867,17 @@ pub fn validate_document_interfaces(
                                 format!("{}.{}", binding_path_str, fact_path.fact)
                             };
 
-                            errors.push(document_interface_error(
+                            errors.push(spec_interface_error(
                                 report_source,
                                 format!(
-                                    "Fact binding '{}' sets document reference to '{}', but that document's rule '{}' has result type {}; the referencing expression expects a {} value",
+                                    "Fact binding '{}' sets spec reference to '{}', but that spec's rule '{}' has result type {}; the referencing expression expects a {} value",
                                     binding_path_str,
-                                    doc.name,
+                                    spec.name,
                                     required_rule,
                                     ref_rule_type.name(),
                                     expected_constraint_name(constraint),
                                 ),
-                                Some(Arc::clone(doc_arc)),
+                                Some(Arc::clone(spec_arc)),
                             ));
                         }
                     }
@@ -901,7 +901,7 @@ mod tests {
     use rust_decimal::Decimal;
     use std::sync::Arc;
 
-    fn test_source(doc_name: &str) -> Source {
+    fn test_source(spec_name: &str) -> Source {
         Source::new(
             "<test>",
             crate::parsing::ast::Span {
@@ -910,8 +910,8 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            doc_name,
-            Arc::from("doc test\nfact x: 1"),
+            spec_name,
+            Arc::from("spec test\nfact x: 1"),
         )
     }
 
@@ -1150,11 +1150,11 @@ mod tests {
         // This test now validates that type specification validation works correctly.
         // The actual validation happens during graph building, but we test the validation
         // function directly here.
-        use crate::parsing::ast::{LemmaDoc, TypeDef};
+        use crate::parsing::ast::{LemmaSpec, TypeDef};
         use crate::planning::types::TypeResolver;
         use std::sync::Arc;
 
-        let doc = Arc::new(LemmaDoc::new("test".to_string()));
+        let spec = Arc::new(LemmaSpec::new("test".to_string()));
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
                 "<test>",
@@ -1165,7 +1165,7 @@ mod tests {
                     col: 0,
                 },
                 "test",
-                Arc::from("doc test\nfact x: 1"),
+                Arc::from("spec test\nfact x: 1"),
             ),
             name: "invalid_money".to_string(),
             parent: "number".to_string(),
@@ -1186,10 +1186,10 @@ mod tests {
         sources.insert("<test>".to_string(), String::new());
         let mut type_resolver = TypeResolver::new();
         type_resolver
-            .register_type(&doc, type_def)
+            .register_type(&spec, type_def)
             .expect("Should register type");
         let resolved_types = type_resolver
-            .resolve_named_types(&doc)
+            .resolve_named_types(&spec)
             .expect("Should resolve types");
 
         // Validate the specifications

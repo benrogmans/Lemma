@@ -20,15 +20,16 @@ fn byte_offset_to_position(text: &str, byte_offset: usize) -> Position {
         }
     }
 
-    // Compute column as UTF-16 code units from line start to the offset.
-    // LSP specifies columns as UTF-16 code unit offsets.
-    let line_slice = &text[line_start_byte..clamped_offset];
-    let utf16_column: u32 = line_slice.encode_utf16().count() as u32;
+    // If offset points at a newline, treat as start of next line (LSP convention for spans that start at newline).
+    let (line, character) =
+        if clamped_offset < text.len() && text.as_bytes()[clamped_offset] == b'\n' {
+            (line + 1, 0)
+        } else {
+            let line_slice = &text[line_start_byte..clamped_offset];
+            (line, line_slice.encode_utf16().count() as u32)
+        };
 
-    Position {
-        line,
-        character: utf16_column,
-    }
+    Position { line, character }
 }
 
 /// Convert a Lemma Span (byte offsets) to an LSP Range using the editor buffer text.
@@ -44,7 +45,7 @@ fn span_to_range(text: &str, start_byte: usize, end_byte: usize) -> Range {
     }
 }
 
-/// A safe default range anchored at the first character of the document.
+/// A safe default range anchored at the first character of the spec.
 ///
 /// Used for errors that have no specific source span (e.g. ResourceLimitExceeded).
 fn default_range() -> Range {
@@ -200,7 +201,7 @@ mod tests {
 
     #[test]
     fn span_to_range_single_line() {
-        let text = "doc test\nfact x: 10";
+        let text = "spec test\nfact x: 10";
         let range = span_to_range(text, 9, 20);
         assert_eq!(range.start.line, 1);
         assert_eq!(range.start.character, 0);
@@ -210,7 +211,7 @@ mod tests {
 
     #[test]
     fn span_to_range_multiline() {
-        let text = "doc test\nfact x: 10\nrule y: 20";
+        let text = "spec test\nfact x: 10\nrule y: 20";
         let range = span_to_range(text, 9, 32);
         assert_eq!(range.start.line, 1);
         assert_eq!(range.start.character, 0);
@@ -225,17 +226,17 @@ mod tests {
             limit_value: "100".to_string(),
             actual_value: "200".to_string(),
             suggestion: "fix a".to_string(),
-            document_context: None,
+            spec_context: None,
         };
         let error2 = Error::ResourceLimitExceeded {
             limit_name: "limit_b".to_string(),
             limit_value: "50".to_string(),
             actual_value: "75".to_string(),
             suggestion: "fix b".to_string(),
-            document_context: None,
+            spec_context: None,
         };
         let diagnostics =
-            errors_to_diagnostics(&[error1, error2], "doc test\nfact x: 10", "test.lemma");
+            errors_to_diagnostics(&[error1, error2], "spec test\nfact x: 10", "test.lemma");
         assert_eq!(diagnostics.len(), 2);
     }
 
@@ -255,7 +256,7 @@ mod tests {
                     col: 1,
                 },
                 "test",
-                Arc::from("doc test"),
+                Arc::from("spec test"),
             )),
             None::<String>,
         );
@@ -270,12 +271,12 @@ mod tests {
                     col: 1,
                 },
                 "other",
-                Arc::from("doc other"),
+                Arc::from("spec other"),
             )),
             None::<String>,
         );
 
-        let text = "doc test";
+        let text = "spec test";
         let diagnostics =
             errors_to_diagnostics(&[error_in_file, error_in_other_file], text, "file_a.lemma");
         assert_eq!(diagnostics.len(), 1);

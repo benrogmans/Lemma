@@ -8,7 +8,7 @@ use std::collections::HashMap;
 #[test]
 fn premium_greater_than_or_equal() {
     let code = r#"
-        doc insurance
+        spec insurance
         fact age: [number]
 
         rule premium: 100
@@ -57,7 +57,7 @@ fn premium_greater_than_or_equal() {
 #[test]
 fn discount_greater_than_threshold() {
     let code = r#"
-        doc pricing
+        spec pricing
         fact quantity: [number]
 
         rule discount: 0%
@@ -109,7 +109,7 @@ fn discount_greater_than_threshold() {
 #[test]
 fn price_less_than_budget() {
     let code = r#"
-        doc shopping
+        spec shopping
         fact base_price: [number]
         fact quantity: [number]
 
@@ -150,7 +150,7 @@ fn price_less_than_budget() {
 #[test]
 fn temperature_in_comfortable_range() {
     let code = r#"
-        doc climate
+        spec climate
         fact temp: [number]
 
         rule comfort_level: 0
@@ -197,7 +197,7 @@ fn temperature_in_comfortable_range() {
 fn get_valid_domain_with_threshold() {
     // Use case: "What order sizes are eligible for free shipping?"
     let code = r#"
-        doc shipping
+        spec shipping
         fact order_total: [number]
 
         rule shipping_cost: 5
@@ -241,7 +241,7 @@ fn get_valid_domain_with_threshold() {
 #[test]
 fn all_comparison_operators() {
     let code = r#"
-        doc test
+        spec test
         fact x: [number]
 
         rule result: x * 2

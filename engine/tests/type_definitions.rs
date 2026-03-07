@@ -8,15 +8,15 @@ use std::collections::HashMap;
 fn test_type_system_with_imports_and_extensions() {
     let mut engine = Engine::new();
 
-    let age_doc = r#"
-doc age
+    let age_spec = r#"
+spec age
 type age: number
   -> minimum 0
   -> maximum 150
 "#;
 
-    let test_types_doc = r#"
-doc test_types
+    let test_types_spec = r#"
+spec test_types
 
 type age from age
 
@@ -30,8 +30,8 @@ fact twenties: [adult_age -> maximum 30]
 rule total: age + adult_age + twenties
 "#;
 
-    add_lemma_code_blocking(&mut engine, age_doc, "age.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, test_types_doc, "test_types.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, age_spec, "age.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, test_types_spec, "test_types.lemma").unwrap();
     let now = DateTimeValue::now();
 
     let mut facts = HashMap::new();
@@ -43,7 +43,7 @@ rule total: age + adult_age + twenties
         .evaluate("test_types", None, &now, vec![], facts)
         .expect("Evaluation failed");
 
-    assert_eq!(response.doc_name, "test_types");
+    assert_eq!(response.spec_name, "test_types");
 
     let total_rule = response
         .results
@@ -65,7 +65,7 @@ fn test_scale_type_default_before_unit_declarations() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc pricing
+        spec pricing
         type money: scale
           -> default 4 eur
           -> unit eur 1
@@ -94,7 +94,7 @@ fn test_scale_type_default_after_unit_declarations() {
     add_lemma_code_blocking(
         &mut engine,
         r#"
-        doc pricing
+        spec pricing
         type money: scale
           -> unit eur 1
           -> unit usd 1.19

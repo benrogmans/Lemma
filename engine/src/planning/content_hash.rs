@@ -1,10 +1,10 @@
-//! Content hashing for LemmaDoc. Knows how to canonically serialize a doc
+//! Content hashing for LemmaSpec. Knows how to canonically serialize a spec
 //! into bytes and produce an 8-char hex hash. Does NOT traverse graphs.
 
 use crate::parsing::ast::{
     ArithmeticComputation, BooleanValue, CalendarUnit, CommandArg, ComparisonComputation,
     ConversionTarget, DateCalendarKind, DateRelativeKind, DurationUnit, ExpressionKind, FactValue,
-    LemmaDoc, LemmaFact, LemmaRule, MathematicalComputation, MetaField, MetaValue, NegationType,
+    LemmaFact, LemmaRule, LemmaSpec, MathematicalComputation, MetaField, MetaValue, NegationType,
     Reference, TypeDef, UnlessClause, Value,
 };
 use sha2::{Digest, Sha256};
@@ -32,15 +32,15 @@ pub fn hash_with_deps(primary: &[u8], dep_hashes: &[String]) -> String {
     finalize_to_hex(&hasher.finalize())
 }
 
-/// Hash a LemmaDoc with its resolved dependency hashes.
+/// Hash a LemmaSpec with its resolved dependency hashes.
 ///
-/// Serializes the doc's semantic content (name, commentary, meta, types, facts,
+/// Serializes the spec's semantic content (name, commentary, meta, types, facts,
 /// rules) in sorted, deterministic order. Excludes editor metadata (attribute,
 /// start_line, source_location) and hash pins (resolution instructions, not content).
 /// Dependency content flows through `dep_hashes`, not inline serialization.
-pub fn hash_doc(doc: &LemmaDoc, dep_hashes: &[String]) -> String {
+pub fn hash_spec(spec: &LemmaSpec, dep_hashes: &[String]) -> String {
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
-    write_doc_canonical(&mut buf, doc);
+    write_spec_canonical(&mut buf, spec);
     hash_with_deps(&buf, dep_hashes)
 }
 
@@ -53,24 +53,24 @@ fn finalize_to_hex(digest: &[u8]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Canonical serialization — deterministic byte representation of a LemmaDoc
+// Canonical serialization — deterministic byte representation of a LemmaSpec
 // ---------------------------------------------------------------------------
 
 fn w(buf: &mut Vec<u8>, s: &str) {
     let _ = buf.write_all(s.as_bytes());
 }
 
-fn write_doc_canonical(buf: &mut Vec<u8>, doc: &LemmaDoc) {
-    w(buf, "doc:");
-    w(buf, &doc.name);
+fn write_spec_canonical(buf: &mut Vec<u8>, spec: &LemmaSpec) {
+    w(buf, "spec:");
+    w(buf, &spec.name);
 
-    if let Some(ref c) = doc.commentary {
+    if let Some(ref c) = spec.commentary {
         w(buf, "\ncommentary:");
         w(buf, c);
     }
 
     // Meta fields sorted by key for determinism
-    let mut metas: Vec<&MetaField> = doc.meta_fields.iter().collect();
+    let mut metas: Vec<&MetaField> = spec.meta_fields.iter().collect();
     metas.sort_by(|a, b| a.key.cmp(&b.key));
     for m in metas {
         w(buf, "\nmeta:");
@@ -80,7 +80,7 @@ fn write_doc_canonical(buf: &mut Vec<u8>, doc: &LemmaDoc) {
     }
 
     // Types sorted by name
-    let mut types: Vec<&TypeDef> = doc.types.iter().collect();
+    let mut types: Vec<&TypeDef> = spec.types.iter().collect();
     types.sort_by(|a, b| a.name().cmp(b.name()));
     for t in types {
         w(buf, "\ntype:");
@@ -88,7 +88,7 @@ fn write_doc_canonical(buf: &mut Vec<u8>, doc: &LemmaDoc) {
     }
 
     // Facts sorted by reference display
-    let mut facts: Vec<&LemmaFact> = doc.facts.iter().collect();
+    let mut facts: Vec<&LemmaFact> = spec.facts.iter().collect();
     facts.sort_by(|a, b| ref_sort_key(&a.reference).cmp(&ref_sort_key(&b.reference)));
     for f in facts {
         w(buf, "\nfact:");
@@ -98,7 +98,7 @@ fn write_doc_canonical(buf: &mut Vec<u8>, doc: &LemmaDoc) {
     }
 
     // Rules sorted by name
-    let mut rules: Vec<&LemmaRule> = doc.rules.iter().collect();
+    let mut rules: Vec<&LemmaRule> = spec.rules.iter().collect();
     rules.sort_by(|a, b| a.name.cmp(&b.name));
     for r in rules {
         w(buf, "\nrule:");
@@ -162,9 +162,9 @@ fn write_type_def(buf: &mut Vec<u8>, td: &TypeDef) {
             write_reference(buf, fact_ref);
             w(buf, ":");
             w(buf, parent);
-            if let Some(doc_ref) = from {
+            if let Some(spec_ref) = from {
                 w(buf, ":from:");
-                w(buf, &doc_ref.name);
+                w(buf, &spec_ref.name);
             }
             if let Some(cs) = constraints {
                 write_constraints(buf, cs);
@@ -208,10 +208,10 @@ fn write_command_arg(buf: &mut Vec<u8>, arg: &CommandArg) {
 fn write_fact_value(buf: &mut Vec<u8>, fv: &FactValue) {
     match fv {
         FactValue::Literal(val) => write_value(buf, val),
-        FactValue::DocumentReference(doc_ref) => {
+        FactValue::SpecReference(spec_ref) => {
             // Hash pin excluded: it's a resolution instruction, not content
-            w(buf, "docref:");
-            w(buf, &doc_ref.name);
+            w(buf, "specref:");
+            w(buf, &spec_ref.name);
         }
         FactValue::TypeDeclaration {
             base,
@@ -220,9 +220,9 @@ fn write_fact_value(buf: &mut Vec<u8>, fv: &FactValue) {
         } => {
             w(buf, "typedecl:");
             w(buf, base);
-            if let Some(doc_ref) = from {
+            if let Some(spec_ref) = from {
                 w(buf, ":from:");
-                w(buf, &doc_ref.name);
+                w(buf, &spec_ref.name);
             }
             if let Some(cs) = constraints {
                 write_constraints(buf, cs);
@@ -524,77 +524,77 @@ mod tests {
     }
 
     #[test]
-    fn hash_doc_is_deterministic() {
-        let doc = make_test_doc();
-        let h1 = hash_doc(&doc, &[]);
-        let h2 = hash_doc(&doc, &[]);
+    fn hash_spec_is_deterministic() {
+        let spec = make_test_spec();
+        let h1 = hash_spec(&spec, &[]);
+        let h2 = hash_spec(&spec, &[]);
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), HASH_HEX_LEN);
     }
 
     #[test]
-    fn hash_doc_changes_with_name() {
-        let d1 = make_test_doc();
-        let mut d2 = make_test_doc();
+    fn hash_spec_changes_with_name() {
+        let d1 = make_test_spec();
+        let mut d2 = make_test_spec();
         d2.name = "other".to_string();
-        assert_ne!(hash_doc(&d1, &[]), hash_doc(&d2, &[]));
+        assert_ne!(hash_spec(&d1, &[]), hash_spec(&d2, &[]));
     }
 
     #[test]
-    fn hash_doc_changes_with_dep_hashes() {
-        let doc = make_test_doc();
-        let h1 = hash_doc(&doc, &[]);
-        let h2 = hash_doc(&doc, &["abcdef01".to_string()]);
+    fn hash_spec_changes_with_dep_hashes() {
+        let spec = make_test_spec();
+        let h1 = hash_spec(&spec, &[]);
+        let h2 = hash_spec(&spec, &["abcdef01".to_string()]);
         assert_ne!(h1, h2);
     }
 
     #[test]
-    fn hash_doc_fact_order_irrelevant() {
-        let mut d1 = make_test_doc();
+    fn hash_spec_fact_order_irrelevant() {
+        let mut d1 = make_test_spec();
         d1.facts = vec![
             make_fact("alpha", Value::Number(Decimal::new(1, 0))),
             make_fact("beta", Value::Number(Decimal::new(2, 0))),
         ];
-        let mut d2 = make_test_doc();
+        let mut d2 = make_test_spec();
         d2.facts = vec![
             make_fact("beta", Value::Number(Decimal::new(2, 0))),
             make_fact("alpha", Value::Number(Decimal::new(1, 0))),
         ];
-        assert_eq!(hash_doc(&d1, &[]), hash_doc(&d2, &[]));
+        assert_eq!(hash_spec(&d1, &[]), hash_spec(&d2, &[]));
     }
 
     #[test]
-    fn hash_doc_rule_order_irrelevant() {
-        let mut d1 = make_test_doc();
+    fn hash_spec_rule_order_irrelevant() {
+        let mut d1 = make_test_spec();
         d1.rules = vec![make_rule("x", 10), make_rule("y", 20)];
-        let mut d2 = make_test_doc();
+        let mut d2 = make_test_spec();
         d2.rules = vec![make_rule("y", 20), make_rule("x", 10)];
-        assert_eq!(hash_doc(&d1, &[]), hash_doc(&d2, &[]));
+        assert_eq!(hash_spec(&d1, &[]), hash_spec(&d2, &[]));
     }
 
     #[test]
-    fn hash_doc_different_values_differ() {
-        let mut d1 = make_test_doc();
+    fn hash_spec_different_values_differ() {
+        let mut d1 = make_test_spec();
         d1.facts = vec![make_fact("x", Value::Number(Decimal::new(1, 0)))];
-        let mut d2 = make_test_doc();
+        let mut d2 = make_test_spec();
         d2.facts = vec![make_fact("x", Value::Number(Decimal::new(2, 0)))];
-        assert_ne!(hash_doc(&d1, &[]), hash_doc(&d2, &[]));
+        assert_ne!(hash_spec(&d1, &[]), hash_spec(&d2, &[]));
     }
 
     #[test]
-    fn hash_doc_commentary_affects_hash() {
-        let mut d1 = make_test_doc();
+    fn hash_spec_commentary_affects_hash() {
+        let mut d1 = make_test_spec();
         d1.commentary = None;
-        let mut d2 = make_test_doc();
+        let mut d2 = make_test_spec();
         d2.commentary = Some("important note".to_string());
-        assert_ne!(hash_doc(&d1, &[]), hash_doc(&d2, &[]));
+        assert_ne!(hash_spec(&d1, &[]), hash_spec(&d2, &[]));
     }
 
-    fn make_test_doc() -> LemmaDoc {
-        let mut doc = LemmaDoc::new("test".to_string());
-        doc.facts = vec![make_fact("price", Value::Number(Decimal::new(100, 0)))];
-        doc.rules = vec![make_rule("total", 100)];
-        doc
+    fn make_test_spec() -> LemmaSpec {
+        let mut spec = LemmaSpec::new("test".to_string());
+        spec.facts = vec![make_fact("price", Value::Number(Decimal::new(100, 0)))];
+        spec.rules = vec![make_rule("total", 100)];
+        spec
     }
 
     fn make_fact(name: &str, value: Value) -> LemmaFact {

@@ -1,7 +1,7 @@
 //! Registry for the Language Server.
 //!
-//! Uses the engine's LemmaBase on both native and WASM: document links (`url_for_id`)
-//! and resolution (`fetch_docs`, `fetch_types`) work in the browser via fetch.
+//! Uses the engine's LemmaBase on both native and WASM: registry/spec links (`url_for_id`)
+//! and resolution (`fetch_specs`, `fetch_types`) work in the browser via fetch.
 
 pub use lemma::registry::Registry;
 pub use lemma::LemmaBase;

@@ -1,9 +1,9 @@
-doc premium_membership
+spec premium_membership
 """
 Premium Membership Benefits
 
 Defines the benefits for premium members.
-This document can be referenced by other documents.
+This spec can be referenced by other specs.
 """
 
 type discount_ratio: ratio
@@ -19,17 +19,17 @@ rule points_multiplier: 1.5
 rule monthly_bonus_points: 100
 
 
-doc membership_benefits
+spec membership_benefits
 """
 Membership Benefits
 
-Shows how documents can reference other documents.
+Shows how specs can reference other specs.
 Membership levels have different benefits.
 """
 
 fact monthly_spend: [number -> minimum 0 -> default 150]
 
-fact membership: doc premium_membership
+fact membership: spec premium_membership
 
 rule discount: monthly_spend * membership.discount_rate
 rule shipping_cost: 10

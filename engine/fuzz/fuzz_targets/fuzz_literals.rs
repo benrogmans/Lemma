@@ -9,7 +9,7 @@ fuzz_target!(|data: &[u8]| {
         let mut engine = Engine::new();
         
         let code = format!(r#"
-doc fuzz_test
+spec fuzz_test
 fact test_value: {}
 "#, s);
         

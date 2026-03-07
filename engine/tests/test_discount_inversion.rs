@@ -9,7 +9,7 @@ use std::collections::HashMap;
 fn discount_multiple_paths_to_same_value() {
     // Use type annotations [text] to make facts free variables for inversion
     let code = r#"
-        doc shop
+        spec shop
         fact discount_code: [text]
         fact member_level: [text]
 

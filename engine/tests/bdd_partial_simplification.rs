@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 #[test]
 fn bdd_partial_simplification_on_large_expression() {
-    // Build a document with many unless branches (discount_code and tag_i) to stress BDD/solver.
-    let mut code = String::from("doc shop_partial\n\nfact discount_code: [text]\n");
+    // Build a spec with many unless branches (discount_code and tag_i) to stress BDD/solver.
+    let mut code = String::from("spec shop_partial\n\nfact discount_code: [text]\n");
 
     let n_extra = 20;
     for i in 1..=n_extra {

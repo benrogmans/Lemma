@@ -1,4 +1,4 @@
-doc compensation/base_policy
+spec compensation/base_policy
 """
 Corporate Base Compensation Policy
 Foundation for all employee compensation
@@ -26,7 +26,7 @@ rule effective_cola:
   unless cost_of_living_adjustment > 10% then 10%
 
 
-doc compensation/engineering_dept
+spec compensation/engineering_dept
 """
 Engineering Department Compensation Rules
 Inherits base policy with engineering-specific bindings
@@ -37,7 +37,7 @@ fact level_multiplier:   [number -> minimum 0 -> default 1.0]
 fact performance_rating: [number -> minimum 0 -> maximum 5 -> default 0.0]
 fact years_of_service:   [number -> minimum 0 -> default 0]
 
-fact policy:                           doc compensation/base_policy
+fact policy:                           spec compensation/base_policy
 fact policy.bonus_pool_percentage:     15%
 fact policy.cost_of_living_adjustment: 3%
 fact policy.stock_grant_percentage:    5%
@@ -90,7 +90,7 @@ rule total_package:
   total_comp_with_stock + benefits_value
 
 
-doc compensation/senior_engineer
+spec compensation/senior_engineer
 """
 Senior Engineer (Level 3) - Specific Employee
 Multiple inheritance levels testing
@@ -100,7 +100,7 @@ fact employee_name: "Alex van der Berg"
 fact location:      "Amsterdam"
 fact location_cola: 15%
 
-fact eng_policy:                    doc compensation/engineering_dept
+fact eng_policy:                    spec compensation/engineering_dept
 fact eng_policy.level_multiplier:   2.5
 fact eng_policy.performance_rating: 4.2
 fact eng_policy.years_of_service:   7
@@ -152,7 +152,7 @@ rule performance_category:
   unless perf_rating >= 4.5 then "Exceptional"
 
 
-doc compensation/principal_engineer
+spec compensation/principal_engineer
 """
 Principal Engineer (Level 5) - Maximum complexity test
 Tests deep inheritance and complex calculations
@@ -166,7 +166,7 @@ fact manages_team:       true
 fact on_call_rotation:   true
 fact team_size:          [number -> minimum 0 -> default 15]
 
-fact eng_policy:                               doc compensation/engineering_dept
+fact eng_policy:                               spec compensation/engineering_dept
 fact eng_policy.level_multiplier:              4.5
 fact eng_policy.performance_rating:            4.8
 fact eng_policy.policy.bonus_pool_percentage:  20%

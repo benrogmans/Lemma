@@ -1,23 +1,23 @@
 //! Type registry for managing custom type definitions and resolution
 //!
 //! This module provides the `TypeResolver` (formerly TypeRegistry) which handles:
-//! - Registering user-defined types for each document
+//! - Registering user-defined types for each spec
 //! - Resolving type hierarchies and inheritance chains
 //! - Detecting and preventing circular dependencies
 //! - Applying constraints to create final type specifications
 
 use crate::error::Error;
-use crate::parsing::ast::{self as ast, CommandArg, LemmaDoc, Reference, TypeDef};
+use crate::parsing::ast::{self as ast, CommandArg, LemmaSpec, Reference, TypeDef};
 use crate::planning::semantics::{self, LemmaType, TypeExtends, TypeSpecification};
 use crate::planning::validation::validate_type_specifications;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Fully resolved types for a single document
-/// After resolution, all imports are inlined - documents are independent
+/// Fully resolved types for a single spec
+/// After resolution, all imports are inlined - specs are independent
 #[derive(Debug, Clone)]
-pub struct ResolvedDocumentTypes {
+pub struct ResolvedSpecTypes {
     /// Named types: type_name -> fully resolved type
     pub named_types: HashMap<String, LemmaType>,
 
@@ -31,15 +31,15 @@ pub struct ResolvedDocumentTypes {
 
 /// Registry for managing and resolving custom types
 ///
-/// Types are organized per document (keyed by Arc<LemmaDoc>) and support inheritance through parent references.
+/// Types are organized per spec (keyed by Arc<LemmaSpec>) and support inheritance through parent references.
 /// The registry handles cycle detection and accumulates constraints through the inheritance chain.
-/// name_to_arc maps base document name to the earliest Arc for that name (by effective_from) for cross-doc resolution.
+/// name_to_arc maps base spec name to the earliest Arc for that name (by effective_from) for cross-spec resolution.
 #[derive(Debug, Clone)]
 pub struct TypeResolver {
-    named_types: HashMap<Arc<LemmaDoc>, HashMap<String, TypeDef>>,
-    inline_type_definitions: HashMap<Arc<LemmaDoc>, HashMap<Reference, TypeDef>>,
-    /// Earliest doc Arc per base name, for cross-document type resolution.
-    name_to_arc: HashMap<String, Arc<LemmaDoc>>,
+    named_types: HashMap<Arc<LemmaSpec>, HashMap<String, TypeDef>>,
+    inline_type_definitions: HashMap<Arc<LemmaSpec>, HashMap<Reference, TypeDef>>,
+    /// Earliest spec Arc per base name, for cross-spec type resolution.
+    name_to_arc: HashMap<String, Arc<LemmaSpec>>,
 }
 
 impl TypeResolver {
@@ -51,10 +51,10 @@ impl TypeResolver {
         }
     }
 
-    /// Register all named types from a document (skips inline types).
-    pub fn register_all(&mut self, doc: &Arc<LemmaDoc>) -> Vec<Error> {
+    /// Register all named types from a spec (skips inline types).
+    pub fn register_all(&mut self, spec: &Arc<LemmaSpec>) -> Vec<Error> {
         let mut errors = Vec::new();
-        for type_def in &doc.types {
+        for type_def in &spec.types {
             let type_name = match type_def {
                 ast::TypeDef::Regular { name, .. } | ast::TypeDef::Import { name, .. } => {
                     Some(name.as_str())
@@ -71,29 +71,29 @@ impl TypeResolver {
                     continue;
                 }
             }
-            if let Err(e) = self.register_type(doc, type_def.clone()) {
+            if let Err(e) = self.register_type(spec, type_def.clone()) {
                 errors.push(e);
             }
         }
         errors
     }
 
-    /// Resolve all named types for every doc and validate their specifications.
-    /// Produces an entry for every doc (even those without named types) because
-    /// every doc needs a unit_index containing at least the primitive ratio units.
+    /// Resolve all named types for every spec and validate their specifications.
+    /// Produces an entry for every spec (even those without named types) because
+    /// every spec needs a unit_index containing at least the primitive ratio units.
     pub fn resolve(
         &self,
-        all_docs: impl IntoIterator<Item = Arc<LemmaDoc>>,
-    ) -> (HashMap<Arc<LemmaDoc>, ResolvedDocumentTypes>, Vec<Error>) {
+        all_specs: impl IntoIterator<Item = Arc<LemmaSpec>>,
+    ) -> (HashMap<Arc<LemmaSpec>, ResolvedSpecTypes>, Vec<Error>) {
         let mut result = HashMap::new();
         let mut errors = Vec::new();
 
-        for doc_arc in all_docs {
-            let doc_arc = &doc_arc;
-            match self.resolve_named_types(doc_arc) {
-                Ok(document_types) => {
-                    for (type_name, lemma_type) in &document_types.named_types {
-                        let source = doc_arc
+        for spec_arc in all_specs {
+            let spec_arc = &spec_arc;
+            match self.resolve_named_types(spec_arc) {
+                Ok(resolved_types) => {
+                    for (type_name, lemma_type) in &resolved_types.named_types {
+                        let source = spec_arc
                             .types
                             .iter()
                             .find(|td| match td {
@@ -104,8 +104,8 @@ impl TypeResolver {
                             .map(|td| td.source_location().clone())
                             .unwrap_or_else(|| {
                                 unreachable!(
-                                    "BUG: resolved named type '{}' has no corresponding TypeDef in document '{}'",
-                                    type_name, doc_arc.name
+                                    "BUG: resolved named type '{}' has no corresponding TypeDef in spec '{}'",
+                                    type_name, spec_arc.name
                                 )
                             });
                         let mut spec_errors = validate_type_specifications(
@@ -115,7 +115,7 @@ impl TypeResolver {
                         );
                         errors.append(&mut spec_errors);
                     }
-                    result.insert(Arc::clone(doc_arc), document_types);
+                    result.insert(Arc::clone(spec_arc), resolved_types);
                 }
                 Err(es) => errors.extend(es),
             }
@@ -124,82 +124,79 @@ impl TypeResolver {
         (result, errors)
     }
 
-    /// Register a user-defined type for a given document (keyed by Arc<LemmaDoc>).
-    /// Updates name_to_arc to keep the earliest doc per base name for cross-doc resolution.
-    pub fn register_type(&mut self, doc: &Arc<LemmaDoc>, def: TypeDef) -> Result<(), Error> {
+    /// Register a user-defined type for a given spec (keyed by Arc<LemmaSpec>).
+    /// Updates name_to_arc to keep the earliest spec per base name for cross-spec resolution.
+    pub fn register_type(&mut self, spec: &Arc<LemmaSpec>, def: TypeDef) -> Result<(), Error> {
         self.name_to_arc
-            .entry(doc.name.clone())
+            .entry(spec.name.clone())
             .and_modify(|existing| {
-                if doc.effective_from() < existing.effective_from() {
-                    *existing = Arc::clone(doc);
+                if spec.effective_from() < existing.effective_from() {
+                    *existing = Arc::clone(spec);
                 }
             })
-            .or_insert_with(|| Arc::clone(doc));
+            .or_insert_with(|| Arc::clone(spec));
 
         let def_loc = def.source_location().clone();
-        let doc_name = &doc.name;
+        let spec_name = &spec.name;
         match &def {
             TypeDef::Regular { name, .. } | TypeDef::Import { name, .. } => {
-                let doc_types = self.named_types.entry(Arc::clone(doc)).or_default();
-                if doc_types.contains_key(name) {
+                let spec_types = self.named_types.entry(Arc::clone(spec)).or_default();
+                if spec_types.contains_key(name) {
                     return Err(Error::validation(
-                        format!(
-                            "Type '{}' is already defined in document '{}'",
-                            name, doc_name
-                        ),
+                        format!("Type '{}' is already defined in spec '{}'", name, spec_name),
                         Some(def_loc.clone()),
                         None::<String>,
                     ));
                 }
-                doc_types.insert(name.clone(), def);
+                spec_types.insert(name.clone(), def);
             }
             TypeDef::Inline { fact_ref, .. } => {
-                let doc_inline_types = self
+                let spec_inline_types = self
                     .inline_type_definitions
-                    .entry(Arc::clone(doc))
+                    .entry(Arc::clone(spec))
                     .or_default();
-                if doc_inline_types.contains_key(fact_ref) {
+                if spec_inline_types.contains_key(fact_ref) {
                     return Err(Error::validation(
                         format!(
-                            "Inline type definition for fact '{}' is already defined in document '{}'",
-                            fact_ref.name, doc_name
+                            "Inline type definition for fact '{}' is already defined in spec '{}'",
+                            fact_ref.name, spec_name
                         ),
                         Some(def_loc.clone()),
                         None::<String>,
                     ));
                 }
-                doc_inline_types.insert(fact_ref.clone(), def);
+                spec_inline_types.insert(fact_ref.clone(), def);
             }
         }
         Ok(())
     }
 
-    /// Resolve all types for a certain document (keyed by Arc<LemmaDoc>).
-    pub fn resolve_types(&self, doc: &Arc<LemmaDoc>) -> Result<ResolvedDocumentTypes, Vec<Error>> {
-        self.resolve_types_internal(doc, true)
+    /// Resolve all types for a certain spec (keyed by Arc<LemmaSpec>).
+    pub fn resolve_types(&self, spec: &Arc<LemmaSpec>) -> Result<ResolvedSpecTypes, Vec<Error>> {
+        self.resolve_types_internal(spec, true)
     }
 
     /// Resolve only named types (for validation before inline type definitions are registered).
     pub fn resolve_named_types(
         &self,
-        doc: &Arc<LemmaDoc>,
-    ) -> Result<ResolvedDocumentTypes, Vec<Error>> {
-        self.resolve_types_internal(doc, false)
+        spec: &Arc<LemmaSpec>,
+    ) -> Result<ResolvedSpecTypes, Vec<Error>> {
+        self.resolve_types_internal(spec, false)
     }
 
     /// Resolve only inline type definitions and merge them into an existing
-    /// `ResolvedDocumentTypes` that already contains the named types.
+    /// `ResolvedSpecTypes` that already contains the named types.
     pub fn resolve_inline_types(
         &self,
-        doc: &Arc<LemmaDoc>,
-        mut existing: ResolvedDocumentTypes,
-    ) -> Result<ResolvedDocumentTypes, Vec<Error>> {
+        spec: &Arc<LemmaSpec>,
+        mut existing: ResolvedSpecTypes,
+    ) -> Result<ResolvedSpecTypes, Vec<Error>> {
         let mut errors = Vec::new();
 
-        if let Some(doc_inline_types) = self.inline_type_definitions.get(doc) {
-            for (fact_ref, type_def) in doc_inline_types {
+        if let Some(spec_inline_types) = self.inline_type_definitions.get(spec) {
+            for (fact_ref, type_def) in spec_inline_types {
                 let mut visited = HashSet::new();
-                match self.resolve_inline_type_definition(doc, type_def, &mut visited) {
+                match self.resolve_inline_type_definition(spec, type_def, &mut visited) {
                     Ok(Some(resolved_type)) => {
                         existing
                             .inline_type_definitions
@@ -207,8 +204,8 @@ impl TypeResolver {
                     }
                     Ok(None) => {
                         unreachable!(
-                            "BUG: registered inline type definition for fact '{}' could not be resolved (doc='{}')",
-                            fact_ref, doc.name
+                            "BUG: registered inline type definition for fact '{}' could not be resolved (spec='{}')",
+                            fact_ref, spec.name
                         );
                     }
                     Err(es) => return Err(es),
@@ -217,19 +214,19 @@ impl TypeResolver {
         }
 
         for (fact_ref, resolved_type) in &existing.inline_type_definitions {
-            let inline_type_name = format!("{}::{}", doc.name, fact_ref);
+            let inline_type_name = format!("{}::{}", spec.name, fact_ref);
             let e: Result<(), Error> = if resolved_type.is_scale() {
                 self.add_scale_units_to_index(
                     &mut existing.unit_index,
                     resolved_type,
-                    doc,
+                    spec,
                     &inline_type_name,
                 )
             } else if resolved_type.is_ratio() {
                 self.add_ratio_units_to_index(
                     &mut existing.unit_index,
                     resolved_type,
-                    doc,
+                    spec,
                     &inline_type_name,
                 )
             } else {
@@ -249,23 +246,23 @@ impl TypeResolver {
 
     fn resolve_types_internal(
         &self,
-        doc: &Arc<LemmaDoc>,
+        spec: &Arc<LemmaSpec>,
         include_anonymous: bool,
-    ) -> Result<ResolvedDocumentTypes, Vec<Error>> {
+    ) -> Result<ResolvedSpecTypes, Vec<Error>> {
         let mut named_types = HashMap::new();
         let mut inline_type_definitions = HashMap::new();
         let mut visited = HashSet::new();
 
-        if let Some(doc_types) = self.named_types.get(doc) {
-            for type_name in doc_types.keys() {
-                match self.resolve_type_internal(doc, type_name, &mut visited) {
+        if let Some(spec_types) = self.named_types.get(spec) {
+            for type_name in spec_types.keys() {
+                match self.resolve_type_internal(spec, type_name, &mut visited) {
                     Ok(Some(resolved_type)) => {
                         named_types.insert(type_name.clone(), resolved_type);
                     }
                     Ok(None) => {
                         unreachable!(
-                            "BUG: registered named type '{}' could not be resolved (doc='{}')",
-                            type_name, doc.name
+                            "BUG: registered named type '{}' could not be resolved (spec='{}')",
+                            type_name, spec.name
                         );
                     }
                     Err(es) => return Err(es),
@@ -275,17 +272,17 @@ impl TypeResolver {
         }
 
         if include_anonymous {
-            if let Some(doc_inline_types) = self.inline_type_definitions.get(doc) {
-                for (fact_ref, type_def) in doc_inline_types {
+            if let Some(spec_inline_types) = self.inline_type_definitions.get(spec) {
+                for (fact_ref, type_def) in spec_inline_types {
                     let mut visited = HashSet::new();
-                    match self.resolve_inline_type_definition(doc, type_def, &mut visited) {
+                    match self.resolve_inline_type_definition(spec, type_def, &mut visited) {
                         Ok(Some(resolved_type)) => {
                             inline_type_definitions.insert(fact_ref.clone(), resolved_type);
                         }
                         Ok(None) => {
                             unreachable!(
-                                "BUG: registered inline type definition for fact '{}' could not be resolved (doc='{}')",
-                                fact_ref, doc.name
+                                "BUG: registered inline type definition for fact '{}' could not be resolved (spec='{}')",
+                                fact_ref, spec.name
                             );
                         }
                         Err(es) => return Err(es),
@@ -294,14 +291,14 @@ impl TypeResolver {
             }
         }
 
-        // Build unit index from types that have units (primitive types first, then document types)
+        // Build unit index from types that have units (primitive types first, then spec types)
         let mut unit_index: HashMap<String, LemmaType> = HashMap::new();
         let mut errors = Vec::new();
 
         if let Err(error) = self.add_ratio_units_to_index(
             &mut unit_index,
             semantics::primitive_ratio(),
-            doc,
+            spec,
             "ratio",
         ) {
             errors.push(error);
@@ -311,9 +308,9 @@ impl TypeResolver {
         for resolved_type in named_types.values() {
             let type_name = resolved_type.name.as_deref().unwrap_or("inline");
             let e: Result<(), Error> = if resolved_type.is_scale() {
-                self.add_scale_units_to_index(&mut unit_index, resolved_type, doc, type_name)
+                self.add_scale_units_to_index(&mut unit_index, resolved_type, spec, type_name)
             } else if resolved_type.is_ratio() {
-                self.add_ratio_units_to_index(&mut unit_index, resolved_type, doc, type_name)
+                self.add_ratio_units_to_index(&mut unit_index, resolved_type, spec, type_name)
             } else {
                 Ok(())
             };
@@ -324,19 +321,19 @@ impl TypeResolver {
 
         // Add units from inline type definitions (collect all errors)
         for (fact_ref, resolved_type) in &inline_type_definitions {
-            let inline_type_name = format!("{}::{}", doc.name, fact_ref);
+            let inline_type_name = format!("{}::{}", spec.name, fact_ref);
             let e: Result<(), Error> = if resolved_type.is_scale() {
                 self.add_scale_units_to_index(
                     &mut unit_index,
                     resolved_type,
-                    doc,
+                    spec,
                     &inline_type_name,
                 )
             } else if resolved_type.is_ratio() {
                 self.add_ratio_units_to_index(
                     &mut unit_index,
                     resolved_type,
-                    doc,
+                    spec,
                     &inline_type_name,
                 )
             } else {
@@ -351,7 +348,7 @@ impl TypeResolver {
             return Err(errors);
         }
 
-        Ok(ResolvedDocumentTypes {
+        Ok(ResolvedSpecTypes {
             named_types,
             inline_type_definitions,
             unit_index,
@@ -360,21 +357,21 @@ impl TypeResolver {
 
     fn resolve_type_internal(
         &self,
-        doc: &Arc<LemmaDoc>,
+        spec: &Arc<LemmaSpec>,
         name: &str,
         visited: &mut HashSet<String>,
     ) -> Result<Option<LemmaType>, Vec<Error>> {
-        let key = format!("{}::{}", doc.name, name);
+        let key = format!("{}::{}", spec.name, name);
         if visited.contains(&key) {
             let source_location = self
                 .named_types
-                .get(doc)
+                .get(spec)
                 .and_then(|dt| dt.get(name))
                 .map(|td| td.source_location().clone())
                 .unwrap_or_else(|| {
                     unreachable!(
                         "BUG: circular dependency detected for type '{}::{}' but type definition not found in registry",
-                        doc.name, name
+                        spec.name, name
                     )
                 });
             return Err(vec![Error::validation(
@@ -385,7 +382,7 @@ impl TypeResolver {
         }
         visited.insert(key.clone());
 
-        let type_def = match self.named_types.get(doc).and_then(|dt| dt.get(name)) {
+        let type_def = match self.named_types.get(spec).and_then(|dt| dt.get(name)) {
             Some(def) => def.clone(),
             None => {
                 visited.remove(&key);
@@ -421,7 +418,7 @@ impl TypeResolver {
         };
 
         let parent_specs = match self.resolve_parent(
-            doc,
+            spec,
             &parent,
             &from,
             visited,
@@ -462,11 +459,11 @@ impl TypeResolver {
         let extends = if self.resolve_primitive_type(&parent).is_some() {
             TypeExtends::Primitive
         } else {
-            let parent_doc_name = from
+            let parent_spec_name = from
                 .as_ref()
                 .map(|r| r.name.as_str())
-                .unwrap_or(doc.name.as_str());
-            let parent_arc = self.name_to_arc.get(parent_doc_name);
+                .unwrap_or(spec.name.as_str());
+            let parent_arc = self.name_to_arc.get(parent_spec_name);
             let family = match parent_arc {
                 Some(arc) => match self.resolve_type_internal(arc, &parent, visited) {
                     Ok(Some(parent_type)) => parent_type
@@ -493,9 +490,9 @@ impl TypeResolver {
 
     fn resolve_parent(
         &self,
-        doc: &Arc<LemmaDoc>,
+        spec: &Arc<LemmaSpec>,
         parent: &str,
-        from: &Option<crate::parsing::ast::DocRef>,
+        from: &Option<crate::parsing::ast::SpecRef>,
         visited: &mut HashSet<String>,
         source: &crate::Source,
     ) -> Result<Option<TypeSpecification>, Vec<Error>> {
@@ -503,11 +500,11 @@ impl TypeResolver {
             return Ok(Some(specs));
         }
 
-        let parent_doc_name = from
+        let parent_spec_name = from
             .as_ref()
             .map(|r| r.name.as_str())
-            .unwrap_or(doc.name.as_str());
-        let parent_arc = self.name_to_arc.get(parent_doc_name);
+            .unwrap_or(spec.name.as_str());
+        let parent_arc = self.name_to_arc.get(parent_spec_name);
         let result = match parent_arc {
             Some(arc) => self.resolve_type_internal(arc, parent, visited),
             None => Ok(None),
@@ -517,7 +514,7 @@ impl TypeResolver {
             Ok(None) => {
                 let type_exists = parent_arc
                     .and_then(|arc| self.named_types.get(arc))
-                    .map(|doc_types| doc_types.contains_key(parent))
+                    .map(|spec_types| spec_types.contains_key(parent))
                     .unwrap_or(false);
 
                 if !type_exists {
@@ -581,7 +578,7 @@ impl TypeResolver {
 
     fn resolve_inline_type_definition(
         &self,
-        doc: &Arc<LemmaDoc>,
+        spec: &Arc<LemmaSpec>,
         type_def: &TypeDef,
         visited: &mut HashSet<String>,
     ) -> Result<Option<LemmaType>, Vec<Error>> {
@@ -597,7 +594,7 @@ impl TypeResolver {
             return Ok(None);
         };
 
-        let parent_specs = match self.resolve_parent(doc, parent, from, visited, &def_loc) {
+        let parent_specs = match self.resolve_parent(spec, parent, from, visited, &def_loc) {
             Ok(Some(specs)) => specs,
             Ok(None) => {
                 return Err(vec![Error::validation(
@@ -618,11 +615,11 @@ impl TypeResolver {
         let extends = if self.resolve_primitive_type(parent).is_some() {
             TypeExtends::Primitive
         } else {
-            let parent_doc_name = from
+            let parent_spec_name = from
                 .as_ref()
                 .map(|r| r.name.as_str())
-                .unwrap_or(doc.name.as_str());
-            let family = match self.name_to_arc.get(parent_doc_name) {
+                .unwrap_or(spec.name.as_str());
+            let family = match self.name_to_arc.get(parent_spec_name) {
                 Some(arc) => match self.resolve_type_internal(arc, parent, visited) {
                     Ok(Some(parent_type)) => parent_type
                         .scale_family_name()
@@ -646,7 +643,7 @@ impl TypeResolver {
         &self,
         unit_index: &mut HashMap<String, LemmaType>,
         resolved_type: &LemmaType,
-        doc: &Arc<LemmaDoc>,
+        spec: &Arc<LemmaSpec>,
         type_name: &str,
     ) -> Result<(), Error> {
         let units = self.extract_units_from_specs(&resolved_type.specifications);
@@ -658,7 +655,7 @@ impl TypeResolver {
                 if same_type {
                     let source = self
                         .named_types
-                        .get(doc)
+                        .get(spec)
                         .and_then(|defs| defs.get(type_name))
                         .map(|def| def.source_location().clone())
                         .expect("BUG: named type definition must have source location");
@@ -701,15 +698,15 @@ impl TypeResolver {
 
                 let source = self
                     .named_types
-                    .get(doc)
+                    .get(spec)
                     .and_then(|defs| defs.get(type_name))
                     .map(|def| def.source_location().clone())
                     .expect("BUG: named type definition must have source location");
 
                 return Err(Error::validation(
                     format!(
-                        "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
-                        unit, doc.name, existing_name, type_name
+                        "Ambiguous unit '{}' in spec '{}'. Defined in multiple types: {} and {}",
+                        unit, spec.name, existing_name, type_name
                     ),
                     Some(source.clone()),
                     None::<String>,
@@ -724,7 +721,7 @@ impl TypeResolver {
         &self,
         unit_index: &mut HashMap<String, LemmaType>,
         resolved_type: &LemmaType,
-        doc: &Arc<LemmaDoc>,
+        spec: &Arc<LemmaSpec>,
         type_name: &str,
     ) -> Result<(), Error> {
         let units = self.extract_units_from_specs(&resolved_type.specifications);
@@ -736,15 +733,15 @@ impl TypeResolver {
                 let existing_name = existing_type.name.as_deref().unwrap_or("inline");
                 let source = self
                     .named_types
-                    .get(doc)
+                    .get(spec)
                     .and_then(|defs| defs.get(type_name))
                     .map(|def| def.source_location().clone())
                     .expect("BUG: named type definition must have source location");
 
                 return Err(Error::validation(
                     format!(
-                        "Ambiguous unit '{}' in document '{}'. Defined in multiple types: {} and {}",
-                        unit, doc.name, existing_name, type_name
+                        "Ambiguous unit '{}' in spec '{}'. Defined in multiple types: {} and {}",
+                        unit, spec.name, existing_name, type_name
                     ),
                     Some(source.clone()),
                     None::<String>,
@@ -780,7 +777,7 @@ impl Default for TypeResolver {
 mod tests {
     use super::*;
     use crate::parse;
-    use crate::parsing::ast::LemmaDoc;
+    use crate::parsing::ast::LemmaSpec;
     use crate::ResourceLimits;
     use rust_decimal::Decimal;
     use std::sync::Arc;
@@ -789,15 +786,15 @@ mod tests {
         TypeResolver::new()
     }
 
-    fn test_doc_arc() -> Arc<LemmaDoc> {
-        Arc::new(LemmaDoc::new("test_doc".to_string()))
+    fn test_spec_arc() -> Arc<LemmaSpec> {
+        Arc::new(LemmaSpec::new("test_spec".to_string()))
     }
 
     #[test]
     fn test_registry_creation() {
         let registry = test_registry();
-        let doc = test_doc_arc();
-        let resolved = registry.resolve_types(&doc).unwrap();
+        let spec_arc = test_spec_arc();
+        let resolved = registry.resolve_types(&spec_arc).unwrap();
         assert!(resolved.named_types.is_empty());
         assert!(resolved.inline_type_definitions.is_empty());
     }
@@ -829,15 +826,15 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                "test_doc",
-                Arc::from("doc test\nfact x: 1"),
+                "test_spec",
+                Arc::from("spec test\nfact x: 1"),
             ),
             name: "money".to_string(),
             parent: "number".to_string(),
             constraints: None,
         };
 
-        let result = registry.register_type(&test_doc_arc(), type_def);
+        let result = registry.register_type(&test_spec_arc(), type_def);
         assert!(result.is_ok());
     }
 
@@ -855,8 +852,8 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                "test_doc",
-                Arc::from("doc test\nfact x: 1"),
+                "test_spec",
+                Arc::from("spec test\nfact x: 1"),
             ),
             parent: "number".to_string(),
             constraints: Some(vec![
@@ -873,10 +870,10 @@ mod tests {
             from: None,
         };
 
-        let doc = test_doc_arc();
-        let result = registry.register_type(&doc, type_def);
+        let spec_arc = test_spec_arc();
+        let result = registry.register_type(&spec_arc, type_def);
         assert!(result.is_ok());
-        let resolved = registry.resolve_types(&doc).unwrap();
+        let resolved = registry.resolve_types(&spec_arc).unwrap();
         assert!(resolved.inline_type_definitions.contains_key(&fact_ref));
     }
 
@@ -892,17 +889,17 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                "test_doc",
-                Arc::from("doc test\nfact x: 1"),
+                "test_spec",
+                Arc::from("spec test\nfact x: 1"),
             ),
             name: "money".to_string(),
             parent: "number".to_string(),
             constraints: None,
         };
 
-        let doc = test_doc_arc();
-        registry.register_type(&doc, type_def.clone()).unwrap();
-        let result = registry.register_type(&doc, type_def);
+        let spec_arc = test_spec_arc();
+        registry.register_type(&spec_arc, type_def.clone()).unwrap();
+        let result = registry.register_type(&spec_arc, type_def);
         assert!(result.is_err());
     }
 
@@ -918,17 +915,17 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                "test_doc",
-                Arc::from("doc test\nfact x: 1"),
+                "test_spec",
+                Arc::from("spec test\nfact x: 1"),
             ),
             name: "money".to_string(),
             parent: "number".to_string(),
             constraints: None,
         };
 
-        let doc = test_doc_arc();
-        registry.register_type(&doc, type_def).unwrap();
-        let resolved = registry.resolve_types(&doc).unwrap();
+        let spec_arc = test_spec_arc();
+        registry.register_type(&spec_arc, type_def).unwrap();
+        let resolved = registry.resolve_types(&spec_arc).unwrap();
 
         assert!(resolved.named_types.contains_key("money"));
         let money_type = resolved.named_types.get("money").unwrap();
@@ -937,19 +934,19 @@ mod tests {
 
     #[test]
     fn test_type_definition_resolution() {
-        let code = r#"doc test
+        let code = r#"spec test
 type dice: number -> minimum 0 -> maximum 6"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         // Use TypeResolver to resolve the type
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), doc.types[0].clone())
+            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
             .unwrap();
 
-        let resolved_types = registry.resolve_types(&Arc::new(doc.clone())).unwrap();
+        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
         let dice_type = resolved_types.named_types.get("dice").unwrap();
 
         // Verify it's a Number type (dimensionless) with the correct constraints
@@ -966,20 +963,20 @@ type dice: number -> minimum 0 -> maximum 6"#;
 
     #[test]
     fn test_type_definition_with_multiple_commands() {
-        let code = r#"doc test
+        let code = r#"spec test
 type money: scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
-        let type_def = &doc.types[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
+        let type_def = &spec.types[0];
 
         // Use TypeResolver to resolve the type
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), type_def.clone())
+            .register_type(&Arc::new(spec.clone()), type_def.clone())
             .unwrap();
 
-        let resolved_types = registry.resolve_types(&Arc::new(doc.clone())).unwrap();
+        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
         let money_type = resolved_types.named_types.get("money").unwrap();
 
         match &money_type.specifications {
@@ -997,19 +994,19 @@ type money: scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#;
 
     #[test]
     fn test_number_type_with_decimals() {
-        let code = r#"doc test
+        let code = r#"spec test
 type price: number -> decimals 2 -> minimum 0"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         // Use TypeResolver to resolve the type
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), doc.types[0].clone())
+            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
             .unwrap();
 
-        let resolved_types = registry.resolve_types(&Arc::new(doc.clone())).unwrap();
+        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
         let price_type = resolved_types.named_types.get("price").unwrap();
 
         // Verify it's a Number type with decimals set to 2
@@ -1026,18 +1023,18 @@ type price: number -> decimals 2 -> minimum 0"#;
 
     #[test]
     fn test_number_type_decimals_only() {
-        let code = r#"doc test
+        let code = r#"spec test
 type precise_number: number -> decimals 4"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), doc.types[0].clone())
+            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
             .unwrap();
 
-        let resolved_types = registry.resolve_types(&Arc::new(doc.clone())).unwrap();
+        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
         let precise_type = resolved_types.named_types.get("precise_number").unwrap();
 
         match &precise_type.specifications {
@@ -1050,18 +1047,18 @@ type precise_number: number -> decimals 4"#;
 
     #[test]
     fn test_scale_type_decimals_only() {
-        let code = r#"doc test
+        let code = r#"spec test
 type weight: scale -> unit kg 1 -> decimals 3"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), doc.types[0].clone())
+            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
             .unwrap();
 
-        let resolved_types = registry.resolve_types(&Arc::new(doc.clone())).unwrap();
+        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
         let weight_type = resolved_types.named_types.get("weight").unwrap();
 
         match &weight_type.specifications {
@@ -1074,18 +1071,18 @@ type weight: scale -> unit kg 1 -> decimals 3"#;
 
     #[test]
     fn test_ratio_type_accepts_optional_decimals_command() {
-        let code = r#"doc test
+        let code = r#"spec test
 type ratio_type: ratio -> decimals 2"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), doc.types[0].clone())
+            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
             .unwrap();
 
-        let resolved_types = registry.resolve_types(&Arc::new(doc.clone())).unwrap();
+        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
         let ratio_type = resolved_types.named_types.get("ratio_type").unwrap();
 
         match &ratio_type.specifications {
@@ -1102,18 +1099,18 @@ type ratio_type: ratio -> decimals 2"#;
 
     #[test]
     fn test_ratio_type_with_default_command() {
-        let code = r#"doc test
+        let code = r#"spec test
 type percentage: ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), doc.types[0].clone())
+            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
             .unwrap();
 
-        let resolved_types = registry.resolve_types(&Arc::new(doc.clone())).unwrap();
+        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
         let percentage_type = resolved_types.named_types.get("percentage").unwrap();
 
         match &percentage_type.specifications {
@@ -1145,21 +1142,21 @@ type percentage: ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
 
     #[test]
     fn test_scale_extension_chain_same_family_units_allowed() {
-        let code = r#"doc test
+        let code = r#"spec test
 type money: scale -> unit eur 1
 type money2: money -> unit usd 1.24"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
-        for type_def in &doc.types {
+        for type_def in &spec.types {
             registry
-                .register_type(&Arc::new(doc.clone()), type_def.clone())
+                .register_type(&Arc::new(spec.clone()), type_def.clone())
                 .unwrap();
         }
 
-        let result = registry.resolve_types(&Arc::new(doc.clone()));
+        let result = registry.resolve_types(&Arc::new(spec.clone()));
         assert!(
             result.is_ok(),
             "Scale extension chain should resolve: {:?}",
@@ -1187,18 +1184,18 @@ type money2: money -> unit usd 1.24"#;
 
     #[test]
     fn test_invalid_parent_type_in_named_type_should_error() {
-        let code = r#"doc test
+        let code = r#"spec test
 type invalid: nonexistent_type -> minimum 0"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), doc.types[0].clone())
+            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
             .unwrap();
 
-        let result = registry.resolve_types(&Arc::new(doc.clone()));
+        let result = registry.resolve_types(&Arc::new(spec.clone()));
         assert!(result.is_err(), "Should reject invalid parent type");
 
         let errs = result.unwrap_err();
@@ -1214,18 +1211,18 @@ type invalid: nonexistent_type -> minimum 0"#;
     #[test]
     fn test_invalid_primitive_type_name_should_error() {
         // "choice" is not a primitive type; this should fail resolution.
-        let code = r#"doc test
+        let code = r#"spec test
 type invalid: choice -> option "a""#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), doc.types[0].clone())
+            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
             .unwrap();
 
-        let result = registry.resolve_types(&Arc::new(doc.clone()));
+        let result = registry.resolve_types(&Arc::new(spec.clone()));
         assert!(result.is_err(), "Should reject invalid type base 'choice'");
 
         let errs = result.unwrap_err();
@@ -1241,7 +1238,7 @@ type invalid: choice -> option "a""#;
     #[test]
     fn test_unit_constraint_validation_errors_are_reported() {
         // Regression guard: overriding existing units should not silently succeed.
-        let code = r#"doc test
+        let code = r#"spec test
 type money: scale
   -> unit eur 1.00
   -> unit usd 1.19
@@ -1251,17 +1248,17 @@ type money2: money
   -> unit usd 1.21
   -> unit gbp 1.30"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
-        for type_def in &doc.types {
+        for type_def in &spec.types {
             registry
-                .register_type(&Arc::new(doc.clone()), type_def.clone())
+                .register_type(&Arc::new(spec.clone()), type_def.clone())
                 .unwrap();
         }
 
-        let result = registry.resolve_types(&Arc::new(doc.clone()));
+        let result = registry.resolve_types(&Arc::new(spec.clone()));
         assert!(
             result.is_err(),
             "Expected unit constraint conflicts to error"
@@ -1282,9 +1279,9 @@ type money2: money
     }
 
     #[test]
-    fn test_document_level_unit_ambiguity_errors_are_reported() {
-        // Regression guard: the same unit name must not be defined by multiple types in one doc.
-        let code = r#"doc test
+    fn test_spec_level_unit_ambiguity_errors_are_reported() {
+        // Regression guard: the same unit name must not be defined by multiple types in one spec.
+        let code = r#"spec test
 type money_a: scale
   -> unit eur 1.00
   -> unit usd 1.19
@@ -1299,17 +1296,17 @@ type length_a: scale
 type length_b: scale
   -> unit meter 1.0"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
-        for type_def in &doc.types {
+        for type_def in &spec.types {
             registry
-                .register_type(&Arc::new(doc.clone()), type_def.clone())
+                .register_type(&Arc::new(spec.clone()), type_def.clone())
                 .unwrap();
         }
 
-        let result = registry.resolve_types(&Arc::new(doc.clone()));
+        let result = registry.resolve_types(&Arc::new(spec.clone()));
         assert!(
             result.is_err(),
             "Expected ambiguous unit definitions to error"
@@ -1331,19 +1328,19 @@ type length_b: scale
 
     #[test]
     fn test_number_type_cannot_have_units() {
-        let code = r#"doc test
+        let code = r#"spec test
 type price: number
   -> unit eur 1.00"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), doc.types[0].clone())
+            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
             .unwrap();
 
-        let result = registry.resolve_types(&Arc::new(doc.clone()));
+        let result = registry.resolve_types(&Arc::new(spec.clone()));
         assert!(result.is_err(), "Number types must reject unit commands");
 
         let errs = result.unwrap_err();
@@ -1358,20 +1355,20 @@ type price: number
 
     #[test]
     fn test_scale_type_can_have_units() {
-        let code = r#"doc test
+        let code = r#"spec test
 type money: scale
   -> unit eur 1.00
   -> unit usd 1.19"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), doc.types[0].clone())
+            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
             .unwrap();
 
-        let resolved = registry.resolve_types(&Arc::new(doc.clone())).unwrap();
+        let resolved = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
         let money_type = resolved.named_types.get("money").unwrap();
 
         match &money_type.specifications {
@@ -1386,7 +1383,7 @@ type money: scale
 
     #[test]
     fn test_extending_type_inherits_units() {
-        let code = r#"doc test
+        let code = r#"spec test
 type money: scale
   -> unit eur 1.00
   -> unit usd 1.19
@@ -1394,17 +1391,17 @@ type money: scale
 type my_money: money
   -> unit gbp 1.30"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
-        for type_def in &doc.types {
+        for type_def in &spec.types {
             registry
-                .register_type(&Arc::new(doc.clone()), type_def.clone())
+                .register_type(&Arc::new(spec.clone()), type_def.clone())
                 .unwrap();
         }
 
-        let resolved = registry.resolve_types(&Arc::new(doc.clone())).unwrap();
+        let resolved = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
         let my_money_type = resolved.named_types.get("my_money").unwrap();
 
         match &my_money_type.specifications {
@@ -1420,20 +1417,20 @@ type my_money: money
 
     #[test]
     fn test_duplicate_unit_in_same_type_is_rejected() {
-        let code = r#"doc test
+        let code = r#"spec test
 type money: scale
   -> unit eur 1.00
   -> unit eur 1.19"#;
 
-        let docs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc = &docs[0];
+        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec = &specs[0];
 
         let mut registry = test_registry();
         registry
-            .register_type(&Arc::new(doc.clone()), doc.types[0].clone())
+            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
             .unwrap();
 
-        let result = registry.resolve_types(&Arc::new(doc.clone()));
+        let result = registry.resolve_types(&Arc::new(spec.clone()));
         assert!(
             result.is_err(),
             "Duplicate units within a type should error"

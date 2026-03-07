@@ -4,14 +4,14 @@ mod common;
 use common::add_lemma_code_blocking;
 
 #[test]
-fn necessary_facts_include_nested_doc_facts_for_local_rule_deps() {
+fn necessary_facts_include_nested_spec_facts_for_local_rule_deps() {
     let code = r#"
-doc money
+spec money
 type money: scale
   -> unit eur 1
   -> unit usd 1.19
 
-doc pricing
+spec pricing
 type money from money
 fact quantity: 10
 fact is_member: false
@@ -23,8 +23,8 @@ rule discount: 0%
 rule total: price - discount
   unless price < 50 eur then price
 
-doc cashier
-fact calc: doc pricing
+spec cashier
+fact calc: spec pricing
 rule total: calc.total
 "#;
 
@@ -61,7 +61,7 @@ rule total: calc.total
 #[test]
 fn schema_errors_on_unknown_rule() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, "doc test\nfact x: 1\nrule y: x", "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, "spec test\nfact x: 1\nrule y: x", "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
     let plan = engine.get_execution_plan("test", None, &now).unwrap();

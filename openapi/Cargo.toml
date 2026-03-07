@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "OpenAPI 3.1 specification generator for Lemma documents."
+description = "OpenAPI 3.1 specification generator for Lemma specs."
 
 [dependencies]
 lemma = { package = "lemma-engine", version = "0.7.6", path = "../engine" }
