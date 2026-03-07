@@ -20,6 +20,7 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
         hour: 0,
         minute: 0,
         second: 0,
+        microsecond: 0,
         timezone: None,
     }
 }

@@ -477,7 +477,19 @@ fn collect_fact_paths(expr: &Expression, out: &mut Vec<FactPath>) {
             | ExpressionKind::MathematicalComputation(_, inner) => {
                 stack.push(inner.as_ref());
             }
-            ExpressionKind::Literal(_) | ExpressionKind::Veto(_) | ExpressionKind::RulePath(_) => {}
+            ExpressionKind::DateRelative(_, date_expr, tolerance) => {
+                stack.push(date_expr.as_ref());
+                if let Some(tol) = tolerance {
+                    stack.push(tol.as_ref());
+                }
+            }
+            ExpressionKind::DateCalendar(_, _, date_expr) => {
+                stack.push(date_expr.as_ref());
+            }
+            ExpressionKind::Literal(_)
+            | ExpressionKind::Veto(_)
+            | ExpressionKind::RulePath(_)
+            | ExpressionKind::Now => {}
         }
     }
 }

@@ -210,6 +210,63 @@ impl PartialEq for Expression {
 
 impl Eq for Expression {}
 
+/// Whether a date is relative to `now` in the past or future direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DateRelativeKind {
+    InPast,
+    InFuture,
+}
+
+/// Calendar-period membership checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DateCalendarKind {
+    Current,
+    Past,
+    Future,
+    NotIn,
+}
+
+/// Granularity of a calendar-period check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CalendarUnit {
+    Year,
+    Month,
+    Week,
+}
+
+impl fmt::Display for DateRelativeKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DateRelativeKind::InPast => write!(f, "in past"),
+            DateRelativeKind::InFuture => write!(f, "in future"),
+        }
+    }
+}
+
+impl fmt::Display for DateCalendarKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DateCalendarKind::Current => write!(f, "in calendar"),
+            DateCalendarKind::Past => write!(f, "in past calendar"),
+            DateCalendarKind::Future => write!(f, "in future calendar"),
+            DateCalendarKind::NotIn => write!(f, "not in calendar"),
+        }
+    }
+}
+
+impl fmt::Display for CalendarUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CalendarUnit::Year => write!(f, "year"),
+            CalendarUnit::Month => write!(f, "month"),
+            CalendarUnit::Week => write!(f, "week"),
+        }
+    }
+}
+
 /// The kind/type of expression
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -221,6 +278,14 @@ pub enum ExpressionKind {
     /// Unresolved unit literal from parser (resolved during planning)
     /// Contains (number, unit_name) - the unit name will be resolved to its type during semantic analysis
     UnresolvedUnitLiteral(Decimal, String),
+    /// The `now` keyword — resolves to the evaluation datetime (= effective).
+    Now,
+    /// Date-relative sugar: `<date_expr> in past [<duration_expr>]` / `<date_expr> in future [<duration_expr>]`
+    /// Fields: (kind, date_expression, optional_tolerance_expression)
+    DateRelative(DateRelativeKind, Arc<Expression>, Option<Arc<Expression>>),
+    /// Calendar-period sugar: `<date_expr> in [past|future] calendar year|month|week`
+    /// Fields: (kind, unit, date_expression)
+    DateCalendar(DateCalendarKind, CalendarUnit, Arc<Expression>),
     LogicalAnd(Arc<Expression>, Arc<Expression>),
     Arithmetic(Arc<Expression>, ArithmeticComputation, Arc<Expression>),
     Comparison(Arc<Expression>, ComparisonComputation, Arc<Expression>),
@@ -739,7 +804,7 @@ pub struct TimezoneValue {
     pub offset_minutes: u8,
 }
 
-/// A datetime value that preserves timezone information
+/// A datetime value that preserves timezone information.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize)]
 pub struct DateTimeValue {
     pub year: i32,
@@ -748,6 +813,8 @@ pub struct DateTimeValue {
     pub hour: u32,
     pub minute: u32,
     pub second: u32,
+    #[serde(default)]
+    pub microsecond: u32,
     pub timezone: Option<TimezoneValue>,
 }
 
@@ -762,6 +829,7 @@ impl DateTimeValue {
             hour: now.time().hour(),
             minute: now.time().minute(),
             second: now.time().second(),
+            microsecond: now.time().nanosecond() / 1000 % 1_000_000,
             timezone: Some(TimezoneValue {
                 offset_hours: (offset_secs / 3600) as i8,
                 offset_minutes: ((offset_secs.abs() % 3600) / 60) as u8,
@@ -773,11 +841,15 @@ impl DateTimeValue {
     /// - Full ISO 8601: `2026-03-04T10:30:00Z`, `2026-03-04T10:30:00+02:00`
     /// - Date + time without tz: `2026-03-04T10:30:00`
     /// - Date only: `2026-03-04` (midnight)
+    /// - ISO week: `2026-W08` (Monday of ISO week)
     /// - Year-month: `2026-03` (first of month)
     /// - Year only: `2026` (Jan 1)
     pub fn parse(s: &str) -> Option<Self> {
         if let Some(dtv) = crate::parsing::literals::parse_datetime_str(s) {
             return Some(dtv);
+        }
+        if let Some(week_val) = Self::parse_iso_week(s) {
+            return Some(week_val);
         }
         if let Ok(ym) = chrono::NaiveDate::parse_from_str(&format!("{}-01", s), "%Y-%m-%d") {
             return Some(Self {
@@ -787,6 +859,7 @@ impl DateTimeValue {
                 hour: 0,
                 minute: 0,
                 second: 0,
+                microsecond: 0,
                 timezone: None,
             });
         }
@@ -799,11 +872,37 @@ impl DateTimeValue {
                     hour: 0,
                     minute: 0,
                     second: 0,
+                    microsecond: 0,
                     timezone: None,
                 });
             }
         }
         None
+    }
+
+    /// Parse ISO week date format: `YYYY-Www` (e.g. `2026-W08`).
+    /// Returns the Monday of that ISO week.
+    fn parse_iso_week(s: &str) -> Option<Self> {
+        let parts: Vec<&str> = s.split("-W").collect();
+        if parts.len() != 2 {
+            return None;
+        }
+        let year: i32 = parts[0].parse().ok()?;
+        let week: u32 = parts[1].parse().ok()?;
+        if week == 0 || week > 53 {
+            return None;
+        }
+        let date = chrono::NaiveDate::from_isoywd_opt(year, week, chrono::Weekday::Mon)?;
+        Some(Self {
+            year: date.year(),
+            month: date.month(),
+            day: date.day(),
+            hour: 0,
+            minute: 0,
+            second: 0,
+            microsecond: 0,
+            timezone: None,
+        })
     }
 }
 
@@ -1061,9 +1160,11 @@ pub fn expression_precedence(kind: &ExpressionKind) -> u8 {
             ArithmeticComputation::Power => 7,
         },
         ExpressionKind::MathematicalComputation(..) => 8,
+        ExpressionKind::DateRelative(..) | ExpressionKind::DateCalendar(..) => 4,
         ExpressionKind::Literal(..)
         | ExpressionKind::Reference(..)
         | ExpressionKind::UnresolvedUnitLiteral(..)
+        | ExpressionKind::Now
         | ExpressionKind::Veto(..) => 10,
     }
 }
@@ -1125,6 +1226,17 @@ impl fmt::Display for Expression {
             },
             ExpressionKind::UnresolvedUnitLiteral(number, unit_name) => {
                 write!(f, "{} {}", format_decimal_source(number), unit_name)
+            }
+            ExpressionKind::Now => write!(f, "now"),
+            ExpressionKind::DateRelative(kind, date_expr, tolerance) => {
+                write!(f, "{} {}", date_expr, kind)?;
+                if let Some(tol) = tolerance {
+                    write!(f, " {}", tol)?;
+                }
+                Ok(())
+            }
+            ExpressionKind::DateCalendar(kind, unit, date_expr) => {
+                write!(f, "{} {} {}", date_expr, kind, unit)
             }
         }
     }
@@ -1207,9 +1319,12 @@ impl fmt::Display for TimezoneValue {
 
 impl fmt::Display for DateTimeValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let is_date_only =
-            self.hour == 0 && self.minute == 0 && self.second == 0 && self.timezone.is_none();
-        if is_date_only {
+        let has_time = self.hour != 0
+            || self.minute != 0
+            || self.second != 0
+            || self.microsecond != 0
+            || self.timezone.is_some();
+        if !has_time {
             write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
         } else {
             write!(
@@ -1217,6 +1332,9 @@ impl fmt::Display for DateTimeValue {
                 "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
                 self.year, self.month, self.day, self.hour, self.minute, self.second
             )?;
+            if self.microsecond != 0 {
+                write!(f, ".{:06}", self.microsecond)?;
+            }
             if let Some(tz) = &self.timezone {
                 write!(f, "{}", tz)?;
             }
@@ -1580,15 +1698,80 @@ mod tests {
             hour: 14,
             minute: 30,
             second: 45,
+            microsecond: 0,
             timezone: Some(TimezoneValue {
                 offset_hours: 1,
                 offset_minutes: 0,
             }),
         };
-        let display = format!("{}", dt);
-        assert!(display.contains("2024"));
-        assert!(display.contains("12"));
-        assert!(display.contains("25"));
+        assert_eq!(format!("{}", dt), "2024-12-25T14:30:45+01:00");
+    }
+
+    #[test]
+    fn test_datetime_value_display_date_only() {
+        let dt = DateTimeValue {
+            year: 2026,
+            month: 3,
+            day: 4,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            microsecond: 0,
+            timezone: None,
+        };
+        assert_eq!(format!("{}", dt), "2026-03-04");
+    }
+
+    #[test]
+    fn test_datetime_value_display_microseconds() {
+        let dt = DateTimeValue {
+            year: 2026,
+            month: 2,
+            day: 23,
+            hour: 14,
+            minute: 30,
+            second: 45,
+            microsecond: 123456,
+            timezone: Some(TimezoneValue {
+                offset_hours: 0,
+                offset_minutes: 0,
+            }),
+        };
+        assert_eq!(format!("{}", dt), "2026-02-23T14:30:45.123456Z");
+    }
+
+    #[test]
+    fn test_datetime_microsecond_in_ordering() {
+        let a = DateTimeValue {
+            year: 2026,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            microsecond: 100,
+            timezone: None,
+        };
+        let b = DateTimeValue {
+            year: 2026,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            microsecond: 200,
+            timezone: None,
+        };
+        assert!(a < b);
+    }
+
+    #[test]
+    fn test_datetime_parse_iso_week() {
+        let dt = DateTimeValue::parse("2026-W01").unwrap();
+        assert_eq!(dt.year, 2025);
+        assert_eq!(dt.month, 12);
+        assert_eq!(dt.day, 29);
+        assert_eq!(dt.microsecond, 0);
     }
 
     #[test]

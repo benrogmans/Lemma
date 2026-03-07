@@ -331,6 +331,7 @@ pub(crate) fn parse_number_unit_literal(
 pub(crate) fn parse_datetime_str(s: &str) -> Option<DateTimeValue> {
     if let Ok(dt) = s.parse::<chrono::DateTime<chrono::FixedOffset>>() {
         let offset = dt.offset().local_minus_utc();
+        let microsecond = dt.nanosecond() / 1000 % 1_000_000;
         return Some(DateTimeValue {
             year: dt.year(),
             month: dt.month(),
@@ -338,6 +339,7 @@ pub(crate) fn parse_datetime_str(s: &str) -> Option<DateTimeValue> {
             hour: dt.hour(),
             minute: dt.minute(),
             second: dt.second(),
+            microsecond,
             timezone: Some(TimezoneValue {
                 offset_hours: (offset / 3600) as i8,
                 offset_minutes: ((offset % 3600) / 60) as u8,
@@ -345,6 +347,7 @@ pub(crate) fn parse_datetime_str(s: &str) -> Option<DateTimeValue> {
         });
     }
     if let Ok(dt) = s.parse::<chrono::NaiveDateTime>() {
+        let microsecond = dt.nanosecond() / 1000 % 1_000_000;
         return Some(DateTimeValue {
             year: dt.year(),
             month: dt.month(),
@@ -352,6 +355,7 @@ pub(crate) fn parse_datetime_str(s: &str) -> Option<DateTimeValue> {
             hour: dt.hour(),
             minute: dt.minute(),
             second: dt.second(),
+            microsecond,
             timezone: None,
         });
     }
@@ -363,6 +367,7 @@ pub(crate) fn parse_datetime_str(s: &str) -> Option<DateTimeValue> {
             hour: 0,
             minute: 0,
             second: 0,
+            microsecond: 0,
             timezone: None,
         });
     }
@@ -577,48 +582,14 @@ fn parse_decimal_number(
 
 /// Parse a date string into a DateTimeValue (for type constraint parsing)
 pub fn parse_date_string(s: &str) -> Result<DateTimeValue, String> {
-    use chrono::{Datelike, Timelike};
-
-    if let Ok(dt) = s.parse::<chrono::DateTime<chrono::FixedOffset>>() {
-        let offset = dt.offset().local_minus_utc();
-        return Ok(DateTimeValue {
-            year: dt.year(),
-            month: dt.month(),
-            day: dt.day(),
-            hour: dt.hour(),
-            minute: dt.minute(),
-            second: dt.second(),
-            timezone: Some(TimezoneValue {
-                offset_hours: (offset / 3600) as i8,
-                offset_minutes: ((offset % 3600) / 60) as u8,
-            }),
-        });
+    // Delegate to parse_datetime_str which handles microseconds.
+    if let Some(dtv) = parse_datetime_str(s) {
+        return Ok(dtv);
     }
-
-    if let Ok(dt) = s.parse::<chrono::NaiveDateTime>() {
-        return Ok(DateTimeValue {
-            year: dt.year(),
-            month: dt.month(),
-            day: dt.day(),
-            hour: dt.hour(),
-            minute: dt.minute(),
-            second: dt.second(),
-            timezone: None,
-        });
+    // Try reduced-precision forms handled by DateTimeValue::parse (year-month, year-only, ISO week).
+    if let Some(dtv) = DateTimeValue::parse(s) {
+        return Ok(dtv);
     }
-
-    if let Ok(d) = s.parse::<chrono::NaiveDate>() {
-        return Ok(DateTimeValue {
-            year: d.year(),
-            month: d.month(),
-            day: d.day(),
-            hour: 0,
-            minute: 0,
-            second: 0,
-            timezone: None,
-        });
-    }
-
     Err(format!("Invalid date format: '{}'", s))
 }
 

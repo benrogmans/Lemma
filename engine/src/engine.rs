@@ -665,7 +665,7 @@ impl Engine {
         let values = crate::serialization::from_json(json)?;
         let plan = base_plan.clone().with_fact_values(values, &self.limits)?;
 
-        self.evaluate_plan(plan, rule_names)
+        self.evaluate_plan(plan, rule_names, effective)
     }
 
     /// Evaluate rules in a document with string values for facts.
@@ -698,7 +698,7 @@ impl Engine {
             .clone()
             .with_fact_values(fact_values, &self.limits)?;
 
-        self.evaluate_plan(plan, rule_names)
+        self.evaluate_plan(plan, rule_names, effective)
     }
 
     /// Invert a rule to find input domains that produce a desired outcome with JSON values.
@@ -748,8 +748,14 @@ impl Engine {
         &self,
         plan: crate::planning::ExecutionPlan,
         rule_names: Vec<String>,
+        effective: &DateTimeValue,
     ) -> Result<Response, Error> {
-        let mut response = self.evaluator.evaluate(&plan);
+        let now_semantic = crate::planning::semantics::date_time_to_semantic(effective);
+        let now_literal = crate::planning::semantics::LiteralValue {
+            value: crate::planning::semantics::ValueKind::Date(now_semantic),
+            lemma_type: crate::planning::semantics::primitive_date().clone(),
+        };
+        let mut response = self.evaluator.evaluate(&plan, now_literal);
 
         if !rule_names.is_empty() {
             response.filter_rules(&rule_names);
@@ -773,6 +779,7 @@ mod tests {
             hour: 0,
             minute: 0,
             second: 0,
+            microsecond: 0,
             timezone: None,
         }
     }

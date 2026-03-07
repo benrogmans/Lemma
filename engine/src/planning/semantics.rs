@@ -35,7 +35,8 @@ pub fn negated_comparison(op: ComparisonComputation) -> ComparisonComputation {
 
 // Internal-only parsing imports (used only within this module for value/type resolution).
 use crate::parsing::ast::{
-    BooleanValue, CommandArg, ConversionTarget, DateTimeValue, DurationUnit, TimeValue,
+    BooleanValue, CalendarUnit, CommandArg, ConversionTarget, DateCalendarKind, DateRelativeKind,
+    DateTimeValue, DurationUnit, TimeValue,
 };
 use crate::parsing::literals::{parse_date_string, parse_duration_from_string, parse_time_string};
 use crate::Error;
@@ -1090,14 +1091,19 @@ pub struct SemanticDateTime {
     pub hour: u32,
     pub minute: u32,
     pub second: u32,
+    #[serde(default)]
+    pub microsecond: u32,
     pub timezone: Option<SemanticTimezone>,
 }
 
 impl fmt::Display for SemanticDateTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let is_date_only =
-            self.hour == 0 && self.minute == 0 && self.second == 0 && self.timezone.is_none();
-        if is_date_only {
+        let has_time = self.hour != 0
+            || self.minute != 0
+            || self.second != 0
+            || self.microsecond != 0
+            || self.timezone.is_some();
+        if !has_time {
             write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
         } else {
             write!(
@@ -1105,6 +1111,9 @@ impl fmt::Display for SemanticDateTime {
                 "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
                 self.year, self.month, self.day, self.hour, self.minute, self.second
             )?;
+            if self.microsecond != 0 {
+                write!(f, ".{:06}", self.microsecond)?;
+            }
             if let Some(tz) = &self.timezone {
                 write!(f, "{}", tz)?;
             }
@@ -1309,6 +1318,12 @@ pub enum ExpressionKind {
     LogicalNegation(Arc<Expression>, NegationType),
     MathematicalComputation(MathematicalComputation, Arc<Expression>),
     Veto(VetoExpression),
+    /// The `now` keyword — resolved at evaluation to the effective datetime.
+    Now,
+    /// Date-relative sugar: `<date_expr> in past [<duration_expr>]` / `in future [...]`
+    DateRelative(DateRelativeKind, Arc<Expression>, Option<Arc<Expression>>),
+    /// Calendar-period sugar: `<date_expr> in [past|future] calendar year|month|week`
+    DateCalendar(DateCalendarKind, CalendarUnit, Arc<Expression>),
 }
 
 impl ExpressionKind {
@@ -1329,7 +1344,19 @@ impl ExpressionKind {
             | ExpressionKind::MathematicalComputation(_, inner) => {
                 inner.collect_fact_paths(facts);
             }
-            ExpressionKind::Literal(_) | ExpressionKind::RulePath(_) | ExpressionKind::Veto(_) => {}
+            ExpressionKind::DateRelative(_, date_expr, tolerance) => {
+                date_expr.collect_fact_paths(facts);
+                if let Some(tol) = tolerance {
+                    tol.collect_fact_paths(facts);
+                }
+            }
+            ExpressionKind::DateCalendar(_, _, date_expr) => {
+                date_expr.collect_fact_paths(facts);
+            }
+            ExpressionKind::Literal(_)
+            | ExpressionKind::RulePath(_)
+            | ExpressionKind::Veto(_)
+            | ExpressionKind::Now => {}
         }
     }
 
@@ -1369,6 +1396,19 @@ impl ExpressionKind {
                 expr.semantic_hash(state);
             }
             ExpressionKind::Veto(v) => v.message.hash(state),
+            ExpressionKind::Now => {}
+            ExpressionKind::DateRelative(kind, date_expr, tolerance) => {
+                kind.hash(state);
+                date_expr.semantic_hash(state);
+                if let Some(tol) = tolerance {
+                    tol.semantic_hash(state);
+                }
+            }
+            ExpressionKind::DateCalendar(kind, unit, date_expr) => {
+                kind.hash(state);
+                unit.hash(state);
+                date_expr.semantic_hash(state);
+            }
         }
     }
 }
@@ -1938,6 +1978,7 @@ pub(crate) fn date_time_to_semantic(dt: &crate::parsing::ast::DateTimeValue) -> 
         hour: dt.hour,
         minute: dt.minute,
         second: dt.second,
+        microsecond: dt.microsecond,
         timezone: dt.timezone.as_ref().map(|tz| SemanticTimezone {
             offset_hours: tz.offset_hours,
             offset_minutes: tz.offset_minutes,
@@ -2225,6 +2266,7 @@ mod tests {
             hour: 0,
             minute: 0,
             second: 0,
+            microsecond: 0,
             timezone: None,
         };
         assert_eq!(

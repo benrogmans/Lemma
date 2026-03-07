@@ -18,7 +18,6 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, LemmaType, TypeSpecification};
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
 
 /// A single Scalar API reference source entry.
 ///
@@ -137,13 +136,14 @@ pub fn generate_openapi_effective(
                 doc_name.clone()
             };
 
-            let response_schema_name = format!("{}_response", doc_name);
+            let safe_name = doc_name.replace('/', "_");
+            let response_schema_name = format!("{}_response", safe_name);
             components_schemas.insert(
                 response_schema_name.clone(),
                 build_response_schema(&schema, &rule_names, proofs_enabled),
             );
 
-            let post_body_schema_name = format!("{}_request", doc_name);
+            let post_body_schema_name = format!("{}_request", safe_name);
             components_schemas.insert(
                 post_body_schema_name.clone(),
                 build_post_request_schema(&facts),
@@ -176,8 +176,9 @@ pub fn generate_openapi_effective(
         "description": "Simple API to retrieve the list of Lemma documents"
     })];
     for doc_name in &unique_doc_names {
+        let safe_tag = doc_name.replace('/', "_");
         tags.push(json!({
-            "name": doc_name,
+            "name": safe_tag,
             "x-displayName": doc_name,
             "description": format!("GET schema or POST evaluate for document '{}'. Use ?rules= to scope.", doc_name)
         }));
@@ -187,17 +188,16 @@ pub fn generate_openapi_effective(
         "description": "Server metadata and introspection endpoints"
     }));
 
-    let mut tag_groups = Vec::new();
-    for doc_name in &unique_doc_names {
-        tag_groups.push(json!({
-            "name": doc_name,
-            "tags": [doc_name]
-        }));
-    }
-    tag_groups.push(json!({
-        "name": "General",
-        "tags": ["Documents", "Meta"]
-    }));
+    let doc_tags: Vec<Value> = unique_doc_names
+        .iter()
+        .map(|n| Value::String(n.replace('/', "_")))
+        .collect();
+
+    let tag_groups = vec![
+        json!({ "name": "Overview", "tags": ["Documents"] }),
+        json!({ "name": "Documents", "tags": doc_tags }),
+        json!({ "name": "Meta", "tags": ["Meta"] }),
+    ];
 
     let version_label = format!("{} (effective {})", env!("CARGO_PKG_VERSION"), effective);
 
@@ -223,8 +223,9 @@ struct InputFact {
     name: String,
     /// The resolved Lemma type for this fact.
     lemma_type: LemmaType,
-    /// Whether this fact has a default value (making it optional in the API).
-    has_default: bool,
+    /// The fact's literal value if defined in the document (e.g. `fact quantity: 10`).
+    /// None for type-only facts (e.g. `fact quantity: [number]`).
+    default_value: Option<lemma::LiteralValue>,
 }
 
 /// Collect all local input facts from a pre-built schema.
@@ -239,7 +240,7 @@ fn collect_input_facts_from_schema(schema: &lemma::DocumentSchema) -> Vec<InputF
         .map(|(name, (lemma_type, default))| InputFact {
             name: name.clone(),
             lemma_type: lemma_type.clone(),
-            has_default: default.is_some(),
+            default_value: default.clone(),
         })
         .collect()
 }
@@ -405,7 +406,7 @@ fn accept_datetime_header_parameter() -> Value {
         "name": "Accept-Datetime",
         "in": "header",
         "required": false,
-        "description": "RFC 7089 (Memento): resolve the document version active at this datetime. Omit for latest. Use path with ~hash for a permalink to a specific version.",
+        "description": "RFC 7089 (Memento): resolve the document version active at this datetime. Omit for current. Use path with ~hash for a permalink to a specific version.",
         "schema": { "type": "string", "format": "date-time" },
         "example": "Sat, 01 Jan 2025 00:00:00 GMT"
     })
@@ -426,7 +427,7 @@ fn build_document_path_item(
         "$ref": format!("#/components/schemas/{}", post_body_schema_name)
     });
 
-    let tag = doc_name.to_string();
+    let tag = doc_name.replace('/', "_");
 
     let rules_example = if rule_names.is_empty() {
         String::new()
@@ -450,7 +451,7 @@ fn build_document_path_item(
     }
 
     let get_summary = "Schema of resolved version (doc, facts, rules, meta, versions)".to_string();
-    let post_summary = "Evaluate (JSON body)".to_string();
+    let post_summary = "Evaluate".to_string();
     let get_operation_id = format!("get_{}", doc_name);
     let post_operation_id = format!("post_{}", doc_name);
 
@@ -487,7 +488,7 @@ fn build_document_path_item(
             "requestBody": {
                 "required": true,
                 "content": {
-                    "application/json": {
+                    "application/x-www-form-urlencoded": {
                         "schema": body_ref
                     }
                 }
@@ -532,43 +533,30 @@ fn type_help(lemma_type: &LemmaType) -> String {
     }
 }
 
-/// Default value as JSON (for POST body schema).
-fn type_default_as_json(lemma_type: &LemmaType) -> Option<Value> {
+/// Default value as a string for form-encoded POST body schema.
+fn type_default_as_string(lemma_type: &LemmaType) -> Option<String> {
     match &lemma_type.specifications {
-        TypeSpecification::Boolean { default, .. } => default.map(Value::Bool),
-        TypeSpecification::Scale { default, .. } => default.as_ref().map(
-            |(d, u)| json!({ "value": d.to_string().parse::<f64>().unwrap_or(0.0), "unit": u }),
-        ),
-        TypeSpecification::Number { default, .. } => default
-            .as_ref()
-            .and_then(|d| d.to_string().parse::<f64>().ok())
-            .map(Value::from),
-        TypeSpecification::Ratio { default, .. } => default
-            .as_ref()
-            .and_then(|d| d.to_string().parse::<f64>().ok())
-            .map(|n| json!({ "value": n })),
-        TypeSpecification::Text { default, .. } => default.clone().map(Value::String),
-        TypeSpecification::Date { default, .. } => {
-            default.as_ref().map(|dt| Value::String(format!("{}", dt)))
+        TypeSpecification::Boolean { default, .. } => default.map(|b| b.to_string()),
+        TypeSpecification::Scale { default, .. } => {
+            default.as_ref().map(|(d, u)| format!("{} {}", d, u))
         }
-        TypeSpecification::Time { default, .. } => {
-            default.as_ref().map(|t| Value::String(format!("{}", t)))
+        TypeSpecification::Number { default, .. } => default.as_ref().map(|d| d.to_string()),
+        TypeSpecification::Ratio { default, .. } => default.as_ref().map(|d| d.to_string()),
+        TypeSpecification::Text { default, .. } => default.clone(),
+        TypeSpecification::Date { default, .. } => default.as_ref().map(|dt| format!("{}", dt)),
+        TypeSpecification::Time { default, .. } => default.as_ref().map(|t| format!("{}", t)),
+        TypeSpecification::Duration { default, .. } => {
+            default.as_ref().map(|(v, u)| format!("{} {}", v, u))
         }
-        TypeSpecification::Duration { default, .. } => default.as_ref().map(|(v, u)| {
-            json!({
-                "value": v.to_string().parse::<f64>().unwrap_or(0.0),
-                "unit": format!("{}", u)
-            })
-        }),
         TypeSpecification::Veto { .. } => None,
         TypeSpecification::Undetermined => unreachable!(
-            "BUG: type_default_as_json called with Undetermined sentinel type; this type must never reach OpenAPI generation"
+            "BUG: type_default_as_string called with Undetermined sentinel type; this type must never reach OpenAPI generation"
         ),
     }
 }
 
 // ---------------------------------------------------------------------------
-// POST request body schema generation (JSON — native types)
+// POST request body schema generation (form-encoded — all string values)
 // ---------------------------------------------------------------------------
 
 fn build_post_request_schema(facts: &[InputFact]) -> Value {
@@ -578,9 +566,9 @@ fn build_post_request_schema(facts: &[InputFact]) -> Value {
     for fact in facts {
         properties.insert(
             fact.name.clone(),
-            build_post_property_schema(&fact.lemma_type),
+            build_post_property_schema(&fact.lemma_type, fact.default_value.as_ref()),
         );
-        if !fact.has_default {
+        if fact.default_value.is_none() {
             required.push(Value::String(fact.name.clone()));
         }
     }
@@ -595,102 +583,30 @@ fn build_post_request_schema(facts: &[InputFact]) -> Value {
     schema
 }
 
-fn build_post_property_schema(lemma_type: &LemmaType) -> Value {
-    let mut schema = build_post_property_schema_inner(lemma_type);
+fn build_post_property_schema(
+    lemma_type: &LemmaType,
+    fact_value: Option<&lemma::LiteralValue>,
+) -> Value {
+    let mut schema = build_post_type_schema(lemma_type);
+
     let help = type_help(lemma_type);
     if !help.is_empty() {
         schema["description"] = Value::String(help);
     }
-    if let Some(default) = type_default_as_json(lemma_type) {
-        schema["default"] = default;
+
+    // Priority: fact's actual value > type's default > nothing
+    let default_str = fact_value
+        .map(|v| v.display_value())
+        .or_else(|| type_default_as_string(lemma_type));
+    if let Some(d) = default_str {
+        schema["default"] = Value::String(d);
     }
+
     schema
 }
 
-fn build_post_property_schema_inner(lemma_type: &LemmaType) -> Value {
+fn build_post_type_schema(lemma_type: &LemmaType) -> Value {
     match &lemma_type.specifications {
-        TypeSpecification::Number {
-            minimum, maximum, ..
-        } => {
-            let mut schema = json!({ "type": "number" });
-            if let Some(min) = minimum {
-                schema["minimum"] = json!(min.to_string().parse::<f64>().unwrap_or(0.0));
-            }
-            if let Some(max) = maximum {
-                schema["maximum"] = json!(max.to_string().parse::<f64>().unwrap_or(0.0));
-            }
-            schema
-        }
-        TypeSpecification::Scale {
-            minimum,
-            maximum,
-            units,
-            ..
-        } => {
-            let unit_names: Vec<Value> = units
-                .iter()
-                .map(|u| Value::String(u.name.clone()))
-                .collect();
-
-            let mut value_schema = json!({ "type": "number" });
-            if let Some(min) = minimum {
-                value_schema["minimum"] = json!(min.to_string().parse::<f64>().unwrap_or(0.0));
-            }
-            if let Some(max) = maximum {
-                value_schema["maximum"] = json!(max.to_string().parse::<f64>().unwrap_or(0.0));
-            }
-
-            if unit_names.is_empty() {
-                value_schema
-            } else {
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "value": value_schema,
-                        "unit": {
-                            "type": "string",
-                            "enum": unit_names
-                        }
-                    },
-                    "required": ["value", "unit"]
-                })
-            }
-        }
-        TypeSpecification::Ratio {
-            minimum,
-            maximum,
-            units,
-            ..
-        } => {
-            let unit_names: Vec<Value> = units
-                .iter()
-                .map(|u| Value::String(u.name.clone()))
-                .collect();
-
-            let mut value_schema = json!({ "type": "number" });
-            if let Some(min) = minimum {
-                value_schema["minimum"] = json!(min.to_string().parse::<f64>().unwrap_or(0.0));
-            }
-            if let Some(max) = maximum {
-                value_schema["maximum"] = json!(max.to_string().parse::<f64>().unwrap_or(0.0));
-            }
-
-            if unit_names.is_empty() {
-                value_schema
-            } else {
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "value": value_schema,
-                        "unit": {
-                            "type": "string",
-                            "enum": unit_names
-                        }
-                    },
-                    "required": ["value"]
-                })
-            }
-        }
         TypeSpecification::Text { options, .. } => {
             let mut schema = json!({ "type": "string" });
             if !options.is_empty() {
@@ -700,36 +616,9 @@ fn build_post_property_schema_inner(lemma_type: &LemmaType) -> Value {
             schema
         }
         TypeSpecification::Boolean { .. } => {
-            json!({ "type": "boolean", "example": true })
+            json!({ "type": "string", "enum": ["true", "false"] })
         }
-        TypeSpecification::Date { .. } => {
-            json!({ "type": "string", "format": "date" })
-        }
-        TypeSpecification::Time { .. } => {
-            json!({ "type": "string", "format": "time" })
-        }
-        TypeSpecification::Duration { .. } => {
-            json!({
-                "type": "object",
-                "properties": {
-                    "value": { "type": "number" },
-                    "unit": {
-                        "type": "string",
-                        "enum": [
-                            "years", "months", "weeks", "days",
-                            "hours", "minutes", "seconds"
-                        ]
-                    }
-                },
-                "required": ["value", "unit"]
-            })
-        }
-        TypeSpecification::Veto { .. } => {
-            json!({ "type": "string" })
-        }
-        TypeSpecification::Undetermined => unreachable!(
-            "BUG: build_post_property_schema_inner called with Undetermined sentinel type; this type must never reach OpenAPI generation"
-        ),
+        _ => json!({ "type": "string" }),
     }
 }
 
@@ -825,66 +714,6 @@ fn type_base_name(lemma_type: &LemmaType) -> String {
     }
 }
 
-/// Convert structured POST JSON input into the flat `HashMap<String, String>` format
-/// that the engine expects.
-///
-/// For example:
-/// - `{"quantity": 10}` → `("quantity", "10")`
-/// - `{"price": {"value": 100, "unit": "eur"}}` → `("price", "100 eur")`
-/// - `{"is_member": true}` → `("is_member", "true")`
-/// - `{"deadline": "2024-01-15"}` → `("deadline", "2024-01-15")`
-pub fn json_body_to_fact_values(body: &Value) -> HashMap<String, String> {
-    let mut result = HashMap::new();
-
-    if let Value::Object(map) = body {
-        for (key, value) in map {
-            if value.is_null() {
-                continue;
-            }
-            let string_value = structured_value_to_string(value);
-            result.insert(key.clone(), string_value);
-        }
-    }
-
-    result
-}
-
-/// Convert a single JSON value (potentially a structured object with value+unit)
-/// into the string format the engine expects.
-fn structured_value_to_string(value: &Value) -> String {
-    match value {
-        Value::Object(obj) => {
-            // Structured format: {"value": N, "unit": "u"} → "N u"
-            if let (Some(val), Some(unit)) = (obj.get("value"), obj.get("unit")) {
-                let val_str = match val {
-                    Value::Number(n) => n.to_string(),
-                    Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
-                let unit_str = match unit {
-                    Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
-                format!("{} {}", val_str, unit_str)
-            } else if let Some(val) = obj.get("value") {
-                // Object with only "value" (no unit), e.g. ratio without unit
-                match val {
-                    Value::Number(n) => n.to_string(),
-                    Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                }
-            } else {
-                serde_json::to_string(value).unwrap_or_default()
-            }
-        }
-        Value::String(s) => s.clone(),
-        Value::Number(n) => n.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Null => String::new(),
-        Value::Array(_) => serde_json::to_string(value).unwrap_or_default(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -922,6 +751,7 @@ mod tests {
             hour: 0,
             minute: 0,
             second: 0,
+            microsecond: 0,
             timezone: None,
         }
     }
@@ -979,11 +809,13 @@ mod tests {
         let groups = spec["x-tagGroups"]
             .as_array()
             .expect("x-tagGroups should be array");
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0]["name"], "pricing");
-        assert_eq!(groups[0]["tags"], json!(["pricing"]));
-        assert_eq!(groups[1]["name"], "General");
-        assert_eq!(groups[1]["tags"], json!(["Documents", "Meta"]));
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0]["name"], "Overview");
+        assert_eq!(groups[0]["tags"], json!(["Documents"]));
+        assert_eq!(groups[1]["name"], "Documents");
+        assert_eq!(groups[1]["tags"], json!(["pricing"]));
+        assert_eq!(groups[2]["name"], "Meta");
+        assert_eq!(groups[2]["tags"], json!(["Meta"]));
     }
 
     #[test]
@@ -1114,6 +946,21 @@ mod tests {
 
         assert!(spec["paths"]["/pricing"].is_object());
         assert!(spec["paths"]["/shipping"].is_object());
+    }
+
+    #[test]
+    fn test_nested_doc_path_schema_refs_are_valid() {
+        let engine = create_engine_with_code("doc a/b/c\nfact x: [number]\nrule result: x");
+        let spec = generate_openapi(&engine, false);
+
+        assert!(spec["paths"]["/a/b/c"]["post"].is_object());
+        let body_ref = spec["paths"]["/a/b/c"]["post"]["requestBody"]["content"]
+            ["application/x-www-form-urlencoded"]["schema"]["$ref"]
+            .as_str()
+            .unwrap();
+        assert_eq!(body_ref, "#/components/schemas/a_b_c_request");
+        assert!(spec["components"]["schemas"]["a_b_c_request"].is_object());
+        assert!(spec["components"]["schemas"]["a_b_c_request"]["properties"]["x"].is_object());
     }
 
     #[test]
@@ -1413,64 +1260,7 @@ rule discount: 20
     }
 
     // =======================================================================
-    // JSON body conversion (pre-existing)
-    // =======================================================================
-
-    #[test]
-    fn test_json_body_to_fact_values_simple_types() {
-        let body = json!({
-            "quantity": 10,
-            "name": "Alice",
-            "is_member": true
-        });
-        let facts = json_body_to_fact_values(&body);
-
-        assert_eq!(facts.get("quantity").unwrap(), "10");
-        assert_eq!(facts.get("name").unwrap(), "Alice");
-        assert_eq!(facts.get("is_member").unwrap(), "true");
-    }
-
-    #[test]
-    fn test_json_body_to_fact_values_structured_with_unit() {
-        let body = json!({
-            "price": { "value": 100, "unit": "eur" }
-        });
-        let facts = json_body_to_fact_values(&body);
-        assert_eq!(facts.get("price").unwrap(), "100 eur");
-    }
-
-    #[test]
-    fn test_json_body_to_fact_values_structured_without_unit() {
-        let body = json!({
-            "rate": { "value": 0.21 }
-        });
-        let facts = json_body_to_fact_values(&body);
-        assert_eq!(facts.get("rate").unwrap(), "0.21");
-    }
-
-    #[test]
-    fn test_json_body_to_fact_values_skips_null() {
-        let body = json!({
-            "quantity": 10,
-            "optional": null
-        });
-        let facts = json_body_to_fact_values(&body);
-        assert_eq!(facts.len(), 1);
-        assert!(facts.contains_key("quantity"));
-        assert!(!facts.contains_key("optional"));
-    }
-
-    #[test]
-    fn test_json_body_to_fact_values_duration() {
-        let body = json!({
-            "workweek": { "value": 40, "unit": "hours" }
-        });
-        let facts = json_body_to_fact_values(&body);
-        assert_eq!(facts.get("workweek").unwrap(), "40 hours");
-    }
-
-    // =======================================================================
-    // Type-specific parameter tests (pre-existing)
+    // Type-specific parameter tests
     // =======================================================================
 
     #[test]
@@ -1489,45 +1279,35 @@ rule discount: 20
     }
 
     #[test]
-    fn test_post_schema_boolean_uses_native_type() {
+    fn test_post_schema_boolean_is_string_with_enum() {
         let engine =
             create_engine_with_code("doc test\nfact is_active: [boolean]\nrule result: is_active");
         let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
-        assert_eq!(schema["properties"]["is_active"]["type"], "boolean");
+        let is_active = &schema["properties"]["is_active"];
+        assert_eq!(is_active["type"], "string");
+        assert_eq!(is_active["enum"], json!(["true", "false"]));
     }
 
     #[test]
-    fn test_get_parameter_boolean_has_enum() {
-        let engine =
-            create_engine_with_code("doc test\nfact is_active: [boolean]\nrule result: is_active");
-        let spec = generate_openapi(&engine, false);
-
-        let request_schema = &spec["components"]["schemas"]["test_request"];
-        let is_active = &request_schema["properties"]["is_active"];
-        assert_eq!(is_active["type"], "boolean");
-    }
-
-    #[test]
-    fn test_post_schema_number_uses_native_type() {
+    fn test_post_schema_number_is_string() {
         let engine =
             create_engine_with_code("doc test\nfact quantity: [number]\nrule result: quantity");
         let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
-        assert_eq!(schema["properties"]["quantity"]["type"], "number");
+        assert_eq!(schema["properties"]["quantity"]["type"], "string");
     }
 
     #[test]
-    fn test_post_schema_date_uses_string_format() {
+    fn test_post_schema_date_is_string() {
         let engine =
             create_engine_with_code("doc test\nfact deadline: [date]\nrule result: deadline");
         let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
         assert_eq!(schema["properties"]["deadline"]["type"], "string");
-        assert_eq!(schema["properties"]["deadline"]["format"], "date");
     }
 
     #[test]
@@ -1564,16 +1344,19 @@ rule result: quantity
             .contains("Number of items to order"));
         assert_eq!(
             req_schema["properties"]["quantity"]["default"]
-                .as_f64()
+                .as_str()
                 .unwrap(),
-            10.0
+            "10"
         );
         assert!(req_schema["properties"]["active"]["description"]
             .as_str()
             .unwrap()
             .contains("Whether the feature is enabled"));
-        assert!(req_schema["properties"]["active"]["default"]
-            .as_bool()
-            .unwrap());
+        assert_eq!(
+            req_schema["properties"]["active"]["default"]
+                .as_str()
+                .unwrap(),
+            "true"
+        );
     }
 }

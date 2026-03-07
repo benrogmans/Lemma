@@ -214,7 +214,19 @@ fn collect_rule_paths_from_expr<'a>(
         | ExpressionKind::MathematicalComputation(_, inner) => {
             collect_rule_paths_from_expr(inner, out);
         }
-        ExpressionKind::Literal(_) | ExpressionKind::FactPath(_) | ExpressionKind::Veto(_) => {}
+        ExpressionKind::DateRelative(_, date_expr, tolerance) => {
+            collect_rule_paths_from_expr(date_expr, out);
+            if let Some(tol) = tolerance {
+                collect_rule_paths_from_expr(tol, out);
+            }
+        }
+        ExpressionKind::DateCalendar(_, _, date_expr) => {
+            collect_rule_paths_from_expr(date_expr, out);
+        }
+        ExpressionKind::Literal(_)
+        | ExpressionKind::FactPath(_)
+        | ExpressionKind::Veto(_)
+        | ExpressionKind::Now => {}
     }
 }
 

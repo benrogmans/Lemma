@@ -5,7 +5,7 @@
 SPACE = _{ WHITE_SPACE | NEWLINE }
 
 reserved_keyword = _{
-    (^"doc" | ^"fact" | ^"rule" | ^"then" | ^"unless" | ^"not" | ^"in" | ^"and" | ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" | ^"abs" | ^"floor" | ^"ceil" | ^"round" | ^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject" | ^"veto" | ^"scale" | ^"number" | ^"text" | ^"date" | ^"time" | ^"duration" | ^"type" | ^"from" | ^"with" | ^"meta") ~ !(ASCII_ALPHANUMERIC | "_")
+    (^"doc" | ^"fact" | ^"rule" | ^"then" | ^"unless" | ^"not" | ^"in" | ^"and" | ^"now" | ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" | ^"abs" | ^"floor" | ^"ceil" | ^"round" | ^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject" | ^"veto" | ^"scale" | ^"number" | ^"text" | ^"date" | ^"time" | ^"duration" | ^"type" | ^"from" | ^"with" | ^"meta") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 // Low-level identifier used by public rules; kept silent so only higher-level
@@ -175,6 +175,8 @@ and_expression = {
 and_operand = {
     not_expr
   | comparison_expression
+  | date_calendar_expression
+  | date_relative_expression
   | conversion_expression
   | base_expression
 }
@@ -185,10 +187,13 @@ and_operand = {
 
 // Primary - the ONLY place where parentheses appear
 primary = {
-    literal
+    now_literal
+  | literal
   | reference
   | "(" ~ SPACE* ~ expression ~ SPACE* ~ ")"
 }
+
+now_literal = { ^"now" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // Individual operators (for type-safe parser matching)
 op_add = { "+" }
@@ -225,6 +230,23 @@ base_expression = { term ~ (SPACE* ~ (op_add | op_sub) ~ SPACE* ~ term)* }
 // so we accept any identifier here.
 conversion_target_name = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 conversion_expression = { base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ conversion_target_name }
+
+// ------------------------------------------------------------------------------------------------
+// DATE SUGAR EXPRESSIONS
+// ------------------------------------------------------------------------------------------------
+
+date_relative_kind = { ^"past" | ^"future" }
+calendar_unit_keyword = { ^"year" | ^"month" | ^"week" }
+
+date_calendar_expression = {
+    base_expression ~ SPACE+ ~ ^"not" ~ SPACE+ ~ ^"in" ~ SPACE+ ~ ^"calendar" ~ SPACE+ ~ calendar_unit_keyword
+  | base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ date_relative_kind ~ SPACE+ ~ ^"calendar" ~ SPACE+ ~ calendar_unit_keyword
+  | base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ ^"calendar" ~ SPACE+ ~ calendar_unit_keyword
+}
+
+date_relative_expression = {
+    base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ date_relative_kind ~ (SPACE+ ~ base_expression)?
+}
 
 // Duration units for conversion
 duration_unit = {
@@ -325,9 +347,10 @@ timezone_minute = { ASCII_DIGIT{2} }
 // Time literals (HH:MM:SS with optional timezone)
 time_literal = { hour ~ ":" ~ minute ~ (":" ~ second)? ~ timezone? }
 
-// ISO8601 DateTime literals with optional time and timezone
+// ISO8601 DateTime literals with optional time, fractional seconds, and timezone
+fractional_seconds = _{ "." ~ ASCII_DIGIT{1,6} }
 date_time_literal = {
-    year ~ "-" ~ month ~ "-" ~ day ~ ("T" ~ hour ~ ":" ~ minute ~ (":" ~ second)? ~ timezone?)?
+    year ~ "-" ~ month ~ "-" ~ day ~ ("T" ~ hour ~ ":" ~ minute ~ (":" ~ second ~ fractional_seconds?)? ~ timezone?)?
 }
 
 // ------------------------------------------------------------------------------------------------

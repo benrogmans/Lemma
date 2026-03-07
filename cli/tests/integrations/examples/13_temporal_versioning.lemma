@@ -66,19 +66,19 @@ fact gross_monthly_salary : [salary]
 
 fact thresholds : doc ind/kennismigrant
 
+rule eligible:
+  meets_salary_requirement
+
 rule required_monthly_salary:
   thresholds.threshold_age_30_plus
   unless applicant_age < 30
     then thresholds.threshold_under_30
 
-rule salary_surplus:
-  gross_monthly_salary - required_monthly_salary
-
 rule meets_salary_requirement:
   gross_monthly_salary >= required_monthly_salary
 
+rule salary_surplus:
+  gross_monthly_salary - required_monthly_salary
+
 rule application_fee:
   thresholds.application_fee
-
-rule eligible:
-  meets_salary_requirement

@@ -26,6 +26,7 @@ fn test_literal_value_to_primitive_type() {
         hour: 0,
         minute: 0,
         second: 0,
+        microsecond: 0,
         timezone: None,
     };
     assert_eq!(
@@ -188,6 +189,7 @@ fn test_literal_value_display_value() {
         hour: 0,
         minute: 0,
         second: 0,
+        microsecond: 0,
         timezone: None,
     };
     assert_eq!(
@@ -202,6 +204,7 @@ fn test_literal_value_display_value() {
         hour: 14,
         minute: 30,
         second: 45,
+        microsecond: 0,
         timezone: Some(TimezoneValue {
             offset_hours: 1,
             offset_minutes: 0,
@@ -254,6 +257,7 @@ fn test_datetime_value_display() {
         hour: 14,
         minute: 30,
         second: 45,
+        microsecond: 0,
         timezone: Some(TimezoneValue {
             offset_hours: 1,
             offset_minutes: 0,

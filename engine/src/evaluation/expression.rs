@@ -726,6 +726,136 @@ fn evaluate_single_expression(
             context.set_proof_node(current, proof_node);
             OperationResult::Veto(veto_expr.message.clone())
         }
+
+        ExpressionKind::Now => {
+            let value = context.now().clone();
+            let proof_node = ProofNode::Value {
+                value: value.clone(),
+                source: ValueSource::Computed,
+                source_location: current.source_location.clone(),
+            };
+            context.set_proof_node(current, proof_node);
+            OperationResult::Value(Box::new(value))
+        }
+
+        ExpressionKind::DateRelative(kind, date_expr, tolerance_expr) => {
+            let date_result = get_operand_result(results, date_expr, "date operand");
+            if let OperationResult::Veto(_) = date_result {
+                return propagate_veto_proof(
+                    context,
+                    current,
+                    date_expr,
+                    date_result,
+                    "date operand",
+                );
+            }
+
+            let date_val = unwrap_value_after_veto_check(
+                &date_result,
+                "date operand",
+                &current.source_location,
+            );
+
+            let date_semantic = match &date_val.value {
+                ValueKind::Date(dt) => dt,
+                _ => {
+                    return OperationResult::Veto(Some(
+                        "Date sugar 'in past/future' requires a date value".to_string(),
+                    ))
+                }
+            };
+
+            let now_val = context.now();
+            let now_semantic = match &now_val.value {
+                ValueKind::Date(dt) => dt,
+                _ => unreachable!("BUG: context.now() must be a Date value"),
+            };
+
+            let tolerance = match tolerance_expr {
+                Some(tol_expr) => {
+                    let tol_result = get_operand_result(results, tol_expr, "tolerance operand");
+                    if let OperationResult::Veto(_) = tol_result {
+                        return propagate_veto_proof(
+                            context,
+                            current,
+                            tol_expr,
+                            tol_result,
+                            "tolerance operand",
+                        );
+                    }
+                    let tol_val = unwrap_value_after_veto_check(
+                        &tol_result,
+                        "tolerance operand",
+                        &current.source_location,
+                    );
+                    match &tol_val.value {
+                        ValueKind::Duration(amount, unit) => Some((*amount, unit.clone())),
+                        _ => {
+                            return OperationResult::Veto(Some(
+                                "Tolerance in date sugar must be a duration value".to_string(),
+                            ))
+                        }
+                    }
+                }
+                None => None,
+            };
+
+            let result = crate::computation::datetime::compute_date_relative(
+                kind,
+                date_semantic,
+                tolerance.as_ref().map(|(a, u)| (a, u)),
+                now_semantic,
+            );
+
+            let date_proof = get_proof_node_required(context, date_expr, "date operand");
+            context.set_proof_node(current, date_proof);
+            result
+        }
+
+        ExpressionKind::DateCalendar(kind, unit, date_expr) => {
+            let date_result = get_operand_result(results, date_expr, "date operand");
+            if let OperationResult::Veto(_) = date_result {
+                return propagate_veto_proof(
+                    context,
+                    current,
+                    date_expr,
+                    date_result,
+                    "date operand",
+                );
+            }
+
+            let date_val = unwrap_value_after_veto_check(
+                &date_result,
+                "date operand",
+                &current.source_location,
+            );
+
+            let date_semantic = match &date_val.value {
+                ValueKind::Date(dt) => dt,
+                _ => {
+                    return OperationResult::Veto(Some(
+                        "Calendar sugar requires a date value".to_string(),
+                    ))
+                }
+            };
+
+            let now_val = context.now();
+            let now_semantic = match &now_val.value {
+                ValueKind::Date(dt) => dt,
+                _ => unreachable!("BUG: context.now() must be a Date value"),
+            };
+
+            let result = crate::computation::datetime::compute_date_calendar(
+                kind,
+                unit,
+                date_semantic,
+                now_semantic,
+            );
+
+            let date_proof = get_proof_node_required(context, date_expr, "date operand");
+            context.set_proof_node(current, date_proof);
+            result
+        }
     }
 }
 
