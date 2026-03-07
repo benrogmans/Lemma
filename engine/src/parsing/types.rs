@@ -68,6 +68,7 @@ pub(crate) fn parse_type_import(
 
     let mut type_names = Vec::new();
     let mut imported_doc_name = None;
+    let mut hash: Option<String> = None;
 
     for inner_pair in type_import_def.into_inner() {
         match inner_pair.as_rule() {
@@ -77,12 +78,16 @@ pub(crate) fn parse_type_import(
             Rule::doc_name => {
                 imported_doc_name = Some(super::facts::parse_doc_name_pair(inner_pair)?);
             }
+            Rule::doc_ref_hash => {
+                hash = Some(inner_pair.as_str().to_string());
+            }
             _ => {}
         }
     }
 
-    let imported_doc_name =
+    let mut imported_doc_name =
         imported_doc_name.expect("BUG: grammar guarantees type_import has doc_name");
+    imported_doc_name.hash_pin = hash;
 
     assert!(
         !type_names.is_empty(),
@@ -152,10 +157,10 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
             None,
         ),
         Rule::type_import_def => {
-            // Parse: type_name_def ~ "from" ~ doc_name
             let inner = first.clone().into_inner();
             let mut type_name_def = None;
             let mut imported_doc_name = None;
+            let mut hash: Option<String> = None;
 
             for item in inner {
                 match item.as_rule() {
@@ -170,6 +175,9 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
                     Rule::doc_name => {
                         imported_doc_name = Some(super::facts::parse_doc_name_pair(item)?);
                     }
+                    Rule::doc_ref_hash => {
+                        hash = Some(item.as_str().to_string());
+                    }
                     _ => {}
                 }
             }
@@ -177,8 +185,9 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
             let source_type =
                 type_name_def.expect("BUG: grammar guarantees type_import_def has type_name_def");
 
-            let from =
+            let mut from =
                 imported_doc_name.expect("BUG: grammar guarantees type_import_def has doc_name");
+            from.hash_pin = hash;
 
             (source_type, Some(from))
         }

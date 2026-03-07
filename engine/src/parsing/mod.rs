@@ -42,6 +42,7 @@ pub fn parse(
                 content.len() as f64 / (1024.0 * 1024.0)
             ),
             suggestion: "Reduce file size or split into multiple documents".to_string(),
+            document_context: None,
         });
     }
 
@@ -67,23 +68,22 @@ pub fn parse(
             Ok(docs)
         }
         Err(e) => {
-            let pest_span = match e.line_col {
-                pest::error::LineColLocation::Pos((line, col)) => Span {
-                    start: 0,
-                    end: 0,
-                    line,
-                    col,
-                },
-                pest::error::LineColLocation::Span((start_line, start_col), (_, _)) => Span {
-                    start: 0,
-                    end: 0,
-                    line: start_line,
-                    col: start_col,
-                },
+            let (line, col) = match e.line_col {
+                pest::error::LineColLocation::Pos((l, c)) => (l, c),
+                pest::error::LineColLocation::Span((l, c), _) => (l, c),
+            };
+            let (start_byte, end_byte) = line_col_to_byte_range(content, line, col);
+            let pest_span = Span {
+                start: start_byte,
+                end: end_byte,
+                line,
+                col,
             };
 
+            let message = humanize_pest_error(&e.variant);
+
             Err(Error::parsing(
-                e.variant.to_string(),
+                message,
                 Some(crate::parsing::source::Source::new(
                     attribute,
                     pest_span,
@@ -96,6 +96,77 @@ pub fn parse(
     }
 }
 
+/// Convert a 1-based line/col to a byte range covering the rest of that line.
+fn line_col_to_byte_range(text: &str, line: usize, col: usize) -> (usize, usize) {
+    let mut current_line = 1usize;
+    let mut line_start = 0usize;
+    for (i, b) in text.bytes().enumerate() {
+        if current_line == line {
+            let start = line_start + col.saturating_sub(1);
+            let end = text[i..].find('\n').map(|n| i + n).unwrap_or(text.len());
+            return (start.min(text.len()), end.max(start));
+        }
+        if b == b'\n' {
+            current_line += 1;
+            line_start = i + 1;
+        }
+    }
+    if current_line == line {
+        let start = line_start + col.saturating_sub(1);
+        return (start.min(text.len()), text.len());
+    }
+    (0, text.len().min(1))
+}
+
+fn humanize_pest_error(variant: &pest::error::ErrorVariant<Rule>) -> String {
+    match variant {
+        pest::error::ErrorVariant::ParsingError {
+            positives,
+            negatives,
+        } => {
+            let readable: Vec<&str> = positives.iter().filter_map(|r| rule_to_human(*r)).collect();
+            if readable.is_empty() {
+                if !negatives.is_empty() {
+                    "Unexpected token".to_string()
+                } else {
+                    "Syntax error".to_string()
+                }
+            } else if readable.len() == 1 {
+                format!("Expected {}", readable[0])
+            } else {
+                format!("Expected one of: {}", readable.join(", "))
+            }
+        }
+        pest::error::ErrorVariant::CustomError { message } => message.clone(),
+    }
+}
+
+fn rule_to_human(rule: Rule) -> Option<&'static str> {
+    match rule {
+        Rule::lemma_file => Some("a document declaration (e.g. 'doc my_document')"),
+        Rule::doc => Some("a document declaration"),
+        Rule::doc_declaration => Some("a document declaration (e.g. 'doc name')"),
+        Rule::doc_name => Some("a document name"),
+        Rule::doc_body => Some("document body (facts, rules, or types)"),
+        Rule::fact_definition => Some("a fact definition (e.g. 'fact x: 10')"),
+        Rule::rule_definition => Some("a rule definition (e.g. 'rule y: x + 1')"),
+        Rule::type_definition => Some("a type definition (e.g. 'type money: scale')"),
+        Rule::type_import => Some("a type import (e.g. 'type money from other_doc')"),
+        Rule::meta_definition => Some("a meta field (e.g. 'meta key: value')"),
+        Rule::expression => Some("an expression"),
+        Rule::unless_statement => Some("an unless clause"),
+        Rule::commentary_block => Some("a commentary block (triple-quoted string)"),
+        Rule::literal => Some("a value (number, text, boolean, date, etc.)"),
+        Rule::number_literal => Some("a number"),
+        Rule::text_literal => Some("a string (double-quoted)"),
+        Rule::boolean_literal => Some("a boolean (true/false/yes/no)"),
+        Rule::label => Some("an identifier"),
+        Rule::assignment_symbol => Some("':'"),
+        Rule::EOI => Some("end of file"),
+        _ => None,
+    }
+}
+
 fn parse_doc(
     pair: Pair<Rule>,
     attribute: &str,
@@ -105,7 +176,7 @@ fn parse_doc(
     let doc_start_line = pair.as_span().start_pos().line_col().0;
 
     let mut doc_name: Option<String> = None;
-    let mut doc_version: Option<String> = None;
+    let mut effective_from: Option<crate::parsing::ast::DateTimeValue> = None;
     let mut commentary: Option<String> = None;
     let mut facts = Vec::new();
     let mut rules = Vec::new();
@@ -125,31 +196,35 @@ fn parse_doc(
             }
             Rule::doc_declaration => {
                 for decl_inner in header_item.into_inner() {
-                    if decl_inner.as_rule() == Rule::doc_name {
-                        for name_part in decl_inner.into_inner() {
-                            match name_part.as_rule() {
-                                Rule::doc_name_base => {
-                                    doc_name = Some(name_part.as_str().to_string());
+                    match decl_inner.as_rule() {
+                        Rule::doc_name => {
+                            for name_part in decl_inner.into_inner() {
+                                match name_part.as_rule() {
+                                    Rule::doc_name_base => {
+                                        doc_name = Some(name_part.as_str().to_string());
+                                    }
+                                    Rule::doc_name_at => {}
+                                    _ => {}
                                 }
-                                Rule::doc_version_tag => {
-                                    let tag = name_part.as_str();
-                                    if tag.len() > crate::limits::MAX_VERSION_TAG_LENGTH {
-                                        return Err(Error::parsing(
+                            }
+                        }
+                        Rule::doc_effective_from => {
+                            let raw = decl_inner.as_str();
+                            effective_from =
+                                Some(crate::parsing::ast::DateTimeValue::parse(raw).ok_or_else(
+                                    || {
+                                        Error::parsing(
                                             format!(
-                                                "Version tag '{}' exceeds maximum length of {} characters",
-                                                tag, crate::limits::MAX_VERSION_TAG_LENGTH
+                                                "Invalid date/time in doc declaration: '{}'",
+                                                raw
                                             ),
                                             None,
                                             None::<String>,
-                                        ));
-                                    }
-                                    doc_version = Some(tag.to_string());
-                                }
-                                Rule::doc_name_at => {}
-                                _ => {}
-                            }
+                                        )
+                                    },
+                                )?);
                         }
-                        break;
+                        _ => {}
                     }
                 }
             }
@@ -238,9 +313,7 @@ fn parse_doc(
     let mut doc = LemmaDoc::new(name)
         .with_attribute(attribute.to_string())
         .with_start_line(doc_start_line);
-    if let Some(version) = doc_version {
-        doc = doc.with_version(version);
-    }
+    doc.effective_from = effective_from;
 
     if let Some(commentary_text) = commentary {
         doc = doc.set_commentary(commentary_text);
@@ -328,12 +401,12 @@ fact name: "Jack""#;
     }
 
     #[test]
-    fn parse_doc_name_first_dot_separates_version() {
-        let input = "doc my.doc\nrule x: 1";
+    fn parse_doc_name_no_version_tag() {
+        let input = "doc mydoc\nrule x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "my");
-        assert_eq!(result[0].version, Some("doc".to_string()));
+        assert_eq!(result[0].name, "mydoc");
+        assert_eq!(result[0].effective_from(), None);
     }
 
     #[test]
@@ -629,13 +702,13 @@ fact a: doc @user/workspace/doc_a"#;
     // =====================================================================
 
     #[test]
-    fn parse_registry_doc_ref_without_version() {
+    fn parse_registry_doc_ref_name_only() {
         let input = "doc example\nfact x: doc @owner/repo/somedoc";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
             crate::FactValue::DocumentReference(doc_ref) => {
                 assert_eq!(doc_ref.name, "owner/repo/somedoc");
-                assert_eq!(doc_ref.version, None);
+                assert_eq!(doc_ref.hash_pin, None);
                 assert!(doc_ref.is_registry);
             }
             other => panic!("Expected DocumentReference, got: {:?}", other),
@@ -643,13 +716,12 @@ fact a: doc @user/workspace/doc_a"#;
     }
 
     #[test]
-    fn parse_registry_doc_ref_with_version() {
-        let input = "doc example\nfact x: doc @owner/repo/somedoc.v1234234";
+    fn parse_registry_doc_ref_name_with_dots_is_whole_name() {
+        let input = "doc example\nfact x: doc @owner/repo/somedoc";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
             crate::FactValue::DocumentReference(doc_ref) => {
                 assert_eq!(doc_ref.name, "owner/repo/somedoc");
-                assert_eq!(doc_ref.version, Some("v1234234".to_string()));
                 assert!(doc_ref.is_registry);
             }
             other => panic!("Expected DocumentReference, got: {:?}", other),
@@ -657,13 +729,13 @@ fact a: doc @user/workspace/doc_a"#;
     }
 
     #[test]
-    fn parse_local_doc_ref_without_version() {
+    fn parse_local_doc_ref_name_only() {
         let input = "doc example\nfact x: doc mydoc";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
             crate::FactValue::DocumentReference(doc_ref) => {
                 assert_eq!(doc_ref.name, "mydoc");
-                assert_eq!(doc_ref.version, None);
+                assert_eq!(doc_ref.hash_pin, None);
                 assert!(!doc_ref.is_registry);
             }
             other => panic!("Expected DocumentReference, got: {:?}", other),
@@ -671,34 +743,22 @@ fact a: doc @user/workspace/doc_a"#;
     }
 
     #[test]
-    fn parse_local_doc_ref_with_version() {
-        let input = "doc example\nfact x: doc mydoc.v1234234";
-        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
-        match &result[0].facts[0].value {
-            crate::FactValue::DocumentReference(doc_ref) => {
-                assert_eq!(doc_ref.name, "mydoc");
-                assert_eq!(doc_ref.version, Some("v1234234".to_string()));
-                assert!(!doc_ref.is_registry);
-            }
-            other => panic!("Expected DocumentReference, got: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_doc_name_with_empty_version_is_error() {
+    fn parse_doc_name_with_trailing_dot_is_error() {
         let input = "doc mydoc.\nfact x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
-        assert!(result.is_err(), "Empty version tag should be a parse error");
+        assert!(
+            result.is_err(),
+            "Trailing dot after doc name should be a parse error"
+        );
     }
 
     #[test]
-    fn parse_type_import_with_version() {
-        let input = "doc example\ntype money from @lemma/std/finance.v2\nfact price: [money]";
+    fn parse_type_import_from_registry() {
+        let input = "doc example\ntype money from @lemma/std/finance\nfact price: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].types[0] {
             crate::TypeDef::Import { from, name, .. } => {
                 assert_eq!(from.name, "lemma/std/finance");
-                assert_eq!(from.version, Some("v2".to_string()));
                 assert!(from.is_registry);
                 assert_eq!(name, "money");
             }
@@ -707,56 +767,119 @@ fact a: doc @user/workspace/doc_a"#;
     }
 
     #[test]
-    fn parse_versioned_doc_declaration() {
-        let input = "doc mydoc.v1234234\nrule x: 1";
+    fn parse_doc_declaration_no_version() {
+        let input = "doc mydoc\nrule x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result[0].name, "mydoc");
-        assert_eq!(result[0].version, Some("v1234234".to_string()));
+        assert_eq!(result[0].effective_from(), None);
     }
 
     #[test]
-    fn parse_multiple_versioned_docs_in_same_file() {
-        let input = "doc mydoc.v1\nrule x: 1\n\ndoc mydoc.v1234234\nrule x: 2";
+    fn parse_multiple_docs_in_same_file() {
+        let input = "doc mydoc_a\nrule x: 1\n\ndoc mydoc_b\nrule x: 2";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].name, "mydoc");
-        assert_eq!(result[0].version, Some("v1".to_string()));
-        assert_eq!(result[1].name, "mydoc");
-        assert_eq!(result[1].version, Some("v1234234".to_string()));
+        assert_eq!(result[0].name, "mydoc_a");
+        assert_eq!(result[1].name, "mydoc_b");
     }
 
     #[test]
-    fn version_tag_at_max_length_is_accepted() {
-        let input = "doc mydoc.12345678\nrule x: 1";
+    fn parse_doc_reference_grammar_accepts_name_only() {
+        let input = "doc consumer\nfact m: doc other";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
-        assert!(result.is_ok(), "8-char version tag should be accepted");
+        assert!(result.is_ok(), "doc name without hash should parse");
+        let doc_ref = match &result.as_ref().unwrap()[0].facts[0].value {
+            crate::FactValue::DocumentReference(r) => r,
+            _ => panic!("expected DocumentReference"),
+        };
+        assert_eq!(doc_ref.name, "other");
+        assert_eq!(doc_ref.hash_pin, None);
     }
 
     #[test]
-    fn version_tag_exceeding_max_length_in_declaration_is_rejected() {
-        let input = "doc mydoc.123456789\nrule x: 1";
-        let result = parse(input, "test.lemma", &ResourceLimits::default());
-        assert!(result.is_err(), "9-char version tag should be rejected");
+    fn parse_doc_reference_with_hash() {
+        let input = "doc consumer\nfact cfg: doc config~a1b2c3d4";
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let doc_ref = match &result[0].facts[0].value {
+            crate::FactValue::DocumentReference(r) => r,
+            other => panic!("expected DocumentReference, got: {:?}", other),
+        };
+        assert_eq!(doc_ref.name, "config");
+        assert_eq!(doc_ref.hash_pin.as_deref(), Some("a1b2c3d4"));
     }
 
     #[test]
-    fn version_tag_exceeding_max_length_in_doc_reference_is_rejected() {
-        let input = "doc consumer\nfact m: doc other.123456789";
-        let result = parse(input, "test.lemma", &ResourceLimits::default());
-        assert!(
-            result.is_err(),
-            "9-char version tag in doc reference should be rejected"
-        );
+    fn parse_doc_reference_registry_with_hash() {
+        let input = "doc consumer\nfact ext: doc @user/workspace/cfg~ab12cd34";
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let doc_ref = match &result[0].facts[0].value {
+            crate::FactValue::DocumentReference(r) => r,
+            other => panic!("expected DocumentReference, got: {:?}", other),
+        };
+        assert_eq!(doc_ref.name, "user/workspace/cfg");
+        assert!(doc_ref.is_registry);
+        assert_eq!(doc_ref.hash_pin.as_deref(), Some("ab12cd34"));
     }
 
     #[test]
-    fn version_tag_exceeding_max_length_in_type_import_is_rejected() {
-        let input = "doc consumer\ntype money from @lemma/std/finance.123456789\nfact p: [money]";
+    fn parse_type_import_with_hash() {
+        let input = "doc consumer\ntype money from finance a1b2c3d4\nfact p: [money]";
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        match &result[0].types[0] {
+            crate::TypeDef::Import { from, name, .. } => {
+                assert_eq!(name, "money");
+                assert_eq!(from.name, "finance");
+                assert_eq!(from.hash_pin.as_deref(), Some("a1b2c3d4"));
+            }
+            other => panic!("expected Import, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_type_import_registry_with_hash() {
+        let input = "doc consumer\ntype money from @lemma/std/finance ab12cd34\nfact p: [money]";
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        match &result[0].types[0] {
+            crate::TypeDef::Import { from, name, .. } => {
+                assert_eq!(name, "money");
+                assert_eq!(from.name, "lemma/std/finance");
+                assert!(from.is_registry);
+                assert_eq!(from.hash_pin.as_deref(), Some("ab12cd34"));
+            }
+            other => panic!("expected Import, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_inline_type_from_with_hash() {
+        let input = "doc consumer\nfact price: [money from finance a1b2c3d4 -> minimum 0]";
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        match &result[0].facts[0].value {
+            crate::FactValue::TypeDeclaration {
+                base,
+                from,
+                constraints,
+                ..
+            } => {
+                assert_eq!(base, "money");
+                let doc_ref = from.as_ref().expect("expected from doc ref");
+                assert_eq!(doc_ref.name, "finance");
+                assert_eq!(doc_ref.hash_pin.as_deref(), Some("a1b2c3d4"));
+                assert!(constraints.is_some());
+            }
+            other => panic!("expected TypeDeclaration, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_type_import_doc_name_with_slashes() {
+        let input = "doc consumer\ntype money from @lemma/std/finance\nfact p: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
-        assert!(
-            result.is_err(),
-            "9-char version tag in type import should be rejected"
-        );
+        assert!(result.is_ok(), "type import from registry should parse");
+        match &result.unwrap()[0].types[0] {
+            crate::TypeDef::Import { from, .. } => assert_eq!(from.name, "lemma/std/finance"),
+            _ => panic!("expected Import"),
+        }
     }
 
     #[test]

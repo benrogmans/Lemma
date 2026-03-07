@@ -1,7 +1,6 @@
 use super::ast::Span;
 use super::Rule;
 use crate::error::Error;
-use crate::limits::MAX_VERSION_TAG_LENGTH;
 use crate::parsing::ast::*;
 use crate::parsing::types;
 use crate::Source;
@@ -214,23 +213,49 @@ fn parse_fact_document_reference(
     _doc_name: &str,
     _source_text: Arc<str>,
 ) -> Result<FactValue, Error> {
-    let doc_name_pair = pair
-        .into_inner()
-        .next()
-        .expect("BUG: grammar guarantees doc_reference has doc_name");
+    let mut doc_ref: Option<DocRef> = None;
+    let mut hash: Option<String> = None;
+    let mut effective: Option<DateTimeValue> = None;
 
-    Ok(FactValue::DocumentReference(parse_doc_name_pair(
-        doc_name_pair,
-    )?))
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::doc_name => {
+                doc_ref = Some(parse_doc_name_pair(inner)?);
+            }
+            Rule::doc_ref_hash => {
+                hash = Some(inner.as_str().to_string());
+            }
+            Rule::doc_ref_datetime => {
+                let s = inner.as_str();
+                let dt = DateTimeValue::parse(s).ok_or_else(|| {
+                    Error::validation(
+                        format!(
+                            "Invalid datetime in doc reference: '{}'. Expected YYYY-MM-DD or ISO 8601 datetime.",
+                            s
+                        ),
+                        None,
+                        None::<String>,
+                    )
+                })?;
+                effective = Some(dt);
+            }
+            _ => unreachable!(
+                "BUG: unexpected rule in doc_reference: {:?}",
+                inner.as_rule()
+            ),
+        }
+    }
+
+    let mut dr = doc_ref.expect("BUG: grammar guarantees doc_reference has doc_name");
+    dr.hash_pin = hash;
+    dr.effective = effective;
+    Ok(FactValue::DocumentReference(dr))
 }
 
 /// Extract a `DocRef` from a `doc_name` grammar pair by reading its named inner pairs.
-///
-/// Returns `Err` if the version tag exceeds [`MAX_VERSION_TAG_LENGTH`] characters.
 pub(crate) fn parse_doc_name_pair(pair: Pair<Rule>) -> Result<DocRef, Error> {
     let mut is_registry = false;
     let mut name = String::new();
-    let mut version = None;
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -240,28 +265,15 @@ pub(crate) fn parse_doc_name_pair(pair: Pair<Rule>) -> Result<DocRef, Error> {
             Rule::doc_name_base => {
                 name = inner.as_str().to_string();
             }
-            Rule::doc_version_tag => {
-                let tag = inner.as_str();
-                if tag.len() > MAX_VERSION_TAG_LENGTH {
-                    return Err(Error::parsing(
-                        format!(
-                            "Version tag '{}' exceeds maximum length of {} characters",
-                            tag, MAX_VERSION_TAG_LENGTH
-                        ),
-                        None,
-                        None::<String>,
-                    ));
-                }
-                version = Some(tag.to_string());
-            }
             _ => {}
         }
     }
 
     Ok(DocRef {
         name,
-        version,
         is_registry,
+        hash_pin: None,
+        effective: None,
     })
 }
 
