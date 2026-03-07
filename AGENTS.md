@@ -11,7 +11,7 @@ Lemma is a **declarative, strictly typed, pure language without functions**. It 
 - **Documents** (`doc`) contain **facts** (named values) and **rules** (expressions that may have `unless` clauses).
 - There are **no functions, no side effects, no mutable state** during evaluation.
 - **Types** include primitives (`boolean`, `number`, `scale`, `text`, `date`, `time`, `duration`, `ratio`) and user-defined types (e.g. `scale` with units like `eur`, `kilogram`).
-- **References** (facts and rules) are written by name; the engine resolves whether each name is a fact or a rule during planning (e.g. `rule_name` or `doc_ref.rule_name`). **Last matching `unless` wins**.
+- **References** (facts and rules) are written by name; the engine resolves whether each name is a fact or a rule during planning (e.g. `rule_name` or `doc_ref.rule_name`). References to rule’s result; **last matching `unless` wins**.
 
 Lemma aims to be reliable enough for critical domains (e.g. aerospace, global regulations). That implies strict validation, deterministic execution, and a clear split between “invalid document” (errors) and “valid but rule doesn’t yield a value” (Veto).
 
@@ -95,14 +95,13 @@ High-level flow:
    - `evaluate` runs the plan; no document parsing during evaluate.
 
 7. **Errors** (`engine/src/error.rs`)  
-   - **Error**: Parse, Semantic, Inversion, Runtime, Engine, MissingFact, CircularDependency, ResourceLimitExceeded, MultipleErrors.  
-   - **LemmaResult&lt;T&gt;** = `Result<T, Error>`.
+   - **Error**: Parsing, Validation (semantic/planning, including circular dependency), Inversion, Registry, ResourceLimitExceeded, Request (invalid API request, e.g. document not found).  
 
 ---
 
 ## 4. Lemma syntax (quick reference and examples)
 
-Lemma has **no inline comments** (`//` and `#` do not exist in the language). Use optional doc-level commentary in triple quotes after `doc name` when you need to document a document.
+Lemma has **no inline comments** (`//` and `#` do not exist in the language). Use optional document-level commentary in triple quotes after `doc name` when you need to document a document.
 
 ### Documents and commentary
 
@@ -117,7 +116,7 @@ Optional description in triple quotes only.
 """
 ```
 
-Document names may carry an optional `.version_tag` suffix (e.g. `doc pricing.v1`). Base names cannot contain a period. `pricing.v1` and `pricing.v2` are distinct documents. An unversioned reference resolves to the latest loaded version by natural sort. A document cannot reference any version of itself (same base name).
+Document names may carry an optional `.version_tag` suffix (e.g. `doc pricing.v1`). Base names cannot contain a period. `pricing.v1` and `pricing.v2` are distinct documents. An unversioned reference resolves to the latest loaded temporal version by natural sort. A document cannot reference any temporal version of itself (same base name).
 
 ### Facts
 
@@ -135,6 +134,9 @@ fact product: [text -> option "A" -> option "B"]
 fact currency: doc base_types
 fact other_doc.price: 15
 ```
+
+Doc reference syntax: **name required**; optional datetime and optional content hash for verification:
+`doc name`, `doc name datetime`, `doc name datetime hash`, `doc name hash`. Hash is verification only; resolution is always by (name, effective).
 
 Values: literals (number, text, boolean, date, duration, percent, number+unit), type annotation `[type]` or `[type -> ...]`, or `doc other_doc`. Bind a fact in another doc with `fact doc.name: value`.
 
@@ -237,7 +239,7 @@ abs value
 
 - **Arithmetic:** `+` `-` `*` `/` `%` `^`
 - **Comparison:** `>` `<` `>=` `<=` `==` `!=` `is` `is not`
-- **Logical:** `and` `or` `not`
+- **Logical:** `and` `not`
 - **Conversion:** `value in unit` (e.g. `price in usd`, `duration in days`)
 - **Math-like (prefix):** `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `abs`, `floor`, `ceil`, `round` (parentheses optional)
 
@@ -286,3 +288,4 @@ See **documentation/reference.md** and **documentation/index.md** for full synta
 - **Veto** is the way “this rule has no value” is expressed (e.g. division by zero, user `veto "..."`); it is not an error. Propagate Veto according to `veto_semantics.md`.
 - When editing the codebase, preserve these guarantees, use **Error** for invalid Lemma, use **Veto** for domain-level “no value,” and **panic/unreachable** for bugs. Prefer **cargo nextest** and TDD as in the project rules.
 - **Never use placeholders in Lemma code** (no dummy values, TODO literals, or fake data in `.lemma` files, docs, or tests). Placeholders destroy certainty; use real, intended values or omit/fail instead.
+- **CLI:** `lemma hash <doc> [--effective T]` prints the document’s content hash. `lemma run <doc> [--effective T] [--hash H]` verifies hash before evaluate. **APIs:** evaluate requests take required doc_name, optional effective, optional content_hash (verify before evaluate).

@@ -240,7 +240,7 @@ rule compound: principal * (1 + rate) ^ years
 rule is_eligible: age >= 18 and income > 30000
 ```
 
-**Logical**: `and`, `or`, `not`
+**Logical**: `and`, `not`
 
 ```lemma
 rule can_approve: is_manager and not is_suspended
@@ -642,8 +642,9 @@ rule eligible_age: age >= 18 and age <= 65
 
 rule eligible_health: not pre_existing_conditions
 
-rule eligible_employment: employment_status == "full_time"
-  or employment_status == "part_time"
+rule eligible_employment: false
+  unless employment_status == "full_time" then true
+  unless employment_status == "part_time" then true
 
 rule is_eligible: eligible_age and eligible_health and eligible_employment
   unless eligible_age == false then veto "Age not within eligible range"
@@ -1066,7 +1067,7 @@ Rule Definition:
 Expressions:
   <arithmetic>        // +, -, *, /, %, ^
   <comparison>        // >, <, >=, <=, ==, !=, is, is not
-  <logical>          // and, or, not
+  <logical>          // and, not
   <mathematical>     // sqrt, sin, cos, tan, log, exp, abs, floor, ceil, round
   <unit-conversion>  // <value> in <unit>
   <reference>        // name or path (resolved to fact or rule)
