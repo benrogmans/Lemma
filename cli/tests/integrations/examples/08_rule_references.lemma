@@ -1,4 +1,4 @@
-doc rule_references
+spec rule_references
 """
 Rule References
 
@@ -29,7 +29,7 @@ rule driving_status:
   unless can_drive_legally then "Can drive legally"
 
 
-doc eligibility_check
+spec eligibility_check
 """
 Eligibility Check with Rule References
 

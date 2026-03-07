@@ -21,7 +21,7 @@ Lemma is a declarative logic language for expressing rules, facts, and business 
 Lemma is whitespace-insensitive. Use formatting that makes your rules readable:
 
 ```lemma
-doc pricing
+spec pricing
 
 fact quantity: [number]
 fact base_price: 100
@@ -44,20 +44,20 @@ Format for clarity - all examples below show formatting styles, not requirements
 
 ## Language Concepts
 
-### Documents
+### Specs
 
-Every Lemma file contains documents - namespaces for facts and rules:
+Every Lemma file contains specs — namespaces for facts and rules:
 
 ```lemma
-doc employee/contract
+spec employee/contract
 """
-Optional documentation in triple quotes
+Optional description in triple quotes
 """
 ```
 
-Documents support hierarchical naming: `contract/employment`, `company/policies/vacation`.
+Specs support hierarchical naming: `contract/employment`, `company/policies/vacation`.
 
-See: [examples/03_document_references.lemma](examples/03_document_references.lemma)
+See: [examples/03_spec_references.lemma](examples/03_spec_references.lemma)
 
 ### Facts
 
@@ -194,28 +194,28 @@ See: [examples/08_rule_references.lemma](examples/08_rule_references.lemma)
 
 ### Document References
 
-Compose documents by referencing and overriding:
+Compose specs by referencing and overriding:
 
 ```lemma
-doc base_employee
+spec base_employee
 fact name: "John Doe"
 fact salary: 5000
 
-doc manager
-fact employee: doc base_employee
+spec manager
+fact employee: spec base_employee
 fact employee.name: "Alice Smith"
 fact employee.salary: 8000
 
 rule manager_bonus: employee.salary * 0.15
 ```
 
-Document names may include a `.version_tag` suffix (e.g. `doc pricing.v1`). Base names cannot contain a period.
-Versioned and unversioned documents with the same base name are distinct.
+Spec names may include a `.version_tag` suffix (e.g. `spec pricing.v1`). Base names cannot contain a period.
+Versioned and unversioned specs with the same base name are distinct.
 An unversioned reference resolves to the latest loaded temporal version by natural sort.
-A document cannot reference any temporal version of itself.
+A spec cannot reference any temporal version of itself.
 
-See: [reference.md - Document References](reference.md#document-references) and
-[examples/03_document_references.lemma](examples/03_document_references.lemma)
+See: [reference.md - Spec References](reference.md#spec-references) and
+[examples/03_spec_references.lemma](examples/03_spec_references.lemma)
 
 ## Expressions
 
@@ -301,7 +301,7 @@ fact price: 100 eur
 fact weight: 75 kilograms
 ```
 
-**Type Imports** - Reuse types across documents:
+**Type Imports** - Reuse types across specs:
 
 ```lemma
 type currency from base_types
@@ -380,7 +380,7 @@ use std::collections::HashMap;
 let mut engine = Engine::new();
 
 engine.add_lemma_files(HashMap::from([("pricing.lemma".into(), r#"
-    doc pricing
+    spec pricing
     fact quantity: [number]
     fact is_vip: false
 
@@ -415,7 +415,7 @@ Browse [examples/](examples/) directory:
 
 1. **[01_simple_facts.lemma](examples/01_simple_facts.lemma)** - All fact types and literals
 2. **[02_rules_and_unless.lemma](examples/02_rules_and_unless.lemma)** - Conditional logic, veto usage
-3. **[03_document_references.lemma](examples/03_document_references.lemma)** - Document composition
+3. **[03_spec_references.lemma](examples/03_spec_references.lemma)** - Spec composition
 4. **[04_unit_conversions.lemma](examples/04_unit_conversions.lemma)** - Working with typed units
 5. **[05_date_handling.lemma](examples/05_date_handling.lemma)** - Date arithmetic and comparisons
 6. **[06_tax_calculation.lemma](examples/06_tax_calculation.lemma)** - Real-world progressive tax rules
@@ -427,13 +427,13 @@ Browse [examples/](examples/) directory:
 Lemma uses a pure Rust evaluator for fast and deterministic execution:
 
 ```bash
-# Run a document
-lemma run document
+# Run a spec
+lemma run spec
 
 # Provide fact values
-lemma run document age=25 income=50000
+lemma run spec age=25 income=50000
 
-# Load multiple documents
+# Load multiple specs
 lemma workspace ./policies/
 ```
 

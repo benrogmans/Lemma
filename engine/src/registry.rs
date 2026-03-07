@@ -3,12 +3,12 @@
 //! A Registry maps `@`-prefixed identifiers to Lemma source text (for resolution)
 //! and to human-facing addresses (for editor navigation).
 //!
-//! The engine calls `resolve_doc` and `resolve_type` during the resolution step
-//! (after parsing local files, before planning) to fetch external documents.
+//! The engine calls `resolve_spec` and `resolve_type` during the resolution step
+//! (after parsing local files, before planning) to fetch external specs.
 //! The Language Server calls `url_for_id` to produce clickable links.
 //!
 //! Input to all methods is the identifier **without** the leading `@`
-//! (for example `"user/workspace/somedoc"` for `doc @user/workspace/somedoc`).
+//! (for example `"user/workspace/somespec"` for `spec @user/workspace/somespec`).
 
 use crate::engine::Context;
 use crate::error::Error;
@@ -25,18 +25,18 @@ use std::sync::Arc;
 
 /// A bundle of Lemma source text returned by the Registry.
 ///
-/// Contains one or more `doc ...` blocks as raw Lemma source code.
-/// Doc declarations use plain names (e.g. `doc org/project/helper`); the `@`
+/// Contains one or more `spec ...` blocks as raw Lemma source code.
+/// Spec declarations use plain names (e.g. `spec org/project/helper`); the `@`
 /// prefix is a reference qualifier and never appears in declarations.
 #[derive(Debug, Clone)]
 pub struct RegistryBundle {
-    /// Lemma source containing one or more `doc ...` blocks.
-    /// Doc declarations use plain names without `@` (e.g. `doc org/project/helper`).
+    /// Lemma source containing one or more `spec ...` blocks.
+    /// Spec declarations use plain names without `@` (e.g. `spec org/project/helper`).
     /// The `@` prefix is a reference qualifier, not part of the name.
     pub lemma_source: String,
 
     /// Source identifier used for diagnostics and proofs
-    /// (for example `"@user/workspace/somedoc"`).
+    /// (for example `"@user/workspace/somespec"`).
     pub attribute: String,
 }
 
@@ -44,10 +44,10 @@ pub struct RegistryBundle {
 ///
 /// Registry implementations classify their errors into these kinds so that
 /// the engine (and ultimately the user) can distinguish between a missing
-/// document, an authorization failure, a network outage, etc.
+/// spec, an authorization failure, a network outage, etc.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistryErrorKind {
-    /// The requested document or type was not found (e.g. HTTP 404).
+    /// The requested spec or type was not found (e.g. HTTP 404).
     NotFound,
     /// The request was unauthorized or forbidden (e.g. HTTP 401, 403).
     Unauthorized,
@@ -91,19 +91,19 @@ impl std::error::Error for RegistryError {}
 /// Implementations must be `Send + Sync` so they can be shared across threads.
 /// Resolution is async so that WASM can use `fetch()` and native can use async HTTP.
 ///
-/// `fetch_docs` / `fetch_types` return a bundle containing ALL temporal versions
+/// `fetch_specs` / `fetch_types` return a bundle containing ALL temporal versions
 /// for the requested identifier. The engine handles temporal resolution
-/// locally using `effective_from` on the parsed documents.
+/// locally using `effective_from` on the parsed specs.
 ///
 /// `name` is the base identifier **without** the leading `@`.
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait Registry: Send + Sync {
-    /// Fetch all temporal versions for a `doc @...` reference.
+    /// Fetch all temporal versions for a `spec @...` reference.
     ///
-    /// `name` is the base name (e.g. `"user/workspace/somedoc"`).
-    /// Returns a bundle whose `lemma_source` contains all temporal versions of the document.
-    async fn fetch_docs(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
+    /// `name` is the base name (e.g. `"user/workspace/somespec"`).
+    /// Returns a bundle whose `lemma_source` contains all temporal versions of the spec.
+    async fn fetch_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
 
     /// Fetch all temporal versions for a `type ... from @...` reference.
     ///
@@ -211,7 +211,7 @@ impl HttpFetcher for WasmHttpFetcher {
 /// This is the default registry for the Lemma engine. It resolves `@...` identifiers
 /// by making HTTP GET requests to `https://lemmabase.com/@{identifier}.lemma`.
 ///
-/// LemmaBase.com returns the requested document with all of its dependencies inlined,
+/// LemmaBase.com returns the requested spec with all of its dependencies inlined,
 /// so the resolution loop typically completes in a single iteration.
 ///
 /// This struct is only available when the `registry` feature is enabled (which it is
@@ -243,7 +243,7 @@ impl LemmaBase {
         Self { fetcher }
     }
 
-    /// Base URL for the document; when effective is set, appends ?effective=... for temporal resolution.
+    /// Base URL for the spec; when effective is set, appends ?effective=... for temporal resolution.
     fn source_url(&self, name: &str, effective: Option<&DateTimeValue>) -> String {
         let base = format!("{}/@{}.lemma", Self::BASE_URL, name);
         match effective {
@@ -261,7 +261,7 @@ impl LemmaBase {
         }
     }
 
-    /// Format a display identifier for error messages, e.g. `"@owner/repo/doc"` or `"@owner/repo/doc 2026-01-01"`.
+    /// Format a display identifier for error messages, e.g. `"@owner/repo/spec"` or `"@owner/repo/spec 2026-01-01"`.
     fn display_id(name: &str, effective: Option<&DateTimeValue>) -> String {
         match effective {
             None => format!("@{}", name),
@@ -319,7 +319,7 @@ impl Default for LemmaBase {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl Registry for LemmaBase {
-    async fn fetch_docs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+    async fn fetch_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
         self.fetch_source(name).await
     }
 
@@ -333,19 +333,19 @@ impl Registry for LemmaBase {
 }
 
 // ---------------------------------------------------------------------------
-// Resolution: fetching external `@...` documents from a Registry
+// Resolution: fetching external `@...` specs from a Registry
 // ---------------------------------------------------------------------------
 
-/// Resolve all external `@...` references in the given document set.
+/// Resolve all external `@...` references in the given spec set.
 ///
-/// Starting from the already-parsed local docs, this function:
-/// 1. Collects all `@...` identifiers referenced by the docs.
-/// 2. For each identifier not already present as a document name, calls the Registry.
-/// 3. Parses the returned source text into additional Lemma docs.
-/// 4. Recurses: checks the newly added docs for further `@...` references.
+/// Starting from the already-parsed local specs, this function:
+/// 1. Collects all `@...` identifiers referenced by the specs.
+/// 2. For each identifier not already present as a spec name, calls the Registry.
+/// 3. Parses the returned source text into additional Lemma specs.
+/// 4. Recurses: checks the newly added specs for further `@...` references.
 /// 5. Repeats until no unresolved references remain.
 ///
-/// Fetches unresolved `@...` references from the registry and inserts resulting docs into `ctx`.
+/// Fetches unresolved `@...` references from the registry and inserts resulting specs into `ctx`.
 /// Updates `sources` with Registry-returned source texts.
 ///
 /// Errors are fatal: if the Registry returns an error, or if a `@...` reference
@@ -374,7 +374,7 @@ pub async fn resolve_registry_references(
             already_requested.insert(dedup);
 
             let bundle_result = match reference.kind {
-                RegistryReferenceKind::Document => registry.fetch_docs(&reference.name).await,
+                RegistryReferenceKind::Spec => registry.fetch_specs(&reference.name).await,
                 RegistryReferenceKind::TypeImport => registry.fetch_types(&reference.name).await,
             };
 
@@ -385,7 +385,7 @@ pub async fn resolve_registry_references(
                 Err(registry_error) => {
                     let suggestion = match &registry_error.kind {
                         RegistryErrorKind::NotFound => Some(
-                            "Check that the identifier is spelled correctly and that the document exists on the registry.".to_string(),
+                            "Check that the identifier is spelled correctly and that the spec exists on the registry.".to_string(),
                         ),
                         RegistryErrorKind::Unauthorized => Some(
                             "Check your authentication credentials or permissions for this registry.".to_string(),
@@ -411,17 +411,17 @@ pub async fn resolve_registry_references(
 
             sources.insert(bundle.attribute.clone(), bundle.lemma_source.clone());
 
-            let new_docs =
+            let new_specs =
                 match crate::parsing::parse(&bundle.lemma_source, &bundle.attribute, limits) {
-                    Ok(docs) => docs,
+                    Ok(specs) => specs,
                     Err(e) => {
                         round_errors.push(e);
                         return Err(round_errors);
                     }
                 };
 
-            for doc in new_docs {
-                if let Err(e) = ctx.insert_doc(Arc::new(doc)) {
+            for spec in new_specs {
+                if let Err(e) = ctx.insert_spec(Arc::new(spec)) {
                     round_errors.push(e);
                 }
             }
@@ -435,10 +435,10 @@ pub async fn resolve_registry_references(
     Ok(())
 }
 
-/// The kind of `@...` reference: a document reference or a type import.
+/// The kind of `@...` reference: a spec reference or a type import.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum RegistryReferenceKind {
-    Document,
+    Spec,
     TypeImport,
 }
 
@@ -456,8 +456,8 @@ impl RegistryReference {
     }
 }
 
-/// Collect all unresolved `@...` references from docs in `ctx`.
-/// Unresolved = not satisfied by ctx.get_doc(name, effective) and not already in already_requested.
+/// Collect all unresolved `@...` references from specs in `ctx`.
+/// Unresolved = not satisfied by ctx.get_spec(name, effective) and not already in already_requested.
 fn collect_unresolved_registry_references(
     ctx: &Context,
     already_requested: &HashSet<(String, RegistryReferenceKind)>,
@@ -465,48 +465,49 @@ fn collect_unresolved_registry_references(
     let mut unresolved: Vec<RegistryReference> = Vec::new();
     let mut seen_in_this_round: HashSet<(String, RegistryReferenceKind)> = HashSet::new();
 
-    for doc in ctx.iter() {
-        let doc = doc.as_ref();
-        if doc.attribute.is_none() {
-            let has_registry_refs =
-                doc.facts.iter().any(
-                    |f| matches!(&f.value, FactValue::DocumentReference(ref r) if r.is_registry),
-                ) || doc
+    for spec in ctx.iter() {
+        let spec = spec.as_ref();
+        if spec.attribute.is_none() {
+            let has_registry_refs = spec
+                .facts
+                .iter()
+                .any(|f| matches!(&f.value, FactValue::SpecReference(ref r) if r.is_registry))
+                || spec
                     .types
                     .iter()
                     .any(|t| matches!(t, TypeDef::Import { from, .. } if from.is_registry));
             if has_registry_refs {
                 panic!(
-                    "BUG: document '{}' must have source attribute when it has registry references",
-                    doc.name
+                    "BUG: spec '{}' must have source attribute when it has registry references",
+                    spec.name
                 );
             }
             continue;
         }
 
-        for fact in &doc.facts {
-            if let FactValue::DocumentReference(doc_ref) = &fact.value {
-                if !doc_ref.is_registry {
+        for fact in &spec.facts {
+            if let FactValue::SpecReference(spec_ref) = &fact.value {
+                if !spec_ref.is_registry {
                     continue;
                 }
                 let already_satisfied = ctx
-                    .get_doc_effective_from(doc_ref.name.as_str(), None)
+                    .get_spec_effective_from(spec_ref.name.as_str(), None)
                     .is_some();
-                let dedup = (doc_ref.name.clone(), RegistryReferenceKind::Document);
+                let dedup = (spec_ref.name.clone(), RegistryReferenceKind::Spec);
                 if !already_satisfied
                     && !already_requested.contains(&dedup)
                     && seen_in_this_round.insert(dedup)
                 {
                     unresolved.push(RegistryReference {
-                        name: doc_ref.name.clone(),
-                        kind: RegistryReferenceKind::Document,
+                        name: spec_ref.name.clone(),
+                        kind: RegistryReferenceKind::Spec,
                         source: fact.source_location.clone(),
                     });
                 }
             }
         }
 
-        for type_def in &doc.types {
+        for type_def in &spec.types {
             if let TypeDef::Import {
                 from,
                 source_location,
@@ -517,7 +518,7 @@ fn collect_unresolved_registry_references(
                     continue;
                 }
                 let already_satisfied = ctx
-                    .get_doc_effective_from(from.name.as_str(), None)
+                    .get_spec_effective_from(from.name.as_str(), None)
                     .is_some();
                 let dedup = (from.name.clone(), RegistryReferenceKind::TypeImport);
                 if !already_satisfied
@@ -558,7 +559,7 @@ mod tests {
         }
 
         /// Add a bundle containing all zones for this identifier.
-        fn add_doc_bundle(&mut self, identifier: &str, lemma_source: &str) {
+        fn add_spec_bundle(&mut self, identifier: &str, lemma_source: &str) {
             self.bundles.insert(
                 identifier.to_string(),
                 RegistryBundle {
@@ -572,12 +573,12 @@ mod tests {
     #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
     #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
     impl Registry for TestRegistry {
-        async fn fetch_docs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+        async fn fetch_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             self.bundles
                 .get(name)
                 .cloned()
                 .ok_or_else(|| RegistryError {
-                    message: format!("Document '{}' not found in test registry", name),
+                    message: format!("Spec '{}' not found in test registry", name),
                     kind: RegistryErrorKind::NotFound,
                 })
         }
@@ -605,13 +606,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_with_no_registry_references_returns_local_docs_unchanged() {
-        let source = r#"doc example
+    async fn resolve_with_no_registry_references_returns_local_specs_unchanged() {
+        let source = r#"spec example
 fact price: 100"#;
-        let local_docs = crate::parse(source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let local_specs = crate::parse(source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut store = Context::new();
-        for doc in &local_docs {
-            store.insert_doc(Arc::new(doc.clone())).unwrap();
+        for spec in &local_specs {
+            store.insert_spec(Arc::new(spec.clone())).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), source.to_string());
@@ -632,23 +633,23 @@ fact price: 100"#;
     }
 
     #[tokio::test]
-    async fn resolve_fetches_single_doc_from_registry() {
-        let local_source = r#"doc main_doc
-fact external: doc @org/project/helper
+    async fn resolve_fetches_single_spec_from_registry() {
+        let local_source = r#"spec main_spec
+fact external: spec @org/project/helper
 rule value: external.quantity"#;
-        let local_docs =
+        let local_specs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut store = Context::new();
-        for doc in local_docs {
-            store.insert_doc(Arc::new(doc)).unwrap();
+        for spec in local_specs {
+            store.insert_spec(Arc::new(spec)).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
         let mut registry = TestRegistry::new();
-        registry.add_doc_bundle(
+        registry.add_spec_bundle(
             "org/project/helper",
-            r#"doc org/project/helper
+            r#"spec org/project/helper
 fact quantity: 42"#,
         );
 
@@ -663,12 +664,12 @@ fact quantity: 42"#,
 
         assert_eq!(store.len(), 2);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
-        assert!(names.iter().any(|n| n == "main_doc"));
+        assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "org/project/helper"));
     }
 
     #[tokio::test]
-    async fn fetch_docs_returns_all_zones_and_url_for_id_supports_effective() {
+    async fn fetch_specs_returns_all_zones_and_url_for_id_supports_effective() {
         let effective = DateTimeValue {
             year: 2026,
             month: 1,
@@ -680,48 +681,48 @@ fact quantity: 42"#,
             timezone: None,
         };
         let mut registry = TestRegistry::new();
-        registry.add_doc_bundle(
-            "org/doc",
-            "doc org/doc 2025-01-01\nfact x: 1\n\ndoc org/doc 2026-01-15\nfact x: 2",
+        registry.add_spec_bundle(
+            "org/spec",
+            "spec org/spec 2025-01-01\nfact x: 1\n\nspec org/spec 2026-01-15\nfact x: 2",
         );
 
-        let bundle = registry.fetch_docs("org/doc").await.unwrap();
+        let bundle = registry.fetch_specs("org/spec").await.unwrap();
         assert!(bundle.lemma_source.contains("fact x: 1"));
         assert!(bundle.lemma_source.contains("fact x: 2"));
 
         assert_eq!(
-            registry.url_for_id("org/doc", None),
-            Some("https://test.registry/org/doc".to_string())
+            registry.url_for_id("org/spec", None),
+            Some("https://test.registry/org/spec".to_string())
         );
         assert_eq!(
-            registry.url_for_id("org/doc", Some(&effective)),
-            Some("https://test.registry/org/doc?effective=2026-01-15".to_string())
+            registry.url_for_id("org/spec", Some(&effective)),
+            Some("https://test.registry/org/spec?effective=2026-01-15".to_string())
         );
     }
 
     #[tokio::test]
     async fn resolve_fetches_transitive_dependencies() {
-        let local_source = r#"doc main_doc
-fact a: doc @org/project/doc_a"#;
-        let local_docs =
+        let local_source = r#"spec main_spec
+fact a: spec @org/project/spec_a"#;
+        let local_specs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut store = Context::new();
-        for doc in local_docs {
-            store.insert_doc(Arc::new(doc)).unwrap();
+        for spec in local_specs {
+            store.insert_spec(Arc::new(spec)).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
         let mut registry = TestRegistry::new();
-        // doc_a depends on doc_b
-        registry.add_doc_bundle(
-            "org/project/doc_a",
-            r#"doc org/project/doc_a
-fact b: doc @org/project/doc_b"#,
+        // spec_a depends on spec_b
+        registry.add_spec_bundle(
+            "org/project/spec_a",
+            r#"spec org/project/spec_a
+fact b: spec @org/project/spec_b"#,
         );
-        registry.add_doc_bundle(
-            "org/project/doc_b",
-            r#"doc org/project/doc_b
+        registry.add_spec_bundle(
+            "org/project/spec_b",
+            r#"spec org/project/spec_b
 fact value: 99"#,
         );
 
@@ -736,32 +737,32 @@ fact value: 99"#,
 
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
-        assert!(names.iter().any(|n| n == "main_doc"));
-        assert!(names.iter().any(|n| n == "org/project/doc_a"));
-        assert!(names.iter().any(|n| n == "org/project/doc_b"));
+        assert!(names.iter().any(|n| n == "main_spec"));
+        assert!(names.iter().any(|n| n == "org/project/spec_a"));
+        assert!(names.iter().any(|n| n == "org/project/spec_b"));
     }
 
     #[tokio::test]
-    async fn resolve_handles_bundle_with_multiple_docs() {
-        let local_source = r#"doc main_doc
-fact a: doc @org/project/doc_a"#;
-        let local_docs =
+    async fn resolve_handles_bundle_with_multiple_specs() {
+        let local_source = r#"spec main_spec
+fact a: spec @org/project/spec_a"#;
+        let local_specs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut store = Context::new();
-        for doc in local_docs {
-            store.insert_doc(Arc::new(doc)).unwrap();
+        for spec in local_specs {
+            store.insert_spec(Arc::new(spec)).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
         let mut registry = TestRegistry::new();
-        // Registry returns both doc_a and doc_b in one bundle
-        registry.add_doc_bundle(
-            "org/project/doc_a",
-            r#"doc org/project/doc_a
-fact b: doc @org/project/doc_b
+        // Registry returns both spec_a and spec_b in one bundle
+        registry.add_spec_bundle(
+            "org/project/spec_a",
+            r#"spec org/project/spec_a
+fact b: spec @org/project/spec_b
 
-doc org/project/doc_b
+spec org/project/spec_b
 fact value: 99"#,
         );
 
@@ -776,20 +777,20 @@ fact value: 99"#,
 
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
-        assert!(names.iter().any(|n| n == "main_doc"));
-        assert!(names.iter().any(|n| n == "org/project/doc_a"));
-        assert!(names.iter().any(|n| n == "org/project/doc_b"));
+        assert!(names.iter().any(|n| n == "main_spec"));
+        assert!(names.iter().any(|n| n == "org/project/spec_a"));
+        assert!(names.iter().any(|n| n == "org/project/spec_b"));
     }
 
     #[tokio::test]
     async fn resolve_returns_registry_error_when_registry_fails() {
-        let local_source = r#"doc main_doc
-fact external: doc @org/project/missing"#;
-        let local_docs =
+        let local_source = r#"spec main_spec
+fact external: spec @org/project/missing"#;
+        let local_specs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut store = Context::new();
-        for doc in local_docs {
-            store.insert_doc(Arc::new(doc)).unwrap();
+        for spec in local_specs {
+            store.insert_spec(Arc::new(spec)).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
@@ -840,14 +841,14 @@ fact external: doc @org/project/missing"#;
 
     #[tokio::test]
     async fn resolve_returns_all_registry_errors_when_multiple_refs_fail() {
-        let local_source = r#"doc main_doc
-fact helper: doc @org/example/helper
+        let local_source = r#"spec main_spec
+fact helper: spec @org/example/helper
 type money from @lemma/std/finance"#;
-        let local_docs =
+        let local_specs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut store = Context::new();
-        for doc in local_docs {
-            store.insert_doc(Arc::new(doc)).unwrap();
+        for spec in local_specs {
+            store.insert_spec(Arc::new(spec)).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
@@ -867,7 +868,7 @@ type money from @lemma/std/finance"#;
         assert_eq!(
             errors.len(),
             2,
-            "Both doc ref and type import ref should produce a Registry error"
+            "Both spec ref and type import ref should produce a Registry error"
         );
         let identifiers: Vec<&str> = errors
             .iter()
@@ -881,7 +882,7 @@ type money from @lemma/std/finance"#;
             .collect();
         assert!(
             identifiers.contains(&"org/example/helper"),
-            "Should include doc ref error: {:?}",
+            "Should include spec ref error: {:?}",
             identifiers
         );
         assert!(
@@ -893,24 +894,24 @@ type money from @lemma/std/finance"#;
 
     #[tokio::test]
     async fn resolve_does_not_request_same_identifier_twice() {
-        let local_source = r#"doc doc_one
-fact a: doc @org/shared
+        let local_source = r#"spec spec_one
+fact a: spec @org/shared
 
-doc doc_two
-fact b: doc @org/shared"#;
-        let local_docs =
+spec spec_two
+fact b: spec @org/shared"#;
+        let local_specs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut store = Context::new();
-        for doc in local_docs {
-            store.insert_doc(Arc::new(doc)).unwrap();
+        for spec in local_specs {
+            store.insert_spec(Arc::new(spec)).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
         let mut registry = TestRegistry::new();
-        registry.add_doc_bundle(
+        registry.add_spec_bundle(
             "org/shared",
-            r#"doc org/shared
+            r#"spec org/shared
 fact value: 1"#,
         );
 
@@ -923,7 +924,7 @@ fact value: 1"#,
         .await
         .unwrap();
 
-        // Should have doc_one, doc_two, and org/shared (fetched only once).
+        // Should have spec_one, spec_two, and org/shared (fetched only once).
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "org/shared"));
@@ -931,22 +932,22 @@ fact value: 1"#,
 
     #[tokio::test]
     async fn resolve_handles_type_import_from_registry() {
-        let local_source = r#"doc main_doc
+        let local_source = r#"spec main_spec
 type money from @lemma/std/finance
 fact price: [money]"#;
-        let local_docs =
+        let local_specs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
         let mut store = Context::new();
-        for doc in local_docs {
-            store.insert_doc(Arc::new(doc)).unwrap();
+        for spec in local_specs {
+            store.insert_spec(Arc::new(spec)).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
         let mut registry = TestRegistry::new();
-        registry.add_doc_bundle(
+        registry.add_spec_bundle(
             "lemma/std/finance",
-            r#"doc lemma/std/finance
+            r#"spec lemma/std/finance
 type money: scale
  -> unit eur 1.00
  -> unit usd 1.10
@@ -964,7 +965,7 @@ type money: scale
 
         assert_eq!(store.len(), 2);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
-        assert!(names.iter().any(|n| n == "main_doc"));
+        assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "lemma/std/finance"));
     }
 
@@ -1040,10 +1041,10 @@ type money: scale
         #[test]
         fn source_url_without_effective() {
             let registry = LemmaBase::new();
-            let url = registry.source_url("user/workspace/somedoc", None);
+            let url = registry.source_url("user/workspace/somespec", None);
             assert_eq!(
                 url,
-                format!("{}/@user/workspace/somedoc.lemma", LemmaBase::BASE_URL)
+                format!("{}/@user/workspace/somespec.lemma", LemmaBase::BASE_URL)
             );
         }
 
@@ -1060,11 +1061,11 @@ type money: scale
                 microsecond: 0,
                 timezone: None,
             };
-            let url = registry.source_url("user/workspace/somedoc", Some(&effective));
+            let url = registry.source_url("user/workspace/somespec", Some(&effective));
             assert_eq!(
                 url,
                 format!(
-                    "{}/@user/workspace/somedoc.lemma?effective=2026-01-15",
+                    "{}/@user/workspace/somespec.lemma?effective=2026-01-15",
                     LemmaBase::BASE_URL
                 )
             );
@@ -1073,20 +1074,23 @@ type money: scale
         #[test]
         fn source_url_for_deeply_nested_identifier() {
             let registry = LemmaBase::new();
-            let url = registry.source_url("org/team/project/subdir/doc", None);
+            let url = registry.source_url("org/team/project/subdir/spec", None);
             assert_eq!(
                 url,
-                format!("{}/@org/team/project/subdir/doc.lemma", LemmaBase::BASE_URL)
+                format!(
+                    "{}/@org/team/project/subdir/spec.lemma",
+                    LemmaBase::BASE_URL
+                )
             );
         }
 
         #[test]
         fn navigation_url_without_effective() {
             let registry = LemmaBase::new();
-            let url = registry.navigation_url("user/workspace/somedoc", None);
+            let url = registry.navigation_url("user/workspace/somespec", None);
             assert_eq!(
                 url,
-                format!("{}/@user/workspace/somedoc", LemmaBase::BASE_URL)
+                format!("{}/@user/workspace/somespec", LemmaBase::BASE_URL)
             );
         }
 
@@ -1103,11 +1107,11 @@ type money: scale
                 microsecond: 0,
                 timezone: None,
             };
-            let url = registry.navigation_url("user/workspace/somedoc", Some(&effective));
+            let url = registry.navigation_url("user/workspace/somespec", Some(&effective));
             assert_eq!(
                 url,
                 format!(
-                    "{}/@user/workspace/somedoc?effective=2026-01-15",
+                    "{}/@user/workspace/somespec?effective=2026-01-15",
                     LemmaBase::BASE_URL
                 )
             );
@@ -1116,20 +1120,20 @@ type money: scale
         #[test]
         fn navigation_url_for_deeply_nested_identifier() {
             let registry = LemmaBase::new();
-            let url = registry.navigation_url("org/team/project/subdir/doc", None);
+            let url = registry.navigation_url("org/team/project/subdir/spec", None);
             assert_eq!(
                 url,
-                format!("{}/@org/team/project/subdir/doc", LemmaBase::BASE_URL)
+                format!("{}/@org/team/project/subdir/spec", LemmaBase::BASE_URL)
             );
         }
 
         #[test]
         fn url_for_id_returns_navigation_url() {
             let registry = LemmaBase::new();
-            let url = registry.url_for_id("user/workspace/somedoc", None);
+            let url = registry.url_for_id("user/workspace/somespec", None);
             assert_eq!(
                 url,
-                Some(format!("{}/@user/workspace/somedoc", LemmaBase::BASE_URL))
+                Some(format!("{}/@user/workspace/somespec", LemmaBase::BASE_URL))
             );
         }
 
@@ -1146,11 +1150,11 @@ type money: scale
                 microsecond: 0,
                 timezone: None,
             };
-            let url = registry.url_for_id("owner/repo/doc", Some(&effective));
+            let url = registry.url_for_id("owner/repo/spec", Some(&effective));
             assert_eq!(
                 url,
                 Some(format!(
-                    "{}/@owner/repo/doc?effective=2026-01-01",
+                    "{}/@owner/repo/spec?effective=2026-01-01",
                     LemmaBase::BASE_URL
                 ))
             );
@@ -1171,8 +1175,8 @@ type money: scale
             let from_new = LemmaBase::new();
             let from_default = LemmaBase::default();
             assert_eq!(
-                from_new.url_for_id("test/doc", None),
-                from_default.url_for_id("test/doc", None)
+                from_new.url_for_id("test/spec", None),
+                from_default.url_for_id("test/spec", None)
             );
         }
 
@@ -1183,13 +1187,13 @@ type money: scale
         #[tokio::test]
         async fn fetch_source_returns_bundle_on_success() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
-                "doc org/my_doc\nfact x: 1",
+                "spec org/my_spec\nfact x: 1",
             )));
 
-            let bundle = registry.fetch_source("org/my_doc").await.unwrap();
+            let bundle = registry.fetch_source("org/my_spec").await.unwrap();
 
-            assert_eq!(bundle.lemma_source, "doc org/my_doc\nfact x: 1");
-            assert_eq!(bundle.attribute, "@org/my_doc");
+            assert_eq!(bundle.lemma_source, "spec org/my_spec\nfact x: 1");
+            assert_eq!(bundle.attribute, "@org/my_spec");
         }
 
         #[tokio::test]
@@ -1198,15 +1202,15 @@ type money: scale
             let captured = captured_url.clone();
             let mock = MockHttpFetcher::with_handler(move |url| {
                 *captured.lock().unwrap() = url.to_string();
-                Ok("doc test/doc\nfact x: 1".to_string())
+                Ok("spec test/spec\nfact x: 1".to_string())
             });
             let registry = LemmaBase::with_fetcher(Box::new(mock));
 
-            let _ = registry.fetch_source("user/workspace/somedoc").await;
+            let _ = registry.fetch_source("user/workspace/somespec").await;
 
             assert_eq!(
                 *captured_url.lock().unwrap(),
-                format!("{}/@user/workspace/somedoc.lemma", LemmaBase::BASE_URL)
+                format!("{}/@user/workspace/somespec.lemma", LemmaBase::BASE_URL)
             );
         }
 
@@ -1321,7 +1325,7 @@ type money: scale
                 ),
             ));
 
-            let err = registry.fetch_source("org/doc").await.unwrap_err();
+            let err = registry.fetch_source("org/spec").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::NetworkError);
             assert!(
@@ -1341,21 +1345,21 @@ type money: scale
         // -------------------------------------------------------------------
 
         #[tokio::test]
-        async fn fetch_docs_delegates_to_fetch_source() {
+        async fn fetch_specs_delegates_to_fetch_source() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
-                "doc org/resolved\nfact a: 1",
+                "spec org/resolved\nfact a: 1",
             )));
 
-            let bundle = registry.fetch_docs("org/resolved").await.unwrap();
+            let bundle = registry.fetch_specs("org/resolved").await.unwrap();
 
-            assert_eq!(bundle.lemma_source, "doc org/resolved\nfact a: 1");
+            assert_eq!(bundle.lemma_source, "spec org/resolved\nfact a: 1");
             assert_eq!(bundle.attribute, "@org/resolved");
         }
 
         #[tokio::test]
         async fn fetch_types_delegates_to_fetch_source() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
-                "doc lemma/std/finance\ntype money: scale\n -> unit eur 1.00",
+                "spec lemma/std/finance\ntype money: scale\n -> unit eur 1.00",
             )));
 
             let bundle = registry.fetch_types("lemma/std/finance").await.unwrap();
@@ -1369,11 +1373,11 @@ type money: scale
         }
 
         #[tokio::test]
-        async fn fetch_docs_propagates_http_error() {
+        async fn fetch_specs_propagates_http_error() {
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
 
-            let err = registry.fetch_docs("org/missing").await.unwrap_err();
+            let err = registry.fetch_specs("org/missing").await.unwrap_err();
 
             assert!(err.message.contains("HTTP 404"));
         }

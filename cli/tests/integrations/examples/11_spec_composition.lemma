@@ -1,4 +1,4 @@
-doc pricing/base_config
+spec pricing/base_config
 """
 Base Pricing Configuration
 
@@ -19,7 +19,7 @@ rule final_price:
   base_price * (1 - standard_discount) * (1 + tax_rate)
 
 
-doc pricing/wholesale
+spec pricing/wholesale
 """
 Wholesale Pricing
 
@@ -47,7 +47,7 @@ rule margin_savings:
   100 - base_price
 
 
-doc pricing/retail
+spec pricing/retail
 """
 Retail Pricing
 
@@ -75,17 +75,17 @@ rule premium_multiplier:
   base_price / 100
 
 
-doc order/line_item
+spec order/line_item
 """
 Order Line Item
 
 Combines pricing with quantity calculations.
-Demonstrates nested document references and multi-level fact access.
+Demonstrates nested spec references and multi-level fact access.
 """
 
 fact quantity: [number -> minimum 0 -> default 10]
 
-fact pricing: doc pricing/base_config
+fact pricing: spec pricing/base_config
 
 rule line_total:
   pricing.final_price * quantity
@@ -94,16 +94,16 @@ rule has_discount:
   pricing.standard_discount > 0%
 
 
-doc order/wholesale_order
+spec order/wholesale_order
 """
 Wholesale Order
 
 Uses wholesale pricing configuration for bulk orders.
-Shows how to reference a document that itself references another document.
+Shows how to reference a spec that itself references another spec.
 """
 
-fact line:          doc order/line_item
-fact line.pricing:  doc pricing/wholesale
+fact line:          spec order/line_item
+fact line.pricing:  spec pricing/wholesale
 fact line.quantity: 100
 
 rule order_total:
@@ -113,7 +113,7 @@ rule effective_unit_price:
   order_total / line.quantity
 
 
-doc order/retail_order
+spec order/retail_order
 """
 Retail Order
 
@@ -121,8 +121,8 @@ Uses retail pricing for individual customer orders.
 Demonstrates different fact paths producing different results.
 """
 
-fact line:          doc order/line_item
-fact line.pricing:  doc pricing/retail
+fact line:          spec order/line_item
+fact line.pricing:  spec pricing/retail
 fact line.quantity: 5
 
 rule order_total:
@@ -132,7 +132,7 @@ rule effective_unit_price:
   order_total / line.quantity
 
 
-doc order/comparison
+spec order/comparison
 """
 Order Comparison
 
@@ -140,9 +140,9 @@ Compares wholesale and retail orders side-by-side.
 Shows how the same rule evaluated through different fact paths yields different results.
 """
 
-fact retail: doc order/retail_order
+fact retail: spec order/retail_order
 
-fact wholesale: doc order/wholesale_order
+fact wholesale: spec order/wholesale_order
 
 rule wholesale_total:
   wholesale.order_total
@@ -157,7 +157,7 @@ rule retail_is_more_expensive:
   retail_total > wholesale_total
 
 
-doc order/custom_wholesale
+spec order/custom_wholesale
 """
 Custom Wholesale Order
 
@@ -165,7 +165,7 @@ Demonstrates fine-grained bindings through nested paths.
 Shows binding facts deep in the reference chain.
 """
 
-fact order:                       doc order/wholesale_order
+fact order:                       spec order/wholesale_order
 fact order.line.pricing.tax_rate: 19%
 fact order.line.quantity:         250
 
@@ -176,19 +176,19 @@ rule savings_vs_standard:
   order.order_total
 
 
-doc complex/multi_reference
+spec complex/multi_reference
 """
-Multiple Document References
+Multiple Spec References
 
-Shows multiple independent document references in a single document.
-Demonstrates mixing different base documents for complex scenarios.
+Shows multiple independent spec references in a single spec.
+Demonstrates mixing different base specs for complex scenarios.
 """
 
-fact base_config: doc pricing/base_config
+fact base_config: spec pricing/base_config
 
-fact retail_config: doc pricing/retail
+fact retail_config: spec pricing/retail
 
-fact wholesale_config: doc pricing/wholesale
+fact wholesale_config: spec pricing/wholesale
 
 rule avg_discount:
   (wholesale_config.standard_discount

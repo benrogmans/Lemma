@@ -48,11 +48,11 @@ const engine = new WasmEngine();
 
 #### `addLemmaFile(code: string, filename: string): string`
 
-Adds a Lemma document to the engine.
+Adds a Lemma spec to the engine.
 
 ```javascript
 const result = engine.addLemmaFile(`
-  doc employee_contract
+  spec employee_contract
 
   fact salary: 5000 eur
   fact start_date: 2024-01-15
@@ -64,7 +64,7 @@ const result = engine.addLemmaFile(`
 
 const response = JSON.parse(result);
 if (response.success) {
-  console.log('Document loaded:', response.data);
+  console.log('Spec loaded:', response.data);
 } else {
   console.error('Error:', response.error);
 }
@@ -72,7 +72,7 @@ if (response.success) {
 
 #### `evaluate(docName: string, facts: string): string`
 
-Evaluates a document with optional runtime facts.
+Evaluates a spec with optional runtime facts.
 
 ```javascript
 // Evaluate with default facts
@@ -86,24 +86,24 @@ const result2 = engine.evaluate('employee_contract', JSON.stringify({
 
 const response = JSON.parse(result2);
 if (response.success) {
-  console.log('Document:', response.data.document);
+  console.log('Spec:', response.data.spec);
   console.log('Rules:', response.data.rules);
   // Access specific rule results directly:
   // response.data.rules.annual_salary.value
 }
 ```
 
-#### `listDocuments(): string`
+#### `listSpecs(): string`
 
-Lists all loaded documents in the engine.
+Lists all loaded specs in the engine.
 
 ```javascript
-const result = engine.listDocuments();
+const result = engine.listSpecs();
 const response = JSON.parse(result);
 
 if (response.success) {
-  console.log('Loaded documents:', response.data);
-  // response.data is an array of document names
+  console.log('Loaded specs:', response.data);
+  // response.data is an array of spec names
 }
 ```
 
@@ -132,7 +132,7 @@ async function calculatePricing() {
 
   // Define pricing rules
   const pricingDoc = `
-    doc product_pricing
+    spec product_pricing
 
     fact base_price: 100 usd
     fact quantity: 1
@@ -160,7 +160,7 @@ async function calculatePricing() {
     rule final_price: base_price * quantity * (1 - best_discount)
   `;
 
-  // Load the document
+  // Load the spec
   const loadResult = JSON.parse(
     engine.addLemmaFile(pricingDoc, 'pricing.lemma')
   );
@@ -219,7 +219,7 @@ interface PricingResults {
 interface EvaluationResponse {
   success: boolean;
   data?: {
-    document: string;
+    spec: string;
     rules: {
       [ruleName: string]: {
         value: any;  // The computed value (e.g., {Number: "100"})
@@ -233,14 +233,14 @@ interface EvaluationResponse {
     };
   };
   error?: string;
-  warnings?: string[];  // Document-level warnings
+  warnings?: string[];  // Spec-level warnings
 }
 
 async function typedExample() {
   await init();
   const engine = new WasmEngine();
 
-  // ... load document
+  // ... load spec
 
   const facts = {
     quantity: 10,
@@ -279,8 +279,8 @@ try {
 ### Performance Tips
 
 1. **Initialize once**: The WASM module should be initialized once per application
-2. **Reuse engines**: Create one `WasmEngine` and load multiple documents
-3. **Batch operations**: Load all documents before evaluating
+2. **Reuse engines**: Create one `WasmEngine` and load multiple specs
+3. **Batch operations**: Load all specs before evaluating
 4. **Cache results**: Evaluation results can be cached if facts don't change
 
 ### Compatibility

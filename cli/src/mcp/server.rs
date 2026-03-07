@@ -95,7 +95,7 @@ mod imp {
     /// Configuration for the MCP server.
     #[derive(Default)]
     pub struct McpConfig {
-        /// When true, admin tools (`add_document`, `get_document_source`) are
+        /// When true, admin tools (`add_spec`, `get_spec_source`) are
         /// advertised and allowed. When false (default), the server is read-only.
         pub admin: bool,
     }
@@ -167,13 +167,13 @@ mod imp {
             let mut tools = vec![
                 serde_json::json!({
                     "name": "evaluate",
-                    "description": "Evaluate rules in a Lemma document. Returns the result and a step-by-step reasoning trace showing which facts were used and which conditions matched. Omit 'rule' to evaluate all rules.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "document": {
-                                "type": "string",
-                                "description": "Name of the document (from 'doc <name>' declaration)"
+                "description": "Evaluate rules in a Lemma spec. Returns the result and a step-by-step reasoning trace showing which facts were used and which conditions matched. Omit 'rule' to evaluate all rules.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "spec": {
+                                        "type": "string",
+                                        "description": "Name of the spec (from 'spec <name>' declaration)"
                             },
                             "rule": {
                                 "type": "string",
@@ -190,50 +190,50 @@ mod imp {
                                 "description": "Optional: evaluate at a specific effective datetime (e.g. '2026', '2026-03', '2026-03-04', '2026-03-04T10:30:00Z')"
                             }
                         },
-                        "required": ["document"]
+                        "required": ["spec"]
                     }
                 }),
                 serde_json::json!({
-                    "name": "list_documents",
-                    "description": "List all loaded Lemma documents with their schemas: fact names, types, defaults, and rule names with return types.",
+                    "name": "list_specs",
+                    "description": "List all loaded Lemma specs with their schemas: fact names, types, defaults, and rule names with return types.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "effective": {
                                 "type": "string",
-                                "description": "Optional: list documents at a specific effective datetime (e.g. '2026', '2026-03-04')"
+                                "description": "Optional: list specs at a specific effective datetime (e.g. '2026', '2026-03-04')"
                             }
                         }
                     }
                 }),
                 serde_json::json!({
                     "name": "get_schema",
-                    "description": "Get a document's schema: its facts (inputs with types, constraints, and defaults) and rules (outputs with types). Optionally scope to a specific rule to see only the facts it needs. Use this before calling evaluate to know which facts to provide.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "document": {
-                                "type": "string",
-                                "description": "Name of the document (from 'doc <name>' declaration)"
-                            },
-                            "rule": {
-                                "type": "string",
-                                "description": "Optional: name of a specific rule. Omit to get the full document schema."
-                            },
+                "description": "Get a spec's schema: its facts (inputs with types, constraints, and defaults) and rules (outputs with types). Optionally scope to a specific rule to see only the facts it needs. Use this before calling evaluate to know which facts to provide.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "spec": {
+                                        "type": "string",
+                                        "description": "Name of the spec (from 'spec <name>' declaration)"
+                                    },
+                                    "rule": {
+                                        "type": "string",
+                                        "description": "Optional: name of a specific rule. Omit to get the full spec schema."
+                                    },
                             "effective": {
                                 "type": "string",
                                 "description": "Optional: get schema at a specific effective datetime"
                             }
                         },
-                        "required": ["document"]
+                        "required": ["spec"]
                     }
                 }),
             ];
 
             if self.config.admin {
                 tools.push(serde_json::json!({
-                    "name": "add_document",
-                    "description": "Add a Lemma document to the engine. Returns the document schema on success.",
+                    "name": "add_spec",
+                    "description": "Add a Lemma spec to the engine. Returns the spec schema on success.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -243,28 +243,28 @@ mod imp {
                             },
                             "source_id": {
                                 "type": "string",
-                                "description": "Optional identifier for this document source"
+                                "description": "Optional identifier for this spec source"
                             }
                         },
                         "required": ["code"]
                     }
                 }));
                 tools.push(serde_json::json!({
-                    "name": "get_document_source",
-                    "description": "Return the Lemma source code for a document. Useful for inspecting or debugging the rules that produce evaluation results.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "document": {
-                                "type": "string",
-                                "description": "Name of the document"
-                            },
+                    "name": "get_spec_source",
+"description": "Return the Lemma source code for a spec. Useful for inspecting or debugging the rules that produce evaluation results.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "spec": {
+                                        "type": "string",
+                                        "description": "Name of the spec"
+                                    },
                             "effective": {
                                 "type": "string",
                                 "description": "Optional: get source at a specific effective datetime"
                             }
                         },
-                        "required": ["document"]
+                        "required": ["spec"]
                     }
                 }));
             }
@@ -290,16 +290,16 @@ mod imp {
             debug!("Calling tool: {}", tool_name);
 
             match tool_name {
-                "add_document" | "get_document_source" if !self.config.admin => {
+                "add_spec" | "get_spec_source" if !self.config.admin => {
                     Err(McpError::invalid_params(
                         "Admin tools are disabled. Start the server with --admin to enable them."
                             .to_string(),
                     ))
                 }
-                "add_document" => self.tool_add_document(arguments),
-                "get_document_source" => self.tool_get_document_source(arguments),
+                "add_spec" => self.tool_add_spec(arguments),
+                "get_spec_source" => self.tool_get_spec_source(arguments),
                 "evaluate" => self.tool_evaluate(arguments),
-                "list_documents" => self.tool_list_documents(arguments),
+                "list_specs" => self.tool_list_specs(arguments),
                 "get_schema" => self.tool_get_schema(arguments),
                 _ => Err(McpError::invalid_params(format!(
                     "Unknown tool: {}",
@@ -308,7 +308,7 @@ mod imp {
             }
         }
 
-        fn tool_add_document(
+        fn tool_add_spec(
             &mut self,
             args: &serde_json::Value,
         ) -> Result<serde_json::Value, McpError> {
@@ -318,18 +318,18 @@ mod imp {
 
             if code.trim().is_empty() {
                 return Err(McpError::invalid_params(
-                    "Document code cannot be empty".to_string(),
+                    "Spec code cannot be empty".to_string(),
                 ));
             }
 
             let source_id = args["source_id"]
                 .as_str()
                 .map(String::from)
-                .unwrap_or_else(|| format!("doc_{}", chrono::Utc::now().timestamp_millis()));
+                .unwrap_or_else(|| format!("spec_{}", chrono::Utc::now().timestamp_millis()));
 
             let names_before: std::collections::HashSet<String> = self
                 .engine
-                .list_documents()
+                .list_specs()
                 .iter()
                 .map(|d| d.name.clone())
                 .collect();
@@ -348,30 +348,30 @@ mod imp {
                         .map(|e| e.to_string())
                         .collect::<Vec<_>>()
                         .join("; ");
-                    McpError::internal_error(format!("Failed to parse document: {}", msg))
+                    McpError::internal_error(format!("Failed to parse spec: {}", msg))
                 })?;
 
-            let new_doc_names: Vec<String> = self
+            let new_spec_names: Vec<String> = self
                 .engine
-                .list_documents()
+                .list_specs()
                 .iter()
                 .filter(|d| !names_before.contains(&d.name))
                 .map(|d| d.name.clone())
                 .collect();
 
-            let mut output = String::from("Document added successfully.\n\n");
+            let mut output = String::from("Spec added successfully.\n\n");
 
             let now = DateTimeValue::now();
-            for doc_name in &new_doc_names {
-                if let Some(plan) = self.engine.get_execution_plan(doc_name, None, &now) {
+            for spec_name in &new_spec_names {
+                if let Some(plan) = self.engine.get_execution_plan(spec_name, None, &now) {
                     output.push_str(&plan.schema().to_string());
                     output.push('\n');
                 }
             }
 
             info!(
-                "Document added from source '{}': {:?}",
-                source_id, new_doc_names
+                "Spec added from source '{}': {:?}",
+                source_id, new_spec_names
             );
 
             Ok(serde_json::json!({
@@ -382,25 +382,25 @@ mod imp {
             }))
         }
 
-        fn tool_get_document_source(
+        fn tool_get_spec_source(
             &self,
             args: &serde_json::Value,
         ) -> Result<serde_json::Value, McpError> {
-            let doc_name = args["document"]
+            let spec_name = args["spec"]
                 .as_str()
-                .ok_or_else(|| McpError::invalid_params("Missing 'document' field".to_string()))?;
+                .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
 
             let now = resolve_effective(args)?;
-            let doc = self.engine.get_document(doc_name, &now).ok_or_else(|| {
+            let spec = self.engine.get_spec(spec_name, &now).ok_or_else(|| {
                 McpError::invalid_params(format!(
-                    "Document '{}' not found. Use list_documents to see available documents.",
-                    doc_name
+                    "Spec '{}' not found. Use list_specs to see available specs.",
+                    spec_name
                 ))
             })?;
 
-            let source = lemma::format_docs(std::slice::from_ref(doc.as_ref()));
+            let source = lemma::format_specs(std::slice::from_ref(spec.as_ref()));
 
-            debug!("Returned source for document '{}'", doc_name);
+            debug!("Returned source for spec '{}'", spec_name);
 
             Ok(serde_json::json!({
                 "content": [{
@@ -414,13 +414,13 @@ mod imp {
             &mut self,
             args: &serde_json::Value,
         ) -> Result<serde_json::Value, McpError> {
-            let document = args["document"]
+            let spec_name = args["spec"]
                 .as_str()
-                .ok_or_else(|| McpError::invalid_params("Missing 'document' field".to_string()))?;
+                .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
 
-            if document.trim().is_empty() {
+            if spec_name.trim().is_empty() {
                 return Err(McpError::invalid_params(
-                    "Document name cannot be empty".to_string(),
+                    "Spec name cannot be empty".to_string(),
                 ));
             }
 
@@ -446,7 +446,7 @@ mod imp {
             let hash_pin = args.get("hash_pin").and_then(|v| v.as_str());
             let response = self
                 .engine
-                .evaluate(document, hash_pin, &now, rule_names, fact_values)
+                .evaluate(spec_name, hash_pin, &now, rule_names, fact_values)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
@@ -481,8 +481,8 @@ mod imp {
             }
 
             info!(
-                "Evaluated document '{}' with {} results",
-                document,
+                "Evaluated spec '{}' with {} results",
+                spec_name,
                 response.results.len()
             );
 
@@ -494,24 +494,20 @@ mod imp {
             }))
         }
 
-        fn tool_list_documents(
-            &self,
-            args: &serde_json::Value,
-        ) -> Result<serde_json::Value, McpError> {
+        fn tool_list_specs(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
             let now = resolve_effective(args)?;
-            let docs = self.engine.list_documents_effective(&now);
+            let specs_list = self.engine.list_specs_effective(&now);
 
-            let output = if docs.is_empty() {
+            let output = if specs_list.is_empty() {
                 if self.config.admin {
-                    "No documents loaded.\n\nUse the 'add_document' tool to load Lemma code."
-                        .to_string()
+                    "No specs loaded.\n\nUse the 'add_spec' tool to load Lemma code.".to_string()
                 } else {
-                    "No documents loaded.".to_string()
+                    "No specs loaded.".to_string()
                 }
             } else {
-                let schemas: Vec<lemma::DocumentSchema> = docs
+                let schemas: Vec<lemma::SpecSchema> = specs_list
                     .iter()
-                    .filter_map(|doc| self.engine.get_execution_plan(&doc.name, None, &now))
+                    .filter_map(|s| self.engine.get_execution_plan(&s.name, None, &now))
                     .map(|plan| plan.schema())
                     .collect();
 
@@ -522,7 +518,7 @@ mod imp {
                     .join("\n\n")
             };
 
-            debug!("Listed {} documents", docs.len());
+            debug!("Listed {} specs", specs_list.len());
 
             Ok(serde_json::json!({
                 "content": [{
@@ -533,24 +529,24 @@ mod imp {
         }
 
         fn tool_get_schema(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
-            let document = args["document"]
+            let spec_name = args["spec"]
                 .as_str()
-                .ok_or_else(|| McpError::invalid_params("Missing 'document' field".to_string()))?;
+                .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
 
-            if document.trim().is_empty() {
+            if spec_name.trim().is_empty() {
                 return Err(McpError::invalid_params(
-                    "Document name cannot be empty".to_string(),
+                    "Spec name cannot be empty".to_string(),
                 ));
             }
 
             let now = resolve_effective(args)?;
             let plan = self
                 .engine
-                .get_execution_plan(document, None, &now)
+                .get_execution_plan(spec_name, None, &now)
                 .ok_or_else(|| {
                     McpError::invalid_params(format!(
-                        "Document '{}' not found. Use list_documents to see available documents.",
-                        document
+                        "Spec '{}' not found. Use list_specs to see available specs.",
+                        spec_name
                     ))
                 })?;
 
@@ -569,9 +565,9 @@ mod imp {
             };
 
             let scope = if rule_names.is_empty() {
-                format!("{} (all rules)", document)
+                format!("{} (all rules)", spec_name)
             } else {
-                format!("{}.{}", document, rule_names[0])
+                format!("{}.{}", spec_name, rule_names[0])
             };
 
             let output = format!("Schema for {}:\n\n{}", scope, schema);

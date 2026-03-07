@@ -75,11 +75,11 @@ fn make_request(id: u64, method: &str, params: serde_json::Value) -> serde_json:
 }
 
 #[test]
-fn test_mcp_list_documents_includes_schema() {
+fn test_mcp_list_specs_includes_schema() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("pricing.lemma"),
-        "doc pricing\nfact quantity: [number]\nfact base_price: 10\nrule total: quantity * base_price\n",
+        "spec pricing\nfact quantity: [number]\nfact base_price: 10\nrule total: quantity * base_price\n",
     )
     .unwrap();
 
@@ -93,7 +93,7 @@ fn test_mcp_list_documents_includes_schema() {
                 3,
                 "tools/call",
                 serde_json::json!({
-                    "name": "list_documents",
+                    "name": "list_specs",
                     "arguments": {}
                 }),
             ),
@@ -103,13 +103,11 @@ fn test_mcp_list_documents_includes_schema() {
     assert!(responses.len() >= 3, "Expected at least 3 responses");
 
     let list_result = &responses[2]["result"]["content"][0]["text"];
-    let text = list_result
-        .as_str()
-        .expect("list_documents should return text");
+    let text = list_result.as_str().expect("list_specs should return text");
 
     assert!(
-        text.contains("Document: pricing"),
-        "Should contain document name, got: {text}"
+        text.contains("Spec: pricing"),
+        "Should contain spec name, got: {text}"
     );
     assert!(
         text.contains("quantity"),
@@ -130,7 +128,7 @@ fn test_mcp_evaluate_includes_reasoning() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("discount.lemma"),
-        "doc discount\nfact quantity: [number]\nrule rate: 0 percent\n unless quantity >= 10 then 10 percent\n unless quantity >= 50 then 20 percent\n",
+        "spec discount\nfact quantity: [number]\nrule rate: 0 percent\n unless quantity >= 10 then 10 percent\n unless quantity >= 50 then 20 percent\n",
     )
     .unwrap();
 
@@ -145,7 +143,7 @@ fn test_mcp_evaluate_includes_reasoning() {
                 serde_json::json!({
                     "name": "evaluate",
                     "arguments": {
-                        "document": "discount",
+                        "spec": "discount",
                         "rule": "rate",
                         "facts": ["quantity=25"]
                     }
@@ -187,9 +185,9 @@ fn test_mcp_read_only_by_default() {
                 3,
                 "tools/call",
                 serde_json::json!({
-                    "name": "add_document",
+                    "name": "add_spec",
                     "arguments": {
-                        "code": "doc test\nfact x: 5\nrule y: x"
+                        "code": "spec test\nfact x: 5\nrule y: x"
                     }
                 }),
             ),
@@ -207,21 +205,21 @@ fn test_mcp_read_only_by_default() {
         .filter_map(|t| t["name"].as_str())
         .collect();
     assert!(
-        !tool_names.contains(&"add_document"),
-        "add_document should not be listed in read-only mode, got: {:?}",
+        !tool_names.contains(&"add_spec"),
+        "add_spec should not be listed in read-only mode, got: {:?}",
         tool_names
     );
     assert!(
-        !tool_names.contains(&"get_document_source"),
-        "get_document_source should not be listed in read-only mode, got: {:?}",
+        !tool_names.contains(&"get_spec_source"),
+        "get_spec_source should not be listed in read-only mode, got: {:?}",
         tool_names
     );
 
-    // Calling add_document should return an error
+    // Calling add_spec should return an error
     let error = &responses[2]["error"];
     assert!(
         error.is_object(),
-        "add_document should return an error in read-only mode"
+        "add_spec should return an error in read-only mode"
     );
     assert!(
         error["message"]
@@ -234,7 +232,7 @@ fn test_mcp_read_only_by_default() {
 }
 
 #[test]
-fn test_mcp_admin_enables_add_document() {
+fn test_mcp_admin_enables_add_spec() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -247,9 +245,9 @@ fn test_mcp_admin_enables_add_document() {
                 3,
                 "tools/call",
                 serde_json::json!({
-                    "name": "add_document",
+                    "name": "add_spec",
                     "arguments": {
-                        "code": "doc test_doc\nfact x: 5\nrule y: x * 2"
+                        "code": "spec test_spec\nfact x: 5\nrule y: x * 2"
                     }
                 }),
             ),
@@ -267,28 +265,26 @@ fn test_mcp_admin_enables_add_document() {
         .filter_map(|t| t["name"].as_str())
         .collect();
     assert!(
-        tool_names.contains(&"add_document"),
-        "add_document should be listed with --admin, got: {:?}",
+        tool_names.contains(&"add_spec"),
+        "add_spec should be listed with --admin, got: {:?}",
         tool_names
     );
     assert!(
-        tool_names.contains(&"get_document_source"),
-        "get_document_source should be listed with --admin, got: {:?}",
+        tool_names.contains(&"get_spec_source"),
+        "get_spec_source should be listed with --admin, got: {:?}",
         tool_names
     );
 
-    // add_document should succeed and return schema
+    // add_spec should succeed and return schema
     let add_result = &responses[2]["result"]["content"][0]["text"];
-    let text = add_result
-        .as_str()
-        .expect("add_document should return text");
+    let text = add_result.as_str().expect("add_spec should return text");
     assert!(
-        text.contains("Document added successfully"),
+        text.contains("Spec added successfully"),
         "Should confirm success, got: {text}"
     );
     assert!(
-        text.contains("Document: test_doc"),
-        "Should include document name in schema, got: {text}"
+        text.contains("Spec: test_spec"),
+        "Should include spec name in schema, got: {text}"
     );
     assert!(
         text.contains("y"),
@@ -297,11 +293,11 @@ fn test_mcp_admin_enables_add_document() {
 }
 
 #[test]
-fn test_mcp_get_document_source() {
+fn test_mcp_get_spec_source() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("pricing.lemma"),
-        "doc pricing\nfact quantity: [number]\nfact base_price: 10\nrule total: quantity * base_price\n",
+        "spec pricing\nfact quantity: [number]\nfact base_price: 10\nrule total: quantity * base_price\n",
     )
     .unwrap();
 
@@ -314,9 +310,9 @@ fn test_mcp_get_document_source() {
                 2,
                 "tools/call",
                 serde_json::json!({
-                    "name": "get_document_source",
+                    "name": "get_spec_source",
                     "arguments": {
-                        "document": "pricing"
+                        "spec": "pricing"
                     }
                 }),
             ),
@@ -328,11 +324,11 @@ fn test_mcp_get_document_source() {
     let source_result = &responses[1]["result"]["content"][0]["text"];
     let text = source_result
         .as_str()
-        .expect("get_document_source should return text");
+        .expect("get_spec_source should return text");
 
     assert!(
-        text.contains("doc pricing"),
-        "Should contain doc declaration, got: {text}"
+        text.contains("spec pricing"),
+        "Should contain spec declaration, got: {text}"
     );
     assert!(
         text.contains("fact quantity"),
@@ -345,11 +341,11 @@ fn test_mcp_get_document_source() {
 }
 
 #[test]
-fn test_mcp_get_document_source_blocked_without_admin() {
+fn test_mcp_get_spec_source_blocked_without_admin() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("pricing.lemma"),
-        "doc pricing\nfact x: 5\nrule y: x\n",
+        "spec pricing\nfact x: 5\nrule y: x\n",
     )
     .unwrap();
 
@@ -362,9 +358,9 @@ fn test_mcp_get_document_source_blocked_without_admin() {
                 2,
                 "tools/call",
                 serde_json::json!({
-                    "name": "get_document_source",
+                    "name": "get_spec_source",
                     "arguments": {
-                        "document": "pricing"
+                        "spec": "pricing"
                     }
                 }),
             ),
@@ -376,7 +372,7 @@ fn test_mcp_get_document_source_blocked_without_admin() {
     let error = &responses[1]["error"];
     assert!(
         error.is_object(),
-        "get_document_source should return an error without --admin"
+        "get_spec_source should return an error without --admin"
     );
     assert!(
         error["message"]

@@ -9,7 +9,7 @@ use std::str::FromStr;
 #[test]
 fn test_percentage_arithmetic() {
     let code = r#"
-doc pricing
+spec pricing
 fact discount: 25%
 rule net_multiplier: 1 - discount
 "#;
@@ -41,7 +41,7 @@ rule net_multiplier: 1 - discount
 #[test]
 fn test_duration_operations() {
     let code = r#"
-doc scheduling
+spec scheduling
 fact meeting_length: 30 minutes
 rule double_meeting: meeting_length * 2
 "#;
@@ -76,7 +76,7 @@ rule double_meeting: meeting_length * 2
 #[test]
 fn test_date_arithmetic_with_duration() {
     let code = r#"
-doc dates
+spec dates
 fact start: 2024-01-15
 rule end: start + 7 days
 "#;
@@ -106,7 +106,7 @@ rule end: start + 7 days
 #[test]
 fn test_boolean_operations() {
     let code = r#"
-doc logic
+spec logic
 fact is_active: true
 fact is_premium: false
 rule can_access: is_active and not is_premium
@@ -141,7 +141,7 @@ rule can_access: is_active and not is_premium
 #[test]
 fn test_text_operations() {
     let code = r#"
-doc strings
+spec strings
 fact greeting: "hello"
 rule message: greeting
 "#;

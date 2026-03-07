@@ -5,7 +5,7 @@
 SPACE = _{ WHITE_SPACE | NEWLINE }
 
 reserved_keyword = _{
-    (^"doc" | ^"fact" | ^"rule" | ^"then" | ^"unless" | ^"not" | ^"in" | ^"and" | ^"now" | ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" | ^"abs" | ^"floor" | ^"ceil" | ^"round" | ^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject" | ^"veto" | ^"scale" | ^"number" | ^"text" | ^"date" | ^"time" | ^"duration" | ^"type" | ^"from" | ^"with" | ^"meta") ~ !(ASCII_ALPHANUMERIC | "_")
+    (^"spec" | ^"fact" | ^"rule" | ^"then" | ^"unless" | ^"not" | ^"in" | ^"and" | ^"now" | ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" | ^"abs" | ^"floor" | ^"ceil" | ^"round" | ^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject" | ^"veto" | ^"scale" | ^"number" | ^"text" | ^"date" | ^"time" | ^"duration" | ^"type" | ^"from" | ^"with" | ^"meta") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 // Low-level identifier used by public rules; kept silent so only higher-level
@@ -57,7 +57,7 @@ type_import = {
 
 type_custom = { label }
 type_name_def    = { type_custom | type_standard }
-type_import_def = { type_name_def ~ SPACE+ ~ ^"from" ~ SPACE+ ~ doc_name ~ (SPACE+ ~ doc_ref_hash)? }
+type_import_def = { type_name_def ~ SPACE+ ~ ^"from" ~ SPACE+ ~ spec_name ~ (SPACE+ ~ spec_ref_hash)? }
 type_arrow_chain = { (type_import_def | type_name_def) ~ (SPACE* ~ arrow_symbol ~ SPACE* ~ command)* }
 
 // ================================================================================================
@@ -92,10 +92,10 @@ command_arg  = { number_literal | boolean_literal | text_literal | label }
 // TOP-LEVEL DOCUMENT STRUCTURE
 // ================================================================================================
 
-lemma_file = { SOI ~ SPACE* ~ doc* ~ SPACE* ~ EOI }
+lemma_file = { SOI ~ SPACE* ~ spec* ~ SPACE* ~ EOI }
 
-doc = {
-    doc_declaration ~ SPACE* ~ commentary_block? ~ SPACE* ~ doc_body
+spec = {
+    spec_declaration ~ SPACE* ~ commentary_block? ~ SPACE* ~ spec_body
 }
 
 meta_definition = { ^"meta" ~ SPACE+ ~ meta_key ~ SPACE* ~ assignment_symbol ~ SPACE* ~ meta_value }
@@ -104,15 +104,15 @@ meta_key_identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 meta_value      = { literal | meta_identifier }
 meta_identifier = @{ (ASCII_ALPHANUMERIC | "_" | "-" | "." | "/")+ }
 
-doc_body = {
+spec_body = {
     (type_import | type_definition | fact_definition | fact_binding | rule_definition | meta_definition | SPACE)*
 }
 
-doc_declaration = { ^"doc" ~ SPACE+ ~ doc_name ~ (SPACE+ ~ doc_effective_from)? }
-doc_effective_from = @{ (ASCII_DIGIT | "-" | ":" | "+" | "T" | "Z")+ }
-doc_name_at     = { "@" }
-doc_name_base   = { ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_" | "-" | "/" )* }
-doc_name        = { doc_name_at? ~ doc_name_base }
+spec_declaration = { ^"spec" ~ SPACE+ ~ spec_name ~ (SPACE+ ~ spec_effective_from)? }
+spec_effective_from = @{ (ASCII_DIGIT | "-" | ":" | "+" | "T" | "Z")+ }
+spec_name_at     = { "@" }
+spec_name_base   = { ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_" | "-" | "/" )* }
+spec_name        = { spec_name_at? ~ spec_name_base }
 
 triple_quote = _{ "\"\"\"" }
 commentary_block = { triple_quote ~ commentary ~ triple_quote }
@@ -131,16 +131,16 @@ fact_binding    = { ^"fact" ~ SPACE+ ~ reference ~ SPACE* ~ assignment_symbol ~ 
 fact_value = {
     inline_type_definition
   | type_declaration
-  | doc_reference
+  | spec_reference
   | literal
 }
 
 type_declaration = { "[" ~ type_name_def ~ "]" }
 inline_type_definition = { "[" ~ type_arrow_chain ~ "]" }
 
-doc_reference = { ^"doc" ~ SPACE+ ~ doc_name ~ ("~" ~ doc_ref_hash)? ~ (SPACE+ ~ doc_ref_datetime)? }
-doc_ref_hash = @{ ASCII_ALPHANUMERIC{8} }
-doc_ref_datetime = @{ (ASCII_DIGIT | "-" | ":" | "+" | "T" | "Z")+ }
+spec_reference = { ^"spec" ~ SPACE+ ~ spec_name ~ ("~" ~ spec_ref_hash)? ~ (SPACE+ ~ spec_ref_datetime)? }
+spec_ref_hash = @{ ASCII_ALPHANUMERIC{8} }
+spec_ref_datetime = @{ (ASCII_DIGIT | "-" | ":" | "+" | "T" | "Z")+ }
 
 // ================================================================================================
 // RULE DEFINITIONS

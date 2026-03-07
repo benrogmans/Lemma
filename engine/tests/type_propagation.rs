@@ -10,7 +10,7 @@ use std::collections::HashMap;
 fn test_money_plus_number_preserves_money() {
     // Money + Number → Money
     let code = r#"
-    doc test
+    spec test
     type money: number
     fact a: [money]
     fact b: 100
@@ -35,7 +35,7 @@ fn test_money_plus_number_preserves_money() {
 fn test_number_plus_money_preserves_money() {
     // Number + Money → Money
     let code = r#"
-    doc test
+    spec test
     type money: number
     fact a: 100
     fact b: [money]
@@ -60,7 +60,7 @@ fn test_number_plus_money_preserves_money() {
 fn test_money_plus_money_preserves_money() {
     // Money + Money → Money
     let code = r#"
-    doc test
+    spec test
     type money: number
     fact a: [money]
     fact b: [money]
@@ -86,7 +86,7 @@ fn test_different_custom_types_same_base() {
     // Money + Price (both extend Number, no units) - should preserve one type
     // Both extend number (dimensionless), so they're compatible and should succeed
     let code = r#"
-    doc test
+    spec test
     type money: number
     type price: number
     fact a: [money]
@@ -118,7 +118,7 @@ fn test_incompatible_types_error() {
     // Test that incompatible types (different base types) produce an error
     // For example: number + text should error during planning/validation
     let code = r#"
-    doc test
+    spec test
     type money: number
     fact a: [money]
     fact b: "hello"
@@ -152,7 +152,7 @@ fn test_different_scale_types_are_incompatible() {
     // EUR + KILOGRAM both extend scale with units, but they're different Scale types
     // They should be rejected (validation fails) because different Scale types are incompatible
     let code = r#"
-    doc test
+    spec test
     type eur: scale
       -> unit EUR 1.00
     type kilogram: scale

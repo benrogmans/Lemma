@@ -27,7 +27,7 @@ pub fn parse(
     content: &str,
     attribute: &str,
     limits: &ResourceLimits,
-) -> Result<Vec<LemmaDoc>, Error> {
+) -> Result<Vec<LemmaSpec>, Error> {
     if content.len() > limits.max_file_size_bytes {
         return Err(Error::ResourceLimitExceeded {
             limit_name: "max_file_size_bytes".to_string(),
@@ -41,8 +41,8 @@ pub fn parse(
                 content.len(),
                 content.len() as f64 / (1024.0 * 1024.0)
             ),
-            suggestion: "Reduce file size or split into multiple documents".to_string(),
-            document_context: None,
+            suggestion: "Reduce file size or split into multiple specs".to_string(),
+            spec_context: None,
         });
     }
 
@@ -52,11 +52,11 @@ pub fn parse(
 
     match LemmaParser::parse(Rule::lemma_file, content) {
         Ok(mut pairs) => {
-            let mut docs = Vec::new();
+            let mut specs = Vec::new();
             if let Some(lemma_file_pair) = pairs.next() {
                 for inner_pair in lemma_file_pair.into_inner() {
-                    if inner_pair.as_rule() == Rule::doc {
-                        docs.push(parse_doc(
+                    if inner_pair.as_rule() == Rule::spec {
+                        specs.push(parse_spec(
                             inner_pair,
                             attribute,
                             &mut depth_tracker,
@@ -65,7 +65,7 @@ pub fn parse(
                     }
                 }
             }
-            Ok(docs)
+            Ok(specs)
         }
         Err(e) => {
             let (line, col) = match e.line_col {
@@ -143,15 +143,15 @@ fn humanize_pest_error(variant: &pest::error::ErrorVariant<Rule>) -> String {
 
 fn rule_to_human(rule: Rule) -> Option<&'static str> {
     match rule {
-        Rule::lemma_file => Some("a document declaration (e.g. 'doc my_document')"),
-        Rule::doc => Some("a document declaration"),
-        Rule::doc_declaration => Some("a document declaration (e.g. 'doc name')"),
-        Rule::doc_name => Some("a document name"),
-        Rule::doc_body => Some("document body (facts, rules, or types)"),
+        Rule::lemma_file => Some("a spec declaration (e.g. 'spec my_spec')"),
+        Rule::spec => Some("a spec declaration"),
+        Rule::spec_declaration => Some("a spec declaration (e.g. 'spec name')"),
+        Rule::spec_name => Some("a spec name"),
+        Rule::spec_body => Some("spec body (facts, rules, or types)"),
         Rule::fact_definition => Some("a fact definition (e.g. 'fact x: 10')"),
         Rule::rule_definition => Some("a rule definition (e.g. 'rule y: x + 1')"),
         Rule::type_definition => Some("a type definition (e.g. 'type money: scale')"),
-        Rule::type_import => Some("a type import (e.g. 'type money from other_doc')"),
+        Rule::type_import => Some("a type import (e.g. 'type money from other_spec')"),
         Rule::meta_definition => Some("a meta field (e.g. 'meta key: value')"),
         Rule::expression => Some("an expression"),
         Rule::unless_statement => Some("an unless clause"),
@@ -167,15 +167,15 @@ fn rule_to_human(rule: Rule) -> Option<&'static str> {
     }
 }
 
-fn parse_doc(
+fn parse_spec(
     pair: Pair<Rule>,
     attribute: &str,
     depth_tracker: &mut DepthTracker,
     source_text: Arc<str>,
-) -> Result<LemmaDoc, Error> {
-    let doc_start_line = pair.as_span().start_pos().line_col().0;
+) -> Result<LemmaSpec, Error> {
+    let spec_start_line = pair.as_span().start_pos().line_col().0;
 
-    let mut doc_name: Option<String> = None;
+    let mut spec_name: Option<String> = None;
     let mut effective_from: Option<crate::parsing::ast::DateTimeValue> = None;
     let mut commentary: Option<String> = None;
     let mut facts = Vec::new();
@@ -183,7 +183,7 @@ fn parse_doc(
     let mut types = Vec::new();
     let mut meta_fields = Vec::new();
 
-    // First, extract doc_header to get commentary and doc_declaration
+    // First, extract spec header to get commentary and spec_declaration
     for header_item in pair.clone().into_inner() {
         match header_item.as_rule() {
             Rule::commentary_block => {
@@ -194,28 +194,28 @@ fn parse_doc(
                     }
                 }
             }
-            Rule::doc_declaration => {
+            Rule::spec_declaration => {
                 for decl_inner in header_item.into_inner() {
                     match decl_inner.as_rule() {
-                        Rule::doc_name => {
+                        Rule::spec_name => {
                             for name_part in decl_inner.into_inner() {
                                 match name_part.as_rule() {
-                                    Rule::doc_name_base => {
-                                        doc_name = Some(name_part.as_str().to_string());
+                                    Rule::spec_name_base => {
+                                        spec_name = Some(name_part.as_str().to_string());
                                     }
-                                    Rule::doc_name_at => {}
+                                    Rule::spec_name_at => {}
                                     _ => {}
                                 }
                             }
                         }
-                        Rule::doc_effective_from => {
+                        Rule::spec_effective_from => {
                             let raw = decl_inner.as_str();
                             effective_from =
                                 Some(crate::parsing::ast::DateTimeValue::parse(raw).ok_or_else(
                                     || {
                                         Error::parsing(
                                             format!(
-                                                "Invalid date/time in doc declaration: '{}'",
+                                                "Invalid date/time in spec declaration: '{}'",
                                                 raw
                                             ),
                                             None,
@@ -232,11 +232,11 @@ fn parse_doc(
         }
     }
 
-    let name = doc_name.expect("BUG: grammar guarantees doc has doc_declaration");
+    let name = spec_name.expect("BUG: grammar guarantees spec has spec_declaration");
 
-    // First pass: collect all named type definitions from doc_body
+    // First pass: collect all named type definitions from spec_body
     for inner_pair in pair.clone().into_inner() {
-        if inner_pair.as_rule() == Rule::doc_body {
+        if inner_pair.as_rule() == Rule::spec_body {
             for body_item in inner_pair.into_inner() {
                 match body_item.as_rule() {
                     Rule::type_definition => {
@@ -263,9 +263,9 @@ fn parse_doc(
         }
     }
 
-    // Second pass: parse facts and rules from doc_body
+    // Second pass: parse facts and rules from spec_body
     for inner_pair in pair.into_inner() {
-        if inner_pair.as_rule() == Rule::doc_body {
+        if inner_pair.as_rule() == Rule::spec_body {
             for body_item in inner_pair.into_inner() {
                 match body_item.as_rule() {
                     Rule::fact_definition => {
@@ -310,29 +310,29 @@ fn parse_doc(
             }
         }
     }
-    let mut doc = LemmaDoc::new(name)
+    let mut spec = LemmaSpec::new(name)
         .with_attribute(attribute.to_string())
-        .with_start_line(doc_start_line);
-    doc.effective_from = effective_from;
+        .with_start_line(spec_start_line);
+    spec.effective_from = effective_from;
 
     if let Some(commentary_text) = commentary {
-        doc = doc.set_commentary(commentary_text);
+        spec = spec.set_commentary(commentary_text);
     }
 
     for fact in facts {
-        doc = doc.add_fact(fact);
+        spec = spec.add_fact(fact);
     }
     for rule in rules {
-        doc = doc.add_rule(rule);
+        spec = spec.add_rule(rule);
     }
     for type_def in types {
-        doc = doc.add_type(type_def);
+        spec = spec.add_type(type_def);
     }
     for meta in meta_fields {
-        doc = doc.add_meta_field(meta);
+        spec = spec.add_meta_field(meta);
     }
 
-    Ok(doc)
+    Ok(spec)
 }
 
 // ============================================================================
@@ -346,14 +346,14 @@ mod tests {
     use crate::ResourceLimits;
 
     #[test]
-    fn parse_empty_input_returns_no_documents() {
+    fn parse_empty_input_returns_no_specs() {
         let result = parse("", "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 0);
     }
 
     #[test]
-    fn parse_workspace_file_yields_expected_doc_facts_and_rules() {
-        let input = r#"doc person
+    fn parse_workspace_file_yields_expected_spec_facts_and_rules() {
+        let input = r#"spec person
 fact name: "John Doe"
 rule adult: true"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
@@ -365,8 +365,8 @@ rule adult: true"#;
     }
 
     #[test]
-    fn mixing_facts_and_rules_is_collected_into_doc() {
-        let input = r#"doc test
+    fn mixing_facts_and_rules_is_collected_into_spec() {
+        let input = r#"spec test
 fact name: "John"
 rule is_adult: age >= 18
 fact age: 25
@@ -381,8 +381,8 @@ rule is_eligible: is_adult and status == "active""#;
     }
 
     #[test]
-    fn parse_simple_document_collects_facts() {
-        let input = r#"doc person
+    fn parse_simple_spec_collects_facts() {
+        let input = r#"spec person
 fact name: "John"
 fact age: 25"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
@@ -392,8 +392,8 @@ fact age: 25"#;
     }
 
     #[test]
-    fn parse_doc_name_with_slashes_is_preserved() {
-        let input = r#"doc contracts/employment/jack
+    fn parse_spec_name_with_slashes_is_preserved() {
+        let input = r#"spec contracts/employment/jack
 fact name: "Jack""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
@@ -401,17 +401,17 @@ fact name: "Jack""#;
     }
 
     #[test]
-    fn parse_doc_name_no_version_tag() {
-        let input = "doc mydoc\nrule x: 1";
+    fn parse_spec_name_no_version_tag() {
+        let input = "spec myspec\nrule x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "mydoc");
+        assert_eq!(result[0].name, "myspec");
         assert_eq!(result[0].effective_from(), None);
     }
 
     #[test]
-    fn parse_commentary_block_is_attached_to_doc() {
-        let input = r#"doc person
+    fn parse_commentary_block_is_attached_to_spec() {
+        let input = r#"spec person
 """
 This is a markdown comment
 with **bold** text
@@ -424,8 +424,8 @@ fact name: "John""#;
     }
 
     #[test]
-    fn parse_document_with_rule_collects_rule() {
-        let input = r#"doc person
+    fn parse_spec_with_rule_collects_rule() {
+        let input = r#"spec person
 rule is_adult: age >= 18"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
@@ -434,11 +434,11 @@ rule is_adult: age >= 18"#;
     }
 
     #[test]
-    fn parse_multiple_documents_returns_all_docs() {
-        let input = r#"doc person
+    fn parse_multiple_specs_returns_all_specs() {
+        let input = r#"spec person
 fact name: "John"
 
-doc company
+spec company
 fact name: "Acme Corp""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 2);
@@ -449,7 +449,7 @@ fact name: "Acme Corp""#;
     #[test]
     fn parse_allows_duplicate_fact_names() {
         // Duplicate fact names are rejected during planning/validation, not parsing.
-        let input = r#"doc person
+        let input = r#"spec person
 fact name: "John"
 fact name: "Jane""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default());
@@ -462,7 +462,7 @@ fact name: "Jane""#;
     #[test]
     fn parse_allows_duplicate_rule_names() {
         // Duplicate rule names are rejected during planning/validation, not parsing.
-        let input = r#"doc person
+        let input = r#"spec person
 rule is_adult: age >= 18
 rule is_adult: age >= 21"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default());
@@ -482,18 +482,18 @@ rule is_adult: age >= 21"#;
     #[test]
     fn parse_handles_whitespace_variants_in_expressions() {
         let test_cases = vec![
-            ("doc test\nrule test: 2+3", "no spaces in arithmetic"),
-            ("doc test\nrule test: age>=18", "no spaces in comparison"),
+            ("spec test\nrule test: 2+3", "no spaces in arithmetic"),
+            ("spec test\nrule test: age>=18", "no spaces in comparison"),
             (
-                "doc test\nrule test: age >= 18 and salary>50000",
+                "spec test\nrule test: age >= 18 and salary>50000",
                 "spaces around and keyword",
             ),
             (
-                "doc test\nrule test: age  >=  18  and  salary  >  50000",
+                "spec test\nrule test: age  >=  18  and  salary  >  50000",
                 "extra spaces",
             ),
             (
-                "doc test\nrule test: \n  age >= 18 \n  and \n  salary > 50000",
+                "spec test\nrule test: \n  age >= 18 \n  and \n  salary > 50000",
                 "newlines in expression",
             ),
         ];
@@ -514,15 +514,18 @@ rule is_adult: age >= 21"#;
     fn parse_error_cases_are_rejected() {
         let error_cases = vec![
             (
-                "doc test\nfact name: \"unclosed string",
+                "spec test\nfact name: \"unclosed string",
                 "unclosed string literal",
             ),
-            ("doc test\nrule test: 2 + + 3", "double operator"),
-            ("doc test\nrule test: (2 + 3", "unclosed parenthesis"),
-            ("doc test\nrule test: 2 + 3)", "extra closing paren"),
+            ("spec test\nrule test: 2 + + 3", "double operator"),
+            ("spec test\nrule test: (2 + 3", "unclosed parenthesis"),
+            ("spec test\nrule test: 2 + 3)", "extra closing paren"),
             // Note: "invalid unit" now parses as a user-defined unit (validated during planning)
-            ("doc test\nfact doc: 123", "reserved keyword as fact name"),
-            ("doc test\nrule rule: true", "reserved keyword as rule name"),
+            ("spec test\nfact spec: 123", "reserved keyword as fact name"),
+            (
+                "spec test\nrule rule: true",
+                "reserved keyword as rule name",
+            ),
         ];
 
         for (input, description) in error_cases {
@@ -551,7 +554,7 @@ rule is_adult: age >= 21"#;
         ];
 
         for (expr, description) in test_cases {
-            let input = format!("doc test\nrule test: {}", expr);
+            let input = format!("spec test\nrule test: {}", expr);
             let result = parse(&input, "test.lemma", &ResourceLimits::default());
             assert!(
                 result.is_ok(),
@@ -605,7 +608,7 @@ rule is_adult: age >= 21"#;
         ];
 
         for (expr, description) in test_cases {
-            let input = format!("doc test\nrule test: {}", expr);
+            let input = format!("spec test\nrule test: {}", expr);
             let result = parse(&input, "test.lemma", &ResourceLimits::default());
             assert!(
                 result.is_ok(),
@@ -618,10 +621,10 @@ rule is_adult: age >= 21"#;
     }
 
     #[test]
-    fn parse_error_includes_attribute_and_parse_error_doc_name() {
+    fn parse_error_includes_attribute_and_parse_error_spec_name() {
         let result = parse(
             r#"
-doc test
+spec test
 fact name: "Unclosed string
 fact age: 25
 "#,
@@ -633,7 +636,7 @@ fact age: 25
             Err(Error::Parsing(details)) => {
                 let src = details.source.as_ref().expect("should have source");
                 assert_eq!(src.attribute, "test.lemma");
-                assert_eq!(src.doc_name, "");
+                assert_eq!(src.spec_name, "");
             }
             Err(e) => panic!("Expected Parse error, got: {e:?}"),
             Ok(_) => panic!("Expected parse error for unclosed string"),
@@ -641,33 +644,33 @@ fact age: 25
     }
 
     #[test]
-    fn parse_registry_style_doc_name() {
-        let input = r#"doc user/workspace/somedoc
+    fn parse_registry_style_spec_name() {
+        let input = r#"spec user/workspace/somespec
 fact name: "Alice""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "user/workspace/somedoc");
+        assert_eq!(result[0].name, "user/workspace/somespec");
     }
 
     #[test]
-    fn parse_fact_doc_reference_with_at_prefix() {
-        let input = r#"doc example
-fact external: doc @user/workspace/somedoc"#;
+    fn parse_fact_spec_reference_with_at_prefix() {
+        let input = r#"spec example
+fact external: spec @user/workspace/somespec"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].facts.len(), 1);
         match &result[0].facts[0].value {
-            crate::FactValue::DocumentReference(doc_ref) => {
-                assert_eq!(doc_ref.name, "user/workspace/somedoc");
-                assert!(doc_ref.is_registry, "expected registry reference");
+            crate::FactValue::SpecReference(spec_ref) => {
+                assert_eq!(spec_ref.name, "user/workspace/somespec");
+                assert!(spec_ref.is_registry, "expected registry reference");
             }
-            other => panic!("Expected DocumentReference, got: {:?}", other),
+            other => panic!("Expected SpecReference, got: {:?}", other),
         }
     }
 
     #[test]
     fn parse_type_import_with_at_prefix() {
-        let input = r#"doc example
+        let input = r#"spec example
 type money from @lemma/std/finance
 fact price: [money]"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
@@ -684,77 +687,77 @@ fact price: [money]"#;
     }
 
     #[test]
-    fn parse_multiple_registry_docs_in_same_file() {
-        let input = r#"doc user/workspace/doc_a
+    fn parse_multiple_registry_specs_in_same_file() {
+        let input = r#"spec user/workspace/spec_a
 fact x: 10
 
-doc user/workspace/doc_b
+spec user/workspace/spec_b
 fact y: 20
-fact a: doc @user/workspace/doc_a"#;
+fact a: spec @user/workspace/spec_a"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].name, "user/workspace/doc_a");
-        assert_eq!(result[1].name, "user/workspace/doc_b");
+        assert_eq!(result[0].name, "user/workspace/spec_a");
+        assert_eq!(result[1].name, "user/workspace/spec_b");
     }
 
     // =====================================================================
-    // Versioned document identifier tests (section 6.1 of plan)
+    // Versioned spec identifier tests (section 6.1 of plan)
     // =====================================================================
 
     #[test]
-    fn parse_registry_doc_ref_name_only() {
-        let input = "doc example\nfact x: doc @owner/repo/somedoc";
+    fn parse_registry_spec_ref_name_only() {
+        let input = "spec example\nfact x: spec @owner/repo/somespec";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
-            crate::FactValue::DocumentReference(doc_ref) => {
-                assert_eq!(doc_ref.name, "owner/repo/somedoc");
-                assert_eq!(doc_ref.hash_pin, None);
-                assert!(doc_ref.is_registry);
+            crate::FactValue::SpecReference(spec_ref) => {
+                assert_eq!(spec_ref.name, "owner/repo/somespec");
+                assert_eq!(spec_ref.hash_pin, None);
+                assert!(spec_ref.is_registry);
             }
-            other => panic!("Expected DocumentReference, got: {:?}", other),
+            other => panic!("Expected SpecReference, got: {:?}", other),
         }
     }
 
     #[test]
-    fn parse_registry_doc_ref_name_with_dots_is_whole_name() {
-        let input = "doc example\nfact x: doc @owner/repo/somedoc";
+    fn parse_registry_spec_ref_name_with_dots_is_whole_name() {
+        let input = "spec example\nfact x: spec @owner/repo/somespec";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
-            crate::FactValue::DocumentReference(doc_ref) => {
-                assert_eq!(doc_ref.name, "owner/repo/somedoc");
-                assert!(doc_ref.is_registry);
+            crate::FactValue::SpecReference(spec_ref) => {
+                assert_eq!(spec_ref.name, "owner/repo/somespec");
+                assert!(spec_ref.is_registry);
             }
-            other => panic!("Expected DocumentReference, got: {:?}", other),
+            other => panic!("Expected SpecReference, got: {:?}", other),
         }
     }
 
     #[test]
-    fn parse_local_doc_ref_name_only() {
-        let input = "doc example\nfact x: doc mydoc";
+    fn parse_local_spec_ref_name_only() {
+        let input = "spec example\nfact x: spec myspec";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
-            crate::FactValue::DocumentReference(doc_ref) => {
-                assert_eq!(doc_ref.name, "mydoc");
-                assert_eq!(doc_ref.hash_pin, None);
-                assert!(!doc_ref.is_registry);
+            crate::FactValue::SpecReference(spec_ref) => {
+                assert_eq!(spec_ref.name, "myspec");
+                assert_eq!(spec_ref.hash_pin, None);
+                assert!(!spec_ref.is_registry);
             }
-            other => panic!("Expected DocumentReference, got: {:?}", other),
+            other => panic!("Expected SpecReference, got: {:?}", other),
         }
     }
 
     #[test]
-    fn parse_doc_name_with_trailing_dot_is_error() {
-        let input = "doc mydoc.\nfact x: 1";
+    fn parse_spec_name_with_trailing_dot_is_error() {
+        let input = "spec myspec.\nfact x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(
             result.is_err(),
-            "Trailing dot after doc name should be a parse error"
+            "Trailing dot after spec name should be a parse error"
         );
     }
 
     #[test]
     fn parse_type_import_from_registry() {
-        let input = "doc example\ntype money from @lemma/std/finance\nfact price: [money]";
+        let input = "spec example\ntype money from @lemma/std/finance\nfact price: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].types[0] {
             crate::TypeDef::Import { from, name, .. } => {
@@ -767,63 +770,63 @@ fact a: doc @user/workspace/doc_a"#;
     }
 
     #[test]
-    fn parse_doc_declaration_no_version() {
-        let input = "doc mydoc\nrule x: 1";
+    fn parse_spec_declaration_no_version() {
+        let input = "spec myspec\nrule x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
-        assert_eq!(result[0].name, "mydoc");
+        assert_eq!(result[0].name, "myspec");
         assert_eq!(result[0].effective_from(), None);
     }
 
     #[test]
-    fn parse_multiple_docs_in_same_file() {
-        let input = "doc mydoc_a\nrule x: 1\n\ndoc mydoc_b\nrule x: 2";
+    fn parse_multiple_specs_in_same_file() {
+        let input = "spec myspec_a\nrule x: 1\n\nspec myspec_b\nrule x: 2";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].name, "mydoc_a");
-        assert_eq!(result[1].name, "mydoc_b");
+        assert_eq!(result[0].name, "myspec_a");
+        assert_eq!(result[1].name, "myspec_b");
     }
 
     #[test]
-    fn parse_doc_reference_grammar_accepts_name_only() {
-        let input = "doc consumer\nfact m: doc other";
+    fn parse_spec_reference_grammar_accepts_name_only() {
+        let input = "spec consumer\nfact m: spec other";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
-        assert!(result.is_ok(), "doc name without hash should parse");
-        let doc_ref = match &result.as_ref().unwrap()[0].facts[0].value {
-            crate::FactValue::DocumentReference(r) => r,
-            _ => panic!("expected DocumentReference"),
+        assert!(result.is_ok(), "spec name without hash should parse");
+        let spec_ref = match &result.as_ref().unwrap()[0].facts[0].value {
+            crate::FactValue::SpecReference(r) => r,
+            _ => panic!("expected SpecReference"),
         };
-        assert_eq!(doc_ref.name, "other");
-        assert_eq!(doc_ref.hash_pin, None);
+        assert_eq!(spec_ref.name, "other");
+        assert_eq!(spec_ref.hash_pin, None);
     }
 
     #[test]
-    fn parse_doc_reference_with_hash() {
-        let input = "doc consumer\nfact cfg: doc config~a1b2c3d4";
+    fn parse_spec_reference_with_hash() {
+        let input = "spec consumer\nfact cfg: spec config~a1b2c3d4";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc_ref = match &result[0].facts[0].value {
-            crate::FactValue::DocumentReference(r) => r,
-            other => panic!("expected DocumentReference, got: {:?}", other),
+        let spec_ref = match &result[0].facts[0].value {
+            crate::FactValue::SpecReference(r) => r,
+            other => panic!("expected SpecReference, got: {:?}", other),
         };
-        assert_eq!(doc_ref.name, "config");
-        assert_eq!(doc_ref.hash_pin.as_deref(), Some("a1b2c3d4"));
+        assert_eq!(spec_ref.name, "config");
+        assert_eq!(spec_ref.hash_pin.as_deref(), Some("a1b2c3d4"));
     }
 
     #[test]
-    fn parse_doc_reference_registry_with_hash() {
-        let input = "doc consumer\nfact ext: doc @user/workspace/cfg~ab12cd34";
+    fn parse_spec_reference_registry_with_hash() {
+        let input = "spec consumer\nfact ext: spec @user/workspace/cfg~ab12cd34";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
-        let doc_ref = match &result[0].facts[0].value {
-            crate::FactValue::DocumentReference(r) => r,
-            other => panic!("expected DocumentReference, got: {:?}", other),
+        let spec_ref = match &result[0].facts[0].value {
+            crate::FactValue::SpecReference(r) => r,
+            other => panic!("expected SpecReference, got: {:?}", other),
         };
-        assert_eq!(doc_ref.name, "user/workspace/cfg");
-        assert!(doc_ref.is_registry);
-        assert_eq!(doc_ref.hash_pin.as_deref(), Some("ab12cd34"));
+        assert_eq!(spec_ref.name, "user/workspace/cfg");
+        assert!(spec_ref.is_registry);
+        assert_eq!(spec_ref.hash_pin.as_deref(), Some("ab12cd34"));
     }
 
     #[test]
     fn parse_type_import_with_hash() {
-        let input = "doc consumer\ntype money from finance a1b2c3d4\nfact p: [money]";
+        let input = "spec consumer\ntype money from finance a1b2c3d4\nfact p: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].types[0] {
             crate::TypeDef::Import { from, name, .. } => {
@@ -837,7 +840,7 @@ fact a: doc @user/workspace/doc_a"#;
 
     #[test]
     fn parse_type_import_registry_with_hash() {
-        let input = "doc consumer\ntype money from @lemma/std/finance ab12cd34\nfact p: [money]";
+        let input = "spec consumer\ntype money from @lemma/std/finance ab12cd34\nfact p: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].types[0] {
             crate::TypeDef::Import { from, name, .. } => {
@@ -852,7 +855,7 @@ fact a: doc @user/workspace/doc_a"#;
 
     #[test]
     fn parse_inline_type_from_with_hash() {
-        let input = "doc consumer\nfact price: [money from finance a1b2c3d4 -> minimum 0]";
+        let input = "spec consumer\nfact price: [money from finance a1b2c3d4 -> minimum 0]";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
             crate::FactValue::TypeDeclaration {
@@ -862,9 +865,9 @@ fact a: doc @user/workspace/doc_a"#;
                 ..
             } => {
                 assert_eq!(base, "money");
-                let doc_ref = from.as_ref().expect("expected from doc ref");
-                assert_eq!(doc_ref.name, "finance");
-                assert_eq!(doc_ref.hash_pin.as_deref(), Some("a1b2c3d4"));
+                let spec_ref = from.as_ref().expect("expected from spec ref");
+                assert_eq!(spec_ref.name, "finance");
+                assert_eq!(spec_ref.hash_pin.as_deref(), Some("a1b2c3d4"));
                 assert!(constraints.is_some());
             }
             other => panic!("expected TypeDeclaration, got: {:?}", other),
@@ -872,8 +875,8 @@ fact a: doc @user/workspace/doc_a"#;
     }
 
     #[test]
-    fn parse_type_import_doc_name_with_slashes() {
-        let input = "doc consumer\ntype money from @lemma/std/finance\nfact p: [money]";
+    fn parse_type_import_spec_name_with_slashes() {
+        let input = "spec consumer\ntype money from @lemma/std/finance\nfact p: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(result.is_ok(), "type import from registry should parse");
         match &result.unwrap()[0].types[0] {
@@ -886,7 +889,7 @@ fact a: doc @user/workspace/doc_a"#;
     fn parse_error_is_returned_for_garbage_input() {
         let result = parse(
             r#"
-doc test
+spec test
 this is not valid lemma syntax @#$%
 "#,
             "test.lemma",

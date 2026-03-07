@@ -8,7 +8,7 @@ use std::collections::HashMap;
 #[test]
 fn invert_unless_linear_addition() {
     let code = r#"
-doc t
+spec t
 fact x: [number]
 rule r: 0
   unless x + 1 > 10 then veto "too much"
@@ -50,7 +50,7 @@ rule r: 0
 #[test]
 fn invert_unless_linear_multiplication() {
     let code = r#"
-doc t
+spec t
 fact x: [number]
 rule r: 0
   unless 2 * x <= 8 then veto "ok"
@@ -92,7 +92,7 @@ rule r: 0
 #[test]
 fn invert_unless_negative_coefficient_flips_inequality() {
     let code = r#"
-doc t
+spec t
 fact x: [number]
 rule r: 0
   unless -2 * x > 4 then veto "neg"
@@ -134,7 +134,7 @@ rule r: 0
 #[test]
 fn invert_unless_scale_unit_conversion_wrapper() {
     let code = r#"
-doc t
+spec t
 type money: scale -> unit eur 1.0 -> unit usd 1.18
 fact price: [money]
 rule r: 0
@@ -186,7 +186,7 @@ rule r: 0
 #[test]
 fn invert_unless_duration_unit_conversion_wrapper() {
     let code = r#"
-doc t
+spec t
 fact d: [duration]
 rule r: 0
   unless (d in hours) >= 2 hours then veto "long"
@@ -231,7 +231,7 @@ rule r: 0
 #[test]
 fn unsupported_comparison_shapes_return_inversion_error() {
     let code = r#"
-doc t
+spec t
 fact x: [number]
 fact y: [number]
 rule r: 0
@@ -258,7 +258,7 @@ rule r: 0
 #[test]
 fn non_linear_comparison_returns_inversion_error() {
     let code = r#"
-doc t
+spec t
 fact x: [number]
 rule r: 0
   unless x * x > 4 then veto "nonlinear"

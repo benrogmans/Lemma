@@ -6,7 +6,7 @@ use lemma::parsing::ast::DateTimeValue;
 #[test]
 fn veto_query_specific_message() {
     let code = r#"
-        doc shipping
+        spec shipping
         fact weight: [number]
 
         rule shipping_cost: 5
@@ -42,7 +42,7 @@ fn veto_query_specific_message() {
 #[test]
 fn veto_query_any_veto() {
     let code = r#"
-        doc shipping
+        spec shipping
         fact weight: [number]
 
         rule shipping_cost: 5
@@ -80,7 +80,7 @@ fn veto_query_any_veto() {
 #[test]
 fn veto_query_with_value_branches_filters_correctly() {
     let code = r#"
-        doc pricing
+        spec pricing
         fact discount: [percent]
 
         rule final_price: 100
@@ -175,7 +175,7 @@ fn veto_query_with_value_branches_filters_correctly() {
 #[test]
 fn veto_non_veto_value_queries_exclude_vetoes() {
     let code = r#"
-        doc pricing
+        spec pricing
         fact discount: [percent]
 
         rule final_price: 100
@@ -213,7 +213,7 @@ fn veto_non_veto_value_queries_exclude_vetoes() {
 #[test]
 fn veto_multiple_facts_multiple_vetoes() {
     let code = r#"
-        doc shipping
+        spec shipping
         fact weight: [number]
         fact distance: [number]
 

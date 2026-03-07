@@ -16,12 +16,12 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
 }
 
 #[test]
-fn test_get_document_route_returns_200() {
+fn test_get_spec_route_returns_200() {
     let temp_dir = tempfile::tempdir().unwrap();
     let lemma_file = temp_dir.path().join("single.lemma");
     std::fs::write(
         &lemma_file,
-        r#"doc single_doc
+        r#"spec single_spec
 fact x: [number]
 rule result: x
 "#,
@@ -45,7 +45,7 @@ rule result: x
         panic!("server did not start within 5s");
     }
 
-    let url = format!("http://127.0.0.1:{}/single_doc?x=42", SERVER_TEST_PORT);
+    let url = format!("http://127.0.0.1:{}/single_spec?x=42", SERVER_TEST_PORT);
     let resp = reqwest::blocking::get(&url).expect("GET request");
     let status = resp.status();
     let _ = child.kill();
@@ -53,7 +53,7 @@ rule result: x
 
     assert!(
         status.is_success(),
-        "GET /single_doc should return 2xx, got {}",
+        "GET /single_spec should return 2xx, got {}",
         status
     );
 }
@@ -109,7 +109,7 @@ fn test_get_with_x_proofs_header_returns_proof_when_proofs_enabled() {
     let lemma_file = temp_dir.path().join("single.lemma");
     std::fs::write(
         &lemma_file,
-        r#"doc single_doc
+        r#"spec single_spec
 fact x: [number]
 rule result: x
 "#,
@@ -136,7 +136,7 @@ rule result: x
     }
 
     let client = reqwest::blocking::Client::new();
-    let url = format!("http://127.0.0.1:{}/single_doc", port);
+    let url = format!("http://127.0.0.1:{}/single_spec", port);
     let resp = client
         .post(&url)
         .header("x-proofs", "true")

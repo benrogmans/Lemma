@@ -7,7 +7,7 @@ use std::collections::HashMap;
 #[test]
 fn test_recursive_rule_reference_expansion_enables_solving() {
     let code = r#"
-        doc pricing
+        spec pricing
         fact base_price: [number]
 
         rule rate_a: 0.21

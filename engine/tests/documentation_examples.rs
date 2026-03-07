@@ -1,4 +1,4 @@
-//! Tests for all documentation example files
+//! Tests for example files under documentation/examples/
 //!
 //! Ensures all example files in documentation/examples/ are valid and can be evaluated
 
@@ -12,25 +12,25 @@ use std::str::FromStr;
 
 fn get_rule_value(
     engine: &Engine,
-    doc_name: &str,
+    spec_name: &str,
     rule_name: &str,
     facts: HashMap<String, String>,
 ) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate(doc_name, None, &now, vec![], facts)
+        .evaluate(spec_name, None, &now, vec![], facts)
         .unwrap();
     response
         .results
         .get(rule_name)
-        .unwrap_or_else(|| panic!("rule '{}' not found in {}", rule_name, doc_name))
+        .unwrap_or_else(|| panic!("rule '{}' not found in {}", rule_name, spec_name))
         .result
         .value()
         .unwrap_or_else(|| panic!("rule '{}' had no value", rule_name))
         .clone()
 }
 
-fn load_documentation_examples() -> Engine {
+fn load_specs_folder_examples() -> Engine {
     let mut engine = Engine::new();
 
     // Load all example files - paths relative to lemma/ crate root (same pattern as integration_examples.rs)
@@ -62,7 +62,7 @@ fn load_documentation_examples() -> Engine {
 
 #[test]
 fn test_01_coffee_order() {
-    let engine = load_documentation_examples();
+    let engine = load_specs_folder_examples();
 
     let mut facts = HashMap::new();
     facts.insert("product".to_string(), "latte".to_string());
@@ -86,7 +86,7 @@ fn test_01_coffee_order() {
 
 #[test]
 fn test_02_library_fees() {
-    let engine = load_documentation_examples();
+    let engine = load_specs_folder_examples();
 
     let mut facts = HashMap::new();
     facts.insert("days_overdue".to_string(), "5".to_string());
@@ -105,7 +105,7 @@ fn test_02_library_fees() {
 
 #[test]
 fn test_03_recipe_scaling() {
-    let engine = load_documentation_examples();
+    let engine = load_specs_folder_examples();
 
     let mut facts = HashMap::new();
     facts.insert("original_servings".to_string(), "4".to_string());
@@ -136,9 +136,9 @@ fn test_03_recipe_scaling() {
 
 #[test]
 fn test_04_membership_benefits() {
-    let engine = load_documentation_examples();
+    let engine = load_specs_folder_examples();
 
-    // Test premium_membership document (has rules, no facts needed)
+    // Test premium_membership spec (has rules, no facts needed)
     let discount_rate = get_rule_value(
         &engine,
         "premium_membership",
@@ -153,7 +153,7 @@ fn test_04_membership_benefits() {
         )
     );
 
-    // Test membership_benefits document (references premium_membership)
+    // Test membership_benefits spec (references premium_membership)
     let discount = get_rule_value(&engine, "membership_benefits", "discount", HashMap::new());
     assert_eq!(
         discount.value,
@@ -185,7 +185,7 @@ fn test_04_membership_benefits() {
 
 #[test]
 fn test_05_weather_clothing() {
-    let engine = load_documentation_examples();
+    let engine = load_specs_folder_examples();
 
     let mut facts = HashMap::new();
     facts.insert("temperature".to_string(), "15 celsius".to_string());
@@ -206,21 +206,21 @@ fn test_05_weather_clothing() {
 #[test]
 fn test_all_documentation_examples_parse() {
     // This test just ensures all examples can be loaded without errors
-    let engine = load_documentation_examples();
+    let engine = load_specs_folder_examples();
 
-    // Verify all documents are loaded
-    let docs = engine.list_documents();
+    // Verify all specs are loaded
+    let specs = engine.list_specs();
 
-    // Verify we have at least the expected documents loaded
+    // Verify we have at least the expected specs loaded
     assert!(
-        docs.len() >= 6,
-        "Expected at least 6 documents (examples + coffee_order), found {}. Available: {:?}",
-        docs.len(),
-        docs
+        specs.len() >= 6,
+        "Expected at least 6 specs (examples + coffee_order), found {}. Available: {:?}",
+        specs.len(),
+        specs
     );
 
-    // Verify key documents exist
-    let key_docs = vec![
+    // Verify key specs exist
+    let key_specs = vec![
         "coffee_order",        // from 01_coffee_order.lemma
         "library_fees",        // from 02_library_fees.lemma
         "recipe_scaling",      // from 03_recipe_scaling.lemma
@@ -229,13 +229,13 @@ fn test_all_documentation_examples_parse() {
         "weather_clothing",    // from 05_weather_clothing.lemma
     ];
 
-    let doc_names: Vec<&str> = docs.iter().map(|d| d.name.as_str()).collect();
-    for expected in key_docs {
+    let spec_names: Vec<&str> = specs.iter().map(|d| d.name.as_str()).collect();
+    for expected in key_specs {
         assert!(
-            doc_names.contains(&expected),
-            "Expected document '{}' not found. Available: {:?}",
+            spec_names.contains(&expected),
+            "Expected spec '{}' not found. Available: {:?}",
             expected,
-            doc_names
+            spec_names
         );
     }
 }

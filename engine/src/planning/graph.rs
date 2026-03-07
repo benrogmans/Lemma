@@ -1,6 +1,6 @@
 use crate::engine::Context;
 use crate::parsing::ast::{
-    self as ast, DateTimeValue, LemmaDoc, LemmaFact, LemmaRule, MetaValue, TypeDef, Value,
+    self as ast, DateTimeValue, LemmaFact, LemmaRule, LemmaSpec, MetaValue, TypeDef, Value,
 };
 use crate::parsing::source::Source;
 use crate::planning::semantics::{
@@ -10,9 +10,9 @@ use crate::planning::semantics::{
     LemmaType, LiteralValue, PathSegment, RulePath, SemanticConversionTarget, TypeExtends,
     TypeSpecification, ValueKind,
 };
-use crate::planning::types::{ResolvedDocumentTypes, TypeResolver};
+use crate::planning::types::{ResolvedSpecTypes, TypeResolver};
 use crate::planning::validation::{
-    validate_document_interfaces, validate_type_specifications, RuleEntryForBindingCheck,
+    validate_spec_interfaces, validate_type_specifications, RuleEntryForBindingCheck,
 };
 use crate::Error;
 use ast::FactValue as ParsedFactValue;
@@ -22,12 +22,12 @@ use std::sync::Arc;
 
 /// Fact bindings map: maps a target fact name path to the binding's value and source.
 ///
-/// The key is the full path of **fact names** from the root document to the target fact.
-/// Doc names are intentionally excluded from the key because doc ref bindings may change
-/// which document a segment points to — matching by fact names only ensures bindings
-/// are applied correctly regardless of doc ref bindings.
+/// The key is the full path of **fact names** from the root spec to the target fact.
+/// Spec names are intentionally excluded from the key because spec ref bindings may change
+/// which spec a segment points to — matching by fact names only ensures bindings
+/// are applied correctly regardless of spec ref bindings.
 ///
-/// Example: `fact employee.salary: 7500` in the root doc produces key `["employee", "salary"]`.
+/// Example: `fact employee.salary: 7500` in the root spec produces key `["employee", "salary"]`.
 type FactBindings = HashMap<Vec<String>, (ParsedFactValue, Source)>;
 
 #[derive(Debug)]
@@ -64,13 +64,13 @@ impl Graph {
         &self.meta
     }
 
-    /// Build the fact map: one entry per fact (Value or DocumentRef), with defaults and coercion applied.
-    /// Preserves definition order from the source document.
+    /// Build the fact map: one entry per fact (Value or SpecRef), with defaults and coercion applied.
+    /// Preserves definition order from the source spec.
     pub(crate) fn build_facts(&self) -> IndexMap<FactPath, FactData> {
         let mut schema: HashMap<FactPath, LemmaType> = HashMap::new();
         let mut values: HashMap<FactPath, LiteralValue> = HashMap::new();
-        let mut doc_arcs: HashMap<FactPath, Arc<LemmaDoc>> = HashMap::new();
-        let mut doc_ref_hashes: HashMap<FactPath, Option<String>> = HashMap::new();
+        let mut spec_arcs: HashMap<FactPath, Arc<LemmaSpec>> = HashMap::new();
+        let mut spec_ref_hashes: HashMap<FactPath, Option<String>> = HashMap::new();
 
         for (path, rfv) in self.facts.iter() {
             match rfv {
@@ -81,13 +81,13 @@ impl Graph {
                 FactData::TypeDeclaration { resolved_type, .. } => {
                     schema.insert(path.clone(), resolved_type.clone());
                 }
-                FactData::DocumentRef {
-                    doc,
+                FactData::SpecRef {
+                    spec: spec_arc,
                     expected_hash_pin,
                     ..
                 } => {
-                    doc_arcs.insert(path.clone(), Arc::clone(doc));
-                    doc_ref_hashes.insert(path.clone(), expected_hash_pin.clone());
+                    spec_arcs.insert(path.clone(), Arc::clone(spec_arc));
+                    spec_ref_hashes.insert(path.clone(), expected_hash_pin.clone());
                 }
             }
         }
@@ -114,12 +114,12 @@ impl Graph {
         let mut facts = IndexMap::new();
         for (path, rfv) in &self.facts {
             let source = rfv.source().clone();
-            if let Some(doc) = doc_arcs.remove(path) {
-                let expected_hash_pin = doc_ref_hashes.remove(path).flatten();
+            if let Some(spec_arc) = spec_arcs.remove(path) {
+                let expected_hash_pin = spec_ref_hashes.remove(path).flatten();
                 facts.insert(
                     path.clone(),
-                    FactData::DocumentRef {
-                        doc,
+                    FactData::SpecRef {
+                        spec: spec_arc,
                         source,
                         expected_hash_pin,
                     },
@@ -130,7 +130,7 @@ impl Graph {
                 let resolved_type = schema
                     .get(path)
                     .cloned()
-                    .expect("non-doc-ref fact has schema (value or type-only)");
+                    .expect("non-spec-ref fact has schema (value or type-only)");
                 facts.insert(
                     path.clone(),
                     FactData::TypeDeclaration {
@@ -286,7 +286,7 @@ pub(crate) struct RuleNode {
     pub rule_type: LemmaType,
 }
 
-type ResolvedTypesMap = HashMap<Arc<LemmaDoc>, ResolvedDocumentTypes>;
+type ResolvedTypesMap = HashMap<Arc<LemmaSpec>, ResolvedSpecTypes>;
 
 struct GraphBuilder<'a> {
     facts: IndexMap<FactPath, FactData>,
@@ -297,31 +297,31 @@ struct GraphBuilder<'a> {
     errors: Vec<Error>,
     meta: HashMap<String, MetaValue>,
     resolve_at: Option<DateTimeValue>,
-    doc_hashes: &'a DocContentHashes,
+    spec_hashes: &'a SpecContentHashes,
 }
 
-/// Map from doc pointer identity to computed content hash.
-pub(crate) type DocContentHashes = HashMap<usize, String>;
+/// Map from spec pointer identity to computed content hash.
+pub(crate) type SpecContentHashes = HashMap<usize, String>;
 
-/// Get the pointer-identity key for a doc Arc.
-pub(crate) fn doc_hash_key(doc: &Arc<LemmaDoc>) -> usize {
-    Arc::as_ptr(doc) as usize
+/// Get the pointer-identity key for a spec Arc.
+pub(crate) fn spec_hash_key(spec: &Arc<LemmaSpec>) -> usize {
+    Arc::as_ptr(spec) as usize
 }
 
 impl Graph {
-    /// Build the dependency graph for a single document.
+    /// Build the dependency graph for a single spec.
     ///
     /// `resolve_at` is the start of the temporal slice (`None` = -∞). Implicit
-    /// doc refs are resolved to the version active at this point; pinned refs
+    /// spec refs are resolved to the version active at this point; pinned refs
     /// use their own `effective`.
     pub(crate) fn build(
-        main_doc: &Arc<LemmaDoc>,
+        main_spec: &Arc<LemmaSpec>,
         context: &Context,
         sources: HashMap<String, String>,
         type_resolver: &TypeResolver,
         resolved_types: &ResolvedTypesMap,
         resolve_at: Option<DateTimeValue>,
-        doc_hashes: &DocContentHashes,
+        spec_hashes: &SpecContentHashes,
     ) -> Result<(Graph, ResolvedTypesMap), Vec<Error>> {
         let mut local_type_resolver = type_resolver.clone();
 
@@ -335,11 +335,11 @@ impl Graph {
                 errors: Vec::new(),
                 meta: HashMap::new(),
                 resolve_at,
-                doc_hashes,
+                spec_hashes,
             };
 
-            builder.build_document(
-                main_doc,
+            builder.build_spec(
+                main_spec,
                 Vec::new(),
                 HashMap::new(),
                 &mut local_type_resolver,
@@ -412,13 +412,13 @@ impl Graph {
             errors.extend(type_errors);
         }
 
-        // Document interface validation uses inferred types (not yet applied to graph)
+        // Spec interface validation uses inferred types (not yet applied to graph)
         let referenced_rules = compute_referenced_rules_by_path(self);
-        let doc_ref_facts: Vec<(FactPath, Arc<LemmaDoc>, Source)> = self
+        let spec_ref_facts: Vec<(FactPath, Arc<LemmaSpec>, Source)> = self
             .facts()
             .iter()
             .filter_map(|(path, fact)| {
-                fact.doc_arc()
+                fact.spec_arc()
                     .map(|arc| (path.clone(), Arc::clone(arc), fact.source().clone()))
             })
             .collect();
@@ -441,7 +441,7 @@ impl Graph {
             })
             .collect();
         if let Err(interface_errors) =
-            validate_document_interfaces(&referenced_rules, &doc_ref_facts, &rule_entries)
+            validate_spec_interfaces(&referenced_rules, &spec_ref_facts, &rule_entries)
         {
             errors.extend(interface_errors);
         }
@@ -462,8 +462,8 @@ impl<'a> GraphBuilder<'a> {
         Error::validation(message.into(), Some(source.clone()), None::<String>)
     }
 
-    fn process_meta_fields(&mut self, doc: &LemmaDoc) {
-        for field in &doc.meta_fields {
+    fn process_meta_fields(&mut self, spec: &LemmaSpec) {
+        for field in &spec.meta_fields {
             // Validate built-in keys
             if field.key == "title" && !matches!(field.value, MetaValue::Literal(Value::Text(_))) {
                 self.errors.push(self.engine_error(
@@ -483,39 +483,43 @@ impl<'a> GraphBuilder<'a> {
         }
     }
 
-    fn resolve_doc_ref(&self, doc_ref: &ast::DocRef) -> Option<Arc<LemmaDoc>> {
-        if let Some(ref pin) = doc_ref.hash_pin {
-            let doc = self.resolve_doc_by_hash(&doc_ref.name, pin)?;
-            if let Some(ref effective) = doc_ref.effective {
-                let active_at = self.context.get_doc(&doc_ref.name, effective);
-                if active_at.as_ref() != Some(&doc) {
+    fn resolve_spec_ref(&self, spec_ref: &ast::SpecRef) -> Option<Arc<LemmaSpec>> {
+        if let Some(ref pin) = spec_ref.hash_pin {
+            let resolved = self.resolve_spec_by_hash(&spec_ref.name, pin)?;
+            if let Some(ref effective) = spec_ref.effective {
+                let active_at = self.context.get_spec(&spec_ref.name, effective);
+                if active_at.as_ref() != Some(&resolved) {
                     return None;
                 }
             }
-            return Some(doc);
+            return Some(resolved);
         }
-        let at = doc_ref.effective.as_ref().or(self.resolve_at.as_ref());
+        let at = spec_ref.effective.as_ref().or(self.resolve_at.as_ref());
         match at {
-            Some(dt) => self.context.get_doc(&doc_ref.name, dt),
-            None => self.context.docs_for_name(&doc_ref.name).into_iter().next(),
+            Some(dt) => self.context.get_spec(&spec_ref.name, dt),
+            None => self
+                .context
+                .specs_for_name(&spec_ref.name)
+                .into_iter()
+                .next(),
         }
     }
 
-    fn resolve_doc_by_hash(&self, name: &str, hash_pin: &str) -> Option<Arc<LemmaDoc>> {
-        let mut matched: Option<Arc<LemmaDoc>> = None;
-        for doc in self.context.iter() {
-            if doc.name != name {
+    fn resolve_spec_by_hash(&self, name: &str, hash_pin: &str) -> Option<Arc<LemmaSpec>> {
+        let mut matched: Option<Arc<LemmaSpec>> = None;
+        for spec in self.context.iter() {
+            if spec.name != name {
                 continue;
             }
-            let key = doc_hash_key(&doc);
-            if let Some(computed) = self.doc_hashes.get(&key) {
+            let key = spec_hash_key(&spec);
+            if let Some(computed) = self.spec_hashes.get(&key) {
                 if super::content_hash::content_hash_matches(hash_pin, computed) {
                     if matched.is_some() {
                         // Hash collision across versions — cannot resolve unambiguously.
                         // Return None to trigger a "not found" error downstream.
                         return None;
                     }
-                    matched = Some(doc);
+                    matched = Some(spec);
                 }
             }
         }
@@ -526,7 +530,7 @@ impl<'a> GraphBuilder<'a> {
         &self,
         type_decl: &ParsedFactValue,
         decl_source: &Source,
-        context_doc: &Arc<LemmaDoc>,
+        context_spec: &Arc<LemmaSpec>,
     ) -> Result<LemmaType, Vec<Error>> {
         let ParsedFactValue::TypeDeclaration {
             base,
@@ -545,13 +549,13 @@ impl<'a> GraphBuilder<'a> {
             ]);
         }
 
-        let source_doc_owned: Option<Arc<LemmaDoc>> =
-            from.as_ref().and_then(|r| self.resolve_doc_ref(r));
-        let source_doc_arc: &Arc<LemmaDoc> = source_doc_owned.as_ref().unwrap_or(context_doc);
-        if from.is_some() && source_doc_owned.is_none() {
+        let source_spec_owned: Option<Arc<LemmaSpec>> =
+            from.as_ref().and_then(|r| self.resolve_spec_ref(r));
+        let source_spec_arc: &Arc<LemmaSpec> = source_spec_owned.as_ref().unwrap_or(context_spec);
+        if from.is_some() && source_spec_owned.is_none() {
             return Err(vec![self.engine_error(
                 format!(
-                    "Document '{}' not found for type import",
+                    "Spec '{}' not found for type import",
                     from.as_ref().map(|r| r.name.as_str()).unwrap_or("")
                 ),
                 decl_source,
@@ -561,17 +565,17 @@ impl<'a> GraphBuilder<'a> {
         let (base_lemma_type, extends) = if let Some(specs) = Graph::resolve_primitive_type(base) {
             (LemmaType::primitive(specs), TypeExtends::Primitive)
         } else {
-            let document_types = self.local_types.get(source_doc_arc).ok_or_else(|| {
+            let resolved_types = self.local_types.get(source_spec_arc).ok_or_else(|| {
                 vec![self.engine_error(
                     format!(
-                        "Resolved types not found for document '{}'",
-                        source_doc_arc.name
+                        "Resolved types not found for spec '{}'",
+                        source_spec_arc.name
                     ),
                     decl_source,
                 )]
             })?;
 
-            let base_type = document_types
+            let base_type = resolved_types
                 .named_types
                 .get(base)
                 .ok_or_else(|| {
@@ -615,16 +619,16 @@ impl<'a> GraphBuilder<'a> {
         Ok(LemmaType::new(base.clone(), specs, extends))
     }
 
-    /// Validate a fact binding path by walking through document references.
+    /// Validate a fact binding path by walking through spec references.
     ///
     /// Returns the binding key (full path as fact names from root) and validates
-    /// that each segment in the path is a document reference. The binding key uses
-    /// fact names only (no doc names) so that doc ref bindings don't cause mismatches.
+    /// that each segment in the path is a spec reference. The binding key uses
+    /// fact names only (no spec names) so that spec ref bindings don't cause mismatches.
     fn resolve_fact_binding(
         &self,
         fact: &LemmaFact,
         current_segment_names: &[String],
-        effective_doc_refs: &HashMap<String, Arc<LemmaDoc>>,
+        effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
     ) -> Result<(Vec<String>, ParsedFactValue, Source), Vec<Error>> {
         let fact_source = &fact.source_location;
         let binding_path_display = format!(
@@ -633,16 +637,16 @@ impl<'a> GraphBuilder<'a> {
             fact.reference.name
         );
 
-        let mut current_doc_arc: Option<Arc<LemmaDoc>> = None;
+        let mut current_spec_arc: Option<Arc<LemmaSpec>> = None;
 
         for (index, segment) in fact.reference.segments.iter().enumerate() {
-            let doc_arc = if index == 0 {
-                match effective_doc_refs.get(segment) {
+            let resolved_arc = if index == 0 {
+                match effective_spec_refs.get(segment) {
                     Some(arc) => Arc::clone(arc),
                     None => {
                         return Err(vec![self.engine_error(
                             format!(
-                                "Invalid fact binding path '{}': '{}' is not a document reference",
+                                "Invalid fact binding path '{}': '{}' is not a spec reference",
                                 binding_path_display, segment
                             ),
                             fact_source,
@@ -650,27 +654,27 @@ impl<'a> GraphBuilder<'a> {
                     }
                 }
             } else {
-                let prev_doc = current_doc_arc.as_ref().unwrap_or_else(|| {
+                let prev_spec = current_spec_arc.as_ref().unwrap_or_else(|| {
                     unreachable!(
-                        "BUG: current_doc_arc should be set after first segment in resolve_fact_binding"
+                        "BUG: current_spec_arc should be set after first segment in resolve_fact_binding"
                     )
                 });
 
-                let seg_fact = prev_doc
+                let seg_fact = prev_spec
                     .facts
                     .iter()
                     .find(|f| f.reference.segments.is_empty() && f.reference.name == *segment);
 
                 match seg_fact {
                     Some(f) => match &f.value {
-                        ParsedFactValue::DocumentReference(doc_ref) => {
-                            match self.resolve_doc_ref(doc_ref) {
+                        ParsedFactValue::SpecReference(spec_ref) => {
+                            match self.resolve_spec_ref(spec_ref) {
                                 Some(arc) => arc,
                                 None => {
                                     return Err(vec![self.engine_error(
                                         format!(
-                                            "Invalid fact binding path '{}': document '{}' not found",
-                                            binding_path_display, doc_ref
+                                            "Invalid fact binding path '{}': spec '{}' not found",
+                                            binding_path_display, spec_ref
                                         ),
                                         fact_source,
                                     )]);
@@ -680,8 +684,8 @@ impl<'a> GraphBuilder<'a> {
                         _ => {
                             return Err(vec![self.engine_error(
                                 format!(
-                                    "Invalid fact binding path '{}': '{}' in document '{}' is not a document reference",
-                                    binding_path_display, segment, prev_doc.name
+                                    "Invalid fact binding path '{}': '{}' in spec '{}' is not a spec reference",
+                                    binding_path_display, segment, prev_spec.name
                                 ),
                                 fact_source,
                             )]);
@@ -690,8 +694,8 @@ impl<'a> GraphBuilder<'a> {
                     None => {
                         return Err(vec![self.engine_error(
                             format!(
-                                "Invalid fact binding path '{}': fact '{}' not found in document '{}'",
-                                binding_path_display, segment, prev_doc.name
+                                "Invalid fact binding path '{}': fact '{}' not found in spec '{}'",
+                                binding_path_display, segment, prev_spec.name
                             ),
                             fact_source,
                         )]);
@@ -699,7 +703,7 @@ impl<'a> GraphBuilder<'a> {
                 }
             };
 
-            current_doc_arc = Some(doc_arc);
+            current_spec_arc = Some(resolved_arc);
         }
 
         // Build the binding key: current_segment_names ++ fact.reference.segments ++ [fact.reference.name]
@@ -714,21 +718,21 @@ impl<'a> GraphBuilder<'a> {
         ))
     }
 
-    /// Build the fact bindings declared in a document.
+    /// Build the fact bindings declared in a spec.
     ///
-    /// For each cross-document fact (reference.segments is non-empty), validate the path
+    /// For each cross-spec fact (reference.segments is non-empty), validate the path
     /// and collect into a FactBindings map. Rejects TypeDeclaration binding values and
     /// duplicate bindings targeting the same path.
     fn build_fact_bindings(
         &self,
-        doc: &LemmaDoc,
+        spec: &LemmaSpec,
         current_segment_names: &[String],
-        effective_doc_refs: &HashMap<String, Arc<LemmaDoc>>,
+        effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
     ) -> Result<FactBindings, Vec<Error>> {
         let mut bindings: FactBindings = HashMap::new();
         let mut errors: Vec<Error> = Vec::new();
 
-        for fact in &doc.facts {
+        for fact in &spec.facts {
             if fact.reference.segments.is_empty() {
                 continue; // Local facts are not bindings
             }
@@ -765,7 +769,7 @@ impl<'a> GraphBuilder<'a> {
                 );
                 errors.push(self.engine_error(
                     format!(
-                        "Fact binding '{}' must provide a literal value or document reference, not a type declaration",
+                        "Fact binding '{}' must provide a literal value or spec reference, not a type declaration",
                         binding_path_display
                     ),
                     &fact.source_location,
@@ -773,7 +777,7 @@ impl<'a> GraphBuilder<'a> {
                 continue;
             }
 
-            match self.resolve_fact_binding(fact, current_segment_names, effective_doc_refs) {
+            match self.resolve_fact_binding(fact, current_segment_names, effective_spec_refs) {
                 Ok((binding_key, fact_value, source)) => {
                     if let Some((_, existing_source)) = bindings.get(&binding_key) {
                         errors.push(self.engine_error(
@@ -813,8 +817,8 @@ impl<'a> GraphBuilder<'a> {
         fact: &LemmaFact,
         current_segments: &[PathSegment],
         fact_bindings: &FactBindings,
-        effective_doc_refs: &HashMap<String, Arc<LemmaDoc>>,
-        current_doc_arc: &Arc<LemmaDoc>,
+        effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
+        current_spec_arc: &Arc<LemmaSpec>,
         used_binding_keys: &mut HashSet<Vec<String>>,
     ) {
         if let Err(e) = crate::limits::check_max_length(
@@ -871,8 +875,11 @@ impl<'a> GraphBuilder<'a> {
         // the schema type from the declaration should be preserved.
         let original_schema_type = if matches!(&fact.value, ParsedFactValue::TypeDeclaration { .. })
         {
-            match self.resolve_type_declaration(&fact.value, &fact.source_location, current_doc_arc)
-            {
+            match self.resolve_type_declaration(
+                &fact.value,
+                &fact.source_location,
+                current_spec_arc,
+            ) {
                 Ok(t) => Some(t),
                 Err(errs) => {
                     self.errors.extend(errs);
@@ -897,7 +904,7 @@ impl<'a> GraphBuilder<'a> {
                     Value::Number(_) => primitive_number().clone(),
                     Value::Scale(_, unit) => self
                         .local_types
-                        .get(current_doc_arc)
+                        .get(current_spec_arc)
                         .and_then(|dt| dt.unit_index.get(unit))
                         .cloned()
                         .unwrap_or_else(|| primitive_scale().clone()),
@@ -926,7 +933,7 @@ impl<'a> GraphBuilder<'a> {
                     match self.resolve_type_declaration(
                         &effective_value,
                         &effective_source,
-                        current_doc_arc,
+                        current_spec_arc,
                     ) {
                         Ok(t) => t,
                         Err(_) => {
@@ -949,16 +956,16 @@ impl<'a> GraphBuilder<'a> {
                     },
                 );
             }
-            ParsedFactValue::DocumentReference(doc_ref) => {
-                let effective_doc_arc =
-                    if let Some(arc) = effective_doc_refs.get(&fact.reference.name).cloned() {
+            ParsedFactValue::SpecReference(spec_ref) => {
+                let effective_spec_arc =
+                    if let Some(arc) = effective_spec_refs.get(&fact.reference.name).cloned() {
                         arc
                     } else {
-                        match self.resolve_doc_ref(doc_ref) {
+                        match self.resolve_spec_ref(spec_ref) {
                             Some(arc) => arc,
                             None => {
                                 self.errors.push(self.engine_error(
-                                    format!("Document '{}' not found", doc_ref),
+                                    format!("Spec '{}' not found", spec_ref),
                                     &effective_source,
                                 ));
                                 return;
@@ -968,26 +975,26 @@ impl<'a> GraphBuilder<'a> {
 
                 self.facts.insert(
                     fact_path,
-                    FactData::DocumentRef {
-                        doc: Arc::clone(&effective_doc_arc),
+                    FactData::SpecRef {
+                        spec: Arc::clone(&effective_spec_arc),
                         source: effective_source,
-                        expected_hash_pin: doc_ref.hash_pin.clone(),
+                        expected_hash_pin: spec_ref.hash_pin.clone(),
                     },
                 );
             }
         }
     }
 
-    /// Returns (path_segments, last_resolved_doc_arc) on success.
+    /// Returns (path_segments, last_resolved_spec_arc) on success.
     fn resolve_path_segments(
         &mut self,
         segments: &[String],
         reference_source: &Source,
         mut current_facts_map: HashMap<String, LemmaFact>,
         mut path_segments: Vec<PathSegment>,
-        effective_doc_refs: &HashMap<String, Arc<LemmaDoc>>,
-    ) -> Option<(Vec<PathSegment>, Arc<LemmaDoc>)> {
-        let mut last_arc: Option<Arc<LemmaDoc>> = None;
+        effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
+    ) -> Option<(Vec<PathSegment>, Arc<LemmaSpec>)> {
+        let mut last_arc: Option<Arc<LemmaSpec>> = None;
 
         for (index, segment) in segments.iter().enumerate() {
             let fact_ref =
@@ -1002,21 +1009,21 @@ impl<'a> GraphBuilder<'a> {
                     }
                 };
 
-            if let ParsedFactValue::DocumentReference(original_doc_ref) = &fact_ref.value {
+            if let ParsedFactValue::SpecReference(original_spec_ref) = &fact_ref.value {
                 let resolved = if index == 0 {
-                    effective_doc_refs
+                    effective_spec_refs
                         .get(segment)
                         .cloned()
-                        .or_else(|| self.resolve_doc_ref(original_doc_ref))
+                        .or_else(|| self.resolve_spec_ref(original_spec_ref))
                 } else {
-                    self.resolve_doc_ref(original_doc_ref)
+                    self.resolve_spec_ref(original_spec_ref)
                 };
 
                 let arc = match resolved {
                     Some(a) => a,
                     None => {
                         self.errors.push(self.engine_error(
-                            format!("Document '{}' not found", original_doc_ref),
+                            format!("Spec '{}' not found", original_spec_ref),
                             reference_source,
                         ));
                         return None;
@@ -1025,7 +1032,7 @@ impl<'a> GraphBuilder<'a> {
 
                 path_segments.push(PathSegment {
                     fact: segment.clone(),
-                    doc: arc.name.clone(),
+                    spec: arc.name.clone(),
                 });
                 current_facts_map = arc
                     .facts
@@ -1035,7 +1042,7 @@ impl<'a> GraphBuilder<'a> {
                 last_arc = Some(arc);
             } else {
                 self.errors.push(self.engine_error(
-                    format!("Fact '{}' is not a document reference", segment),
+                    format!("Fact '{}' is not a spec reference", segment),
                     reference_source,
                 ));
                 return None;
@@ -1050,51 +1057,51 @@ impl<'a> GraphBuilder<'a> {
         Some((path_segments, final_arc))
     }
 
-    fn build_document(
+    fn build_spec(
         &mut self,
-        doc_arc: &Arc<LemmaDoc>,
+        spec_arc: &Arc<LemmaSpec>,
         current_segments: Vec<PathSegment>,
         fact_bindings: FactBindings,
         type_resolver: &mut TypeResolver,
     ) -> Result<(), Vec<Error>> {
-        let doc = doc_arc.as_ref();
+        let spec = spec_arc.as_ref();
         if let Err(e) =
-            crate::limits::check_max_length(&doc.name, crate::limits::MAX_DOC_NAME_LENGTH, "doc")
+            crate::limits::check_max_length(&spec.name, crate::limits::MAX_SPEC_NAME_LENGTH, "spec")
         {
             self.errors.push(e);
         }
 
         if current_segments.is_empty() {
-            self.process_meta_fields(doc);
+            self.process_meta_fields(spec);
         }
 
         // Step 0: Cross-version self-reference check.
-        // A document must not reference any version of itself (same base name).
-        for fact in doc.facts.iter() {
-            if let ParsedFactValue::DocumentReference(doc_ref) = &fact.value {
-                if doc_ref.name == doc.name {
+        // A spec must not reference any version of itself (same base name).
+        for fact in spec.facts.iter() {
+            if let ParsedFactValue::SpecReference(spec_ref) = &fact.value {
+                if spec_ref.name == spec.name {
                     self.errors.push(self.engine_error(
                         format!(
-                            "document '{}' cannot reference '{}' (same base name)",
-                            doc.name, doc_ref
+                            "spec '{}' cannot reference '{}' (same base name)",
+                            spec.name, spec_ref
                         ),
                         &fact.source_location,
                     ));
                 }
             }
         }
-        for type_def in &doc.types {
+        for type_def in &spec.types {
             if let ast::TypeDef::Import {
                 from,
                 source_location,
                 ..
             } = type_def
             {
-                if from.name == doc.name {
+                if from.name == spec.name {
                     self.errors.push(self.engine_error(
                         format!(
-                            "document '{}' cannot reference '{}' (same base name)",
-                            doc.name, from
+                            "spec '{}' cannot reference '{}' (same base name)",
+                            spec.name, from
                         ),
                         source_location,
                     ));
@@ -1102,15 +1109,15 @@ impl<'a> GraphBuilder<'a> {
             }
         }
 
-        let mut effective_doc_refs: HashMap<String, Arc<LemmaDoc>> = HashMap::new();
-        for fact in doc.facts.iter() {
+        let mut effective_spec_refs: HashMap<String, Arc<LemmaSpec>> = HashMap::new();
+        for fact in spec.facts.iter() {
             if fact.reference.segments.is_empty() {
-                if let ParsedFactValue::DocumentReference(doc_ref) = &fact.value {
-                    if doc_ref.name == doc.name {
+                if let ParsedFactValue::SpecReference(spec_ref) = &fact.value {
+                    if spec_ref.name == spec.name {
                         continue;
                     }
-                    if let Some(arc) = self.resolve_doc_ref(doc_ref) {
-                        effective_doc_refs.insert(fact.reference.name.clone(), arc);
+                    if let Some(arc) = self.resolve_spec_ref(spec_ref) {
+                        effective_spec_refs.insert(fact.reference.name.clone(), arc);
                     }
                 }
             }
@@ -1118,28 +1125,28 @@ impl<'a> GraphBuilder<'a> {
 
         let current_segment_names: Vec<String> =
             current_segments.iter().map(|s| s.fact.clone()).collect();
-        for fact in doc.facts.iter() {
+        for fact in spec.facts.iter() {
             if fact.reference.segments.is_empty() {
-                if let ParsedFactValue::DocumentReference(_) = &fact.value {
+                if let ParsedFactValue::SpecReference(_) = &fact.value {
                     let mut binding_key = current_segment_names.clone();
                     binding_key.push(fact.reference.name.clone());
-                    if let Some((ParsedFactValue::DocumentReference(bound_doc_ref), _)) =
+                    if let Some((ParsedFactValue::SpecReference(bound_spec_ref), _)) =
                         fact_bindings.get(&binding_key)
                     {
-                        if bound_doc_ref.name == doc.name {
+                        if bound_spec_ref.name == spec.name {
                             continue;
                         }
-                        if let Some(arc) = self.resolve_doc_ref(bound_doc_ref) {
-                            effective_doc_refs.insert(fact.reference.name.clone(), arc);
+                        if let Some(arc) = self.resolve_spec_ref(bound_spec_ref) {
+                            effective_spec_refs.insert(fact.reference.name.clone(), arc);
                         }
                     }
                 }
             }
         }
 
-        // Step 2: Build fact bindings declared in this document (for passing to referenced docs)
-        let this_doc_bindings =
-            match self.build_fact_bindings(doc, &current_segment_names, &effective_doc_refs) {
+        // Step 2: Build fact bindings declared in this spec (for passing to referenced specs)
+        let this_spec_bindings =
+            match self.build_fact_bindings(spec, &current_segment_names, &effective_spec_refs) {
                 Ok(bindings) => bindings,
                 Err(errors) => {
                     self.errors.extend(errors);
@@ -1148,16 +1155,16 @@ impl<'a> GraphBuilder<'a> {
             };
 
         // Build facts_map for rule resolution and other lookups
-        let facts_map: HashMap<String, &LemmaFact> = doc
+        let facts_map: HashMap<String, &LemmaFact> = spec
             .facts
             .iter()
             .map(|fact| (fact.reference.name.clone(), fact))
             .collect();
 
-        // Register inline type definitions from this document's facts (no insert yet).
+        // Register inline type definitions from this spec's facts (no insert yet).
         // Only top-level TypeDeclaration facts with 'from' or 'constraints' are inline type defs.
         if current_segments.is_empty() {
-            for fact in &doc.facts {
+            for fact in &spec.facts {
                 if !fact.reference.segments.is_empty() {
                     continue;
                 }
@@ -1184,7 +1191,7 @@ impl<'a> GraphBuilder<'a> {
                             fact_ref: fact.reference.clone(),
                             from: from.clone(),
                         };
-                        if let Err(e) = type_resolver.register_type(doc_arc, inline_type_def) {
+                        if let Err(e) = type_resolver.register_type(spec_arc, inline_type_def) {
                             self.errors.push(e);
                         }
                     }
@@ -1192,19 +1199,19 @@ impl<'a> GraphBuilder<'a> {
             }
         }
 
-        if let Some(existing_types) = self.local_types.get(doc_arc).cloned() {
-            match type_resolver.resolve_inline_types(doc_arc, existing_types) {
-                Ok(document_types) => {
-                    for (fact_ref, lemma_type) in &document_types.inline_type_definitions {
+        if let Some(existing_types) = self.local_types.get(spec_arc).cloned() {
+            match type_resolver.resolve_inline_types(spec_arc, existing_types) {
+                Ok(resolved_types) => {
+                    for (fact_ref, lemma_type) in &resolved_types.inline_type_definitions {
                         let type_name = format!("{} (inline)", fact_ref.name);
-                        let fact = doc
+                        let fact = spec
                             .facts
                             .iter()
                             .find(|f| &f.reference == fact_ref)
                             .unwrap_or_else(|| {
                                 unreachable!(
-                                    "BUG: inline type definition for '{}' has no corresponding fact in document '{}'",
-                                    fact_ref.name, doc.name
+                                    "BUG: inline type definition for '{}' has no corresponding fact in spec '{}'",
+                                    fact_ref.name, spec.name
                                 )
                             });
                         let source = &fact.source_location;
@@ -1215,7 +1222,8 @@ impl<'a> GraphBuilder<'a> {
                         );
                         self.errors.append(&mut spec_errors);
                     }
-                    self.local_types.insert(Arc::clone(doc_arc), document_types);
+                    self.local_types
+                        .insert(Arc::clone(spec_arc), resolved_types);
                 }
                 Err(es) => {
                     self.errors.extend(es);
@@ -1225,12 +1233,12 @@ impl<'a> GraphBuilder<'a> {
 
         // Step 4: Add local facts using caller's fact_bindings
         let mut used_binding_keys: HashSet<Vec<String>> = HashSet::new();
-        for fact in &doc.facts {
+        for fact in &spec.facts {
             if !fact.reference.segments.is_empty() {
                 continue; // Skip binding facts (processed in step 2)
             }
-            if let ParsedFactValue::DocumentReference(doc_ref) = &fact.value {
-                if doc_ref.name == doc.name {
+            if let ParsedFactValue::SpecReference(spec_ref) = &fact.value {
+                if spec_ref.name == spec.name {
                     continue; // Self-reference — error already reported in step 0
                 }
             }
@@ -1238,13 +1246,13 @@ impl<'a> GraphBuilder<'a> {
                 fact,
                 &current_segments,
                 &fact_bindings,
-                &effective_doc_refs,
-                doc_arc,
+                &effective_spec_refs,
+                spec_arc,
                 &mut used_binding_keys,
             );
         }
 
-        // Rebuild effective_doc_refs from the graph so bound doc refs are reflected for rule resolution
+        // Rebuild effective_spec_refs from the graph so bound spec refs are reflected for rule resolution
         for (path, rfv) in &self.facts {
             if path.segments.len() != current_segments.len() {
                 continue;
@@ -1253,33 +1261,33 @@ impl<'a> GraphBuilder<'a> {
                 .segments
                 .iter()
                 .zip(current_segments.iter())
-                .all(|(a, b)| a.fact == b.fact && a.doc == b.doc)
+                .all(|(a, b)| a.fact == b.fact && a.spec == b.spec)
             {
                 continue;
             }
-            if let FactData::DocumentRef { doc, .. } = rfv {
-                effective_doc_refs.insert(path.fact.clone(), Arc::clone(doc));
+            if let FactData::SpecRef { spec, .. } = rfv {
+                effective_spec_refs.insert(path.fact.clone(), Arc::clone(spec));
             }
         }
 
-        for fact in &doc.facts {
+        for fact in &spec.facts {
             if !fact.reference.segments.is_empty() {
                 continue;
             }
-            if let ParsedFactValue::DocumentReference(_) = &fact.value {
-                let nested_arc = match effective_doc_refs.get(&fact.reference.name) {
+            if let ParsedFactValue::SpecReference(_) = &fact.value {
+                let nested_arc = match effective_spec_refs.get(&fact.reference.name) {
                     Some(arc) => Arc::clone(arc),
                     None => continue,
                 };
                 let mut nested_segments = current_segments.clone();
                 nested_segments.push(PathSegment {
                     fact: fact.reference.name.clone(),
-                    doc: nested_arc.name.clone(),
+                    spec: nested_arc.name.clone(),
                 });
 
                 let nested_segment_names: Vec<String> =
                     nested_segments.iter().map(|s| s.fact.clone()).collect();
-                let mut combined_bindings = this_doc_bindings.clone();
+                let mut combined_bindings = this_spec_bindings.clone();
                 for (key, value_and_source) in &fact_bindings {
                     if key.len() > nested_segment_names.len()
                         && key[..nested_segment_names.len()] == nested_segment_names[..]
@@ -1289,7 +1297,7 @@ impl<'a> GraphBuilder<'a> {
                     }
                 }
 
-                if let Err(errs) = self.build_document(
+                if let Err(errs) = self.build_spec(
                     &nested_arc,
                     nested_segments,
                     combined_bindings,
@@ -1300,7 +1308,7 @@ impl<'a> GraphBuilder<'a> {
             }
         }
 
-        // Check for unused fact bindings that targeted this document's facts
+        // Check for unused fact bindings that targeted this spec's facts
         // Only check bindings at exactly this depth (deeper bindings are passed through)
         let expected_key_len = current_segments.len() + 1;
         for (binding_key, (_, binding_source)) in &fact_bindings {
@@ -1313,7 +1321,7 @@ impl<'a> GraphBuilder<'a> {
             {
                 self.errors.push(self.engine_error(
                     format!(
-                        "Fact binding targets a fact that does not exist in the referenced document: '{}'",
+                        "Fact binding targets a fact that does not exist in the referenced spec: '{}'",
                         binding_key.join(".")
                     ),
                     binding_source,
@@ -1321,13 +1329,13 @@ impl<'a> GraphBuilder<'a> {
             }
         }
 
-        for rule in &doc.rules {
+        for rule in &spec.rules {
             self.add_rule(
                 rule,
-                doc_arc,
+                spec_arc,
                 &facts_map,
                 &current_segments,
-                &effective_doc_refs,
+                &effective_spec_refs,
             );
         }
 
@@ -1337,10 +1345,10 @@ impl<'a> GraphBuilder<'a> {
     fn add_rule(
         &mut self,
         rule: &LemmaRule,
-        current_doc_arc: &Arc<LemmaDoc>,
+        current_spec_arc: &Arc<LemmaSpec>,
         facts_map: &HashMap<String, &LemmaFact>,
         current_segments: &[PathSegment],
-        effective_doc_refs: &HashMap<String, Arc<LemmaDoc>>,
+        effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
     ) {
         if let Err(e) =
             crate::limits::check_max_length(&rule.name, crate::limits::MAX_RULE_NAME_LENGTH, "rule")
@@ -1367,11 +1375,11 @@ impl<'a> GraphBuilder<'a> {
 
         let converted_expression = match self.convert_expression_and_extract_dependencies(
             &rule.expression,
-            current_doc_arc,
+            current_spec_arc,
             facts_map,
             current_segments,
             &mut depends_on_rules,
-            effective_doc_refs,
+            effective_spec_refs,
         ) {
             Some(expr) => expr,
             None => return,
@@ -1381,22 +1389,22 @@ impl<'a> GraphBuilder<'a> {
         for unless_clause in &rule.unless_clauses {
             let converted_condition = match self.convert_expression_and_extract_dependencies(
                 &unless_clause.condition,
-                current_doc_arc,
+                current_spec_arc,
                 facts_map,
                 current_segments,
                 &mut depends_on_rules,
-                effective_doc_refs,
+                effective_spec_refs,
             ) {
                 Some(expr) => expr,
                 None => return,
             };
             let converted_result = match self.convert_expression_and_extract_dependencies(
                 &unless_clause.result,
-                current_doc_arc,
+                current_spec_arc,
                 facts_map,
                 current_segments,
                 &mut depends_on_rules,
-                effective_doc_refs,
+                effective_spec_refs,
             ) {
                 Some(expr) => expr,
                 None => return,
@@ -1415,33 +1423,33 @@ impl<'a> GraphBuilder<'a> {
     }
 
     /// Converts left and right expressions and accumulates rule dependencies.
-    /// Same `current_segments`, `depends_on_rules`, and `effective_doc_refs` semantics as [`convert_expression_and_extract_dependencies`](Self::convert_expression_and_extract_dependencies).
+    /// Same `current_segments`, `depends_on_rules`, and `effective_spec_refs` semantics as [`convert_expression_and_extract_dependencies`](Self::convert_expression_and_extract_dependencies).
     #[allow(clippy::too_many_arguments)]
     fn convert_binary_operands(
         &mut self,
         left: &ast::Expression,
         right: &ast::Expression,
-        current_doc_arc: &Arc<LemmaDoc>,
+        current_spec_arc: &Arc<LemmaSpec>,
         facts_map: &HashMap<String, &LemmaFact>,
         current_segments: &[PathSegment],
         depends_on_rules: &mut BTreeSet<RulePath>,
-        effective_doc_refs: &HashMap<String, Arc<LemmaDoc>>,
+        effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
     ) -> Option<(Expression, Expression)> {
         let converted_left = self.convert_expression_and_extract_dependencies(
             left,
-            current_doc_arc,
+            current_spec_arc,
             facts_map,
             current_segments,
             depends_on_rules,
-            effective_doc_refs,
+            effective_spec_refs,
         )?;
         let converted_right = self.convert_expression_and_extract_dependencies(
             right,
-            current_doc_arc,
+            current_spec_arc,
             facts_map,
             current_segments,
             depends_on_rules,
-            effective_doc_refs,
+            effective_spec_refs,
         )?;
         Some((converted_left, converted_right))
     }
@@ -1450,19 +1458,19 @@ impl<'a> GraphBuilder<'a> {
     ///
     /// ## Parameters
     ///
-    /// - **current_segments**: Path from the root document to the document we're currently converting in. Each segment is a (fact name, doc name) pair. Used to build full [`FactPath`]s and [`RulePath`]s when resolving references like `nested_doc.fact` or `nested_doc.rule`.
+    /// - **current_segments**: Path from the root spec to the spec we're currently converting in. Each segment is a (fact name, spec name) pair. Used to build full [`FactPath`]s and [`RulePath`]s when resolving references like `nested_spec.fact` or `nested_spec.rule`.
     /// - **depends_on_rules**: Accumulator for the rule we're converting: every [`RulePath`] that this expression references is inserted here. Later used for topological ordering and cycle detection.
-    /// - **effective_doc_refs**: For the current document, maps **fact name → doc name** for facts that are document references. E.g. `fact x: doc foo` gives `"x" → "foo"`. Used by [`resolve_path_segments`](Self::resolve_path_segments) when resolving the first segment of a path like `x.some_rule`.
+    /// - **effective_spec_refs**: For the current spec, maps **fact name → spec name** for facts that are spec references. E.g. `fact x: spec foo` gives `"x" → "foo"`. Used by [`resolve_path_segments`](Self::resolve_path_segments) when resolving the first segment of a path like `x.some_rule`.
     fn convert_expression_and_extract_dependencies(
         &mut self,
         expr: &ast::Expression,
-        current_doc_arc: &Arc<LemmaDoc>,
+        current_spec_arc: &Arc<LemmaSpec>,
         facts_map: &HashMap<String, &LemmaFact>,
         current_segments: &[PathSegment],
         depends_on_rules: &mut BTreeSet<RulePath>,
-        effective_doc_refs: &HashMap<String, Arc<LemmaDoc>>,
+        effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
     ) -> Option<Expression> {
-        let current_doc = current_doc_arc.as_ref();
+        let current_spec = current_spec_arc.as_ref();
         let expr_src = expr
             .source_location
             .as_ref()
@@ -1482,25 +1490,25 @@ impl<'a> GraphBuilder<'a> {
                         expr_source,
                         facts_map_owned,
                         current_segments.to_vec(),
-                        effective_doc_refs,
+                        effective_spec_refs,
                     )?;
                     (segs, Some(arc))
                 };
 
-                let (is_fact, is_rule, target_doc_name_opt) = match &target_arc_opt {
+                let (is_fact, is_rule, target_spec_name_opt) = match &target_arc_opt {
                     None => {
                         let is_fact = facts_map.contains_key(&r.name);
-                        let is_rule = current_doc.rules.iter().any(|rule| rule.name == r.name);
+                        let is_rule = current_spec.rules.iter().any(|rule| rule.name == r.name);
                         (is_fact, is_rule, None)
                     }
                     Some(target_arc) => {
-                        let target_doc = target_arc.as_ref();
-                        let is_fact = target_doc
+                        let target_spec = target_arc.as_ref();
+                        let is_fact = target_spec
                             .facts
                             .iter()
                             .any(|f| f.reference.is_local() && f.reference.name == r.name);
-                        let is_rule = target_doc.rules.iter().any(|rule| rule.name == r.name);
-                        (is_fact, is_rule, Some(target_doc.name.as_str()))
+                        let is_rule = target_spec.rules.iter().any(|rule| rule.name == r.name);
+                        (is_fact, is_rule, Some(target_spec.name.as_str()))
                     }
                 };
 
@@ -1532,8 +1540,8 @@ impl<'a> GraphBuilder<'a> {
                         source_location: expr.source_location.clone(),
                     });
                 }
-                let msg = match target_doc_name_opt {
-                    Some(doc) => format!("Reference '{}' not found in document '{}'", r.name, doc),
+                let msg = match target_spec_name_opt {
+                    Some(s) => format!("Reference '{}' not found in spec '{}'", r.name, s),
                     None => format!("Reference '{}' not found", r.name),
                 };
                 self.errors.push(self.engine_error(msg, expr_source));
@@ -1544,11 +1552,11 @@ impl<'a> GraphBuilder<'a> {
                 let (l, r) = self.convert_binary_operands(
                     left,
                     right,
-                    current_doc_arc,
+                    current_spec_arc,
                     facts_map,
                     current_segments,
                     depends_on_rules,
-                    effective_doc_refs,
+                    effective_spec_refs,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::LogicalAnd(Arc::new(l), Arc::new(r)),
@@ -1560,11 +1568,11 @@ impl<'a> GraphBuilder<'a> {
                 let (l, r) = self.convert_binary_operands(
                     left,
                     right,
-                    current_doc_arc,
+                    current_spec_arc,
                     facts_map,
                     current_segments,
                     depends_on_rules,
-                    effective_doc_refs,
+                    effective_spec_refs,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::Arithmetic(Arc::new(l), op.clone(), Arc::new(r)),
@@ -1576,11 +1584,11 @@ impl<'a> GraphBuilder<'a> {
                 let (l, r) = self.convert_binary_operands(
                     left,
                     right,
-                    current_doc_arc,
+                    current_spec_arc,
                     facts_map,
                     current_segments,
                     depends_on_rules,
-                    effective_doc_refs,
+                    effective_spec_refs,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::Comparison(Arc::new(l), op.clone(), Arc::new(r)),
@@ -1591,15 +1599,15 @@ impl<'a> GraphBuilder<'a> {
             ast::ExpressionKind::UnitConversion(value, target) => {
                 let converted_value = self.convert_expression_and_extract_dependencies(
                     value,
-                    current_doc_arc,
+                    current_spec_arc,
                     facts_map,
                     current_segments,
                     depends_on_rules,
-                    effective_doc_refs,
+                    effective_spec_refs,
                 )?;
 
-                let resolved_doc_types = self.local_types.get(current_doc_arc);
-                let unit_index = resolved_doc_types.map(|dt| &dt.unit_index);
+                let resolved_spec_types = self.local_types.get(current_spec_arc);
+                let unit_index = resolved_spec_types.map(|dt| &dt.unit_index);
                 let semantic_target = match conversion_target_to_semantic(target, unit_index) {
                     Ok(t) => t,
                     Err(msg) => {
@@ -1630,11 +1638,11 @@ impl<'a> GraphBuilder<'a> {
             ast::ExpressionKind::LogicalNegation(operand, neg_type) => {
                 let converted_operand = self.convert_expression_and_extract_dependencies(
                     operand,
-                    current_doc_arc,
+                    current_spec_arc,
                     facts_map,
                     current_segments,
                     depends_on_rules,
-                    effective_doc_refs,
+                    effective_spec_refs,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::LogicalNegation(
@@ -1648,11 +1656,11 @@ impl<'a> GraphBuilder<'a> {
             ast::ExpressionKind::MathematicalComputation(op, operand) => {
                 let converted_operand = self.convert_expression_and_extract_dependencies(
                     operand,
-                    current_doc_arc,
+                    current_spec_arc,
                     facts_map,
                     current_segments,
                     depends_on_rules,
-                    effective_doc_refs,
+                    effective_spec_refs,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::MathematicalComputation(
@@ -1678,7 +1686,7 @@ impl<'a> GraphBuilder<'a> {
                     Value::Number(_) => primitive_number().clone(),
                     Value::Scale(_, unit) => self
                         .local_types
-                        .get(current_doc_arc)
+                        .get(current_spec_arc)
                         .and_then(|dt| dt.unit_index.get(unit))
                         .cloned()
                         .unwrap_or_else(|| primitive_scale().clone()),
@@ -1706,7 +1714,7 @@ impl<'a> GraphBuilder<'a> {
             ast::ExpressionKind::UnresolvedUnitLiteral(value, unit) => {
                 if let Some(dt) = self
                     .local_types
-                    .get(current_doc_arc)
+                    .get(current_spec_arc)
                     .and_then(|dt| dt.unit_index.get(unit))
                 {
                     let semantic_value = ValueKind::Scale(*value, unit.clone());
@@ -1733,20 +1741,20 @@ impl<'a> GraphBuilder<'a> {
             ast::ExpressionKind::DateRelative(kind, date_expr, tolerance) => {
                 let converted_date = self.convert_expression_and_extract_dependencies(
                     date_expr,
-                    current_doc_arc,
+                    current_spec_arc,
                     facts_map,
                     current_segments,
                     depends_on_rules,
-                    effective_doc_refs,
+                    effective_spec_refs,
                 )?;
                 let converted_tolerance = match tolerance {
                     Some(tol) => Some(Arc::new(self.convert_expression_and_extract_dependencies(
                         tol,
-                        current_doc_arc,
+                        current_spec_arc,
                         facts_map,
                         current_segments,
                         depends_on_rules,
-                        effective_doc_refs,
+                        effective_spec_refs,
                     )?)),
                     None => None,
                 };
@@ -1763,11 +1771,11 @@ impl<'a> GraphBuilder<'a> {
             ast::ExpressionKind::DateCalendar(kind, unit, date_expr) => {
                 let converted_date = self.convert_expression_and_extract_dependencies(
                     date_expr,
-                    current_doc_arc,
+                    current_spec_arc,
                     facts_map,
                     current_segments,
                     depends_on_rules,
-                    effective_doc_refs,
+                    effective_spec_refs,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::DateCalendar(*kind, *unit, Arc::new(converted_date)),
@@ -1781,11 +1789,11 @@ impl<'a> GraphBuilder<'a> {
 fn find_types_by_name<'a>(
     types: &'a ResolvedTypesMap,
     name: &str,
-) -> Option<&'a ResolvedDocumentTypes> {
+) -> Option<&'a ResolvedSpecTypes> {
     types
         .iter()
-        .filter(|(doc, _)| doc.name == name)
-        .min_by_key(|(doc, _)| doc.effective_from().cloned())
+        .filter(|(spec, _)| spec.name == name)
+        .min_by_key(|(spec, _)| spec.effective_from().cloned())
         .map(|(_, t)| t)
 }
 
@@ -1924,8 +1932,8 @@ fn infer_expression_type(
                 SemanticConversionTarget::Duration(_) => primitive_duration().clone(),
                 SemanticConversionTarget::ScaleUnit(unit_name) => {
                     if source_type.is_number() {
-                        let doc_name = &expr_source.doc_name;
-                        find_types_by_name(resolved_types, doc_name)
+                        let spec_name = &expr_source.spec_name;
+                        find_types_by_name(resolved_types, spec_name)
                             .and_then(|dt| dt.unit_index.get(unit_name).cloned())
                             .unwrap_or_else(LemmaType::undetermined_type)
                     } else {
@@ -1934,8 +1942,8 @@ fn infer_expression_type(
                 }
                 SemanticConversionTarget::RatioUnit(unit_name) => {
                     if source_type.is_number() {
-                        let doc_name = &expr_source.doc_name;
-                        find_types_by_name(resolved_types, doc_name)
+                        let spec_name = &expr_source.spec_name;
+                        find_types_by_name(resolved_types, spec_name)
                             .and_then(|dt| dt.unit_index.get(unit_name).cloned())
                             .unwrap_or_else(LemmaType::undetermined_type)
                     } else {
@@ -1965,7 +1973,7 @@ fn infer_expression_type(
 }
 
 /// Infer the type of a fact reference without producing errors.
-/// Returns `LemmaType::undetermined_type()` when the fact cannot be found or is a document reference.
+/// Returns `LemmaType::undetermined_type()` when the fact cannot be found or is a spec reference.
 fn infer_fact_type(fact_path: &FactPath, graph: &Graph) -> LemmaType {
     let entry = match graph.facts().get(fact_path) {
         Some(e) => e,
@@ -1974,7 +1982,7 @@ fn infer_fact_type(fact_path: &FactPath, graph: &Graph) -> LemmaType {
     match entry {
         FactData::Value { value, .. } => value.lemma_type.clone(),
         FactData::TypeDeclaration { resolved_type, .. } => resolved_type.clone(),
-        FactData::DocumentRef { .. } => LemmaType::undetermined_type(),
+        FactData::SpecRef { .. } => LemmaType::undetermined_type(),
     }
 }
 
@@ -2289,15 +2297,15 @@ fn check_unit_conversion_types(
                     ),
                 )]),
                 None if source_type.is_number() => {
-                    if find_types_by_name(resolved_types, &source.doc_name)
+                    if find_types_by_name(resolved_types, &source.spec_name)
                         .and_then(|dt| dt.unit_index.get(unit_name))
                         .is_none()
                     {
                         Err(vec![engine_error_at(
                             source,
                             format!(
-                                "Unknown unit '{}' in document '{}'.",
-                                unit_name, source.doc_name
+                                "Unknown unit '{}' in spec '{}'.",
+                                unit_name, source.spec_name
                             ),
                         )])
                     } else {
@@ -2366,7 +2374,7 @@ fn check_all_rule_references_exist(graph: &Graph) -> Result<(), Vec<Error>> {
     }
 }
 
-/// Check that no fact and rule share the same name in the same document.
+/// Check that no fact and rule share the same name in the same spec.
 fn check_fact_and_rule_name_collisions(graph: &Graph) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
     for rule_path in graph.rules().keys() {
@@ -2394,7 +2402,7 @@ fn check_fact_and_rule_name_collisions(graph: &Graph) -> Result<(), Vec<Error>> 
     }
 }
 
-/// Check that a fact reference is valid (exists and is not a bare document reference).
+/// Check that a fact reference is valid (exists and is not a bare spec reference).
 fn check_fact_reference(
     fact_path: &FactPath,
     graph: &Graph,
@@ -2411,10 +2419,10 @@ fn check_fact_reference(
     };
     match entry {
         FactData::Value { .. } | FactData::TypeDeclaration { .. } => Ok(()),
-        FactData::DocumentRef { .. } => Err(vec![engine_error_at(
+        FactData::SpecRef { .. } => Err(vec![engine_error_at(
             entry.source(),
             format!(
-                "Cannot compute type for document reference fact '{}'",
+                "Cannot compute type for spec reference fact '{}'",
                 fact_path
             ),
         )]),
@@ -2568,16 +2576,16 @@ fn check_expression(
                     match target {
                         SemanticConversionTarget::ScaleUnit(unit_name)
                         | SemanticConversionTarget::RatioUnit(unit_name) => {
-                            if find_types_by_name(resolved_types, &expr_source.doc_name)
+                            if find_types_by_name(resolved_types, &expr_source.spec_name)
                                 .and_then(|dt| dt.unit_index.get(unit_name))
                                 .is_none()
                             {
                                 errors.push(engine_error_at(
                                     expr_source,
                                     format!(
-                                        "Cannot resolve unit '{}' for document '{}' (types may not have been resolved)",
+                                        "Cannot resolve unit '{}' for spec '{}' (types may not have been resolved)",
                                         unit_name,
-                                        expr_source.doc_name
+                                        expr_source.spec_name
                                     ),
                                 ));
                             }
@@ -2797,9 +2805,9 @@ fn check_rule_types(
                         }
 
                         errors.push(Error::validation(
-                            format!("Type mismatch in rule '{}' in document '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same primitive type.",
+                            format!("Type mismatch in rule '{}' in spec '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same primitive type.",
                             rule_path.rule,
-                            rule_source.doc_name,
+                            rule_source.spec_name,
                             location_parts.join(", "),
                             existing_type.name(),
                             branch_index,
@@ -2926,58 +2934,58 @@ mod tests {
                 col: 0,
             },
             "test",
-            Arc::from("doc test\nfact x: 1\nrule result: x"),
+            Arc::from("spec test\nfact x: 1\nrule result: x"),
         )
     }
 
     fn test_sources() -> HashMap<String, String> {
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), "doc test\n".to_string());
+        sources.insert("test.lemma".to_string(), "spec test\n".to_string());
         sources
     }
 
     /// Test helper: register types, resolve, and build graph in one call.
     fn build_graph(
-        main_doc: &LemmaDoc,
-        all_docs: &[LemmaDoc],
+        main_spec: &LemmaSpec,
+        all_specs: &[LemmaSpec],
         sources: HashMap<String, String>,
     ) -> Result<Graph, Vec<Error>> {
         let mut ctx = Context::new();
-        for doc in all_docs {
-            ctx.insert_doc(Arc::new(doc.clone()))
-                .expect("test docs must have valid timespans");
+        for spec in all_specs {
+            ctx.insert_spec(Arc::new(spec.clone()))
+                .expect("test specs must have valid timespans");
         }
-        let main_doc_arc = ctx
-            .get_doc_effective_from(main_doc.name.as_str(), main_doc.effective_from())
-            .expect("main_doc must be in all_docs");
+        let main_spec_arc = ctx
+            .get_spec_effective_from(main_spec.name.as_str(), main_spec.effective_from())
+            .expect("main_spec must be in all_specs");
 
         let mut type_resolver = TypeResolver::new();
         let mut type_errors = Vec::new();
-        let all_docs: Vec<_> = ctx.iter().collect();
-        for doc_arc in &all_docs {
-            type_errors.extend(type_resolver.register_all(doc_arc));
+        let all_specs_vec: Vec<_> = ctx.iter().collect();
+        for spec_arc in &all_specs_vec {
+            type_errors.extend(type_resolver.register_all(spec_arc));
         }
-        let (resolved_types, resolve_errors) = type_resolver.resolve(all_docs);
+        let (resolved_types, resolve_errors) = type_resolver.resolve(all_specs_vec);
         type_errors.extend(resolve_errors);
 
-        let doc_hashes: DocContentHashes = ctx
+        let spec_hashes: SpecContentHashes = ctx
             .iter()
-            .map(|d| {
+            .map(|s| {
                 (
-                    doc_hash_key(&d),
-                    crate::planning::content_hash::hash_doc(&d, &[]),
+                    spec_hash_key(&s),
+                    crate::planning::content_hash::hash_spec(&s, &[]),
                 )
             })
             .collect();
 
         match Graph::build(
-            &main_doc_arc,
+            &main_spec_arc,
             &ctx,
             sources,
             &type_resolver,
             &resolved_types,
-            main_doc_arc.effective_from().cloned(),
-            &doc_hashes,
+            main_spec_arc.effective_from().cloned(),
+            &spec_hashes,
         ) {
             Ok((graph, _types)) => {
                 if type_errors.is_empty() {
@@ -2986,16 +2994,16 @@ mod tests {
                     Err(type_errors)
                 }
             }
-            Err(mut doc_errors) => {
+            Err(mut spec_errors) => {
                 let mut all_errors = type_errors;
-                all_errors.append(&mut doc_errors);
+                all_errors.append(&mut spec_errors);
                 Err(all_errors)
             }
         }
     }
 
-    fn create_test_doc(name: &str) -> LemmaDoc {
-        LemmaDoc::new(name.to_string())
+    fn create_test_spec(name: &str) -> LemmaSpec {
+        LemmaSpec::new(name.to_string())
     }
 
     fn create_literal_fact(name: &str, value: Value) -> LemmaFact {
@@ -3018,14 +3026,14 @@ mod tests {
 
     #[test]
     fn test_build_simple_graph() {
-        let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact(
+        let mut spec = create_test_spec("test");
+        spec = spec.add_fact(create_literal_fact(
             "age",
             Value::Number(rust_decimal::Decimal::from(25)),
         ));
-        doc = doc.add_fact(create_literal_fact("name", Value::Text("John".to_string())));
+        spec = spec.add_fact(create_literal_fact("name", Value::Text("John".to_string())));
 
-        let result = build_graph(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&spec, &[spec.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -3035,8 +3043,8 @@ mod tests {
 
     #[test]
     fn test_build_graph_with_rule() {
-        let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact(
+        let mut spec = create_test_spec("test");
+        spec = spec.add_fact(create_literal_fact(
             "age",
             Value::Number(rust_decimal::Decimal::from(25)),
         ));
@@ -3055,9 +3063,9 @@ mod tests {
             unless_clauses: Vec::new(),
             source_location: test_source(),
         };
-        doc = doc.add_rule(rule);
+        spec = spec.add_rule(rule);
 
-        let result = build_graph(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&spec, &[spec.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -3066,25 +3074,25 @@ mod tests {
     }
 
     #[test]
-    fn should_reject_fact_binding_into_non_document_fact() {
+    fn should_reject_fact_binding_into_non_spec_fact() {
         // Higher-standard language rule:
-        // if `x` is a literal (not a document reference), `x.y = ...` must be rejected.
+        // if `x` is a literal (not a spec reference), `x.y = ...` must be rejected.
         //
         // This is currently expected to FAIL until graph building enforces it consistently.
-        let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact("x", Value::Number(1.into())));
+        let mut spec = create_test_spec("test");
+        spec = spec.add_fact(create_literal_fact("x", Value::Number(1.into())));
 
-        // Bind x.y, but x is not a document reference.
-        doc = doc.add_fact(LemmaFact {
+        // Bind x.y, but x is not a spec reference.
+        spec = spec.add_fact(LemmaFact {
             reference: Reference::from_path(vec!["x".to_string(), "y".to_string()]),
             value: ParsedFactValue::Literal(Value::Number(2.into())),
             source_location: test_source(),
         });
 
-        let result = build_graph(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&spec, &[spec.clone()], test_sources());
         assert!(
             result.is_err(),
-            "Overriding x.y must fail when x is not a document reference"
+            "Overriding x.y must fail when x is not a spec reference"
         );
     }
 
@@ -3094,16 +3102,16 @@ mod tests {
         // It's ambiguous for humans and leads to confusing error messages.
         //
         // This is currently expected to FAIL until the language enforces it.
-        let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact("x", Value::Number(1.into())));
-        doc = doc.add_rule(LemmaRule {
+        let mut spec = create_test_spec("test");
+        spec = spec.add_fact(create_literal_fact("x", Value::Number(1.into())));
+        spec = spec.add_rule(LemmaRule {
             name: "x".to_string(),
             expression: create_literal_expr(Value::Number(2.into())),
             unless_clauses: Vec::new(),
             source_location: test_source(),
         });
 
-        let result = build_graph(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&spec, &[spec.clone()], test_sources());
         assert!(
             result.is_err(),
             "Fact and rule name collisions should be rejected"
@@ -3112,17 +3120,17 @@ mod tests {
 
     #[test]
     fn test_duplicate_fact() {
-        let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact(
+        let mut spec = create_test_spec("test");
+        spec = spec.add_fact(create_literal_fact(
             "age",
             Value::Number(rust_decimal::Decimal::from(25)),
         ));
-        doc = doc.add_fact(create_literal_fact(
+        spec = spec.add_fact(create_literal_fact(
             "age",
             Value::Number(rust_decimal::Decimal::from(30)),
         ));
 
-        let result = build_graph(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&spec, &[spec.clone()], test_sources());
         assert!(result.is_err(), "Should detect duplicate fact");
 
         let errors = result.unwrap_err();
@@ -3133,7 +3141,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_rule() {
-        let mut doc = create_test_doc("test");
+        let mut spec = create_test_spec("test");
 
         let rule1 = LemmaRule {
             name: "test_rule".to_string(),
@@ -3148,10 +3156,10 @@ mod tests {
             source_location: test_source(),
         };
 
-        doc = doc.add_rule(rule1);
-        doc = doc.add_rule(rule2);
+        spec = spec.add_rule(rule1);
+        spec = spec.add_rule(rule2);
 
-        let result = build_graph(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&spec, &[spec.clone()], test_sources());
         assert!(result.is_err(), "Should detect duplicate rule");
 
         let errors = result.unwrap_err();
@@ -3162,7 +3170,7 @@ mod tests {
 
     #[test]
     fn test_missing_fact_reference() {
-        let mut doc = create_test_doc("test");
+        let mut spec = create_test_spec("test");
 
         let missing_fact_expr = ast::Expression {
             kind: ast::ExpressionKind::Reference(Reference {
@@ -3178,9 +3186,9 @@ mod tests {
             unless_clauses: Vec::new(),
             source_location: test_source(),
         };
-        doc = doc.add_rule(rule);
+        spec = spec.add_rule(rule);
 
-        let result = build_graph(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&spec, &[spec.clone()], test_sources());
         assert!(result.is_err(), "Should detect missing fact");
 
         let errors = result.unwrap_err();
@@ -3190,32 +3198,32 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_document_reference() {
-        let mut doc = create_test_doc("test");
+    fn test_missing_spec_reference() {
+        let mut spec = create_test_spec("test");
 
         let fact = LemmaFact {
             reference: Reference {
                 segments: Vec::new(),
                 name: "contract".to_string(),
             },
-            value: ParsedFactValue::DocumentReference(crate::DocRef::local("nonexistent")),
+            value: ParsedFactValue::SpecReference(crate::SpecRef::local("nonexistent")),
             source_location: test_source(),
         };
-        doc = doc.add_fact(fact);
+        spec = spec.add_fact(fact);
 
-        let result = build_graph(&doc, &[doc.clone()], test_sources());
-        assert!(result.is_err(), "Should detect missing document");
+        let result = build_graph(&spec, &[spec.clone()], test_sources());
+        assert!(result.is_err(), "Should detect missing spec");
 
         let errors = result.unwrap_err();
         assert!(errors
             .iter()
-            .any(|e| e.to_string().contains("Document 'nonexistent' not found")));
+            .any(|e| e.to_string().contains("Spec 'nonexistent' not found")));
     }
 
     #[test]
     fn test_fact_reference_conversion() {
-        let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact(
+        let mut spec = create_test_spec("test");
+        spec = spec.add_fact(create_literal_fact(
             "age",
             Value::Number(rust_decimal::Decimal::from(25)),
         ));
@@ -3234,9 +3242,9 @@ mod tests {
             unless_clauses: Vec::new(),
             source_location: test_source(),
         };
-        doc = doc.add_rule(rule);
+        spec = spec.add_rule(rule);
 
-        let result = build_graph(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&spec, &[spec.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -3250,7 +3258,7 @@ mod tests {
 
     #[test]
     fn test_rule_reference_conversion() {
-        let mut doc = create_test_doc("test");
+        let mut spec = create_test_spec("test");
 
         let rule1_expr = ast::Expression {
             kind: ast::ExpressionKind::Reference(Reference {
@@ -3266,7 +3274,7 @@ mod tests {
             unless_clauses: Vec::new(),
             source_location: test_source(),
         };
-        doc = doc.add_rule(rule1);
+        spec = spec.add_rule(rule1);
 
         let rule2_expr = ast::Expression {
             kind: ast::ExpressionKind::Reference(Reference {
@@ -3282,14 +3290,14 @@ mod tests {
             unless_clauses: Vec::new(),
             source_location: test_source(),
         };
-        doc = doc.add_rule(rule2);
+        spec = spec.add_rule(rule2);
 
-        doc = doc.add_fact(create_literal_fact(
+        spec = spec.add_fact(create_literal_fact(
             "age",
             Value::Number(rust_decimal::Decimal::from(25)),
         ));
 
-        let result = build_graph(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&spec, &[spec.clone()], test_sources());
         assert!(result.is_ok(), "Should build graph successfully");
 
         let graph = result.unwrap();
@@ -3310,12 +3318,12 @@ mod tests {
 
     #[test]
     fn test_collect_multiple_errors() {
-        let mut doc = create_test_doc("test");
-        doc = doc.add_fact(create_literal_fact(
+        let mut spec = create_test_spec("test");
+        spec = spec.add_fact(create_literal_fact(
             "age",
             Value::Number(rust_decimal::Decimal::from(25)),
         ));
-        doc = doc.add_fact(create_literal_fact(
+        spec = spec.add_fact(create_literal_fact(
             "age",
             Value::Number(rust_decimal::Decimal::from(30)),
         ));
@@ -3334,9 +3342,9 @@ mod tests {
             unless_clauses: Vec::new(),
             source_location: test_source(),
         };
-        doc = doc.add_rule(rule);
+        spec = spec.add_rule(rule);
 
-        let result = build_graph(&doc, &[doc.clone()], test_sources());
+        let result = build_graph(&spec, &[spec.clone()], test_sources());
         assert!(result.is_err(), "Should collect multiple errors");
 
         let errors = result.unwrap_err();
@@ -3361,10 +3369,10 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            "doc_a",
-            Arc::from("doc test\nfact x: 1\nrule result: x"),
+            "spec_a",
+            Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
-        let doc_a = create_test_doc("doc_a")
+        let spec_a = create_test_spec("spec_a")
             .with_attribute("a.lemma".to_string())
             .add_type(TypeDef::Regular {
                 source_location: type_source.clone(),
@@ -3387,10 +3395,10 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            "doc_b",
-            Arc::from("doc test\nfact x: 1\nrule result: x"),
+            "spec_b",
+            Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
-        let doc_b = create_test_doc("doc_b")
+        let spec_b = create_test_spec("spec_b")
             .with_attribute("b.lemma".to_string())
             .add_type(TypeDef::Regular {
                 source_location: type_source_b.clone(),
@@ -3408,132 +3416,136 @@ mod tests {
         let mut sources = HashMap::new();
         sources.insert(
             "a.lemma".to_string(),
-            "doc doc_a\ntype money: number\ntype money: number".to_string(),
+            "spec spec_a\ntype money: number\ntype money: number".to_string(),
         );
         sources.insert(
             "b.lemma".to_string(),
-            "doc doc_b\ntype length: number\ntype length: number".to_string(),
+            "spec spec_b\ntype length: number\ntype length: number".to_string(),
         );
 
-        let result = build_graph(&doc_a, &[doc_a.clone(), doc_b.clone()], sources);
+        let result = build_graph(&spec_a, &[spec_a.clone(), spec_b.clone()], sources);
         assert!(result.is_err(), "Should fail with duplicate type errors");
         let errors = result.unwrap_err();
         assert!(
             errors.len() >= 2,
-            "Should collect duplicate type error from each document, got {}",
+            "Should collect duplicate type error from each spec, got {}",
             errors.len()
         );
         assert!(
             errors
                 .iter()
                 .any(|e| e.to_string().contains("Type 'money' is already defined")),
-            "Should report duplicate 'money' in doc_a: {:?}",
+            "Should report duplicate 'money' in spec_a: {:?}",
             errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
         );
         assert!(
             errors
                 .iter()
                 .any(|e| e.to_string().contains("Type 'length' is already defined")),
-            "Should report duplicate 'length' in doc_b: {:?}",
+            "Should report duplicate 'length' in spec_b: {:?}",
             errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
         );
     }
 
     // =================================================================
-    // Versioned document identifiers: latest-resolution (section 6.3)
+    // Versioned spec identifiers: latest-resolution (section 6.3)
     // =================================================================
 
     #[test]
-    fn doc_ref_resolves_to_matching_document() {
-        let code = r#"doc mydoc
+    fn spec_ref_resolves_to_matching_spec() {
+        let code = r#"spec myspec
 fact x: 10
 
-doc consumer
-fact m: doc mydoc
+spec consumer
+fact m: spec myspec
 rule result: m.x"#;
-        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
-        let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let consumer = specs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
-        let result = build_graph(consumer, &docs, sources);
-        assert!(result.is_ok(), "doc ref should resolve: {:?}", result.err());
+        let result = build_graph(consumer, &specs, sources);
+        assert!(
+            result.is_ok(),
+            "spec ref should resolve: {:?}",
+            result.err()
+        );
     }
 
     #[test]
-    fn doc_ref_resolves_to_single_doc_by_name() {
-        let code = r#"doc mydoc
+    fn spec_ref_resolves_to_single_spec_by_name() {
+        let code = r#"spec myspec
 fact x: 10
 
-doc consumer
-fact m: doc mydoc
+spec consumer
+fact m: spec myspec
 rule result: m.x"#;
-        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
-        let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let consumer = specs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
 
-        let graph = build_graph(consumer, &docs, sources).unwrap();
+        let graph = build_graph(consumer, &specs, sources).unwrap();
         let fact_path = FactPath {
             segments: vec![PathSegment {
                 fact: "m".to_string(),
-                doc: "mydoc".to_string(),
+                spec: "myspec".to_string(),
             }],
             fact: "x".to_string(),
         };
         assert!(
             graph.facts.contains_key(&fact_path),
-            "Ref should resolve to mydoc. Facts: {:?}",
+            "Ref should resolve to myspec. Facts: {:?}",
             graph.facts.keys().collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn doc_ref_to_nonexistent_document_is_error() {
-        let code = r#"doc mydoc
+    fn spec_ref_to_nonexistent_spec_is_error() {
+        let code = r#"spec myspec
 fact x: 10
 
-doc consumer
-fact m: doc nonexistent
+spec consumer
+fact m: spec nonexistent
 rule result: m.x"#;
-        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
-        let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let consumer = specs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
-        let result = build_graph(consumer, &docs, sources);
-        assert!(result.is_err(), "Should fail for non-existent document");
+        let result = build_graph(consumer, &specs, sources);
+        assert!(result.is_err(), "Should fail for non-existent spec");
     }
 
     #[test]
-    fn unversioned_ref_resolves_to_only_unversioned_doc() {
-        let code = r#"doc mydoc
+    fn unversioned_ref_resolves_to_only_unversioned_spec() {
+        let code = r#"spec myspec
 fact x: 10
 
-doc consumer
-fact m: doc mydoc
+spec consumer
+fact m: spec myspec
 rule result: m.x"#;
-        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
-        let consumer = docs.iter().find(|d| d.name == "consumer").unwrap();
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let consumer = specs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
-        let result = build_graph(consumer, &docs, sources);
+        let result = build_graph(consumer, &specs, sources);
         assert!(
             result.is_ok(),
-            "Should resolve to unversioned mydoc: {:?}",
+            "Should resolve to unversioned myspec: {:?}",
             result.err()
         );
     }
 
     // =================================================================
-    // Versioned document identifiers: self-reference check (section 6.4)
+    // Versioned spec identifiers: self-reference check (section 6.4)
     // =================================================================
 
     #[test]
     fn self_reference_is_error() {
-        let code = "doc mydoc\nfact m: doc mydoc";
-        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let code = "spec myspec\nfact m: spec myspec";
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
-        let result = build_graph(&docs[0], &docs, sources);
+        let result = build_graph(&specs[0], &specs, sources);
         assert!(result.is_err(), "Self-reference should be an error");
         let errors = result.unwrap_err();
         assert!(
@@ -3546,21 +3558,21 @@ rule result: m.x"#;
     }
 
     #[test]
-    fn reference_to_different_doc_is_allowed() {
-        let code = r#"doc mydoc
+    fn reference_to_different_spec_is_allowed() {
+        let code = r#"spec myspec
 fact x: 10
 
-doc otherdoc
-fact m: doc mydoc
+spec other_spec
+fact m: spec myspec
 rule result: m.x"#;
-        let docs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
-        let otherdoc = docs.iter().find(|d| d.name == "otherdoc").unwrap();
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let other_spec = specs.iter().find(|d| d.name == "other_spec").unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
-        let result = build_graph(otherdoc, &docs, sources);
+        let result = build_graph(other_spec, &specs, sources);
         assert!(
             result.is_ok(),
-            "Reference to different doc should be allowed: {:?}",
+            "Reference to different spec should be allowed: {:?}",
             result.err()
         );
     }

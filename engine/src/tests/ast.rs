@@ -100,7 +100,7 @@ fn test_conversion_target_display() {
 }
 
 #[test]
-fn test_doc_type_display() {
+fn test_spec_type_display() {
     assert_eq!(
         format!("{}", crate::planning::semantics::primitive_text()),
         "text"

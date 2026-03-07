@@ -31,78 +31,78 @@ struct NumericConstraints {
 
 pub fn run_interactive(
     engine: &Engine,
-    doc_name: Option<String>,
+    spec_name: Option<String>,
     rule_names: Option<Vec<String>>,
     provided_facts: &HashMap<String, String>,
     now: &DateTimeValue,
 ) -> Result<InteractiveResult> {
-    let doc = match doc_name {
+    let spec = match spec_name {
         Some(name) => name,
-        None => select_document(engine, now)?,
+        None => select_spec(engine, now)?,
     };
 
     let rules = match rule_names {
         Some(names) => Some(names),
-        None => select_rules(engine, &doc, now)?,
+        None => select_rules(engine, &spec, now)?,
     };
 
-    // let target = prompt_target(engine, &doc, &rules, &now)?;
+    // let target = prompt_target(engine, &spec, &rules, &now)?;
     let target = None;
-    let facts = prompt_facts(engine, &doc, &rules, provided_facts, now)?;
+    let facts = prompt_facts(engine, &spec, &rules, provided_facts, now)?;
 
-    Ok((doc, rules, facts, target))
+    Ok((spec, rules, facts, target))
 }
 
-fn select_document(engine: &Engine, now: &DateTimeValue) -> Result<String> {
-    let documents = engine.list_documents_effective(now);
+fn select_spec(engine: &Engine, now: &DateTimeValue) -> Result<String> {
+    let specs = engine.list_specs_effective(now);
 
-    if documents.is_empty() {
-        anyhow::bail!("No documents found in workspace. Add .lemma files to get started.");
+    if specs.is_empty() {
+        anyhow::bail!("No specs found in workspace. Add .lemma files to get started.");
     }
 
-    if documents.len() == 1 {
-        return Ok(documents
+    if specs.len() == 1 {
+        return Ok(specs
             .first()
-            .ok_or_else(|| anyhow::anyhow!("Expected at least one document"))?
+            .ok_or_else(|| anyhow::anyhow!("Expected at least one spec"))?
             .name
             .clone());
     }
 
-    let display_options: Vec<String> = documents
+    let display_options: Vec<String> = specs
         .iter()
-        .map(|doc| {
+        .map(|spec| {
             let (facts_count, rules_count) = engine
-                .get_execution_plan(&doc.name, None, now)
+                .get_execution_plan(&spec.name, None, now)
                 .map(|p| (p.facts.len(), p.rules.len()))
                 .unwrap_or((0, 0));
             format!(
                 "{} ({} facts, {} rules)",
-                doc.name, facts_count, rules_count
+                spec.name, facts_count, rules_count
             )
         })
         .collect();
 
-    let selected = Select::new("Select a document:", display_options.clone())
+    let selected = Select::new("Select a spec:", display_options.clone())
         .with_help_message("Use arrow keys to navigate, Enter to select")
         .prompt()
-        .context("Failed to get document selection")?;
+        .context("Failed to get spec selection")?;
 
-    let doc_index = display_options
+    let spec_index = display_options
         .iter()
         .position(|d| d == &selected)
-        .context("Failed to find selected document index")?;
+        .context("Failed to find selected spec index")?;
 
-    Ok(documents[doc_index].name.clone())
+    Ok(specs[spec_index].name.clone())
 }
 
 fn select_rules(
     engine: &Engine,
-    doc_name: &str,
+    spec_name: &str,
     now: &DateTimeValue,
 ) -> Result<Option<Vec<String>>> {
     let plan = engine
-        .get_execution_plan(doc_name, None, now)
-        .context(format!("Document '{}' not found", doc_name))?;
+        .get_execution_plan(spec_name, None, now)
+        .context(format!("Spec '{}' not found", spec_name))?;
     let rule_names: Vec<String> = plan.schema().rules.keys().cloned().collect();
 
     if rule_names.is_empty() {
@@ -127,7 +127,7 @@ fn select_rules(
 
 fn _prompt_target(
     engine: &Engine,
-    doc_name: &str,
+    spec_name: &str,
     rule_names: &Option<Vec<String>>,
     now: &DateTimeValue,
 ) -> Result<Option<String>> {
@@ -143,7 +143,7 @@ fn _prompt_target(
         return Ok(None);
     }
 
-    let available_rules = engine.get_document_rules(doc_name, now)?;
+    let available_rules = engine.get_spec_rules(spec_name, now)?;
     if available_rules.is_empty() {
         return Ok(None);
     }
@@ -187,14 +187,14 @@ fn _prompt_target(
 
 fn prompt_facts(
     engine: &Engine,
-    doc_name: &str,
+    spec_name: &str,
     rule_names: &Option<Vec<String>>,
     provided_facts: &HashMap<String, String>,
     now: &DateTimeValue,
 ) -> Result<HashMap<String, String>> {
     let plan = engine
-        .get_execution_plan(doc_name, None, now)
-        .context(format!("Document '{}' not found", doc_name))?;
+        .get_execution_plan(spec_name, None, now)
+        .context(format!("Spec '{}' not found", spec_name))?;
 
     let selected_rules: Vec<String> = rule_names.clone().unwrap_or_default();
     let schema = if selected_rules.is_empty() {
@@ -205,7 +205,7 @@ fn prompt_facts(
     };
 
     // Only prompt for facts that need input: not in provided_facts and no value in plan.
-    // Facts with a value (document-defined) are not prompted. Facts with only a type default
+    // Facts with a value (spec-defined) are not prompted. Facts with only a type default
     // are still prompted but prefilled via default_value_from_type below.
     let promptable_facts: Vec<_> = schema
         .facts
@@ -236,7 +236,7 @@ fn prompt_facts(
             trial_facts.extend(facts.clone());
             trial_facts.insert(fact_name.clone(), input_value.clone());
 
-            match engine.evaluate(doc_name, None, now, selected_rules.clone(), trial_facts) {
+            match engine.evaluate(spec_name, None, now, selected_rules.clone(), trial_facts) {
                 Ok(_) => {
                     facts.insert(fact_name.clone(), input_value);
                     break;

@@ -1,14 +1,14 @@
 //! Lemma source code formatting.
 //!
-//! Formats parsed documents into canonical Lemma source text.
+//! Formats parsed specs into canonical Lemma source text.
 //! Value and constraint formatting is delegated to [`AsLemmaSource`] (in `parsing::ast`),
 //! which emits valid, round-trippable Lemma syntax. The regular `Display` impls on AST
 //! types are for human-readable output (error messages, evaluation); they are **not** used
 //! here. This module handles layout: alignment, line wrapping, and section ordering.
 
 use crate::parsing::ast::{
-    expression_precedence, AsLemmaSource, Expression, ExpressionKind, FactValue, LemmaDoc,
-    LemmaFact, LemmaRule, TypeDef,
+    expression_precedence, AsLemmaSource, Expression, ExpressionKind, FactValue, LemmaFact,
+    LemmaRule, LemmaSpec, TypeDef,
 };
 use crate::{parse, Error, ResourceLimits};
 
@@ -20,18 +20,18 @@ pub const MAX_COLS: usize = 60;
 // Public entry points
 // =============================================================================
 
-/// Format a sequence of parsed documents into canonical Lemma source.
+/// Format a sequence of parsed specs into canonical Lemma source.
 ///
-/// Documents are separated by two blank lines.
+/// Specs are separated by two blank lines.
 /// The result ends with a single newline.
 #[must_use]
-pub fn format_docs(docs: &[LemmaDoc]) -> String {
+pub fn format_specs(specs: &[LemmaSpec]) -> String {
     let mut out = String::new();
-    for (index, doc) in docs.iter().enumerate() {
+    for (index, spec) in specs.iter().enumerate() {
         if index > 0 {
             out.push_str("\n\n");
         }
-        out.push_str(&format_document(doc, MAX_COLS));
+        out.push_str(&format_spec(spec, MAX_COLS));
     }
     if !out.ends_with('\n') {
         out.push('\n');
@@ -44,31 +44,31 @@ pub fn format_docs(docs: &[LemmaDoc]) -> String {
 /// Returns an error if the source does not parse.
 pub fn format_source(source: &str, attribute: &str) -> Result<String, Error> {
     let limits = ResourceLimits::default();
-    let docs = parse(source, attribute, &limits)?;
-    Ok(format_docs(&docs))
+    let specs = parse(source, attribute, &limits)?;
+    Ok(format_specs(&specs))
 }
 
 // =============================================================================
-// Document
+// Spec
 // =============================================================================
 
-fn format_document(doc: &LemmaDoc, max_cols: usize) -> String {
+fn format_spec(spec: &LemmaSpec, max_cols: usize) -> String {
     let mut out = String::new();
-    out.push_str("doc ");
-    out.push_str(&doc.name);
-    if let Some(ref af) = doc.effective_from {
+    out.push_str("spec ");
+    out.push_str(&spec.name);
+    if let Some(ref af) = spec.effective_from {
         out.push(' ');
         out.push_str(&af.to_string());
     }
     out.push('\n');
 
-    if let Some(ref commentary) = doc.commentary {
+    if let Some(ref commentary) = spec.commentary {
         out.push_str("\"\"\"\n");
         out.push_str(commentary);
         out.push_str("\n\"\"\"\n");
     }
 
-    for meta in &doc.meta_fields {
+    for meta in &spec.meta_fields {
         out.push_str(&format!(
             "meta {}: {}\n",
             meta.key,
@@ -76,7 +76,7 @@ fn format_document(doc: &LemmaDoc, max_cols: usize) -> String {
         ));
     }
 
-    let named_types: Vec<_> = doc
+    let named_types: Vec<_> = spec
         .types
         .iter()
         .filter(|t| !matches!(t, TypeDef::Inline { .. }))
@@ -92,13 +92,13 @@ fn format_document(doc: &LemmaDoc, max_cols: usize) -> String {
         }
     }
 
-    if !doc.facts.is_empty() {
-        format_sorted_facts(&doc.facts, &mut out);
+    if !spec.facts.is_empty() {
+        format_sorted_facts(&spec.facts, &mut out);
     }
 
-    if !doc.rules.is_empty() {
+    if !spec.rules.is_empty() {
         out.push('\n');
-        for (index, rule) in doc.rules.iter().enumerate() {
+        for (index, rule) in spec.rules.iter().enumerate() {
             if index > 0 {
                 out.push('\n');
             }
@@ -147,17 +147,17 @@ fn max_ref_width(facts: &[&LemmaFact]) -> usize {
 /// Group facts into two sections separated by a blank line:
 ///
 /// 1. Regular facts (literals, type declarations) — original order, aligned
-/// 2. Document references, each followed by its cross-doc overrides — original order, aligned per sub-group
+/// 2. Spec references, each followed by its cross-spec overrides — original order, aligned per sub-group
 fn format_sorted_facts(facts: &[LemmaFact], out: &mut String) {
     let mut regular: Vec<&LemmaFact> = Vec::new();
-    let mut doc_refs: Vec<&LemmaFact> = Vec::new();
+    let mut spec_refs: Vec<&LemmaFact> = Vec::new();
     let mut overrides: Vec<&LemmaFact> = Vec::new();
 
     for fact in facts {
         if !fact.reference.is_local() {
             overrides.push(fact);
-        } else if matches!(&fact.value, FactValue::DocumentReference(_)) {
-            doc_refs.push(fact);
+        } else if matches!(&fact.value, FactValue::SpecReference(_)) {
+            spec_refs.push(fact);
         } else {
             regular.push(fact);
         }
@@ -178,15 +178,15 @@ fn format_sorted_facts(facts: &[LemmaFact], out: &mut String) {
         emit_group(&regular, out);
     }
 
-    // Group 2: Doc references, each followed by its overrides
-    if !doc_refs.is_empty() {
+    // Group 2: Spec references, each followed by its overrides
+    if !spec_refs.is_empty() {
         out.push('\n');
-        for (i, doc_fact) in doc_refs.iter().enumerate() {
+        for (i, spec_fact) in spec_refs.iter().enumerate() {
             if i > 0 {
                 out.push('\n');
             }
-            let ref_name = &doc_fact.reference.name;
-            let mut sub_group: Vec<&LemmaFact> = vec![doc_fact];
+            let ref_name = &spec_fact.reference.name;
+            let mut sub_group: Vec<&LemmaFact> = vec![spec_fact];
             for ovr in &overrides {
                 if ovr.reference.segments.first().map(|s| s.as_str()) == Some(ref_name.as_str()) {
                     sub_group.push(ovr);
@@ -196,8 +196,11 @@ fn format_sorted_facts(facts: &[LemmaFact], out: &mut String) {
         }
     }
 
-    // Any overrides that didn't match a doc ref (shouldn't happen in valid Lemma, but be safe)
-    let matched_prefixes: Vec<&str> = doc_refs.iter().map(|f| f.reference.name.as_str()).collect();
+    // Any overrides that didn't match a spec ref (shouldn't happen in valid Lemma, but be safe)
+    let matched_prefixes: Vec<&str> = spec_refs
+        .iter()
+        .map(|f| f.reference.name.as_str())
+        .collect();
     let unmatched: Vec<&LemmaFact> = overrides
         .iter()
         .filter(|o| {
@@ -520,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_format_source_round_trips_text() {
-        let source = r#"doc test
+        let source = r#"spec test
 
 fact name: "Alice"
 
@@ -533,7 +536,7 @@ rule greeting: "hello"
 
     #[test]
     fn test_format_source_preserves_percent() {
-        let source = r#"doc test
+        let source = r#"spec test
 
 fact rate: 10 percent
 
@@ -551,7 +554,7 @@ rule tax: rate * 21%
     fn test_format_groups_facts_preserving_order() {
         // Facts are deliberately mixed: the formatter keeps all regular facts together
         // in original order, aligned
-        let source = r#"doc test
+        let source = r#"spec test
 
 fact income: [number -> minimum 0]
 fact filing_status: [filing_status_type -> default "single"]
@@ -566,7 +569,7 @@ rule total: income
             .split("rule total")
             .next()
             .unwrap()
-            .split("doc test\n")
+            .split("spec test\n")
             .nth(1)
             .unwrap();
         let lines: Vec<&str> = fact_section.lines().filter(|l| !l.is_empty()).collect();
@@ -582,12 +585,12 @@ rule total: income
     }
 
     #[test]
-    fn test_format_groups_doc_refs_with_overrides() {
-        let source = r#"doc test
+    fn test_format_groups_spec_refs_with_overrides() {
+        let source = r#"spec test
 
 fact retail.quantity: 5
-fact wholesale: doc order/wholesale
-fact retail: doc order/retail
+fact wholesale: spec order/wholesale
+fact retail: spec order/retail
 fact wholesale.quantity: 100
 fact base_price: 50
 
@@ -598,22 +601,22 @@ rule total: base_price
             .split("rule total")
             .next()
             .unwrap()
-            .split("doc test\n")
+            .split("spec test\n")
             .nth(1)
             .unwrap();
         let lines: Vec<&str> = fact_section.lines().filter(|l| !l.is_empty()).collect();
         // Group 1: Literals
         assert_eq!(lines[0], "fact base_price : 50");
-        // Group 4: Doc refs in original order, each with its overrides, aligned
-        assert_eq!(lines[1], "fact wholesale          : doc order/wholesale");
+        // Group 4: Spec refs in original order, each with its overrides, aligned
+        assert_eq!(lines[1], "fact wholesale          : spec order/wholesale");
         assert_eq!(lines[2], "fact wholesale.quantity : 100");
-        assert_eq!(lines[3], "fact retail          : doc order/retail");
+        assert_eq!(lines[3], "fact retail          : spec order/retail");
         assert_eq!(lines[4], "fact retail.quantity : 5");
     }
 
     #[test]
     fn test_format_source_weather_clothing_text_quoted() {
-        let source = r#"doc weather_clothing
+        let source = r#"spec weather_clothing
 
 type clothing_style: text
   -> option "light"
@@ -644,7 +647,7 @@ rule clothing_layer: "light"
 
     #[test]
     fn test_format_text_option_round_trips() {
-        let source = r#"doc test
+        let source = r#"spec test
 
 type status: text
   -> option "active"
@@ -672,7 +675,7 @@ rule out: s
 
     #[test]
     fn test_format_help_round_trips() {
-        let source = r#"doc test
+        let source = r#"spec test
 fact quantity: [number -> help "Number of items to order"]
 rule total: quantity
 "#;
@@ -689,7 +692,7 @@ rule total: quantity
 
     #[test]
     fn test_format_scale_type_def_round_trips() {
-        let source = r#"doc test
+        let source = r#"spec test
 
 type money: scale
   -> unit eur 1.00

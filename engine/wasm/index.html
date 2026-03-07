@@ -78,19 +78,19 @@
 
         /* --- Document cards --- */
 
-        .doc-card {
+        .spec-card {
             background: white;
             border: 1px solid #e5e7eb;
             border-radius: 8px;
             padding: 12px;
             margin-top: 12px;
         }
-        .doc-card h3 {
+        .spec-card h3 {
             margin: 0 0 10px 0;
             font-size: 16px;
         }
 
-        #doc-select {
+        #spec-select {
             font-size: 14px;
             padding: 6px 10px;
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -141,7 +141,7 @@
 
         /* --- Actions row --- */
 
-        .doc-actions {
+        .spec-actions {
             display: flex;
             gap: 8px;
             align-items: center;
@@ -213,16 +213,16 @@
         </div>
         <div class="editor-actions">
             <span class="hint">Edits auto-load.</span>
-            <a href="#" id="format-btn" class="format-link" title="Format document">Format</a>
+            <a href="#" id="format-btn" class="format-link" title="Format spec">Format</a>
         </div>
     </div>
 
     <div class="section">
         <div style="display:flex;align-items:center;justify-content:space-between;">
-            <h2 style="margin:0;">Documents</h2>
-            <select id="doc-select"><option value="">No documents loaded</option></select>
+            <h2 style="margin:0;">Specs</h2>
+            <select id="spec-select"><option value="">No specs loaded</option></select>
         </div>
-        <div id="doc-detail"></div>
+        <div id="spec-detail"></div>
     </div>
 
     <script type="module">
@@ -244,7 +244,7 @@
         const DOC_URI = 'file:///playground/wasm.lemma';
 
         const state = {
-            docs: [],
+            specs: [],
             schemas: {},
             factValues: {},
             evalResults: {},
@@ -277,44 +277,44 @@
             return s;
         }
 
-        function docKey(entry) {
+        function specKey(entry) {
             if (entry.effective_from) return entry.name + ' ' + datetimeValueToString(entry.effective_from);
             return entry.name;
         }
 
-        function docAsOf(key) {
-            var entry = state.docs.find(function (d) { return docKey(d) === key; });
+        function specAsOf(key) {
+            var entry = state.specs.find(function (d) { return specKey(d) === key; });
             if (entry && entry.effective_from) return datetimeValueToString(entry.effective_from);
             return null;
         }
 
-        function docName(key) {
-            var entry = state.docs.find(function (d) { return docKey(d) === key; });
+        function specName(key) {
+            var entry = state.specs.find(function (d) { return specKey(d) === key; });
             return entry ? entry.name : key;
         }
 
-        function factValuesStorageKey(docName) {
-            return 'lemma_playground:doc:' + docName;
+        function factValuesStorageKey(specName) {
+            return 'lemma_playground:spec:' + specName;
         }
 
-        function persistFactValues(docName) {
+        function persistFactValues(specName) {
             try {
-                localStorage.setItem(factValuesStorageKey(docName), JSON.stringify(state.factValues[docName] || {}));
+                localStorage.setItem(factValuesStorageKey(specName), JSON.stringify(state.factValues[specName] || {}));
             } catch (_) {}
         }
 
-        function loadFactValuesFromStorage(docName) {
-            if (state.factValues[docName] && Object.keys(state.factValues[docName]).length > 0) return;
+        function loadFactValuesFromStorage(specName) {
+            if (state.factValues[specName] && Object.keys(state.factValues[specName]).length > 0) return;
             try {
-                const raw = localStorage.getItem(factValuesStorageKey(docName));
+                const raw = localStorage.getItem(factValuesStorageKey(specName));
                 if (raw) {
                     const parsed = JSON.parse(raw);
                     if (parsed && typeof parsed === 'object') {
-                        state.factValues[docName] = parsed;
+                        state.factValues[specName] = parsed;
                     }
                 }
             } catch (_) {}
-            if (!state.factValues[docName]) state.factValues[docName] = {};
+            if (!state.factValues[specName]) state.factValues[specName] = {};
         }
 
         // ---------------------------------------------------------------
@@ -370,11 +370,11 @@
         // Fact value serialization (state -> engine JSON)
         // ---------------------------------------------------------------
 
-        function serializeFactValues(docName) {
-            const values = state.factValues[docName];
+        function serializeFactValues(specName) {
+            const values = state.factValues[specName];
             if (!values) return {};
 
-            const schema = state.schemas[docName];
+            const schema = state.schemas[specName];
             if (!schema || !Array.isArray(schema.facts)) return {};
 
             const result = {};
@@ -441,7 +441,7 @@
         // DOM: Build a fact input row
         // ---------------------------------------------------------------
 
-        function buildFactRow(docName, fact) {
+        function buildFactRow(specName, fact) {
             const name = fact.name;
             const schemaType = fact.schemaType;
             const kind = specKind(schemaType);
@@ -460,16 +460,16 @@
             const inputGroup = document.createElement('div');
             inputGroup.className = 'input-group';
 
-            if (!state.factValues[docName]) {
-                state.factValues[docName] = {};
+            if (!state.factValues[specName]) {
+                state.factValues[specName] = {};
             }
-            let currentValue = state.factValues[docName][name];
+            let currentValue = state.factValues[specName][name];
             if (currentValue === undefined && fact.defaultValue) {
                 const fromDoc = storedFromLiteralValue(fact.defaultValue, kind);
                 if (fromDoc !== undefined) {
-                    state.factValues[docName][name] = fromDoc;
+                    state.factValues[specName][name] = fromDoc;
                     currentValue = fromDoc;
-                    persistFactValues(docName);
+                    persistFactValues(specName);
                 }
             }
 
@@ -480,11 +480,11 @@
                     checkbox.checked = true;
                 } else if (currentValue === undefined && spec && typeof spec.default === 'boolean') {
                     checkbox.checked = spec.default;
-                    state.factValues[docName][name] = spec.default;
+                    state.factValues[specName][name] = spec.default;
                 }
                 checkbox.addEventListener('change', function () {
-                    state.factValues[docName][name] = this.checked;
-                    persistFactValues(docName);
+                    state.factValues[specName][name] = this.checked;
+                    persistFactValues(specName);
                 });
                 inputGroup.appendChild(checkbox);
 
@@ -507,11 +507,11 @@
                         select.value = currentValue;
                     } else if (currentValue === undefined && spec && typeof spec.default === 'string') {
                         select.value = spec.default;
-                        state.factValues[docName][name] = spec.default;
+                        state.factValues[specName][name] = spec.default;
                     }
                     select.addEventListener('change', function () {
-                        state.factValues[docName][name] = this.value;
-                        persistFactValues(docName);
+                        state.factValues[specName][name] = this.value;
+                        persistFactValues(specName);
                     });
                     inputGroup.appendChild(select);
                 } else {
@@ -522,11 +522,11 @@
                         input.value = currentValue;
                     } else if (currentValue === undefined && spec && typeof spec.default === 'string') {
                         input.value = spec.default;
-                        state.factValues[docName][name] = spec.default;
+                        state.factValues[specName][name] = spec.default;
                     }
                     input.addEventListener('input', function () {
-                        state.factValues[docName][name] = this.value;
-                        persistFactValues(docName);
+                        state.factValues[specName][name] = this.value;
+                        persistFactValues(specName);
                     });
                     inputGroup.appendChild(input);
                 }
@@ -542,11 +542,11 @@
                     const def = spec.default;
                     const defStr = typeof def === 'number' ? String(def) : String(def);
                     input.value = defStr;
-                    state.factValues[docName][name] = defStr;
+                    state.factValues[specName][name] = defStr;
                 }
                 input.addEventListener('input', function () {
-                    state.factValues[docName][name] = this.value;
-                    persistFactValues(docName);
+                    state.factValues[specName][name] = this.value;
+                    persistFactValues(specName);
                 });
                 inputGroup.appendChild(input);
 
@@ -562,16 +562,16 @@
                     amountInput.value = storedEntry.amount;
                 }
 
-                if (!state.factValues[docName][name] || typeof state.factValues[docName][name] !== 'object') {
-                    state.factValues[docName][name] = { amount: storedEntry.amount || '', unit: storedEntry.unit || '' };
+                if (!state.factValues[specName][name] || typeof state.factValues[specName][name] !== 'object') {
+                    state.factValues[specName][name] = { amount: storedEntry.amount || '', unit: storedEntry.unit || '' };
                 }
 
                 amountInput.addEventListener('input', function () {
-                    if (!state.factValues[docName][name] || typeof state.factValues[docName][name] !== 'object') {
-                        state.factValues[docName][name] = { amount: '', unit: '' };
+                    if (!state.factValues[specName][name] || typeof state.factValues[specName][name] !== 'object') {
+                        state.factValues[specName][name] = { amount: '', unit: '' };
                     }
-                    state.factValues[docName][name].amount = this.value;
-                    persistFactValues(docName);
+                    state.factValues[specName][name].amount = this.value;
+                    persistFactValues(specName);
                 });
                 inputGroup.appendChild(amountInput);
 
@@ -591,8 +591,8 @@
                         unitSelect.value = storedEntry.unit;
                     }
                     unitSelect.addEventListener('change', function () {
-                        state.factValues[docName][name].unit = this.value;
-                        persistFactValues(docName);
+                        state.factValues[specName][name].unit = this.value;
+                        persistFactValues(specName);
                     });
                     inputGroup.appendChild(unitSelect);
                 }
@@ -609,16 +609,16 @@
                     amountInput.value = storedEntry.amount;
                 }
 
-                if (!state.factValues[docName][name] || typeof state.factValues[docName][name] !== 'object') {
-                    state.factValues[docName][name] = { amount: storedEntry.amount || '', unit: storedEntry.unit || 'ratio' };
+                if (!state.factValues[specName][name] || typeof state.factValues[specName][name] !== 'object') {
+                    state.factValues[specName][name] = { amount: storedEntry.amount || '', unit: storedEntry.unit || 'ratio' };
                 }
 
                 amountInput.addEventListener('input', function () {
-                    if (!state.factValues[docName][name] || typeof state.factValues[docName][name] !== 'object') {
-                        state.factValues[docName][name] = { amount: '', unit: 'ratio' };
+                    if (!state.factValues[specName][name] || typeof state.factValues[specName][name] !== 'object') {
+                        state.factValues[specName][name] = { amount: '', unit: 'ratio' };
                     }
-                    state.factValues[docName][name].amount = this.value;
-                    persistFactValues(docName);
+                    state.factValues[specName][name].amount = this.value;
+                    persistFactValues(specName);
                 });
                 inputGroup.appendChild(amountInput);
 
@@ -637,8 +637,8 @@
                     unitSelect.value = storedEntry.unit;
                 }
                 unitSelect.addEventListener('change', function () {
-                    state.factValues[docName][name].unit = this.value;
-                    persistFactValues(docName);
+                    state.factValues[specName][name].unit = this.value;
+                    persistFactValues(specName);
                 });
                 inputGroup.appendChild(unitSelect);
 
@@ -650,8 +650,8 @@
                     input.value = currentValue;
                 }
                 input.addEventListener('input', function () {
-                    state.factValues[docName][name] = this.value;
-                    persistFactValues(docName);
+                    state.factValues[specName][name] = this.value;
+                    persistFactValues(specName);
                 });
                 inputGroup.appendChild(input);
 
@@ -663,8 +663,8 @@
                     input.value = currentValue;
                 }
                 input.addEventListener('input', function () {
-                    state.factValues[docName][name] = this.value;
-                    persistFactValues(docName);
+                    state.factValues[specName][name] = this.value;
+                    persistFactValues(specName);
                 });
                 inputGroup.appendChild(input);
 
@@ -676,8 +676,8 @@
                     input.value = currentValue;
                 }
                 input.addEventListener('input', function () {
-                    state.factValues[docName][name] = this.value;
-                    persistFactValues(docName);
+                    state.factValues[specName][name] = this.value;
+                    persistFactValues(specName);
                 });
                 inputGroup.appendChild(input);
 
@@ -689,8 +689,8 @@
                     input.value = currentValue;
                 }
                 input.addEventListener('input', function () {
-                    state.factValues[docName][name] = this.value;
-                    persistFactValues(docName);
+                    state.factValues[specName][name] = this.value;
+                    persistFactValues(specName);
                 });
                 inputGroup.appendChild(input);
             }
@@ -785,20 +785,20 @@
         }
 
         // ---------------------------------------------------------------
-        // DOM: Build a doc card
+        // DOM: Build a spec card
         // ---------------------------------------------------------------
 
-        function buildDocCard(key) {
+        function buildSpecCard(key) {
             loadFactValuesFromStorage(key);
             const schema = state.schemas[key];
             const facts = (schema && Array.isArray(schema.facts)) ? schema.facts : [];
 
             const card = document.createElement('div');
-            card.className = 'doc-card';
-            card.dataset.docName = key;
+            card.className = 'spec-card';
+            card.dataset.specName = key;
 
             const heading = document.createElement('h3');
-            heading.textContent = 'doc ' + key;
+            heading.textContent = 'spec ' + key;
             card.appendChild(heading);
 
             const factsGrid = document.createElement('div');
@@ -809,7 +809,7 @@
             card.appendChild(factsGrid);
 
             const actions = document.createElement('div');
-            actions.className = 'doc-actions';
+            actions.className = 'spec-actions';
 
             const evaluateButton = document.createElement('button');
             evaluateButton.textContent = 'Evaluate';
@@ -839,7 +839,7 @@
         // Schema diffing and DOM patching
         // ---------------------------------------------------------------
 
-        function patchFactInputs(docName, card, oldFacts, newFacts) {
+        function patchFactInputs(specName, card, oldFacts, newFacts) {
             const factsGrid = card.querySelector('.facts-grid');
             if (!factsGrid) return;
 
@@ -860,8 +860,8 @@
                     if (existingRow) {
                         factsGrid.removeChild(existingRow);
                     }
-                    if (state.factValues[docName]) {
-                        delete state.factValues[docName][oldName];
+                    if (state.factValues[specName]) {
+                        delete state.factValues[specName][oldName];
                     }
                 }
             }
@@ -882,14 +882,14 @@
                     }
 
                     // Different type kind: replace input, delete old state value
-                    if (state.factValues[docName]) {
-                        delete state.factValues[docName][name];
+                    if (state.factValues[specName]) {
+                        delete state.factValues[specName][name];
                     }
-                    const newRow = buildFactRow(docName, newFact);
+                    const newRow = buildFactRow(specName, newFact);
                     factsGrid.replaceChild(newRow, existingRow);
                 } else if (!existingRow) {
                     // New fact: add input
-                    const newRow = buildFactRow(docName, newFact);
+                    const newRow = buildFactRow(specName, newFact);
                     factsGrid.appendChild(newRow);
                 }
             }
@@ -903,22 +903,22 @@
             }
         }
 
-        function patchDocCards() {
-            const select = document.getElementById('doc-select');
-            const keys = state.docs.map(docKey);
+        function patchSpecCards() {
+            const select = document.getElementById('spec-select');
+            const keys = state.specs.map(specKey);
             const prevSelected = select.value;
 
             select.textContent = '';
             if (keys.length === 0) {
                 const opt = document.createElement('option');
                 opt.value = '';
-                opt.textContent = 'No documents loaded';
+                opt.textContent = 'No specs loaded';
                 select.appendChild(opt);
             } else {
                 for (const key of keys) {
                     const opt = document.createElement('option');
                     opt.value = key;
-                    opt.textContent = 'doc ' + key;
+                    opt.textContent = 'spec ' + key;
                     select.appendChild(opt);
                 }
             }
@@ -929,18 +929,18 @@
                 select.value = keys[0];
             }
 
-            renderSelectedDoc();
+            renderSelectedSpec();
         }
 
-        function renderSelectedDoc() {
-            const select = document.getElementById('doc-select');
-            const detail = document.getElementById('doc-detail');
+        function renderSelectedSpec() {
+            const select = document.getElementById('spec-select');
+            const detail = document.getElementById('spec-detail');
             const key = select.value;
             detail.textContent = '';
 
             if (!key || !state.schemas[key]) return;
 
-            const card = buildDocCard(key);
+            const card = buildSpecCard(key);
             detail.appendChild(card);
         }
 
@@ -950,8 +950,8 @@
 
         function fetchSchema(key) {
             if (!engine) return null;
-            var name = docName(key);
-            var asOfStr = docAsOf(key);
+            var name = specName(key);
+            var asOfStr = specAsOf(key);
             let response;
             try {
                 var raw = engine.getSchemaAsOf(name, asOfStr || '1', '[]');
@@ -980,7 +980,7 @@
                     });
                 }
             }
-            return { doc: schema.doc, facts: facts, rules: schema.rules };
+            return { spec: schema.spec, facts: facts, rules: schema.rules };
         }
 
         async function loadCode() {
@@ -1000,31 +1000,31 @@
             }
 
             if (!addResult || !addResult.success) {
-                // Clear docs on compile error; LSP handles status bar diagnostics.
-                state.docs = [];
-                patchDocCards();
+                // Clear specs on compile error; LSP handles status bar diagnostics.
+                state.specs = [];
+                patchSpecCards();
                 return;
             }
 
-            // Fetch new doc list
+            // Fetch new spec list
             let listResult;
             try {
-                listResult = JSON.parse(engine.listDocuments());
+                listResult = JSON.parse(engine.listSpecs());
             } catch (parseError) {
-                setStatus('err', 'Exception listing documents', parseError.message || String(parseError));
+                setStatus('err', 'Exception listing specs', parseError.message || String(parseError));
                 return;
             }
 
             if (!listResult || !listResult.success) {
-                console.error('listDocuments failed:', listResult);
-                state.docs = [];
-                patchDocCards();
+                console.error('listSpecs failed:', listResult);
+                state.specs = [];
+                patchSpecCards();
                 return;
             }
 
-            const docEntries = Array.isArray(listResult.documents) ? listResult.documents : [];
-            const newKeys = docEntries.map(docKey);
-            const oldKeys = state.docs.map(docKey);
+            const specEntries = Array.isArray(listResult.specs) ? listResult.specs : [];
+            const newKeys = specEntries.map(specKey);
+            const oldKeys = state.specs.map(specKey);
 
             for (const oldK of oldKeys) {
                 if (newKeys.indexOf(oldK) === -1) {
@@ -1034,10 +1034,10 @@
                 }
             }
 
-            state.docs = docEntries;
+            state.specs = specEntries;
 
-            for (const entry of docEntries) {
-                const key = docKey(entry);
+            for (const entry of specEntries) {
+                const key = specKey(entry);
                 try {
                     const asOf = entry.effective_from ? datetimeValueToString(entry.effective_from) : '1';
                     const raw = engine.getSchemaAsOf(entry.name, asOf, '[]');
@@ -1050,7 +1050,7 @@
                 } catch (e) { console.error('getSchema failed for', key, e); }
             }
 
-            patchDocCards();
+            patchSpecCards();
         }
 
         function scheduleLoad(immediate) {
@@ -1079,8 +1079,8 @@
 
             if (!engine) return;
 
-            const name = docName(key);
-            const asOf = docAsOf(key) || '1';
+            const name = specName(key);
+            const asOf = specAsOf(key) || '1';
             const factsJson = JSON.stringify(serializeFactValues(key));
 
             let evalResult;
@@ -1089,17 +1089,17 @@
                 evalResult = JSON.parse(raw);
             } catch (parseError) {
                 state.evalResults[key] = { success: false, error: parseError.message || String(parseError) };
-                renderResultsForDoc(key);
+                renderResultsForSpec(key);
                 return;
             }
 
             state.evalResults[key] = evalResult;
-            renderResultsForDoc(key);
+            renderResultsForSpec(key);
         }
 
-        function renderResultsForDoc(docName) {
-            const detail = document.getElementById('doc-detail');
-            const card = detail.querySelector('.doc-card');
+        function renderResultsForSpec(specName) {
+            const detail = document.getElementById('spec-detail');
+            const card = detail.querySelector('.spec-card');
             if (!card) return;
 
             const resultsContainer = card.querySelector('.results-container');
@@ -1107,7 +1107,7 @@
 
             resultsContainer.textContent = '';
 
-            const evalResult = state.evalResults[docName];
+            const evalResult = state.evalResults[specName];
             if (!evalResult) return;
 
             if (!evalResult.success) {
@@ -1127,24 +1127,24 @@
             }
         }
 
-        function clearInputs(docName) {
-            state.factValues[docName] = {};
-            persistFactValues(docName);
-            delete state.evalResults[docName];
+        function clearInputs(specName) {
+            state.factValues[specName] = {};
+            persistFactValues(specName);
+            delete state.evalResults[specName];
 
-            const detail = document.getElementById('doc-detail');
-            const card = detail.querySelector('.doc-card');
+            const detail = document.getElementById('spec-detail');
+            const card = detail.querySelector('.spec-card');
             if (!card) return;
 
             const factsGrid = card.querySelector('.facts-grid');
             if (!factsGrid) return;
 
-            const schema = state.schemas[docName];
+            const schema = state.schemas[specName];
             const facts = (schema && Array.isArray(schema.facts)) ? schema.facts : [];
 
             factsGrid.textContent = '';
             for (const fact of facts) {
-                factsGrid.appendChild(buildFactRow(docName, fact));
+                factsGrid.appendChild(buildFactRow(specName, fact));
             }
 
             const resultsContainer = card.querySelector('.results-container');
@@ -1199,7 +1199,7 @@
 
                 monacoEditor = monaco.editor.create(editorEl, {
                     value: [
-                        'doc pricing',
+                        'spec pricing',
                         '',
                         'type money: scale',
                         '  -> unit eur 1',
@@ -1234,7 +1234,7 @@
                     }
                 });
 
-                document.getElementById('doc-select').addEventListener('change', renderSelectedDoc);
+                document.getElementById('spec-select').addEventListener('change', renderSelectedSpec);
 
                 document.getElementById('format-btn').addEventListener('click', function (e) {
                     e.preventDefault();

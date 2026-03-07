@@ -1,7 +1,7 @@
 mod diagnostics;
-mod document_links;
 mod registry;
 mod server;
+mod spec_links;
 mod workspace;
 
 #[cfg(not(target_arch = "wasm32"))]

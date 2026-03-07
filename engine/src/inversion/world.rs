@@ -1061,7 +1061,7 @@ mod tests {
 
     fn empty_plan() -> ExecutionPlan {
         ExecutionPlan {
-            doc_name: "test".to_string(),
+            spec_name: "test".to_string(),
             facts: indexmap::IndexMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),

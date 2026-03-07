@@ -13,7 +13,7 @@ fn test_file_size_limit() {
     let mut engine = Engine::with_limits(limits);
 
     // Create a file larger than 100 bytes
-    let large_code = "doc test\nfact x: 1\n".repeat(10); // ~200 bytes
+    let large_code = "spec test\nfact x: 1\n".repeat(10); // ~200 bytes
 
     let result = add_lemma_code_blocking(&mut engine, &large_code, "test.lemma");
 
@@ -36,7 +36,7 @@ fn test_file_size_just_under_limit() {
     };
 
     let mut engine = Engine::with_limits(limits);
-    let code = "doc test fact x: 1 rule y: x + 1"; // Small file
+    let code = "spec test fact x: 1 rule y: x + 1"; // Small file
 
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(result.is_ok(), "Small file should be accepted");
@@ -52,7 +52,7 @@ fn test_fact_value_size_limit() {
     let mut engine = Engine::with_limits(limits);
     add_lemma_code_blocking(
         &mut engine,
-        "doc test\nfact name: [text]\nrule result: name",
+        "spec test\nfact name: [text]\nrule result: name",
         "test.lemma",
     )
     .unwrap();
@@ -75,21 +75,21 @@ fn test_fact_value_size_limit() {
 // --- Name length limits ---
 
 #[test]
-fn doc_name_at_max_length_is_accepted() {
-    let name = "a".repeat(lemma::limits::MAX_DOC_NAME_LENGTH);
-    let code = format!("doc {name}\nfact x: 1");
+fn spec_name_at_max_length_is_accepted() {
+    let name = "a".repeat(lemma::limits::MAX_SPEC_NAME_LENGTH);
+    let code = format!("spec {name}\nfact x: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     assert!(
         result.is_ok(),
-        "Doc name at max length should be accepted: {result:?}"
+        "Spec name at max length should be accepted: {result:?}"
     );
 }
 
 #[test]
-fn doc_name_exceeding_max_length_is_rejected() {
-    let name = "a".repeat(lemma::limits::MAX_DOC_NAME_LENGTH + 1);
-    let code = format!("doc {name}\nfact x: 1");
+fn spec_name_exceeding_max_length_is_rejected() {
+    let name = "a".repeat(lemma::limits::MAX_SPEC_NAME_LENGTH + 1);
+    let code = format!("spec {name}\nfact x: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     let errs = result.unwrap_err();
@@ -99,14 +99,14 @@ fn doc_name_exceeding_max_length_is_rejected() {
             Error::ResourceLimitExceeded { limit_name, .. } => Some(limit_name.clone()),
             _ => None,
         })
-        .expect("expected ResourceLimitExceeded for doc name");
-    assert_eq!(limit_err, "max_doc_name_length");
+        .expect("expected ResourceLimitExceeded for spec name");
+    assert_eq!(limit_err, "max_spec_name_length");
 }
 
 #[test]
 fn fact_name_at_max_length_is_accepted() {
     let name = "a".repeat(lemma::limits::MAX_FACT_NAME_LENGTH);
-    let code = format!("doc test\nfact {name}: 1");
+    let code = format!("spec test\nfact {name}: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     assert!(
@@ -118,7 +118,7 @@ fn fact_name_at_max_length_is_accepted() {
 #[test]
 fn fact_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::limits::MAX_FACT_NAME_LENGTH + 1);
-    let code = format!("doc test\nfact {name}: 1");
+    let code = format!("spec test\nfact {name}: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     let errs = result.unwrap_err();
@@ -135,7 +135,7 @@ fn fact_name_exceeding_max_length_is_rejected() {
 #[test]
 fn fact_binding_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::limits::MAX_FACT_NAME_LENGTH + 1);
-    let code = format!("doc test\nfact other.{name}: 1");
+    let code = format!("spec test\nfact other.{name}: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     let errs = result.unwrap_err();
@@ -152,7 +152,7 @@ fn fact_binding_name_exceeding_max_length_is_rejected() {
 #[test]
 fn rule_name_at_max_length_is_accepted() {
     let name = "a".repeat(lemma::limits::MAX_RULE_NAME_LENGTH);
-    let code = format!("doc test\nrule {name}: 1");
+    let code = format!("spec test\nrule {name}: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     assert!(
@@ -164,7 +164,7 @@ fn rule_name_at_max_length_is_accepted() {
 #[test]
 fn rule_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::limits::MAX_RULE_NAME_LENGTH + 1);
-    let code = format!("doc test\nrule {name}: 1");
+    let code = format!("spec test\nrule {name}: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     let errs = result.unwrap_err();
@@ -181,7 +181,7 @@ fn rule_name_exceeding_max_length_is_rejected() {
 #[test]
 fn type_name_at_max_length_is_accepted() {
     let name = "a".repeat(lemma::limits::MAX_TYPE_NAME_LENGTH);
-    let code = format!("doc test\ntype {name}: number\nfact x: 1");
+    let code = format!("spec test\ntype {name}: number\nfact x: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     assert!(
@@ -193,7 +193,7 @@ fn type_name_at_max_length_is_accepted() {
 #[test]
 fn type_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::limits::MAX_TYPE_NAME_LENGTH + 1);
-    let code = format!("doc test\ntype {name}: number\nfact x: 1");
+    let code = format!("spec test\ntype {name}: number\nfact x: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     let errs = result.unwrap_err();
@@ -210,7 +210,7 @@ fn type_name_exceeding_max_length_is_rejected() {
 #[test]
 fn type_import_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::limits::MAX_TYPE_NAME_LENGTH + 1);
-    let code = format!("doc test\ntype {name} from other\nfact x: 1");
+    let code = format!("spec test\ntype {name} from other\nfact x: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
     let errs = result.unwrap_err();

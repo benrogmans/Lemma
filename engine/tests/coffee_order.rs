@@ -13,9 +13,9 @@ use std::str::FromStr;
 fn load_coffee_order() -> Engine {
     let mut engine = Engine::new();
 
-    // Load the examples document first (contains money and priority types)
+    // Load the examples spec first (contains money and priority types)
     let examples = r#"
-doc examples
+spec examples
 
 type money: scale
   -> decimals 2
@@ -30,7 +30,7 @@ type priority: text
 "#;
 
     let coffee_order = r#"
-doc coffee_order
+spec coffee_order
 
 type coffee: text
   -> option "espresso"
@@ -90,11 +90,11 @@ rule total: subtotal - discount_amount
 fn test_coffee_order_parses() {
     let engine = load_coffee_order();
 
-    // Verify documents are loaded
-    let docs = engine.list_documents();
-    let doc_names: Vec<&str> = docs.iter().map(|d| d.name.as_str()).collect();
-    assert!(doc_names.contains(&"examples"));
-    assert!(doc_names.contains(&"coffee_order"));
+    // Verify specs are loaded
+    let specs = engine.list_specs();
+    let spec_names: Vec<&str> = specs.iter().map(|d| d.name.as_str()).collect();
+    assert!(spec_names.contains(&"examples"));
+    assert!(spec_names.contains(&"coffee_order"));
 }
 
 #[test]

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 fn eval_rule(
     code: &str,
-    doc_name: &str,
+    spec_name: &str,
     rule_name: &str,
     facts: HashMap<String, String>,
 ) -> String {
@@ -21,7 +21,7 @@ fn eval_rule(
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate(doc_name, None, &now, vec![], facts)
+        .evaluate(spec_name, None, &now, vec![], facts)
         .expect("Should evaluate");
     let result = response
         .results
@@ -66,7 +66,7 @@ fn expect_plan_error(code: &str, expected_substring: &str) {
 
 #[test]
 fn number_add_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact a: 10
 fact b: 3
 rule result: a + b"#;
@@ -75,7 +75,7 @@ rule result: a + b"#;
 
 #[test]
 fn number_subtract_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact a: 10
 fact b: 3
 rule result: a - b"#;
@@ -84,7 +84,7 @@ rule result: a - b"#;
 
 #[test]
 fn number_multiply_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact a: 10
 fact b: 3
 rule result: a * b"#;
@@ -93,7 +93,7 @@ rule result: a * b"#;
 
 #[test]
 fn number_divide_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact a: 12
 fact b: 4
 rule result: a / b"#;
@@ -102,7 +102,7 @@ rule result: a / b"#;
 
 #[test]
 fn number_modulo_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact a: 10
 fact b: 3
 rule result: a % b"#;
@@ -111,7 +111,7 @@ rule result: a % b"#;
 
 #[test]
 fn number_power_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact a: 2
 fact b: 3
 rule result: a ^ b"#;
@@ -124,7 +124,7 @@ rule result: a ^ b"#;
 
 #[test]
 fn scale_add_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact price: 10 eur
 fact n: 5
@@ -135,7 +135,7 @@ rule result: price + n"#;
 
 #[test]
 fn scale_subtract_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact price: 10 eur
 fact n: 3
@@ -146,7 +146,7 @@ rule result: price - n"#;
 
 #[test]
 fn scale_multiply_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact price: 10 eur
 fact n: 3
@@ -157,7 +157,7 @@ rule result: price * n"#;
 
 #[test]
 fn number_multiply_scale() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact n: 3
 fact price: 10 eur
@@ -168,7 +168,7 @@ rule result: n * price"#;
 
 #[test]
 fn scale_divide_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact price: 12 eur
 fact n: 4
@@ -179,7 +179,7 @@ rule result: price / n"#;
 
 #[test]
 fn scale_modulo_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact price: 10 eur
 fact n: 3
@@ -190,7 +190,7 @@ rule result: price % n"#;
 
 #[test]
 fn scale_power_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact price: 2 eur
 fact n: 3
@@ -205,7 +205,7 @@ rule result: price ^ n"#;
 
 #[test]
 fn scale_add_ratio() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact price: 100 eur
 fact rate: 10%
@@ -216,7 +216,7 @@ rule result: price + rate"#;
 
 #[test]
 fn scale_subtract_ratio() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact price: 100 eur
 fact discount: 25%
@@ -227,7 +227,7 @@ rule result: price - discount"#;
 
 #[test]
 fn scale_multiply_ratio() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact price: 100 eur
 fact rate: 50%
@@ -238,7 +238,7 @@ rule result: price * rate"#;
 
 #[test]
 fn scale_divide_ratio() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact price: 100 eur
 fact rate: 50%
@@ -253,7 +253,7 @@ rule result: price / rate"#;
 
 #[test]
 fn scale_multiply_duration() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact rate: 50 eur
 fact hours: 8 hours
@@ -264,7 +264,7 @@ rule result: rate * hours"#;
 
 #[test]
 fn duration_multiply_scale() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact hours: 8 hours
 fact rate: 50 eur
@@ -275,7 +275,7 @@ rule result: hours * rate"#;
 
 #[test]
 fn scale_divide_duration() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact total: 400 eur
 fact hours: 8 hours
@@ -290,7 +290,7 @@ rule result: total / hours"#;
 
 #[test]
 fn duration_add_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 10 hours
 fact n: 5
 rule result: d + n"#;
@@ -300,7 +300,7 @@ rule result: d + n"#;
 
 #[test]
 fn duration_subtract_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 10 hours
 fact n: 3
 rule result: d - n"#;
@@ -310,7 +310,7 @@ rule result: d - n"#;
 
 #[test]
 fn duration_multiply_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 10 hours
 fact n: 3
 rule result: d * n"#;
@@ -320,7 +320,7 @@ rule result: d * n"#;
 
 #[test]
 fn number_multiply_duration() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact n: 3
 fact d: 10 hours
 rule result: n * d"#;
@@ -330,7 +330,7 @@ rule result: n * d"#;
 
 #[test]
 fn duration_divide_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 12 hours
 fact n: 4
 rule result: d / n"#;
@@ -340,7 +340,7 @@ rule result: d / n"#;
 
 #[test]
 fn duration_modulo_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 10 hours
 fact n: 3
 rule result: d % n"#;
@@ -350,7 +350,7 @@ rule result: d % n"#;
 
 #[test]
 fn duration_power_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 2 hours
 fact n: 3
 rule result: d ^ n"#;
@@ -364,7 +364,7 @@ rule result: d ^ n"#;
 
 #[test]
 fn duration_add_ratio() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 10 hours
 fact r: 50%
 rule result: d + r"#;
@@ -374,7 +374,7 @@ rule result: d + r"#;
 
 #[test]
 fn duration_subtract_ratio() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 10 hours
 fact r: 25%
 rule result: d - r"#;
@@ -384,7 +384,7 @@ rule result: d - r"#;
 
 #[test]
 fn duration_multiply_ratio() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 10 hours
 fact r: 50%
 rule result: d * r"#;
@@ -394,7 +394,7 @@ rule result: d * r"#;
 
 #[test]
 fn ratio_multiply_duration() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact r: 50%
 fact d: 10 hours
 rule result: r * d"#;
@@ -404,7 +404,7 @@ rule result: r * d"#;
 
 #[test]
 fn duration_divide_ratio() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 10 hours
 fact r: 50%
 rule result: d / r"#;
@@ -418,7 +418,7 @@ rule result: d / r"#;
 
 #[test]
 fn ratio_multiply_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact r: 50%
 fact n: 200
 rule result: r * n"#;
@@ -427,7 +427,7 @@ rule result: r * n"#;
 
 #[test]
 fn ratio_add_number() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact r: 10%
 fact n: 100
 rule result: n + r"#;
@@ -440,7 +440,7 @@ rule result: n + r"#;
 
 #[test]
 fn scale_add_scale_same_family() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact a: 4 eur
 fact b: 5 eur
@@ -455,7 +455,7 @@ rule result: a + b"#;
 
 #[test]
 fn scale_subtract_scale_same_family() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact a: 10 eur
 fact b: 3 eur
@@ -470,7 +470,7 @@ rule result: a - b"#;
 
 #[test]
 fn scale_add_scale_result_used_in_comparison() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact a: 4 eur
 fact b: 5 eur
@@ -485,7 +485,7 @@ rule over_threshold: total > threshold"#;
 
 #[test]
 fn scale_add_scale_result_in_further_arithmetic() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact a: 10 eur
 fact b: 20 eur
@@ -506,7 +506,7 @@ rule total: subtotal + c"#;
 
 #[test]
 fn ratio_add_ratio() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact a: 10%
 fact b: 5%
 rule result: a + b"#;
@@ -516,7 +516,7 @@ rule result: a + b"#;
 
 #[test]
 fn ratio_subtract_ratio() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact a: 25%
 fact b: 10%
 rule result: a - b"#;
@@ -526,7 +526,7 @@ rule result: a - b"#;
 
 #[test]
 fn ratio_add_ratio_result_used_with_scale() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 fact base_rate: 10%
 fact surcharge: 5%
@@ -547,7 +547,7 @@ rule discount: price * combined_rate"#;
 
 #[test]
 fn date_subtract_date_result_used_in_comparison_with_duration() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact start: 2024-01-01
 fact end: 2024-01-10
 fact limit: 5 days
@@ -562,7 +562,7 @@ rule over_limit: elapsed > limit"#;
 
 #[test]
 fn duration_add_duration() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact a: 10 hours
 fact b: 5 hours
 rule result: a + b"#;
@@ -572,7 +572,7 @@ rule result: a + b"#;
 
 #[test]
 fn duration_subtract_duration() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact a: 10 hours
 fact b: 3 hours
 rule result: a - b"#;
@@ -586,7 +586,7 @@ rule result: a - b"#;
 
 #[test]
 fn date_add_duration() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 2024-01-01
 fact dur: 7 days
 rule result: d + dur"#;
@@ -600,7 +600,7 @@ rule result: d + dur"#;
 
 #[test]
 fn date_subtract_duration() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact d: 2024-01-08
 fact dur: 7 days
 rule result: d - dur"#;
@@ -614,7 +614,7 @@ rule result: d - dur"#;
 
 #[test]
 fn duration_add_date() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact dur: 7 days
 fact d: 2024-01-01
 rule result: dur + d"#;
@@ -628,7 +628,7 @@ rule result: dur + d"#;
 
 #[test]
 fn date_subtract_date() {
-    let code = r#"doc t
+    let code = r#"spec t
 fact a: 2024-01-10
 fact b: 2024-01-01
 rule result: a - b"#;
@@ -646,7 +646,7 @@ rule result: a - b"#;
 
 #[test]
 fn same_family_parent_plus_child() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 type budget: money -> unit jpy 160.00 -> minimum 0
 fact price: 10 eur
@@ -662,7 +662,7 @@ rule result: price + allowance"#;
 
 #[test]
 fn same_family_siblings() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 type income: money -> minimum 0
 type expense: money -> minimum 0
@@ -679,7 +679,7 @@ rule remaining: salary - rent"#;
 
 #[test]
 fn same_family_result_used_in_comparison() {
-    let code = r#"doc t
+    let code = r#"spec t
 type money: scale -> unit eur 1.00
 type budget: money -> unit jpy 160.00 -> minimum 0
 fact price: 4 eur
@@ -697,7 +697,7 @@ rule over_budget: total > limit"#;
 #[test]
 fn different_families_subtract_rejected() {
     expect_plan_error(
-        r#"doc t
+        r#"spec t
 type money: scale -> unit eur 1.00
 type weight: scale -> unit kg 1.0
 fact price: 10 eur
@@ -710,7 +710,7 @@ rule result: price - mass"#,
 #[test]
 fn different_families_children_add_rejected() {
     expect_plan_error(
-        r#"doc t
+        r#"spec t
 type money: scale -> unit eur 1.00
 type pocket_money: money -> minimum 0
 type weight: scale -> unit kg 1.0
@@ -729,7 +729,7 @@ rule result: cash + parcel"#,
 #[test]
 fn boolean_add_number_rejected() {
     expect_plan_error(
-        r#"doc t
+        r#"spec t
 fact a: true
 fact b: 5
 rule result: a + b"#,
@@ -740,7 +740,7 @@ rule result: a + b"#,
 #[test]
 fn number_multiply_boolean_rejected() {
     expect_plan_error(
-        r#"doc t
+        r#"spec t
 fact a: 5
 fact b: true
 rule result: a * b"#,
@@ -755,7 +755,7 @@ rule result: a * b"#,
 #[test]
 fn text_add_number_rejected() {
     expect_plan_error(
-        r#"doc t
+        r#"spec t
 fact a: "hello"
 fact b: 5
 rule result: a + b"#,
@@ -766,7 +766,7 @@ rule result: a + b"#,
 #[test]
 fn text_multiply_text_rejected() {
     expect_plan_error(
-        r#"doc t
+        r#"spec t
 fact a: "hello"
 fact b: "world"
 rule result: a * b"#,
@@ -781,7 +781,7 @@ rule result: a * b"#,
 #[test]
 fn different_scale_families_add_rejected() {
     expect_plan_error(
-        r#"doc t
+        r#"spec t
 type money: scale -> unit eur 1.00
 type weight: scale -> unit kg 1.0
 fact price: 10 eur
@@ -794,7 +794,7 @@ rule result: price + mass"#,
 #[test]
 fn different_scale_families_multiply_rejected() {
     expect_plan_error(
-        r#"doc t
+        r#"spec t
 type money: scale -> unit eur 1.00
 type weight: scale -> unit kg 1.0
 fact price: 10 eur
@@ -811,7 +811,7 @@ rule result: price * mass"#,
 #[test]
 fn date_multiply_number_rejected() {
     expect_plan_error(
-        r#"doc t
+        r#"spec t
 fact d: 2024-01-01
 fact n: 5
 rule result: d * n"#,
@@ -822,7 +822,7 @@ rule result: d * n"#,
 #[test]
 fn date_add_scale_rejected() {
     expect_plan_error(
-        r#"doc t
+        r#"spec t
 type money: scale -> unit eur 1.00
 fact d: 2024-01-01
 fact price: 10 eur
@@ -838,7 +838,7 @@ rule result: d + price"#,
 #[test]
 fn number_divide_duration_rejected() {
     expect_plan_error(
-        r#"doc t
+        r#"spec t
 fact n: 100
 fact d: 5 hours
 rule result: n / d"#,

@@ -1,8 +1,8 @@
-//! Execution plan for evaluated documents
+//! Execution plan for evaluated specs
 //!
 //! Provides a complete self-contained execution plan ready for the evaluator.
 //! The plan contains all facts, rules flattened into executable branches,
-//! and execution order - no document structure needed during evaluation.
+//! and execution order - no spec structure needed during evaluation.
 
 use crate::parsing::ast::{DateTimeValue, MetaValue};
 use crate::planning::graph::Graph;
@@ -20,13 +20,13 @@ use std::collections::{HashMap, HashSet};
 /// A complete execution plan ready for the evaluator
 ///
 /// Contains the topologically sorted list of rules to execute, along with all facts.
-/// Self-contained structure - no document lookups required during evaluation.
+/// Self-contained structure - no spec lookups required during evaluation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionPlan {
-    /// Main document name
-    pub doc_name: String,
+    /// Main spec name
+    pub spec_name: String,
 
-    /// Per-fact data in definition order: value, type-only, or document reference.
+    /// Per-fact data in definition order: value, type-only, or spec reference.
     #[serde(serialize_with = "crate::serialization::serialize_resolved_fact_value_map")]
     #[serde(deserialize_with = "crate::serialization::deserialize_resolved_fact_value_map")]
     pub facts: IndexMap<FactPath, FactData>,
@@ -37,7 +37,7 @@ pub struct ExecutionPlan {
     /// Source code for error messages
     pub sources: HashMap<String, String>,
 
-    /// Document metadata
+    /// Spec metadata
     pub meta: HashMap<String, MetaValue>,
 
     /// Temporal slice start (inclusive). None = -∞.
@@ -49,7 +49,7 @@ pub struct ExecutionPlan {
 
 /// An executable rule with flattened branches
 ///
-/// Contains all information needed to evaluate a rule without document lookups.
+/// Contains all information needed to evaluate a rule without spec lookups.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutableRule {
     /// Unique identifier for this rule
@@ -69,7 +69,7 @@ pub struct ExecutableRule {
     #[serde(deserialize_with = "crate::serialization::deserialize_fact_path_set")]
     pub needs_facts: HashSet<FactPath>,
 
-    /// Source location for error messages (always present for rules from parsed documents)
+    /// Source location for error messages (always present for rules from parsed specs)
     pub source: Source,
 
     /// Computed type of this rule's result
@@ -86,7 +86,7 @@ pub struct Branch {
     /// Result expression
     pub result: Expression,
 
-    /// Source location for error messages (always present for branches from parsed documents)
+    /// Source location for error messages (always present for branches from parsed specs)
     pub source: Source,
 }
 
@@ -94,7 +94,7 @@ pub struct Branch {
 /// Internal implementation detail - only called by plan()
 pub(crate) fn build_execution_plan(
     graph: &Graph,
-    main_doc_name: &str,
+    main_spec_name: &str,
     valid_from: Option<DateTimeValue>,
     valid_to: Option<DateTimeValue>,
 ) -> ExecutionPlan {
@@ -130,7 +130,7 @@ pub(crate) fn build_execution_plan(
     populate_needs_facts(&mut executable_rules, graph);
 
     ExecutionPlan {
-        doc_name: main_doc_name.to_string(),
+        spec_name: main_spec_name.to_string(),
         facts,
         rules: executable_rules,
         sources: graph.sources().clone(),
@@ -194,7 +194,7 @@ fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
     }
 }
 
-/// A document's public interface: its facts (inputs) and rules (outputs) with
+/// A spec's public interface: its facts (inputs) and rules (outputs) with
 /// full structured type information.
 ///
 /// Built from an [`ExecutionPlan`] via [`ExecutionPlan::schema`] (all facts and
@@ -206,20 +206,20 @@ fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
 /// can work at whatever fidelity they need — structured types for input forms,
 /// or `Display` for plain text.
 #[derive(Debug, Clone, Serialize)]
-pub struct DocumentSchema {
-    /// Document name
-    pub doc: String,
+pub struct SpecSchema {
+    /// Spec name
+    pub spec: String,
     /// Facts (inputs) keyed by name: (type, optional default value)
     pub facts: indexmap::IndexMap<String, (LemmaType, Option<LiteralValue>)>,
     /// Rules (outputs) keyed by name, with their computed result types
     pub rules: indexmap::IndexMap<String, LemmaType>,
-    /// Document metadata
+    /// Spec metadata
     pub meta: HashMap<String, MetaValue>,
 }
 
-impl std::fmt::Display for DocumentSchema {
+impl std::fmt::Display for SpecSchema {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Document: {}", self.doc)?;
+        write!(f, "Spec: {}", self.spec)?;
 
         if !self.meta.is_empty() {
             write!(f, "\n\nMeta:")?;
@@ -347,28 +347,26 @@ fn format_type_constraints(spec: &TypeSpecification) -> Option<String> {
 }
 
 impl ExecutionPlan {
-    /// Resolved document references in this plan.
+    /// Resolved spec references in this plan.
     ///
-    /// Iterates facts and collects entries where `FactData::doc_arc()` returns
-    /// `Some`. No data duplication — the `Arc<LemmaDoc>` is already stored in
-    /// `FactData::DocumentRef`.
-    pub fn document_refs(
-        &self,
-    ) -> Vec<(&FactPath, &std::sync::Arc<crate::parsing::ast::LemmaDoc>)> {
+    /// Iterates facts and collects entries where `FactData::spec_arc()` returns
+    /// `Some`. No data duplication — the `Arc<LemmaSpec>` is already stored in
+    /// `FactData::SpecRef`.
+    pub fn spec_refs(&self) -> Vec<(&FactPath, &std::sync::Arc<crate::parsing::ast::LemmaSpec>)> {
         self.facts
             .iter()
-            .filter_map(|(path, data)| data.doc_arc().map(|arc| (path, arc)))
+            .filter_map(|(path, data)| data.spec_arc().map(|arc| (path, arc)))
             .collect()
     }
 
-    /// Build a [`DocumentSchema`] summarising **all** of this plan's facts and
+    /// Build a [`SpecSchema`] summarising **all** of this plan's facts and
     /// rules.
     ///
-    /// All facts with a typed schema (local and cross-document) are included.
-    /// Document-reference facts (which have no schema type) are excluded.
-    /// Only local rules (no cross-document segments) are included.
+    /// All facts with a typed schema (local and cross-spec) are included.
+    /// Spec-reference facts (which have no schema type) are excluded.
+    /// Only local rules (no cross-spec segments) are included.
     /// Results are sorted alphabetically by name for deterministic output.
-    pub fn schema(&self) -> DocumentSchema {
+    pub fn schema(&self) -> SpecSchema {
         let mut fact_entries: Vec<(String, (LemmaType, Option<LiteralValue>))> = self
             .facts
             .iter()
@@ -389,22 +387,22 @@ impl ExecutionPlan {
             .collect();
         rule_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-        DocumentSchema {
-            doc: self.doc_name.clone(),
+        SpecSchema {
+            spec: self.spec_name.clone(),
             facts: fact_entries.into_iter().collect(),
             rules: rule_entries.into_iter().collect(),
             meta: self.meta.clone(),
         }
     }
 
-    /// Build a [`DocumentSchema`] scoped to specific rules.
+    /// Build a [`SpecSchema`] scoped to specific rules.
     ///
     /// The returned schema contains only the facts **needed** by the given rules
     /// (transitively, via `needs_facts`) and only those rules. This is the
     /// "what do I need to evaluate these rules?" view.
     ///
     /// Returns `Err` if any rule name is not found in the plan.
-    pub fn schema_for_rules(&self, rule_names: &[String]) -> Result<DocumentSchema, Error> {
+    pub fn schema_for_rules(&self, rule_names: &[String]) -> Result<SpecSchema, Error> {
         let mut needed_facts = HashSet::new();
         let mut rule_entries: Vec<(String, LemmaType)> = Vec::new();
 
@@ -412,8 +410,8 @@ impl ExecutionPlan {
             let rule = self.get_rule(rule_name).ok_or_else(|| {
                 Error::validation(
                     format!(
-                        "Rule '{}' not found in document '{}'",
-                        rule_name, self.doc_name
+                        "Rule '{}' not found in spec '{}'",
+                        rule_name, self.spec_name
                     ),
                     None,
                     None::<String>,
@@ -437,8 +435,8 @@ impl ExecutionPlan {
             .collect();
         fact_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-        Ok(DocumentSchema {
-            doc: self.doc_name.clone(),
+        Ok(SpecSchema {
+            spec: self.spec_name.clone(),
             facts: fact_entries.into_iter().collect(),
             rules: rule_entries.into_iter().collect(),
             meta: self.meta.clone(),
@@ -450,7 +448,7 @@ impl ExecutionPlan {
         self.facts.keys().find(|path| path.input_key() == name)
     }
 
-    /// Look up a local rule by its name (rule in the main document).
+    /// Look up a local rule by its name (rule in the main spec).
     pub fn get_rule(&self, name: &str) -> Option<&ExecutableRule> {
         self.rules
             .iter()
@@ -499,7 +497,7 @@ impl ExecutionPlan {
             let expected_type = fact_data.schema_type().cloned().ok_or_else(|| {
                 Error::validation(
                     format!(
-                        "Fact '{}' is a document reference; cannot provide a value.",
+                        "Fact '{}' is a spec reference; cannot provide a value.",
                         name
                     ),
                     None,
@@ -548,7 +546,7 @@ impl ExecutionPlan {
                         "Reduce the size of fact values to {} bytes or less",
                         limits.max_fact_value_bytes
                     ),
-                    document_context: None,
+                    spec_context: None,
                 });
             }
 
@@ -661,7 +659,7 @@ pub(crate) fn validate_literal_facts_against_types(plan: &ExecutionPlan) -> Vec<
     for (fact_path, fact_data) in &plan.facts {
         let (expected_type, lit) = match fact_data {
             FactData::Value { value, .. } => (&value.lemma_type, value),
-            FactData::TypeDeclaration { .. } | FactData::DocumentRef { .. } => continue,
+            FactData::TypeDeclaration { .. } | FactData::SpecRef { .. } => continue,
         };
 
         if let Err(msg) = validate_value_against_type(expected_type, lit) {
@@ -716,7 +714,7 @@ mod tests {
         add_lemma_code_blocking(
             &mut engine,
             r#"
-                doc test
+                spec test
                 fact age: [number -> default 25]
                 "#,
             "test.lemma",
@@ -749,7 +747,7 @@ mod tests {
         add_lemma_code_blocking(
             &mut engine,
             r#"
-                doc test
+                spec test
                 fact age: [number]
                 "#,
             "test.lemma",
@@ -774,7 +772,7 @@ mod tests {
         add_lemma_code_blocking(
             &mut engine,
             r#"
-                doc test
+                spec test
                 fact known: [number]
                 "#,
             "test.lemma",
@@ -799,11 +797,11 @@ mod tests {
         add_lemma_code_blocking(
             &mut engine,
             r#"
-                doc private
+                spec private
                 fact base_price: [number]
 
-                doc test
-                fact rules: doc private
+                spec test
+                fact rules: spec private
                 "#,
             "test.lemma",
         )
@@ -822,7 +820,7 @@ mod tests {
         let fact_path = FactPath {
             segments: vec![PathSegment {
                 fact: "rules".to_string(),
-                doc: "private".to_string(),
+                spec: "private".to_string(),
             }],
             fact: "base_price".to_string(),
         };
@@ -845,8 +843,8 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            doc_name: "<test>".to_string(),
-            source_text: Arc::from("doc test\nfact x: 1\nrule result: x"),
+            spec_name: "<test>".to_string(),
+            source_text: Arc::from("spec test\nfact x: 1\nrule result: x"),
         }
     }
 
@@ -901,7 +899,7 @@ mod tests {
                 col: 0,
             },
             "test",
-            Arc::from("doc test\nfact x: 1\nrule result: x"),
+            Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();
         facts.insert(
@@ -916,7 +914,7 @@ mod tests {
         );
 
         let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
+            spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
@@ -958,7 +956,7 @@ mod tests {
                 col: 0,
             },
             "test",
-            Arc::from("doc test\nfact x: 1\nrule result: x"),
+            Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();
         facts.insert(
@@ -973,7 +971,7 @@ mod tests {
         );
 
         let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
+            spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
@@ -1022,7 +1020,7 @@ mod tests {
                 col: 0,
             },
             "test",
-            Arc::from("doc test\nfact x: 1\nrule result: x"),
+            Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();
         facts.insert(
@@ -1038,7 +1036,7 @@ mod tests {
         );
 
         let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
+            spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
@@ -1071,7 +1069,7 @@ mod tests {
             },
         );
         let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
+            spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
             sources: {
@@ -1087,7 +1085,7 @@ mod tests {
         let json = serde_json::to_string(&plan).expect("Should serialize");
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
 
-        assert_eq!(deserialized.doc_name, plan.doc_name);
+        assert_eq!(deserialized.spec_name, plan.spec_name);
         assert_eq!(deserialized.facts.len(), plan.facts.len());
         assert_eq!(deserialized.rules.len(), plan.rules.len());
         assert_eq!(deserialized.sources.len(), plan.sources.len());
@@ -1107,7 +1105,7 @@ mod tests {
             },
         );
         let mut plan = ExecutionPlan {
-            doc_name: "test".to_string(),
+            spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
             sources: HashMap::new(),
@@ -1145,7 +1143,7 @@ mod tests {
         let json = serde_json::to_string(&plan).expect("Should serialize");
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
 
-        assert_eq!(deserialized.doc_name, plan.doc_name);
+        assert_eq!(deserialized.spec_name, plan.spec_name);
         assert_eq!(deserialized.facts.len(), plan.facts.len());
         assert_eq!(deserialized.rules.len(), plan.rules.len());
         assert_eq!(deserialized.rules[0].name, "can_drive");
@@ -1159,7 +1157,7 @@ mod tests {
         let fact_path = FactPath {
             segments: vec![PathSegment {
                 fact: "employee".to_string(),
-                doc: "private".to_string(),
+                spec: "private".to_string(),
             }],
             fact: "salary".to_string(),
         };
@@ -1173,7 +1171,7 @@ mod tests {
             },
         );
         let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
+            spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
             sources: HashMap::new(),
@@ -1222,7 +1220,7 @@ mod tests {
         );
 
         let plan = ExecutionPlan {
-            doc_name: "test".to_string(),
+            spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
             sources: HashMap::new(),
@@ -1264,7 +1262,7 @@ mod tests {
             },
         );
         let mut plan = ExecutionPlan {
-            doc_name: "test".to_string(),
+            spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
             sources: HashMap::new(),
@@ -1331,7 +1329,7 @@ mod tests {
     #[test]
     fn test_serialize_deserialize_empty_plan() {
         let plan = ExecutionPlan {
-            doc_name: "empty".to_string(),
+            spec_name: "empty".to_string(),
             facts: IndexMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
@@ -1343,7 +1341,7 @@ mod tests {
         let json = serde_json::to_string(&plan).expect("Should serialize");
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
 
-        assert_eq!(deserialized.doc_name, "empty");
+        assert_eq!(deserialized.spec_name, "empty");
         assert_eq!(deserialized.facts.len(), 0);
         assert_eq!(deserialized.rules.len(), 0);
         assert_eq!(deserialized.sources.len(), 0);
@@ -1363,7 +1361,7 @@ mod tests {
             },
         );
         let mut plan = ExecutionPlan {
-            doc_name: "test".to_string(),
+            spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
             sources: HashMap::new(),
@@ -1432,7 +1430,7 @@ mod tests {
             },
         );
         let mut plan = ExecutionPlan {
-            doc_name: "test".to_string(),
+            spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
             sources: {
@@ -1478,7 +1476,7 @@ mod tests {
         let deserialized2: ExecutionPlan =
             serde_json::from_str(&json2).expect("Should deserialize again");
 
-        assert_eq!(deserialized2.doc_name, plan.doc_name);
+        assert_eq!(deserialized2.spec_name, plan.spec_name);
         assert_eq!(deserialized2.facts.len(), plan.facts.len());
         assert_eq!(deserialized2.rules.len(), plan.rules.len());
         assert_eq!(deserialized2.sources.len(), plan.sources.len());

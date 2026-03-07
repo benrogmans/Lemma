@@ -7,10 +7,10 @@
 
 > **A language that means business.**
 
-Lemma is a declarative language designed specifically for expressing business logic. Lemma docs flow like natural language and encode pricing rules, tax calculations, eligibility criteria, contracts, and policies. Business stakeholders can read and validate them, while software systems can enforce and automate them.
+Lemma is a declarative language designed specifically for expressing business logic. Lemma specs flow like natural language and encode pricing rules, tax calculations, eligibility criteria, contracts, and policies. Business stakeholders can read and validate them, while software systems can enforce and automate them.
 
 ```lemma
-doc pricing
+spec pricing
 
 fact quantity: [number]
 fact is_vip  : false
@@ -36,7 +36,7 @@ AI models operate on probability. By design, they approximate—they don't calcu
 
 **Lemma provides certainty**. Every answer is exact, delivered in microseconds, and the reasoning is verifiable.
 
-Pro tip: use Lemma's MCP server to make your LLMs deterministic. Use LLMs as a friendly interface for your Lemma docs.
+Pro tip: use Lemma's MCP server to make your LLMs deterministic. Use LLMs as a friendly interface for your Lemma Specs.
 
 ## Quick Start
 
@@ -46,12 +46,12 @@ Pro tip: use Lemma's MCP server to make your LLMs deterministic. Use LLMs as a f
 cargo install lemma-cli
 ```
 
-### Your first Lemma doc
+### Your first Lemma spec
 
 Create `shipping.lemma`:
 
 ```lemma
-doc shipping
+spec shipping
 
 type weight: scale
   -> unit kilogram 1.0
@@ -120,7 +120,7 @@ lemma run shipping
 Rules start with a default value, then conditions override:
 
 ```lemma
-doc pricing
+spec pricing
 
 fact quantity: [number]
 fact is_vip  : false
@@ -140,7 +140,7 @@ rule price: 20 * quantity - discount?
 Define custom types with units and constraints:
 
 ```lemma
-doc type_examples
+spec type_examples
 
 type money: scale
   -> unit eur 1.00
@@ -175,7 +175,7 @@ fact deadline: 2024-12-31
 Define custom types with units, constraints, and validation:
 
 ```lemma
-doc unit_conversions
+spec unit_conversions
 
 type money: scale
   -> unit eur 1.00
@@ -194,7 +194,7 @@ type discount: ratio
 Unit conversions work within the same type:
 
 ```lemma
-doc unit_conversions
+spec unit_conversions
 
 type money: scale
   -> unit eur 1.00
@@ -210,7 +210,7 @@ rule price_usd: price in usd
 Compose complex logic from simple rules:
 
 ```lemma
-doc driving_eligibility
+spec driving_eligibility
 
 type license_status: text
   -> option "valid"
@@ -229,42 +229,42 @@ rule can_drive: is_adult? and has_license?
   unless license_suspended then veto "License suspended"
 ```
 
-### Document composition
+### Spec composition
 
 
 ```lemma
-doc employee
+spec employee
 fact years_service: 8
 
-doc leave_policy
+spec leave_policy
 fact senior_threshold: 5
 fact base_leave_days : 25
 fact bonus_leave_days: 5
 
-doc leave_entitlement
-fact employee    : doc employee
-fact leave_policy: doc leave_policy
+spec leave_entitlement
+fact employee    : spec employee
+fact leave_policy: spec leave_policy
 
 rule is_senior        : employee.years_service >= leave_policy.senior_threshold
 rule annual_leave_days: leave_policy.base_leave_days
   unless is_senior? then leave_policy.base_leave_days + leave_policy.bonus_leave_days
 ```
 
-### Document versioning
+### Temporal versioning
 
-Documents with the same name can have multiple versions over time by specifying an active-from date on the doc declaration. The engine resolves the correct version based on a point in time.
+Specs with the same name can have multiple versions over time by specifying an active-from date on the spec declaration. The engine resolves the correct version based on a point in time.
 
 ```lemma
-doc pricing
+spec pricing
 fact base_price: 20
 
 rule total: base_price * quantity
 ```
 
-This document has no temporal metadata, so it is active from the beginning of time. When a new version is introduced, the old one is automatically superseded:
+This spec has no temporal metadata, so it is active from the beginning of time. When a new version is introduced, the old one is automatically superseded:
 
 ```lemma
-doc pricing 2025-01-01
+spec pricing 2025-01-01
 
 fact base_price: 25
 
@@ -275,7 +275,7 @@ The new version takes over starting 2025-01-01. The original is now effectively 
 
 **Resolution rules:**
 
-- Documents are sorted by `effective_from` (no `effective_from` = earliest).
+- Specs are sorted by `effective_from` (no `effective_from` = earliest).
 - A version is active until the next version's `effective_from`, or indefinitely if it is the latest version.
 
 ### Veto for hard constraints
@@ -283,7 +283,7 @@ The new version takes over starting 2025-01-01. The original is now effectively 
 You should use types to constrain facts whenever possible. Sometimes though, you might need to consider multiple data points to validate a rule. This is where `veto` comes in. In the example below, we want to ensure that the review date is after the start date.
 
 ```lemma
-doc performance_review
+spec performance_review
 
 fact start_date       : [date]
 fact review_date      : [date]
@@ -301,14 +301,14 @@ rule bonus_percentage: 0%
 
 - **[Language Guide](documentation/index.md)** - Complete language reference
 - **[Reference](documentation/reference.md)** - All operators and types
-- **[Examples](documentation/examples/)** - Example Lemma documents
+- **[Examples](documentation/examples/)** - Example Lemma specs
 
 [📚 View Full Documentation](documentation/)
 
 ## CLI Usage
 
 ```bash
-# Run a document (evaluates all rules)
+# Run a spec (evaluates all rules)
 lemma run simple_facts
 
 # Run specific rules only
@@ -317,19 +317,19 @@ lemma run tax_calculation:tax_owed
 # Provide fact values
 lemma run tax_calculation income=75000 filing_status="married"
 
-# Interactive mode for exploring documents and facts
+# Interactive mode for exploring specs and facts
 lemma run --interactive
 
 # Machine-readable output (for scripts and tools)
 lemma run pricing --raw
 
-# Show document structure
+# Show spec structure
 lemma show pricing
 
-# List all documents in workspace
+# List all specs in workspace
 lemma list
 
-# List documents in specific directory
+# List specs in specific directory
 lemma list ./policies/
 
 # Start HTTP server (workspace auto-detected)
@@ -349,7 +349,7 @@ Start a server with your workspace pre-loaded:
 ```bash
 lemma server --dir ./policies
 
-# Evaluate a document (all rules) via query parameters
+# Evaluate a spec (all rules) via query parameters
 curl "http://localhost:8012/@pricing?quantity=10&is_member=true"
 
 # Evaluate specific rules only
@@ -361,8 +361,8 @@ curl -X POST http://localhost:8012/@pricing \
   -d '{"quantity": 10, "is_member": true}'
 ```
 
-The server auto-generates typed REST endpoints for each loaded document. Meta routes:
-- `GET /` — list all documents with their schemas
+The server auto-generates typed REST endpoints for each loaded spec. Meta routes:
+- `GET /` — list all specs with their schemas
 - `GET /openapi.json` — OpenAPI 3.1 specification
 - `GET /docs` — interactive API documentation (Scalar)
 - `GET /health` — health check
@@ -375,7 +375,7 @@ lemma server --dir ./policies --watch
 
 ### MCP Server
 
-The MCP (Model Context Protocol) server enables AI assistants to interact with Lemma docs programmatically, providing tools for doc creation, evaluation, and inspection.
+The MCP (Model Context Protocol) server enables AI assistants to interact with Lemma specs programmatically, providing tools for spec creation, evaluation, and inspection.
 
 ### WebAssembly
 
@@ -403,18 +403,18 @@ The image supports `linux/amd64` and `linux/arm64`. Docker automatically pulls t
 docker run --rm ghcr.io/benrogmans/lemma --help
 ```
 
-**Evaluate a document:**
+**Evaluate a spec:**
 
-Mount your workspace into the container's `/docs` directory:
+Mount your workspace into the container's `/specs` directory:
 
 ```bash
-docker run --rm -v "$(pwd):/docs" ghcr.io/benrogmans/lemma run shipping
+docker run --rm -v "$(pwd):/specs" ghcr.io/benrogmans/lemma run shipping
 ```
 
 **Deploy as an HTTP API:**
 
 ```bash
-docker run -d -p 8012:8012 -v "$(pwd):/docs" ghcr.io/benrogmans/lemma \
+docker run -d -p 8012:8012 -v "$(pwd):/specs" ghcr.io/benrogmans/lemma \
   server --host 0.0.0.0 --port 8012
 ```
 
@@ -429,7 +429,7 @@ services:
     ports:
       - "8012:8012"
     volumes:
-      - ./policies:/docs:ro
+      - ./policies:/specs:ro
     command: ["server", "--host", "0.0.0.0", "--port", "8012", "--watch"]
 ```
 

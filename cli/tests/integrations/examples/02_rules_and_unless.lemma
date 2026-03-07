@@ -1,4 +1,4 @@
-doc rules_and_unless
+spec rules_and_unless
 
 fact is_premium:   yes
 fact base_price:   [number -> minimum 0]

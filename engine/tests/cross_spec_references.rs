@@ -4,25 +4,25 @@ use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
-/// Test cross-document fact references (should work)
+/// Test cross-spec fact references (should work)
 #[test]
-fn test_cross_doc_fact_reference() {
+fn test_cross_spec_fact_reference() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact price: 100
 fact quantity: 5
 "#;
 
-    let derived_doc = r#"
-doc derived
-fact base_data: doc base
+    let derived_spec = r#"
+spec derived
+fact base_data: spec base
 rule total: base_data.price * base_data.quantity
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -37,25 +37,25 @@ rule total: base_data.price * base_data.quantity
     assert_eq!(total.result.value().unwrap().to_string(), "500");
 }
 
-/// Test cross-document rule reference
+/// Test cross-spec rule reference
 #[test]
-fn test_cross_doc_rule_reference() {
+fn test_cross_spec_rule_reference() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact value: 50
 rule doubled: value * 2
 "#;
 
-    let derived_doc = r#"
-doc derived
-fact base_data: doc base
+    let derived_spec = r#"
+spec derived
+fact base_data: spec base
 rule derived_value: base_data.doubled + 10
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -70,26 +70,26 @@ rule derived_value: base_data.doubled + 10
     assert_eq!(derived_value.result.value().unwrap().to_string(), "110");
 }
 
-/// Test cross-document rule reference with dependencies
+/// Test cross-spec rule reference with dependencies
 #[test]
-fn test_cross_doc_rule_reference_with_dependencies() {
+fn test_cross_spec_rule_reference_with_dependencies() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base_employee
+    let base_spec = r#"
+spec base_employee
 fact monthly_salary: 5000
 rule annual_salary: monthly_salary * 12
 rule with_bonus: annual_salary * 1.1
 "#;
 
-    let derived_doc = r#"
-doc manager
-fact employee: doc base_employee
+    let derived_spec = r#"
+spec manager
+fact employee: spec base_employee
 rule manager_bonus: employee.annual_salary * 0.15
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -104,28 +104,28 @@ rule manager_bonus: employee.annual_salary * 0.15
     assert_eq!(bonus.result.value().unwrap().to_string(), "9000");
 }
 
-/// Test fact binding with cross-doc rule reference
+/// Test fact binding with cross-spec rule reference
 #[test]
-fn test_cross_doc_fact_binding_with_rule_reference() {
+fn test_cross_spec_fact_binding_with_rule_reference() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact price: 100
 fact quantity: 5
 rule total: price * quantity
 "#;
 
-    let derived_doc = r#"
-doc derived
-fact config: doc base
+    let derived_spec = r#"
+spec derived
+fact config: spec base
 fact config.price: 200
 fact config.quantity: 3
 rule derived_total: config.total
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -140,34 +140,34 @@ rule derived_total: config.total
     assert_eq!(total.result.value().unwrap().to_string(), "600");
 }
 
-/// Test nested cross-document rule references
+/// Test nested cross-spec rule references
 #[test]
-fn test_nested_cross_doc_rule_reference() {
+fn test_nested_cross_spec_rule_reference() {
     let mut engine = Engine::new();
 
-    let config_doc = r#"
-doc config
+    let config_spec = r#"
+spec config
 fact base_days: 3
 rule standard_processing_days: base_days
 rule express_processing_days: 1
 "#;
 
-    let order_doc = r#"
-doc order
+    let order_spec = r#"
+spec order
 fact is_express: false
 rule processing_days: 5
 "#;
 
-    let derived_doc = r#"
-doc derived
-fact settings: doc config
-fact order_info: doc order
+    let derived_spec = r#"
+spec derived
+fact settings: spec config
+fact order_info: spec order
 rule total_days: settings.standard_processing_days + order_info.processing_days
 "#;
 
-    add_lemma_code_blocking(&mut engine, config_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, order_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, config_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, order_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -182,27 +182,27 @@ rule total_days: settings.standard_processing_days + order_info.processing_days
     assert_eq!(total.result.value().unwrap().to_string(), "8");
 }
 
-/// Test cross-document rule reference in unless clause
+/// Test cross-spec rule reference in unless clause
 #[test]
-fn test_cross_doc_rule_reference_in_unless_clause() {
+fn test_cross_spec_rule_reference_in_unless_clause() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact threshold: 100
 fact value: 150
 rule is_valid: value >= threshold
 "#;
 
-    let derived_doc = r#"
-doc derived
-fact base_data: doc base
+    let derived_spec = r#"
+spec derived
+fact base_data: spec base
 rule status: "invalid"
   unless base_data.is_valid then "valid"
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -217,25 +217,25 @@ rule status: "invalid"
     assert_eq!(status.result.value().unwrap().to_string(), "valid");
 }
 
-/// Test that we can mix cross-doc fact and rule references
+/// Test that we can mix cross-spec fact and rule references
 #[test]
-fn test_cross_doc_mixed_fact_and_rule_references() {
+fn test_cross_spec_mixed_fact_and_rule_references() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact input: 50
 rule calculated: input * 2
 "#;
 
-    let derived_doc = r#"
-doc derived
-fact base_data: doc base
+    let derived_spec = r#"
+spec derived
+fact base_data: spec base
 rule combined: base_data.input + base_data.calculated
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -250,28 +250,28 @@ rule combined: base_data.input + base_data.calculated
     assert_eq!(combined.result.value().unwrap().to_string(), "150");
 }
 
-/// Test cross-document fact binding with multiple levels (should work)
+/// Test cross-spec fact binding with multiple levels (should work)
 #[test]
 fn test_multi_level_fact_binding() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact x: 10
 fact y: 20
 fact z: 30
 "#;
 
-    let derived_doc = r#"
-doc derived
-fact data: doc base
+    let derived_spec = r#"
+spec derived
+fact data: spec base
 fact data.x: 100
 fact data.y: 200
 rule sum: data.x + data.y + data.z
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -293,22 +293,22 @@ rule sum: data.x + data.y + data.z
 fn test_simple_fact_binding() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base
+    let base_spec = r#"
+spec base
 fact price: 100
 fact quantity: 5
 "#;
 
-    let derived_doc = r#"
-doc derived
-fact config: doc base
+    let derived_spec = r#"
+spec derived
+fact config: spec base
 fact config.price: 200
 fact config.quantity: 3
 rule total: config.price * config.quantity
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -330,30 +330,30 @@ rule total: config.price * config.quantity
 fn test_different_fact_paths_produce_different_results() {
     let mut engine = Engine::new();
 
-    let example1_doc = r#"
-doc example1
+    let example1_spec = r#"
+spec example1
 fact price: 99
 rule total: price * 1.21
 "#;
 
-    let example2_doc = r#"
-doc example2
-fact base: doc example1
+    let example2_spec = r#"
+spec example2
+fact base: spec example1
 "#;
 
-    let example3_doc = r#"
-doc example3
-fact base: doc example2
+    let example3_spec = r#"
+spec example3
+fact base: spec example2
 rule total1: base.base.total
 
-fact base2: doc example2
+fact base2: spec example2
 fact base2.base.price: 79
 rule total2: base2.base.total
 "#;
 
-    add_lemma_code_blocking(&mut engine, example1_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, example2_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, example3_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, example1_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, example2_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, example3_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -380,15 +380,15 @@ rule total2: base2.base.total
 }
 
 #[test]
-fn doc_ref_evaluates_to_referenced_document() {
+fn spec_ref_evaluates_to_referenced_spec() {
     let mut engine = Engine::new();
 
     let code = r#"
-doc pricing
+spec pricing
 fact base_price: 200
 
-doc order
-fact p: doc pricing
+spec order
+fact p: spec pricing
 rule total: p.base_price
 "#;
 
@@ -407,16 +407,16 @@ rule total: p.base_price
     assert_eq!(
         total.result.value().unwrap().to_string(),
         "200",
-        "Doc ref should evaluate against the referenced pricing document"
+        "Spec ref should evaluate against the referenced pricing spec"
     );
 }
 
 #[test]
-fn cross_doc_dependency_rules_excluded_from_results() {
+fn cross_spec_dependency_rules_excluded_from_results() {
     let mut engine = Engine::new();
 
-    let base_doc = r#"
-doc base_employee
+    let base_spec = r#"
+spec base_employee
 fact monthly_salary: 5000
 fact employment_duration: 3 years
 rule annual_salary: monthly_salary * 12
@@ -424,16 +424,16 @@ rule is_eligible_for_bonus: false
   unless employment_duration >= 1 years then true
 "#;
 
-    let derived_doc = r#"
-doc specific_employee
-fact employee: doc base_employee
+    let derived_spec = r#"
+spec specific_employee
+fact employee: spec base_employee
 rule salary_with_bonus: employee.annual_salary
   unless employee.is_eligible_for_bonus then employee.annual_salary * 1.1
 rule employee_summary: employee.monthly_salary
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
+    add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -445,7 +445,7 @@ rule employee_summary: employee.monthly_salary
     assert_eq!(
         result_names,
         vec!["employee_summary", "salary_with_bonus"],
-        "Only local rules should appear in results; cross-doc dependencies \
+        "Only local rules should appear in results; cross-spec dependencies \
          (annual_salary, is_eligible_for_bonus) must be excluded"
     );
 
@@ -463,15 +463,15 @@ rule employee_summary: employee.monthly_salary
 }
 
 #[test]
-fn doc_ref_from_order_to_pricing_evaluates_correctly() {
+fn spec_ref_from_order_to_pricing_evaluates_correctly() {
     let mut engine = Engine::new();
 
     let code = r#"
-doc pricing
+spec pricing
 fact base_price: 150
 
-doc order
-fact p: doc pricing
+spec order
+fact p: spec pricing
 rule total: p.base_price
 "#;
 
@@ -490,6 +490,6 @@ rule total: p.base_price
     assert_eq!(
         total.result.value().unwrap().to_string(),
         "150",
-        "Doc ref should evaluate against the referenced pricing document"
+        "Spec ref should evaluate against the referenced pricing spec"
     );
 }

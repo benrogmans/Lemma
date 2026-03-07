@@ -73,38 +73,38 @@ export async function test() {
     const engine = new WasmEngine();
     console.log('✓ Engine created successfully');
 
-    // Test 2: Add simple document
+    // Test 2: Add simple spec
     const addResult = await engine.addLemmaFile(`
-      doc test
+      spec test
       fact x: 10
       rule double: x * 2
     `, 'test.lemma');
 
     const addParsed = JSON.parse(addResult);
     if (!addParsed.success) {
-      throw new Error('Failed to add document: ' + JSON.stringify(addParsed));
+      throw new Error('Failed to add spec: ' + JSON.stringify(addParsed));
     }
-    console.log('✓ Document added successfully');
+    console.log('✓ Spec added successfully');
 
-    // Test 3: Evaluate document
+    // Test 3: Evaluate spec
     const evalResult = engine.evaluate('test', '', '[]', '{}');
     const evalParsed = JSON.parse(evalResult);
     if (!evalParsed.success) {
-      throw new Error('Failed to evaluate document: ' + JSON.stringify(evalParsed));
+      throw new Error('Failed to evaluate spec: ' + JSON.stringify(evalParsed));
     }
-    console.log('✓ Document evaluated successfully');
+    console.log('✓ Spec evaluated successfully');
 
-    // Test 4: List documents
-    const listResult = engine.listDocuments();
+    // Test 4: List specs
+    const listResult = engine.listSpecs();
     const listParsed = JSON.parse(listResult);
-    if (!listParsed.success || listParsed.documents.length === 0) {
-      throw new Error('Failed to list documents: ' + JSON.stringify(listParsed));
+    if (!listParsed.success || listParsed.specs.length === 0) {
+      throw new Error('Failed to list specs: ' + JSON.stringify(listParsed));
     }
-    console.log('✓ Documents listed successfully');
+    console.log('✓ Specs listed successfully');
 
-    // Test 5: Complex document
+    // Test 5: Complex spec
     const complexResult = await engine.addLemmaFile(`
-      doc pricing
+      spec pricing
       fact quantity: 25
       fact is_vip: false
 
@@ -118,9 +118,9 @@ export async function test() {
 
     const complexParsed = JSON.parse(complexResult);
     if (!complexParsed.success) {
-      throw new Error('Failed to add complex document: ' + JSON.stringify(complexParsed));
+      throw new Error('Failed to add complex spec: ' + JSON.stringify(complexParsed));
     }
-    console.log('✓ Complex document added successfully');
+    console.log('✓ Complex spec added successfully');
 
     // Test 6: Evaluation with facts (as JSON object)
     const factsResult = engine.evaluate('pricing', '', '[]', JSON.stringify({
@@ -135,7 +135,7 @@ export async function test() {
 
     // Test 7: Various fact value types
     const typesResult = await engine.addLemmaFile(`
-      doc type_test
+      spec type_test
       fact number_fact: 42
       fact bool_fact: false
       fact string_fact: "hello"
@@ -147,7 +147,7 @@ export async function test() {
 
     const typesParsed = JSON.parse(typesResult);
     if (!typesParsed.success) {
-      throw new Error('Failed to add type test document: ' + JSON.stringify(typesParsed));
+      throw new Error('Failed to add type test spec: ' + JSON.stringify(typesParsed));
     }
 
     // Test with various types in the object
@@ -184,7 +184,7 @@ export async function test() {
     console.log('✓ Type handling in facts object successful');
 
     // Test 8: Error handling - parse error
-    const parseErrorResult = await engine.addLemmaFile('doc invalid\nfact x :', 'invalid.lemma');
+    const parseErrorResult = await engine.addLemmaFile('spec invalid\nfact x :', 'invalid.lemma');
     const parseErrorParsed = JSON.parse(parseErrorResult);
     if (parseErrorParsed.success) {
       throw new Error('Expected parse error but got success');
@@ -195,13 +195,13 @@ export async function test() {
     }
     console.log('✓ Parse error handling successful');
 
-    // Test 9: Error handling - evaluate non-existent document
+    // Test 9: Error handling - evaluate non-existent spec
     const nonExistentResult = engine.evaluate('nonexistent', '', '[]', '{}');
     const nonExistentParsed = JSON.parse(nonExistentResult);
     if (nonExistentParsed.success) {
-      throw new Error('Expected error for non-existent document but got success');
+      throw new Error('Expected error for non-existent spec but got success');
     }
-    console.log('✓ Non-existent document error handling successful');
+    console.log('✓ Non-existent spec error handling successful');
 
     // Test 10: Error handling - invalid JSON in facts
     const invalidJsonResult = engine.evaluate('test', '', '[]', 'not json');
@@ -213,13 +213,13 @@ export async function test() {
 
     // Test 11: Veto scenario
     const vetoResult = await engine.addLemmaFile(`
-      doc veto_test
+      spec veto_test
       fact x: 10
       rule bad_sqrt: sqrt(-1)
     `, 'veto_test.lemma');
     const vetoAddParsed = JSON.parse(vetoResult);
     if (!vetoAddParsed.success) {
-      throw new Error('Failed to add veto test document: ' + JSON.stringify(vetoAddParsed));
+      throw new Error('Failed to add veto test spec: ' + JSON.stringify(vetoAddParsed));
     }
     const vetoEvalResult = engine.evaluate('veto_test', '', '[]', '{}');
     const vetoEvalParsed = JSON.parse(vetoEvalResult);
@@ -237,14 +237,14 @@ export async function test() {
 
     // Test 12: Missing facts
     const missingFactsResult = await engine.addLemmaFile(`
-      doc missing_test
+      spec missing_test
       fact x: [number]
       fact y: [number]
       rule sum: x + y
     `, 'missing_test.lemma');
     const missingAddParsed = JSON.parse(missingFactsResult);
     if (!missingAddParsed.success) {
-      throw new Error('Failed to add missing facts test document: ' + JSON.stringify(missingAddParsed));
+      throw new Error('Failed to add missing facts test spec: ' + JSON.stringify(missingAddParsed));
     }
     const missingEvalResult = engine.evaluate('missing_test', '', '[]', JSON.stringify({ x: 10 }));
     const missingEvalParsed = JSON.parse(missingEvalResult);
@@ -284,14 +284,14 @@ export async function test() {
 
     // Test 14: Units and percentages
     const unitsResult = await engine.addLemmaFile(`
-      doc units_test
+      spec units_test
       fact price: 100
       fact discount: 10%
       rule final_price: price * (1 - discount)
     `, 'units_test.lemma');
     const unitsAddParsed = JSON.parse(unitsResult);
     if (!unitsAddParsed.success) {
-      throw new Error('Failed to add units test document: ' + JSON.stringify(unitsAddParsed));
+      throw new Error('Failed to add units test spec: ' + JSON.stringify(unitsAddParsed));
     }
     const unitsEvalResult = engine.evaluate('units_test', '', '[]', '{}');
     const unitsEvalParsed = JSON.parse(unitsEvalResult);
@@ -306,7 +306,7 @@ export async function test() {
 
     // Test 15: Scale unit conversion via `in`
     const scaleConvDoc = await engine.addLemmaFile(`
-      doc scale_conv
+      spec scale_conv
       type money: scale
         -> unit eur 1
         -> unit usd 1.19
@@ -315,11 +315,11 @@ export async function test() {
     `, 'scale_conv.lemma');
     const scaleConvParsed = JSON.parse(scaleConvDoc);
     if (!scaleConvParsed.success) {
-      throw new Error('Failed to add scale conversion doc: ' + JSON.stringify(scaleConvParsed));
+      throw new Error('Failed to add scale conversion spec: ' + JSON.stringify(scaleConvParsed));
     }
     const scaleConvEval = JSON.parse(engine.evaluate('scale_conv', '', '[]', '{}'));
     if (!scaleConvEval.success) {
-      throw new Error('Failed to evaluate scale conversion doc: ' + JSON.stringify(scaleConvEval));
+      throw new Error('Failed to evaluate scale conversion spec: ' + JSON.stringify(scaleConvEval));
     }
     const priceUsdRule = scaleConvEval.response?.results?.price_usd;
     if (!priceUsdRule || !priceUsdRule.result || !opIsValue(priceUsdRule.result)) {
@@ -348,17 +348,17 @@ export async function test() {
     }
     console.log('✓ Empty facts handling successful');
 
-    // Test 17: Multiple documents
-    const doc1Result = await engine.addLemmaFile('doc doc1\nfact x: 1', 'doc1.lemma');
-    const doc2Result = await engine.addLemmaFile('doc doc2\nfact y: 2', 'doc2.lemma');
-    if (!JSON.parse(doc1Result).success || !JSON.parse(doc2Result).success) {
-      throw new Error('Failed to add multiple documents');
+    // Test 17: Multiple specs
+    const spec1Result = await engine.addLemmaFile('spec spec1\nfact x: 1', 'spec1.lemma');
+    const spec2Result = await engine.addLemmaFile('spec spec2\nfact y: 2', 'spec2.lemma');
+    if (!JSON.parse(spec1Result).success || !JSON.parse(spec2Result).success) {
+      throw new Error('Failed to add multiple specs');
     }
-    const listAfterMultiple = JSON.parse(engine.listDocuments());
-    if (!listAfterMultiple.success || listAfterMultiple.documents.length < 2) {
-      throw new Error('Expected multiple documents, got: ' + JSON.stringify(listAfterMultiple));
+    const listAfterMultiple = JSON.parse(engine.listSpecs());
+    if (!listAfterMultiple.success || listAfterMultiple.specs.length < 2) {
+      throw new Error('Expected multiple specs, got: ' + JSON.stringify(listAfterMultiple));
     }
-    console.log('✓ Multiple documents handling successful');
+    console.log('✓ Multiple specs handling successful');
 
     console.log('\n✅ All WASM tests passed!');
 

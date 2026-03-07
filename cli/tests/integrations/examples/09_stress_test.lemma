@@ -1,4 +1,4 @@
-doc stress_test
+spec stress_test
 """
 Comprehensive Lemma Stress Test
 Demonstrates: type annotations, complex rules, rule references,
@@ -171,9 +171,9 @@ rule summary:
   unless savings_percent > 30% then "Excellent savings!"
 
 
-doc stress_test_config
+spec stress_test_config
 """
-Configuration document - demonstrates document composition
+Configuration spec - demonstrates spec composition
 """
 
 fact base_tax_rate:                 8%
@@ -194,18 +194,18 @@ fact weight_limit_express:          100
 fact weight_limit_standard:         50
 
 
-doc stress_test_extended
+spec stress_test_extended
 """
-Extended stress test with document composition
-Demonstrates: cross-document references, field access, complex dependencies, fact bindings
+Extended stress test with spec composition
+Demonstrates: cross-spec references, field access, complex dependencies, fact bindings
 """
 
-fact config:                      doc stress_test_config
+fact config:                      spec stress_test_config
 fact config.base_tax_rate:        7%
 fact config.luxury_tax_threshold: 1200
 fact config.max_discount_cap:     35%
 
-fact order:                         doc stress_test
+fact order:                         spec stress_test
 fact order.free_shipping_threshold: 600
 fact order.min_order_value:         100
 

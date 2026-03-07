@@ -7,7 +7,7 @@ use std::collections::HashMap;
 #[test]
 fn test_better_error_for_invalid_value() {
     let code = r#"
-        doc shipping
+        spec shipping
         fact weight: [number]
 
         rule shipping_cost: 5
@@ -39,7 +39,7 @@ fn test_better_error_for_invalid_value() {
 #[test]
 fn test_better_error_for_veto_mismatch() {
     let code = r#"
-        doc validation
+        spec validation
         fact age: [number]
 
         rule eligibility: true
@@ -71,7 +71,7 @@ fn test_better_error_for_veto_mismatch() {
 #[test]
 fn test_error_with_no_satisfiable_branches() {
     let code = r#"
-        doc test
+        spec test
         fact x: [number]
         fact y: [number]
 

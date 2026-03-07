@@ -22,16 +22,16 @@ import init, { WasmEngine } from '@benrogmans/lemma-engine';
 await init();
 const engine = new WasmEngine();
 
-// Load a document
+// Load a spec
 const result = engine.addLemmaCode(`
-  doc example
+  spec example
   fact price: 100
   rule total: price * 2
 `, 'example.lemma');
 
 const addResult = JSON.parse(result);
 if (addResult.success) {
-  console.log('Document loaded successfully');
+  console.log('Spec loaded successfully');
 } else {
   console.error('Error:', addResult.error);
 }
@@ -57,21 +57,21 @@ if (response.success) {
 Creates a new engine instance.
 
 ### `addLemmaCode(code: string, source: string): string`
-Parses and loads a Lemma document.
+Parses and loads a Lemma spec.
 
 **Returns:** JSON string with `{success, data, error, warnings}` structure.
 
-### `evaluate(docName: string, factValuesJson: string): string`
-Evaluates a loaded document.
+### `evaluate(specName: string, factValuesJson: string): string`
+Evaluates a loaded spec.
 
 **Parameters:**
-- `docName` - Name of the document to evaluate
+- `specName` - Name of the spec to evaluate
 - `factValuesJson` - JSON array of fact values (e.g., `'["x=10", "y=20"]'`)
 
 **Returns:** JSON string with `{success, data, error, warnings}` structure. The `data` field contains the serialized `Response`.
 
-### `listDocuments(): string`
-Returns JSON string with `{success, data, error, warnings}` structure. The `data` field contains a JSON array of loaded document names.
+### `listSpecs(): string`
+Returns JSON string with `{success, data, error, warnings}` structure. The `data` field contains a JSON array of loaded spec names.
 
 
 ## Response Format

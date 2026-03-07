@@ -5,7 +5,7 @@ title: CLI Guide
 
 # Lemma CLI
 
-The Lemma CLI provides everything you need to work with Lemma: document evaluation, workspace management, and HTTP/MCP servers.
+The Lemma CLI provides everything you need to work with Lemma: spec evaluation, workspace management, and HTTP/MCP servers.
 
 ## Installation
 
@@ -17,31 +17,31 @@ cargo build --release
 
 ## Commands
 
-### `lemma run` - Evaluate a document
+### `lemma run` - Evaluate a spec
 
 Run rules in a workspace and see the results.
 
 ```bash
-lemma run [<document>[:<rules>]] [facts...] [-d <path>] [-r|--raw] [-i|--interactive]
+lemma run [<spec>[:<rules>]] [facts...] [-d <path>] [-r|--raw] [-i|--interactive]
 ```
 
 **Syntax:**
-- `document` - evaluates all rules in the document
-- `document:rule` - evaluates only the specified rule
-- `document:rule1,rule2,rule3` - evaluates multiple specific rules (comma-separated)
+- `spec` - evaluates all rules in the spec
+- `spec:rule` - evaluates only the specified rule
+- `spec:rule1,rule2,rule3` - evaluates multiple specific rules (comma-separated)
 - No arguments with `-i` - launches interactive mode
 
 **Options:**
 - `-d, --dir <path>` - Workspace root directory (default: `.`)
 - `-r, --raw` - Output raw values only (for piping to other tools)
 - `-i, --interactive` - Enable interactive mode with:
-  - Fuzzy-searchable document selection
+  - Fuzzy-searchable spec selection
   - Multi-select rule picker
   - Type-aware fact input (calendar picker for dates, examples for other types)
 
 **Examples:**
 ```bash
-# Evaluate all rules in a document
+# Evaluate all rules in a spec
 lemma run pricing -d ./policies
 
 # Evaluate only the total rule
@@ -56,10 +56,10 @@ lemma run pricing:total -r base_price=200
 # Pipe result to jq or other tools
 lemma run pricing:total -r base_price=200 | xargs echo "Total:"
 
-# Interactive mode (guided prompts for document, rules, and facts)
+# Interactive mode (guided prompts for spec, rules, and facts)
 lemma run -i
 
-# Interactive fact entry for specific document
+# Interactive fact entry for specific spec
 lemma run pricing -i
 
 # Interactive fact entry for specific rules
@@ -96,12 +96,12 @@ Raw output (`--raw`) shows only values (perfect for piping):
 
 **Note:** When evaluating specific rules, their dependencies are still computed but only the requested rules appear in the output.
 
-### `lemma show` - Show document structure
+### `lemma show` - Show spec structure
 
-View the structure of a document including facts, rules, and required inputs.
+View the structure of a spec including facts, rules, and required inputs.
 
 ```bash
-lemma show <document> [-d <path>]
+lemma show <spec> [-d <path>]
 ```
 
 **Example:**
@@ -109,9 +109,9 @@ lemma show <document> [-d <path>]
 lemma show pricing -d ./policies
 ```
 
-### `lemma list` - List all documents
+### `lemma list` - List all specs
 
-Load and display information about all documents in a workspace.
+Load and display information about all specs in a workspace.
 
 ```bash
 lemma list [path]
@@ -146,14 +146,14 @@ lemma server -d ./policies -p 8080
 # Health check
 GET /health
 
-# Evaluate pre-loaded document with facts as query params
-GET /evaluate/{document}?fact1=value1&fact2=value2
+# Evaluate pre-loaded spec with facts as query params
+GET /evaluate/{spec}?fact1=value1&fact2=value2
 
 # Evaluate inline code
 POST /evaluate
 Content-Type: application/json
 {
-  "code": "doc example\nfact x: 5\nrule y: x * 2",
+  "code": "spec example\nfact x: 5\nrule y: x * 2",
   "facts": {
     "x": 100
   }
@@ -186,8 +186,8 @@ lemma mcp [-d <path>]
 - `-d, --dir` - Workspace root directory (default: `.`)
 
 The MCP server provides AI assistants with tools to:
-- Add and evaluate Lemma documents
-- Inspect document structure
+- Add and evaluate Lemma specs
+- Inspect spec structure
 - Query rules with fact values
 
 ## Workspace Structure
@@ -201,7 +201,7 @@ policies/
 └── tax.lemma
 ```
 
-The CLI automatically loads all `.lemma` files and makes their documents available for evaluation.
+The CLI automatically loads all `.lemma` files and makes their specs available for evaluation.
 
 ## Examples
 
@@ -214,7 +214,7 @@ cd policies
 
 # 2. Create a Lemma file
 cat > pricing.lemma << 'EOF'
-doc pricing
+spec pricing
 fact base_price: 100
 fact quantity: 1
 rule total: base_price * quantity * 1.1
@@ -226,7 +226,7 @@ lemma run pricing
 # 4. Provide fact values
 lemma run pricing base_price=200 quantity=5
 
-# 5. Show document structure
+# 5. Show spec structure
 lemma show pricing
 
 # 6. Start HTTP server
@@ -243,7 +243,7 @@ lemma server --workdir ./policies &
 curl -X POST http://localhost:8012/evaluate \
   -H "Content-Type: application/json" \
   -d '{
-    "code": "doc calc\nfact x: 10\nrule double: x * 2",
+    "code": "spec calc\nfact x: 10\nrule double: x * 2",
     "facts": {"x": 25}
   }'
 
@@ -256,25 +256,25 @@ curl -X POST http://localhost:8012/evaluate \
 
 ## Features
 
-- **Document Listing** - Load and list all documents from a directory
-- **CLI Evaluation** - Run documents from command line with operation records
+- **Spec Listing** - Load and list all specs from a directory
+- **CLI Evaluation** - Run specs from command line with operation records
 - **Interactive Mode** - Guided prompts with fuzzy search, multi-select, and calendar date picker
 - **Raw Output Mode** - Extract values for piping to other Unix tools
 - **HTTP Server** - REST API with both stateful and stateless evaluation
-- **Document Inspection** - View document structure and requirements
+- **Spec Inspection** - View spec structure and requirements
 - **MCP Server** - Model Context Protocol for AI assistant integration
 
 ## Performance
 
-- Document loading: ~1ms per document
+- Spec loading: ~1ms per spec
 - Rule evaluation: <1ms simple, <10ms complex
 - Server startup: instant with pre-loaded workspace
 - Memory: ~1KB per fact, ~2KB per rule
 
 ## Troubleshooting
 
-### "Document not found"
-Make sure your `.lemma` files are in the workspace directory and contain valid `doc` declarations.
+### "Spec not found"
+Make sure your `.lemma` files are in the workspace directory and contain valid `spec` declarations.
 
 ### "Address already in use"
 Another process is using the port. Try a different port:
@@ -283,7 +283,7 @@ lemma server --port 8080
 ```
 
 ### Parse errors
-Check your Lemma syntax. Use `lemma show` to verify the document loads correctly.
+Check your Lemma syntax. Use `lemma show` to verify the spec loads correctly.
 
 ## See Also
 

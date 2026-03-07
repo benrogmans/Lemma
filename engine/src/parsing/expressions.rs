@@ -10,7 +10,7 @@ fn create_expression_with_location(
     kind: ExpressionKind,
     pair: &Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Expression {
     let span = Span::from_pest_span(pair.as_span());
@@ -19,7 +19,7 @@ fn create_expression_with_location(
         Source::new(
             attribute.to_string(),
             span,
-            doc_name.to_string(),
+            spec_name.to_string(),
             source_text.clone(),
         ),
     )
@@ -28,7 +28,7 @@ fn create_expression_with_location(
 fn parse_literal_expression(
     pair: Pair<Rule>,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let literal_pair = if pair.as_rule() == Rule::literal {
@@ -44,14 +44,14 @@ fn parse_literal_expression(
         let (number, unit_name) = crate::parsing::literals::parse_number_unit_literal(
             literal_pair.clone(),
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         )?;
         return Ok(create_expression_with_location(
             ExpressionKind::UnresolvedUnitLiteral(number, unit_name),
             &literal_pair,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         ));
     }
@@ -59,7 +59,7 @@ fn parse_literal_expression(
     let literal_value = crate::parsing::literals::parse_literal(
         literal_pair.clone(),
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     )?;
 
@@ -67,7 +67,7 @@ fn parse_literal_expression(
         ExpressionKind::Literal(literal_value),
         &literal_pair,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     ))
 }
@@ -76,7 +76,7 @@ pub(crate) fn parse_primary(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let rule = pair.as_rule();
@@ -86,7 +86,7 @@ pub(crate) fn parse_primary(
                 ExpressionKind::Now,
                 &pair,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             ));
         }
@@ -100,7 +100,7 @@ pub(crate) fn parse_primary(
         | Rule::time_literal
         | Rule::duration_literal
         | Rule::number_unit_literal => {
-            return parse_literal_expression(pair, attribute, doc_name, source_text.clone());
+            return parse_literal_expression(pair, attribute, spec_name, source_text.clone());
         }
         Rule::reference => {
             let reference = parse_reference(pair.clone())?;
@@ -108,7 +108,7 @@ pub(crate) fn parse_primary(
                 ExpressionKind::Reference(reference),
                 &pair,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             ));
         }
@@ -129,7 +129,7 @@ pub(crate) fn parse_primary(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             );
         }
@@ -143,7 +143,7 @@ pub(crate) fn parse_primary(
                     ExpressionKind::Now,
                     &inner,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 ));
             }
@@ -157,7 +157,7 @@ pub(crate) fn parse_primary(
             | Rule::time_literal
             | Rule::duration_literal
             | Rule::number_unit_literal => {
-                return parse_literal_expression(inner, attribute, doc_name, source_text.clone());
+                return parse_literal_expression(inner, attribute, spec_name, source_text.clone());
             }
             Rule::reference => {
                 let reference = parse_reference(inner.clone())?;
@@ -165,7 +165,7 @@ pub(crate) fn parse_primary(
                     ExpressionKind::Reference(reference),
                     &inner,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 ));
             }
@@ -174,7 +174,7 @@ pub(crate) fn parse_primary(
                     inner,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 );
             }
@@ -195,7 +195,7 @@ pub(crate) fn parse_primary(
                     inner,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 );
             }
@@ -209,7 +209,7 @@ pub(crate) fn parse_expression(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     if let Err(msg) = depth_tracker.push_depth() {
@@ -224,7 +224,7 @@ pub(crate) fn parse_expression(
             limit_value: depth_tracker.max_depth().to_string(),
             actual_value: actual_depth,
             suggestion: "Simplify nested expressions to reduce depth".to_string(),
-            document_context: None,
+            spec_context: None,
         });
     }
 
@@ -232,7 +232,7 @@ pub(crate) fn parse_expression(
         pair,
         depth_tracker,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     );
     depth_tracker.pop_depth();
@@ -243,7 +243,7 @@ fn parse_expression_impl(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     match pair.as_rule() {
@@ -252,7 +252,13 @@ fn parse_expression_impl(
             let and_expr = inner
                 .next()
                 .expect("BUG: grammar guarantees expression has one and_expression");
-            return parse_and_expression(and_expr, depth_tracker, attribute, doc_name, source_text);
+            return parse_and_expression(
+                and_expr,
+                depth_tracker,
+                attribute,
+                spec_name,
+                source_text,
+            );
         }
 
         Rule::and_expression => {
@@ -260,7 +266,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             );
         }
@@ -270,7 +276,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             );
         }
@@ -280,7 +286,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             );
         }
@@ -289,7 +295,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )
         }
@@ -298,7 +304,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )
         }
@@ -307,7 +313,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )
         }
@@ -316,7 +322,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )
         }
@@ -326,7 +332,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             );
         }
@@ -336,7 +342,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             );
         }
@@ -346,7 +352,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             );
         }
@@ -356,7 +362,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )
         }
@@ -379,7 +385,7 @@ fn parse_expression_impl(
                 pair,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )
         }
@@ -400,7 +406,7 @@ fn parse_expression_impl(
                 return parse_literal_expression(
                     inner_pair,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 );
             }
@@ -411,7 +417,7 @@ fn parse_expression_impl(
                     ExpressionKind::Reference(reference),
                     &inner_pair,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 ));
             }
@@ -421,7 +427,7 @@ fn parse_expression_impl(
                     inner_pair,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 );
             }
@@ -430,7 +436,7 @@ fn parse_expression_impl(
                     inner_pair,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 );
             }
@@ -439,7 +445,7 @@ fn parse_expression_impl(
                     inner_pair,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 );
             }
@@ -456,7 +462,7 @@ fn parse_expression_impl(
                     inner_pair,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 );
             }
@@ -479,7 +485,7 @@ fn parse_expression_impl(
                     inner_pair,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 );
             }
@@ -494,7 +500,7 @@ fn parse_expression_impl(
             "Invalid expression: unable to parse '{}' as any valid expression type",
             pair.as_str()
         ),
-        Some(Source::new(attribute, span, doc_name, source_text.clone())),
+        Some(Source::new(attribute, span, spec_name, source_text.clone())),
         None::<String>,
     ))
 }
@@ -513,7 +519,7 @@ fn parse_and_operand(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     match pair.as_rule() {
@@ -526,7 +532,7 @@ fn parse_and_operand(
                 first,
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )
         }
@@ -534,56 +540,56 @@ fn parse_and_operand(
             pair,
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         ),
         Rule::comparison_expression => parse_comparison_expression(
             pair,
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         ),
         Rule::date_calendar_expression => parse_date_calendar_expression(
             pair,
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         ),
         Rule::date_relative_expression => parse_date_relative_expression(
             pair,
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         ),
         Rule::conversion_expression => parse_conversion_expression(
             pair,
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         ),
         Rule::base_expression => parse_base_expression(
             pair,
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         ),
         Rule::term | Rule::power | Rule::factor | Rule::primary => parse_expression_impl(
             pair,
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         ),
         _ => parse_expression_impl(
             pair,
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         ),
     }
@@ -593,7 +599,7 @@ fn parse_and_expression(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let original_pair = pair.clone();
@@ -604,7 +610,7 @@ fn parse_and_expression(
             .expect("BUG: grammar guarantees AND expression has left operand"),
         depth_tracker,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     )?;
 
@@ -614,7 +620,7 @@ fn parse_and_expression(
                 right_pair.clone(),
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )?;
             let kind = ExpressionKind::LogicalAnd(Arc::new(left), Arc::new(right));
@@ -622,7 +628,7 @@ fn parse_and_expression(
                 kind,
                 &original_pair,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             );
         }
@@ -635,7 +641,7 @@ fn parse_base_expression(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let original_pair = pair.clone();
@@ -647,7 +653,7 @@ fn parse_base_expression(
             .expect("BUG: grammar guarantees base_expression has left term"),
         depth_tracker,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     )?;
 
@@ -668,7 +674,7 @@ fn parse_base_expression(
             right_term_pair,
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         )?;
 
@@ -677,7 +683,7 @@ fn parse_base_expression(
             kind,
             &original_pair,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         );
     }
@@ -689,7 +695,7 @@ fn parse_conversion_expression(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let original_pair = pair.clone();
@@ -703,7 +709,7 @@ fn parse_conversion_expression(
                     inner,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )?);
             }
@@ -726,7 +732,7 @@ fn parse_conversion_expression(
         kind,
         &original_pair,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     ))
 }
@@ -752,7 +758,7 @@ fn parse_term(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let mut pairs = pair.clone().into_inner();
@@ -762,7 +768,7 @@ fn parse_term(
             .expect("BUG: grammar guarantees term has left power"),
         depth_tracker,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     )?;
 
@@ -782,13 +788,13 @@ fn parse_term(
                 .expect("BUG: grammar guarantees right power after operator in term"),
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         )?;
 
         let kind = ExpressionKind::Arithmetic(Arc::new(left), operation, Arc::new(right));
         left =
-            create_expression_with_location(kind, &pair, attribute, doc_name, source_text.clone());
+            create_expression_with_location(kind, &pair, attribute, spec_name, source_text.clone());
     }
 
     Ok(left)
@@ -798,7 +804,7 @@ fn parse_power(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let mut pairs = pair.clone().into_inner();
@@ -808,7 +814,7 @@ fn parse_power(
             .expect("BUG: grammar guarantees power has factor"),
         depth_tracker,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     )?;
 
@@ -820,7 +826,7 @@ fn parse_power(
                     .expect("BUG: grammar guarantees right operand after ^ in power"),
                 depth_tracker,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             )?;
 
@@ -833,7 +839,7 @@ fn parse_power(
                 kind,
                 &pair,
                 attribute,
-                doc_name,
+                spec_name,
                 source_text.clone(),
             ));
         }
@@ -846,7 +852,7 @@ fn parse_factor(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let mut pairs = pair.clone().into_inner();
@@ -863,7 +869,7 @@ fn parse_factor(
                     first_pair,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )?;
                 return Ok(expr);
@@ -876,7 +882,7 @@ fn parse_factor(
             expr_pair,
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         )?
     } else {
@@ -888,7 +894,7 @@ fn parse_factor(
             ExpressionKind::Literal(Value::Number(rust_decimal::Decimal::ZERO)),
             &pair,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         );
         let kind = ExpressionKind::Arithmetic(
@@ -900,7 +906,7 @@ fn parse_factor(
             kind,
             &pair,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         ))
     } else {
@@ -912,7 +918,7 @@ fn parse_comparison_expression(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let mut pairs = pair.clone().into_inner();
@@ -922,7 +928,7 @@ fn parse_comparison_expression(
             .expect("BUG: grammar guarantees comparison has left operand"),
         depth_tracker,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     )?;
 
@@ -969,7 +975,7 @@ fn parse_comparison_expression(
                 .expect("BUG: grammar guarantees comparison has right operand"),
             depth_tracker,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         )?;
 
@@ -978,7 +984,7 @@ fn parse_comparison_expression(
             kind,
             &pair,
             attribute,
-            doc_name,
+            spec_name,
             source_text.clone(),
         ));
     }
@@ -990,7 +996,7 @@ fn parse_date_relative_expression(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let original_pair = pair.clone();
@@ -1006,7 +1012,7 @@ fn parse_date_relative_expression(
                         inner,
                         depth_tracker,
                         attribute,
-                        doc_name,
+                        spec_name,
                         source_text.clone(),
                     )?);
                 } else {
@@ -1014,7 +1020,7 @@ fn parse_date_relative_expression(
                         inner,
                         depth_tracker,
                         attribute,
-                        doc_name,
+                        spec_name,
                         source_text.clone(),
                     )?);
                 }
@@ -1045,7 +1051,7 @@ fn parse_date_relative_expression(
         ExpressionKind::DateRelative(relative_kind, Arc::new(date_expr), tolerance.map(Arc::new)),
         &original_pair,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     ))
 }
@@ -1054,7 +1060,7 @@ fn parse_date_calendar_expression(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let original_pair = pair.clone();
@@ -1070,7 +1076,7 @@ fn parse_date_calendar_expression(
                         inner,
                         depth_tracker,
                         attribute,
-                        doc_name,
+                        spec_name,
                         source_text.clone(),
                     )?);
                 }
@@ -1112,7 +1118,7 @@ fn parse_date_calendar_expression(
         ExpressionKind::DateCalendar(calendar_kind, unit, Arc::new(date_expr)),
         &original_pair,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     ))
 }
@@ -1121,7 +1127,7 @@ fn parse_not_expression(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     let original_pair = pair.clone();
@@ -1134,7 +1140,7 @@ fn parse_not_expression(
         operand_pair,
         depth_tracker,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     )?;
     let kind = ExpressionKind::LogicalNegation(Arc::new(operand), NegationType::Not);
@@ -1143,7 +1149,7 @@ fn parse_not_expression(
         kind,
         &original_pair,
         attribute,
-        doc_name,
+        spec_name,
         source_text.clone(),
     ))
 }
@@ -1152,7 +1158,7 @@ fn parse_logical_expression(
     pair: Pair<Rule>,
     depth_tracker: &mut DepthTracker,
     attribute: &str,
-    doc_name: &str,
+    spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     match pair.as_rule() {
@@ -1185,8 +1191,8 @@ fn parse_logical_expression(
                 Rule::round_expr => MathematicalComputation::Round,
                 unexpected => {
                     unreachable!(
-                        "BUG: unexpected rule '{:?}' in mathematical expression parser (attribute={}, doc={})",
-                        unexpected, attribute, doc_name
+                        "BUG: unexpected rule '{:?}' in mathematical expression parser (attribute={}, spec={})",
+                        unexpected, attribute, spec_name
                     )
                 }
             };
@@ -1198,7 +1204,7 @@ fn parse_logical_expression(
                             inner,
                             depth_tracker,
                             attribute,
-                            doc_name,
+                            spec_name,
                             source_text.clone(),
                         )?;
                         let kind =
@@ -1207,7 +1213,7 @@ fn parse_logical_expression(
                             kind,
                             &pair,
                             attribute,
-                            doc_name,
+                            spec_name,
                             source_text.clone(),
                         ));
                     }
@@ -1216,7 +1222,7 @@ fn parse_logical_expression(
                             inner,
                             depth_tracker,
                             attribute,
-                            doc_name,
+                            spec_name,
                             source_text.clone(),
                         )?;
                         let kind =
@@ -1225,7 +1231,7 @@ fn parse_logical_expression(
                             kind,
                             &pair,
                             attribute,
-                            doc_name,
+                            spec_name,
                             source_text.clone(),
                         ));
                     }
@@ -1243,7 +1249,7 @@ fn parse_logical_expression(
                     node,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )
             }
@@ -1252,7 +1258,7 @@ fn parse_logical_expression(
                     node,
                     depth_tracker,
                     attribute,
-                    doc_name,
+                    spec_name,
                     source_text.clone(),
                 )
             }
@@ -1263,14 +1269,14 @@ fn parse_logical_expression(
                             inner,
                             depth_tracker,
                             attribute,
-                            doc_name,
+                            spec_name,
                             source_text.clone(),
                         )?,
                         Rule::literal => parse_expression(
                             inner,
                             depth_tracker,
                             attribute,
-                            doc_name,
+                            spec_name,
                             source_text.clone(),
                         )?,
                         _ => continue,
@@ -1281,7 +1287,7 @@ fn parse_logical_expression(
                         kind,
                         &node,
                         attribute,
-                        doc_name,
+                        spec_name,
                         source_text.clone(),
                     ));
                 }
@@ -1326,7 +1332,7 @@ fn parse_logical_expression(
                                 inner,
                                 depth_tracker,
                                 attribute,
-                                doc_name,
+                                spec_name,
                                 source_text.clone(),
                             )?;
                             let kind = ExpressionKind::MathematicalComputation(
@@ -1337,7 +1343,7 @@ fn parse_logical_expression(
                                 kind,
                                 &node,
                                 attribute,
-                                doc_name,
+                                spec_name,
                                 source_text.clone(),
                             ));
                         }
@@ -1346,7 +1352,7 @@ fn parse_logical_expression(
                                 inner,
                                 depth_tracker,
                                 attribute,
-                                doc_name,
+                                spec_name,
                                 source_text.clone(),
                             )?;
                             let kind = ExpressionKind::MathematicalComputation(
@@ -1357,7 +1363,7 @@ fn parse_logical_expression(
                                 kind,
                                 &node,
                                 attribute,
-                                doc_name,
+                                spec_name,
                                 source_text.clone(),
                             ));
                         }
@@ -1378,7 +1384,7 @@ mod tests {
 
     #[test]
     fn test_simple_number() {
-        let input = r#"doc test
+        let input = r#"spec test
 rule num: 42"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
@@ -1390,7 +1396,7 @@ rule num: 42"#;
 
     #[test]
     fn test_fact_reference_parsing() {
-        let input = r#"doc test
+        let input = r#"spec test
 rule simple_ref: age"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
@@ -1399,7 +1405,7 @@ rule simple_ref: age"#;
             result.err()
         );
 
-        let input = r#"doc test
+        let input = r#"spec test
 rule nested_ref: employee.salary"#;
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
@@ -1415,7 +1421,7 @@ rule nested_ref: employee.salary"#;
             "2 + 3", "2+1", "5 * 6", "5* 6", "7 % 3", "3%2", "2 ^ 3", "2^3",
         ];
         for expr in cases {
-            let input = format!("doc test\nrule test: {}", expr);
+            let input = format!("spec test\nrule test: {}", expr);
             let result = parse(&input, "test.lemma", &crate::ResourceLimits::default());
             assert!(
                 result.is_ok(),
@@ -1428,7 +1434,7 @@ rule nested_ref: employee.salary"#;
 
     #[test]
     fn test_conversion_expression_parsing() {
-        let input = r#"doc test
+        let input = r#"spec test
 fact income: 80000
 fact total_tax: 20000
 rule effective_tax_rate: total_tax / income in percent"#;
@@ -1453,7 +1459,7 @@ rule effective_tax_rate: total_tax / income in percent"#;
         ];
 
         for (expr, description) in test_cases {
-            let input = format!("doc test\nrule test: {}", expr);
+            let input = format!("spec test\nrule test: {}", expr);
             let result = parse(&input, "test.lemma", &crate::ResourceLimits::default());
             assert!(
                 result.is_ok(),
@@ -1475,7 +1481,7 @@ rule effective_tax_rate: total_tax / income in percent"#;
         ];
 
         for (expr, description) in test_cases {
-            let input = format!("doc test\nrule test: {}", expr);
+            let input = format!("spec test\nrule test: {}", expr);
             let result = parse(&input, "test.lemma", &crate::ResourceLimits::default());
             assert!(
                 result.is_ok(),
@@ -1532,7 +1538,10 @@ rule effective_tax_rate: total_tax / income in percent"#;
         ];
 
         for (expr, description) in test_cases {
-            let input = format!("doc test\nfact x: true\nfact y: false\nrule test: {}", expr);
+            let input = format!(
+                "spec test\nfact x: true\nfact y: false\nrule test: {}",
+                expr
+            );
             let result = parse(&input, "test.lemma", &crate::ResourceLimits::default());
             assert!(
                 result.is_ok(),
@@ -1547,11 +1556,11 @@ rule effective_tax_rate: total_tax / income in percent"#;
     #[test]
     fn test_now_keyword_parses_as_expression_kind_now() {
         use crate::parsing::ast::ExpressionKind;
-        let input = "doc test\nrule current_time: now";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+        let input = "spec test\nrule current_time: now";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse now keyword");
-        let doc = &docs[0];
-        let rule = &doc.rules[0];
+        let spec = &specs[0];
+        let rule = &spec.rules[0];
         assert!(
             matches!(rule.expression.kind, ExpressionKind::Now),
             "Expected ExpressionKind::Now, got {:?}",
@@ -1561,7 +1570,7 @@ rule effective_tax_rate: total_tax / income in percent"#;
 
     #[test]
     fn test_now_is_reserved_keyword() {
-        let input = "doc test\nfact now: 42";
+        let input = "spec test\nfact now: 42";
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
             result.is_err(),
@@ -1571,7 +1580,7 @@ rule effective_tax_rate: total_tax / income in percent"#;
 
     #[test]
     fn test_now_in_comparison() {
-        let input = "doc test\nfact deadline: 2026-03-07\nrule is_overdue: deadline < now";
+        let input = "spec test\nfact deadline: 2026-03-07\nrule is_overdue: deadline < now";
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
@@ -1582,7 +1591,7 @@ rule effective_tax_rate: total_tax / income in percent"#;
 
     #[test]
     fn test_now_in_arithmetic() {
-        let input = "doc test\nrule offset: now + 1 days";
+        let input = "spec test\nrule offset: now + 1 days";
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
@@ -1593,20 +1602,20 @@ rule effective_tax_rate: total_tax / income in percent"#;
 
     #[test]
     fn test_now_display_round_trips() {
-        let input = "doc test\nrule current_time: now";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+        let input = "spec test\nrule current_time: now";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse now keyword");
-        let rule = &docs[0].rules[0];
+        let rule = &specs[0].rules[0];
         assert_eq!(format!("{}", rule.expression), "now");
     }
 
     #[test]
     fn test_fractional_seconds_parse() {
-        let input = "doc test\nfact ts: 2026-02-26T14:30:00.123456Z";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+        let input = "spec test\nfact ts: 2026-02-26T14:30:00.123456Z";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse fractional seconds");
-        let doc = &docs[0];
-        let fact = &doc.facts[0];
+        let spec = &specs[0];
+        let fact = &spec.facts[0];
         match &fact.value {
             crate::parsing::ast::FactValue::Literal(crate::parsing::ast::Value::Date(dtv)) => {
                 assert_eq!(dtv.microsecond, 123456, "Expected 123456 microseconds");
@@ -1620,11 +1629,11 @@ rule effective_tax_rate: total_tax / income in percent"#;
 
     #[test]
     fn test_fractional_seconds_three_digits() {
-        let input = "doc test\nfact ts: 2026-02-26T14:30:00.123Z";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+        let input = "spec test\nfact ts: 2026-02-26T14:30:00.123Z";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse fractional seconds (3 digits)");
-        let doc = &docs[0];
-        let fact = &doc.facts[0];
+        let spec = &specs[0];
+        let fact = &spec.facts[0];
         match &fact.value {
             crate::parsing::ast::FactValue::Literal(crate::parsing::ast::Value::Date(dtv)) => {
                 assert_eq!(
@@ -1639,10 +1648,10 @@ rule effective_tax_rate: total_tax / income in percent"#;
     #[test]
     fn test_date_sugar_in_past() {
         use crate::parsing::ast::{DateRelativeKind, ExpressionKind};
-        let input = "doc test\nfact deadline: 2026-01-01\nrule overdue: deadline in past";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+        let input = "spec test\nfact deadline: 2026-01-01\nrule overdue: deadline in past";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse 'in past'");
-        let rule = &docs[0].rules[0];
+        let rule = &specs[0].rules[0];
         match &rule.expression.kind {
             ExpressionKind::DateRelative(kind, _date, tolerance) => {
                 assert_eq!(*kind, DateRelativeKind::InPast);
@@ -1655,10 +1664,10 @@ rule effective_tax_rate: total_tax / income in percent"#;
     #[test]
     fn test_date_sugar_in_past_with_tolerance() {
         use crate::parsing::ast::{DateRelativeKind, ExpressionKind};
-        let input = "doc test\nfact deadline: 2026-01-01\nrule recent: deadline in past 7 days";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+        let input = "spec test\nfact deadline: 2026-01-01\nrule recent: deadline in past 7 days";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse 'in past 7 days'");
-        let rule = &docs[0].rules[0];
+        let rule = &specs[0].rules[0];
         match &rule.expression.kind {
             ExpressionKind::DateRelative(kind, _date, tolerance) => {
                 assert_eq!(*kind, DateRelativeKind::InPast);
@@ -1671,10 +1680,10 @@ rule effective_tax_rate: total_tax / income in percent"#;
     #[test]
     fn test_date_sugar_in_future() {
         use crate::parsing::ast::{DateRelativeKind, ExpressionKind};
-        let input = "doc test\nfact deadline: 2026-01-01\nrule upcoming: deadline in future";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+        let input = "spec test\nfact deadline: 2026-01-01\nrule upcoming: deadline in future";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse 'in future'");
-        let rule = &docs[0].rules[0];
+        let rule = &specs[0].rules[0];
         match &rule.expression.kind {
             ExpressionKind::DateRelative(kind, _date, tolerance) => {
                 assert_eq!(*kind, DateRelativeKind::InFuture);
@@ -1687,10 +1696,10 @@ rule effective_tax_rate: total_tax / income in percent"#;
     #[test]
     fn test_date_sugar_in_future_with_tolerance() {
         use crate::parsing::ast::{DateRelativeKind, ExpressionKind};
-        let input = "doc test\nfact deadline: 2026-01-01\nrule soon: deadline in future 30 days";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+        let input = "spec test\nfact deadline: 2026-01-01\nrule soon: deadline in future 30 days";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse 'in future 30 days'");
-        let rule = &docs[0].rules[0];
+        let rule = &specs[0].rules[0];
         match &rule.expression.kind {
             ExpressionKind::DateRelative(kind, _date, tolerance) => {
                 assert_eq!(*kind, DateRelativeKind::InFuture);
@@ -1704,10 +1713,10 @@ rule effective_tax_rate: total_tax / income in percent"#;
     fn test_date_sugar_in_calendar_year() {
         use crate::parsing::ast::{CalendarUnit, DateCalendarKind, ExpressionKind};
         let input =
-            "doc test\nfact deadline: 2026-01-01\nrule this_year: deadline in calendar year";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            "spec test\nfact deadline: 2026-01-01\nrule this_year: deadline in calendar year";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse 'in calendar year'");
-        let rule = &docs[0].rules[0];
+        let rule = &specs[0].rules[0];
         match &rule.expression.kind {
             ExpressionKind::DateCalendar(kind, unit, _date) => {
                 assert_eq!(*kind, DateCalendarKind::Current);
@@ -1721,10 +1730,10 @@ rule effective_tax_rate: total_tax / income in percent"#;
     fn test_date_sugar_in_past_calendar_month() {
         use crate::parsing::ast::{CalendarUnit, DateCalendarKind, ExpressionKind};
         let input =
-            "doc test\nfact deadline: 2026-01-01\nrule last_month: deadline in past calendar month";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            "spec test\nfact deadline: 2026-01-01\nrule last_month: deadline in past calendar month";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse 'in past calendar month'");
-        let rule = &docs[0].rules[0];
+        let rule = &specs[0].rules[0];
         match &rule.expression.kind {
             ExpressionKind::DateCalendar(kind, unit, _date) => {
                 assert_eq!(*kind, DateCalendarKind::Past);
@@ -1738,10 +1747,10 @@ rule effective_tax_rate: total_tax / income in percent"#;
     fn test_date_sugar_in_future_calendar_week() {
         use crate::parsing::ast::{CalendarUnit, DateCalendarKind, ExpressionKind};
         let input =
-            "doc test\nfact deadline: 2026-01-01\nrule next_week: deadline in future calendar week";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            "spec test\nfact deadline: 2026-01-01\nrule next_week: deadline in future calendar week";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse 'in future calendar week'");
-        let rule = &docs[0].rules[0];
+        let rule = &specs[0].rules[0];
         match &rule.expression.kind {
             ExpressionKind::DateCalendar(kind, unit, _date) => {
                 assert_eq!(*kind, DateCalendarKind::Future);
@@ -1755,10 +1764,10 @@ rule effective_tax_rate: total_tax / income in percent"#;
     fn test_date_sugar_not_in_calendar_year() {
         use crate::parsing::ast::{CalendarUnit, DateCalendarKind, ExpressionKind};
         let input =
-            "doc test\nfact deadline: 2026-01-01\nrule other_year: deadline not in calendar year";
-        let docs = parse(input, "test.lemma", &crate::ResourceLimits::default())
+            "spec test\nfact deadline: 2026-01-01\nrule other_year: deadline not in calendar year";
+        let specs = parse(input, "test.lemma", &crate::ResourceLimits::default())
             .expect("Failed to parse 'not in calendar year'");
-        let rule = &docs[0].rules[0];
+        let rule = &specs[0].rules[0];
         match &rule.expression.kind {
             ExpressionKind::DateCalendar(kind, unit, _date) => {
                 assert_eq!(*kind, DateCalendarKind::NotIn);
@@ -1770,7 +1779,7 @@ rule effective_tax_rate: total_tax / income in percent"#;
 
     #[test]
     fn test_unit_conversion_still_works() {
-        let input = "doc test\ntype money: scale\n -> unit eur 1.00\n -> unit usd 1.10\nfact price: 100 eur\nrule converted: price in usd";
+        let input = "spec test\ntype money: scale\n -> unit eur 1.00\n -> unit usd 1.10\nfact price: 100 eur\nrule converted: price in usd";
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
@@ -1782,15 +1791,15 @@ rule effective_tax_rate: total_tax / income in percent"#;
     #[test]
     fn test_date_sugar_in_past_and_conjunction() {
         use crate::parsing::ast::ExpressionKind;
-        let input = "doc test\nfact a: 2026-01-01\nfact b: true\nrule check: a in past and b";
+        let input = "spec test\nfact a: 2026-01-01\nfact b: true\nrule check: a in past and b";
         let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
         assert!(
             result.is_ok(),
             "Failed to parse 'X in past and Y': {:?}",
             result.err()
         );
-        let docs = result.unwrap();
-        let rule = &docs[0].rules[0];
+        let specs = result.unwrap();
+        let rule = &specs[0].rules[0];
         assert!(
             matches!(rule.expression.kind, ExpressionKind::LogicalAnd(..)),
             "Expected LogicalAnd at top level, got {:?}",

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 #[test]
 fn test_rule_reference_expansion_simple_constant() {
     let code = r#"
-        doc pricing
+        spec pricing
         fact base_price: [number]
 
         rule tax_rate: 0.21
@@ -40,7 +40,7 @@ fn test_rule_reference_expansion_simple_constant() {
 #[test]
 fn test_enhanced_error_message_lists_values() {
     let code = r#"
-        doc test
+        spec test
         fact x: [number]
 
         rule result: 10

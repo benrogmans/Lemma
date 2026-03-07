@@ -27,73 +27,73 @@ fn format_and_extract_rule_expr(source: &str) -> String {
 
 #[test]
 fn precedence_add_inside_multiply_preserves_parens() {
-    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a + b) * c";
+    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a + b) * c";
     assert_eq!(format_and_extract_rule_expr(src), "(a + b) * c");
 }
 
 #[test]
 fn precedence_multiply_inside_add_omits_parens() {
-    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a + b * c";
+    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a + b * c";
     assert_eq!(format_and_extract_rule_expr(src), "a + b * c");
 }
 
 #[test]
 fn precedence_add_right_of_multiply_preserves_parens() {
-    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a * (b + c)";
+    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a * (b + c)";
     assert_eq!(format_and_extract_rule_expr(src), "a * (b + c)");
 }
 
 #[test]
 fn precedence_same_level_add_no_extra_parens() {
-    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a + b) + c";
+    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a + b) + c";
     assert_eq!(format_and_extract_rule_expr(src), "a + b + c");
 }
 
 #[test]
 fn precedence_same_level_multiply_no_extra_parens() {
-    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a * b) * c";
+    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a * b) * c";
     assert_eq!(format_and_extract_rule_expr(src), "a * b * c");
 }
 
 #[test]
 fn precedence_not_binds_tighter_than_and() {
-    let src = "doc test\nfact a: true\nfact b: true\nrule x: not a and b";
+    let src = "spec test\nfact a: true\nfact b: true\nrule x: not a and b";
     assert_eq!(format_and_extract_rule_expr(src), "not a and b");
 }
 
 #[test]
 fn precedence_not_over_and_preserves_parens() {
-    let src = "doc test\nfact a: true\nfact b: true\nrule x: not (a and b)";
+    let src = "spec test\nfact a: true\nfact b: true\nrule x: not (a and b)";
     assert_eq!(format_and_extract_rule_expr(src), "not (a and b)");
 }
 
 #[test]
 fn precedence_subtract_inside_multiply_preserves_parens() {
-    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a - b) * c";
+    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a - b) * c";
     assert_eq!(format_and_extract_rule_expr(src), "(a - b) * c");
 }
 
 #[test]
 fn precedence_multiply_inside_subtract_omits_parens() {
-    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a - b * c";
+    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a - b * c";
     assert_eq!(format_and_extract_rule_expr(src), "a - b * c");
 }
 
 #[test]
 fn precedence_nested_arithmetic_mixed() {
-    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: (a + b) * (c - d)";
+    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: (a + b) * (c - d)";
     assert_eq!(format_and_extract_rule_expr(src), "(a + b) * (c - d)");
 }
 
 #[test]
 fn precedence_comparison_lower_than_arithmetic() {
-    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a + b > c";
+    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a + b > c";
     assert_eq!(format_and_extract_rule_expr(src), "a + b > c");
 }
 
 #[test]
 fn precedence_deeply_nested() {
-    let src = "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: a + b * c + d";
+    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: a + b * c + d";
     assert_eq!(format_and_extract_rule_expr(src), "a + b * c + d");
 }
 
@@ -124,17 +124,17 @@ const EXAMPLE_FILES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Verify that formatting preserves the document structure:
-/// parse(source) and parse(format(source)) must have the same documents,
+/// Verify that formatting preserves the spec structure:
+/// parse(source) and parse(format(source)) must have the same specs,
 /// with the same names, fact references, rule names, and unless-clause counts.
 fn round_trip_example(filename: &str, source: &str) {
     let formatted = format_source(source, filename)
         .unwrap_or_else(|e| panic!("[{}] format_source failed: {:?}", filename, e));
 
     let limits = ResourceLimits::default();
-    let original_docs = parse(source, filename, &limits)
+    let original_specs = parse(source, filename, &limits)
         .unwrap_or_else(|e| panic!("[{}] initial parse failed: {:?}", filename, e));
-    let reformatted_docs = parse(&formatted, filename, &limits).unwrap_or_else(|e| {
+    let reformatted_specs = parse(&formatted, filename, &limits).unwrap_or_else(|e| {
         panic!(
             "[{}] re-parse of formatted output failed: {:?}\nFormatted output:\n{}",
             filename, e, formatted
@@ -142,29 +142,25 @@ fn round_trip_example(filename: &str, source: &str) {
     });
 
     assert_eq!(
-        original_docs.len(),
-        reformatted_docs.len(),
-        "[{}] document count mismatch after round-trip",
+        original_specs.len(),
+        reformatted_specs.len(),
+        "[{}] spec count mismatch after round-trip",
         filename
     );
 
-    for (orig, refmt) in original_docs.iter().zip(reformatted_docs.iter()) {
-        assert_eq!(
-            orig.name, refmt.name,
-            "[{}] document name mismatch",
-            filename
-        );
+    for (orig, refmt) in original_specs.iter().zip(reformatted_specs.iter()) {
+        assert_eq!(orig.name, refmt.name, "[{}] spec name mismatch", filename);
 
         assert_eq!(
             orig.commentary, refmt.commentary,
-            "[{}] doc '{}' commentary mismatch",
+            "[{}] spec '{}' commentary mismatch",
             filename, orig.name
         );
 
         assert_eq!(
             orig.types.len(),
             refmt.types.len(),
-            "[{}] doc '{}' type count mismatch",
+            "[{}] spec '{}' type count mismatch",
             filename,
             orig.name
         );
@@ -172,7 +168,7 @@ fn round_trip_example(filename: &str, source: &str) {
         assert_eq!(
             orig.facts.len(),
             refmt.facts.len(),
-            "[{}] doc '{}' fact count mismatch",
+            "[{}] spec '{}' fact count mismatch",
             filename,
             orig.name
         );
@@ -181,14 +177,14 @@ fn round_trip_example(filename: &str, source: &str) {
         let refmt_fact_refs: Vec<_> = refmt.facts.iter().map(|f| &f.reference).collect();
         assert_eq!(
             orig_fact_refs, refmt_fact_refs,
-            "[{}] doc '{}' fact references mismatch",
+            "[{}] spec '{}' fact references mismatch",
             filename, orig.name
         );
 
         assert_eq!(
             orig.rules.len(),
             refmt.rules.len(),
-            "[{}] doc '{}' rule count mismatch",
+            "[{}] spec '{}' rule count mismatch",
             filename,
             orig.name
         );
@@ -196,18 +192,18 @@ fn round_trip_example(filename: &str, source: &str) {
         for (orig_rule, refmt_rule) in orig.rules.iter().zip(refmt.rules.iter()) {
             assert_eq!(
                 orig_rule.name, refmt_rule.name,
-                "[{}] doc '{}' rule name mismatch",
+                "[{}] spec '{}' rule name mismatch",
                 filename, orig.name
             );
             assert_eq!(
                 orig_rule.expression, refmt_rule.expression,
-                "[{}] doc '{}' rule '{}' expression mismatch",
+                "[{}] spec '{}' rule '{}' expression mismatch",
                 filename, orig.name, orig_rule.name
             );
             assert_eq!(
                 orig_rule.unless_clauses.len(),
                 refmt_rule.unless_clauses.len(),
-                "[{}] doc '{}' rule '{}' unless-clause count mismatch",
+                "[{}] spec '{}' rule '{}' unless-clause count mismatch",
                 filename,
                 orig.name,
                 orig_rule.name
@@ -220,12 +216,12 @@ fn round_trip_example(filename: &str, source: &str) {
             {
                 assert_eq!(
                     orig_uc.condition, refmt_uc.condition,
-                    "[{}] doc '{}' rule '{}' unless[{}] condition mismatch",
+                    "[{}] spec '{}' rule '{}' unless[{}] condition mismatch",
                     filename, orig.name, orig_rule.name, i
                 );
                 assert_eq!(
                     orig_uc.result, refmt_uc.result,
-                    "[{}] doc '{}' rule '{}' unless[{}] result mismatch",
+                    "[{}] spec '{}' rule '{}' unless[{}] result mismatch",
                     filename, orig.name, orig_rule.name, i
                 );
             }
@@ -317,7 +313,7 @@ fn idempotency_precedence_expressions() {
     ];
     for expr in expressions {
         let src = format!(
-            "doc test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: {}",
+            "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: {}",
             expr
         );
         let output1 = format_source(&src, "test.lemma")
