@@ -15,7 +15,7 @@ use crate::planning::ExecutionPlan;
 use indexmap::IndexMap;
 pub use operations::{ComputationKind, OperationKind, OperationRecord, OperationResult};
 pub use response::{Facts, Response, RuleResult};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Evaluation context for storing intermediate results
 pub struct EvaluationContext {
@@ -102,8 +102,7 @@ impl Evaluator {
             results: IndexMap::new(),
         };
 
-        let mut seen_facts = HashSet::new();
-        let mut fact_list = Vec::new();
+        let mut used_facts: HashMap<FactPath, LiteralValue> = HashMap::new();
 
         // Execute each rule in topological order (already sorted by ExecutionPlan)
         for exec_rule in &plan.rules {
@@ -119,23 +118,12 @@ impl Evaluator {
 
             let rule_operations = context.operations.clone();
 
-            // Collect facts from operations (semantics types only; no parsing)
             for op in &rule_operations {
                 if let OperationKind::FactUsed { fact_ref, value } = &op.kind {
-                    if seen_facts.insert(fact_ref.clone()) {
-                        fact_list.push(Fact {
-                            path: fact_ref.clone(),
-                            value: FactValue::Literal(value.clone()),
-                            source: None,
-                        });
-                    }
+                    used_facts.entry(fact_ref.clone()).or_insert(value.clone());
                 }
             }
 
-            // Only include local rules (no cross-document segments) in the
-            // response. Dependency rules from referenced documents are still
-            // evaluated above and stored in context.rule_results so proof
-            // traces can reference them, but they are not top-level results.
             if !exec_rule.path.segments.is_empty() {
                 continue;
             }
@@ -161,6 +149,19 @@ impl Evaluator {
                 rule_type: exec_rule.rule_type.clone(),
             });
         }
+
+        // Build fact list in definition order (plan.facts is an IndexMap)
+        let fact_list: Vec<Fact> = plan
+            .facts
+            .keys()
+            .filter_map(|path| {
+                used_facts.remove(path).map(|value| Fact {
+                    path: path.clone(),
+                    value: FactValue::Literal(value),
+                    source: None,
+                })
+            })
+            .collect();
 
         if !fact_list.is_empty() {
             response.facts = vec![Facts {

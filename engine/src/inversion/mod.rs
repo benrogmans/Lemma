@@ -20,7 +20,7 @@ pub use world::World;
 
 use crate::planning::semantics::{Expression, FactPath, LiteralValue, ValueKind};
 use crate::planning::ExecutionPlan;
-use crate::{Error, LemmaResult, OperationResult};
+use crate::{Error, OperationResult};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::collections::{HashMap, HashSet};
 
@@ -137,9 +137,9 @@ pub fn invert(
     target: Target,
     plan: &ExecutionPlan,
     provided_facts: &HashSet<FactPath>,
-) -> LemmaResult<InversionResponse> {
+) -> Result<InversionResponse, Error> {
     let executable_rule = plan.get_rule(rule_name).ok_or_else(|| {
-        Error::planning(
+        Error::validation(
             format!("Rule not found: {}.{}", plan.doc_name, rule_name),
             None,
             None::<String>,
@@ -417,6 +417,7 @@ fn compute_is_determined(all_domains: &[HashMap<FactPath, Domain>]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parsing::ast::DateTimeValue;
     use crate::Engine;
     use rust_decimal::Decimal;
     use std::collections::HashMap;
@@ -426,17 +427,12 @@ mod tests {
         engine: &mut Engine,
         code: &str,
         source: &str,
-    ) -> crate::LemmaResult<()> {
+    ) -> Result<(), Vec<crate::Error>> {
         let files: std::collections::HashMap<String, String> =
             std::iter::once((source.to_string(), code.to_string())).collect();
         tokio::runtime::Runtime::new()
             .expect("tokio runtime")
             .block_on(engine.add_lemma_files(files))
-            .map_err(|errs| match errs.len() {
-                0 => unreachable!("add_lemma_files returned Err with empty error list"),
-                1 => errs.into_iter().next().unwrap(),
-                _ => crate::Error::MultipleErrors(errs),
-            })
     }
 
     #[test]
@@ -535,10 +531,12 @@ rule another: base
 
         let mut engine = Engine::new();
         add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+        let now = DateTimeValue::now();
 
         let inv = engine
             .invert(
                 "example",
+                &now,
                 "another",
                 Target::value(LiteralValue::number(3.into())),
                 HashMap::new(),
@@ -576,10 +574,12 @@ rule another: base
 
         let mut engine = Engine::new();
         add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+        let now = DateTimeValue::now();
 
         let inv = engine
             .invert(
                 "example",
+                &now,
                 "another",
                 Target::value(LiteralValue::number(7.into())),
                 HashMap::new(),
@@ -607,10 +607,12 @@ rule another: base
 
         let mut engine = Engine::new();
         add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+        let now = DateTimeValue::now();
 
         let inv = engine
             .invert(
                 "example",
+                &now,
                 "another",
                 Target::veto(Some("way too much".to_string())),
                 HashMap::new(),
@@ -676,8 +678,15 @@ rule another: base
         let mut engine = Engine::new();
         add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
+        let now = DateTimeValue::now();
         let inv = engine
-            .invert("example", "another", Target::any_veto(), HashMap::new())
+            .invert(
+                "example",
+                &now,
+                "another",
+                Target::any_veto(),
+                HashMap::new(),
+            )
             .expect("inversion should succeed");
 
         assert!(!inv.is_empty(), "expected solutions for any-veto query");

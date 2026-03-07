@@ -91,8 +91,7 @@ fn collect_unknown_facts(
         }
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right)
-        | ExpressionKind::LogicalOr(left, right) => {
+        | ExpressionKind::LogicalAnd(left, right) => {
             collect_unknown_facts(left, provided_facts, result);
             collect_unknown_facts(right, provided_facts, result);
         }
@@ -349,8 +348,7 @@ fn contains_fact(expression: &Expression, fact_path: &FactPath) -> bool {
         ExpressionKind::FactPath(fp) => fp == fact_path,
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right)
-        | ExpressionKind::LogicalOr(left, right) => {
+        | ExpressionKind::LogicalAnd(left, right) => {
             contains_fact(left, fact_path) || contains_fact(right, fact_path)
         }
         ExpressionKind::LogicalNegation(inner, _)
@@ -372,8 +370,7 @@ fn count_fact_occurrences(expression: &Expression, fact_path: &FactPath) -> usiz
         }
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right)
-        | ExpressionKind::LogicalOr(left, right) => {
+        | ExpressionKind::LogicalAnd(left, right) => {
             count_fact_occurrences(left, fact_path) + count_fact_occurrences(right, fact_path)
         }
         ExpressionKind::LogicalNegation(inner, _)
@@ -391,8 +388,7 @@ fn contains_rule_reference(expression: &Expression) -> bool {
         ExpressionKind::RulePath(_) => true,
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right)
-        | ExpressionKind::LogicalOr(left, right) => {
+        | ExpressionKind::LogicalAnd(left, right) => {
             contains_rule_reference(left) || contains_rule_reference(right)
         }
         ExpressionKind::LogicalNegation(inner, _)
@@ -429,9 +425,7 @@ fn has_supported_operations(expression: &Expression) -> bool {
 
         ExpressionKind::UnitConversion(inner, _) => has_supported_operations(inner),
 
-        ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right)
-        | ExpressionKind::LogicalOr(left, right) => {
+        ExpressionKind::Comparison(left, _, right) | ExpressionKind::LogicalAnd(left, right) => {
             has_supported_operations(left) && has_supported_operations(right)
         }
 

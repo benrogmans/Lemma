@@ -17,7 +17,7 @@ pub enum OperationResult {
 }
 
 impl OperationResult {
-    pub fn is_veto(&self) -> bool {
+    pub fn vetoed(&self) -> bool {
         matches!(self, OperationResult::Veto(_))
     }
 
