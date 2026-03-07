@@ -1,6 +1,7 @@
 use lemma::{Engine, FactPath, LiteralValue, Target, TargetOp};
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 /// Test TargetOp::Gt (Greater Than)
@@ -18,9 +19,11 @@ fn target_operator_greater_than() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Question: "What base prices result in final price > $100?"
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "pricing",
+            &now,
             "final_price",
             Target::with_op(
                 TargetOp::Gt,
@@ -59,9 +62,11 @@ fn target_operator_less_than_or_equal() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Question: "What monthly costs keep annual cost <= $50,000?"
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "budget",
+            &now,
             "annual_cost",
             Target::with_op(
                 TargetOp::Lte,
@@ -96,9 +101,11 @@ fn target_operator_greater_than_or_equal() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Question: "What base salaries give total comp >= $120,000?"
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "compensation",
+            &now,
             "total_comp",
             Target::with_op(
                 TargetOp::Gte,
@@ -135,9 +142,11 @@ fn boolean_not_operator() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Question: "What conditions trigger veto?"
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "eligibility",
+            &now,
             "can_access",
             Target::any_veto(),
             HashMap::new(),
@@ -179,9 +188,11 @@ fn cross_document_simple() {
     add_lemma_code_blocking(&mut engine, derived_doc, "derived").unwrap();
 
     // Question: "What order_total gives final_total of $85?"
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "derived",
+            &now,
             "final_total",
             Target::value(LiteralValue::number(85.into())),
             HashMap::new(),
@@ -226,9 +237,11 @@ fn cross_document_rule_references() {
     given.insert("settings.min_threshold".to_string(), "1000".to_string());
 
     // Question: "What customer_lifetime_value makes is_vip true?" (>= 2000)
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "order",
+            &now,
             "is_vip",
             Target::value(LiteralValue::from_bool(true)),
             given,
@@ -283,9 +296,11 @@ fn cross_document_multi_level() {
     );
 
     // Question: "What amount gives $15 fee?"
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "transaction",
+            &now,
             "fee",
             Target::value(LiteralValue::number(15.into())),
             given,
@@ -334,9 +349,11 @@ fn cross_document_piecewise() {
     given.insert("subtotal".to_string(), "100".to_string());
 
     // Question: "What tier gives $80 total?" (i.e., 20% discount)
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "pricing",
+            &now,
             "total",
             Target::value(LiteralValue::number(80.into())),
             given,
@@ -375,10 +392,16 @@ fn complex_boolean_not_and_combination() {
 
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    let now = DateTimeValue::now();
 
-    // Question: "What conditions cause veto?"
     let solutions = engine
-        .invert("shipping", "can_ship", Target::any_veto(), HashMap::new())
+        .invert(
+            "shipping",
+            &now,
+            "can_ship",
+            Target::any_veto(),
+            HashMap::new(),
+        )
         .expect("should invert successfully");
 
     // Should have solutions
@@ -409,8 +432,10 @@ fn target_operator_not_equal() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Question: "What status values are NOT complete?"
+    let now = DateTimeValue::now();
     let result = engine.invert(
         "validation",
+        &now,
         "is_complete",
         Target::with_op(
             TargetOp::Neq,

@@ -107,7 +107,12 @@ rule usage: nonexistent + 1
         result.is_err(),
         "Reference to non-existent name should fail"
     );
-    let err_msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    let err_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         err_msg.contains("nonexistent"),
         "Error should mention the reference name: {}",
@@ -133,7 +138,12 @@ rule usage: ambiguous + 1
         result.is_err(),
         "Reference that is both fact and rule should fail"
     );
-    let err_msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    let err_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         err_msg.contains("'ambiguous' is both a fact and a rule"),
         "Error should state the name is both a fact and a rule: {}",

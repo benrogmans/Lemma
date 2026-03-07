@@ -381,3 +381,19 @@ fn test_expression_get_source_text_source_not_found() {
 
     assert_eq!(expr.get_source_text(&sources), None);
 }
+
+#[test]
+fn test_datetime_value_parse_year_and_year_month_equal() {
+    let from_year = DateTimeValue::parse("2026").expect("2026 should parse");
+    let from_year_month = DateTimeValue::parse("2026-01").expect("2026-01 should parse");
+    assert_eq!(
+        from_year, from_year_month,
+        "2026 and 2026-01 should normalize to same value"
+    );
+    assert_eq!(from_year.year, 2026);
+    assert_eq!(from_year.month, 1);
+    assert_eq!(from_year.day, 1);
+    assert_eq!(from_year.hour, 0);
+    assert_eq!(from_year.minute, 0);
+    assert_eq!(from_year.second, 0);
+}

@@ -1,6 +1,7 @@
 use lemma::evaluation::OperationResult;
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 use lemma::ValueKind;
 use rust_decimal::Decimal;
@@ -23,9 +24,12 @@ rule check: accept
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
         .evaluate(
             "pricing",
+            None,
+            &now,
             vec![],
             HashMap::from([("price".to_string(), "100 eur".to_string())]),
         )
@@ -60,9 +64,12 @@ rule check: accept
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
         .evaluate(
             "pricing",
+            None,
+            &now,
             vec![],
             HashMap::from([("price".to_string(), "84 eur".to_string())]),
         )
@@ -97,9 +104,12 @@ rule check: accept
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     let err = engine
         .evaluate(
             "pricing",
+            None,
+            &now,
             vec![],
             HashMap::from([("price".to_string(), "100".to_string())]),
         )
@@ -128,9 +138,12 @@ rule check: accept
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     let err = engine
         .evaluate(
             "pricing",
+            None,
+            &now,
             vec![],
             HashMap::from([("price".to_string(), "100 btc".to_string())]),
         )
@@ -154,7 +167,10 @@ rule price_usd: 100 eur in usd
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("pricing", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("pricing", None, &now, vec![], HashMap::new())
+        .unwrap();
     let rule_result = response
         .results
         .values()
@@ -192,8 +208,12 @@ rule price_gbp: 100 eur in gbp
 "#;
 
     let mut engine = Engine::new();
-    let err = add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap_err();
-    let msg = err.to_string();
+    let errs = add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap_err();
+    let msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
 
     assert!(msg.contains("Unknown unit 'gbp'"), "actual error: {msg}");
     assert!(msg.contains("Valid units:"), "actual error: {msg}");
@@ -219,7 +239,10 @@ rule base_shipping: 5.99
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("shipping", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("shipping", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let rule_result = response
         .results
@@ -257,7 +280,10 @@ rule total: base_fee + surcharge
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("shipping", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("shipping", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let rule_result = response
         .results

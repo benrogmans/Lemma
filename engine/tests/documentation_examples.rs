@@ -5,6 +5,7 @@
 use lemma::{Engine, SemanticDurationUnit};
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -15,7 +16,10 @@ fn get_rule_value(
     rule_name: &str,
     facts: HashMap<String, String>,
 ) -> lemma::LiteralValue {
-    let response = engine.evaluate(doc_name, vec![], facts).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate(doc_name, None, &now, vec![], facts)
+        .unwrap();
     response
         .results
         .get(rule_name)
@@ -41,8 +45,16 @@ fn load_documentation_examples() -> Engine {
     for path in examples {
         let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("Failed to read {}: {}", path, e));
-        add_lemma_code_blocking(&mut engine, &content, path)
-            .unwrap_or_else(|e| panic!("Failed to parse {}: {}", path, e));
+        add_lemma_code_blocking(&mut engine, &content, path).unwrap_or_else(|errs| {
+            panic!(
+                "Failed to parse {}: {}",
+                path,
+                errs.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        });
     }
 
     engine
@@ -217,12 +229,13 @@ fn test_all_documentation_examples_parse() {
         "weather_clothing",    // from 05_weather_clothing.lemma
     ];
 
+    let doc_names: Vec<&str> = docs.iter().map(|d| d.name.as_str()).collect();
     for expected in key_docs {
         assert!(
-            docs.contains(&expected.to_string()),
+            doc_names.contains(&expected),
             "Expected document '{}' not found. Available: {:?}",
             expected,
-            docs
+            doc_names
         );
     }
 }

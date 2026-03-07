@@ -1,6 +1,7 @@
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 #[test]
@@ -22,8 +23,9 @@ rule equal_false: a == c
     )
     .unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_equal_numbers", vec![], HashMap::new())
+        .evaluate("test_equal_numbers", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let equal_true = response.results.get("equal_true").unwrap();
@@ -51,8 +53,9 @@ rule different_greeting: greeting == other
     )
     .unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_equal_text", vec![], HashMap::new())
+        .evaluate("test_equal_text", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let same = response.results.get("same_greeting").unwrap();
@@ -81,8 +84,9 @@ rule different_price: price_a == price_c
     )
     .unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_equal_money", vec![], HashMap::new())
+        .evaluate("test_equal_money", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let same = response.results.get("same_price").unwrap();
@@ -111,8 +115,9 @@ rule mixed: flag_a == flag_c
     )
     .unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_equal_booleans", vec![], HashMap::new())
+        .evaluate("test_equal_booleans", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let both_true = response.results.get("both_true").unwrap();
@@ -141,8 +146,9 @@ rule message: "inactive"
     )
     .unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_equal_conditions", vec![], HashMap::new())
+        .evaluate("test_equal_conditions", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let message = response.results.get("message").unwrap();

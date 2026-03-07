@@ -4,6 +4,7 @@
 
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -91,13 +92,15 @@ fn test_coffee_order_parses() {
 
     // Verify documents are loaded
     let docs = engine.list_documents();
-    assert!(docs.contains(&"examples".to_string()));
-    assert!(docs.contains(&"coffee_order".to_string()));
+    let doc_names: Vec<&str> = docs.iter().map(|d| d.name.as_str()).collect();
+    assert!(doc_names.contains(&"examples"));
+    assert!(doc_names.contains(&"coffee_order"));
 }
 
 #[test]
 fn test_coffee_order_espresso_small_no_loyalty() {
     let engine = load_coffee_order();
+    let now = DateTimeValue::now();
 
     let fact_values = HashMap::from([
         ("product".to_string(), "espresso".to_string()),
@@ -107,7 +110,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
     ]);
 
     let response = engine
-        .evaluate("coffee_order", vec![], fact_values)
+        .evaluate("coffee_order", None, &now, vec![], fact_values)
         .expect("Evaluation failed");
 
     // Check base_price: espresso = 2.50 usd
@@ -299,6 +302,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
 #[test]
 fn test_coffee_order_latte_large_with_loyalty() {
     let engine = load_coffee_order();
+    let now = DateTimeValue::now();
 
     let fact_values = HashMap::from([
         ("product".to_string(), "latte".to_string()),
@@ -308,7 +312,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
     ]);
 
     let response = engine
-        .evaluate("coffee_order", vec![], fact_values)
+        .evaluate("coffee_order", None, &now, vec![], fact_values)
         .expect("Evaluation failed");
 
     // Check base_price: latte = 3.50 usd
@@ -467,6 +471,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
 #[test]
 fn test_coffee_order_ordered_priority() {
     let engine = load_coffee_order();
+    let now = DateTimeValue::now();
 
     // Test priority mapping
     let priorities = ["low", "medium", "high"];
@@ -476,7 +481,7 @@ fn test_coffee_order_ordered_priority() {
         let fact_values = HashMap::from([("priority".to_string(), priority.to_string())]);
 
         let response = engine
-            .evaluate("coffee_order", vec![], fact_values)
+            .evaluate("coffee_order", None, &now, vec![], fact_values)
             .expect("Evaluation failed");
 
         let ordered_priority = response
@@ -503,6 +508,7 @@ fn test_coffee_order_ordered_priority() {
 #[test]
 fn test_coffee_order_invalid_size_veto() {
     let engine = load_coffee_order();
+    let now = DateTimeValue::now();
 
     // Size "extra large" is defined in the inline type constraint, but size_multiplier
     // only handles small/medium/large, so it should veto
@@ -513,7 +519,7 @@ fn test_coffee_order_invalid_size_veto() {
     ]);
 
     let response = engine
-        .evaluate("coffee_order", vec![], fact_values)
+        .evaluate("coffee_order", None, &now, vec![], fact_values)
         .expect("Evaluation should complete (even with veto)");
 
     let size_multiplier = response
@@ -524,7 +530,7 @@ fn test_coffee_order_invalid_size_veto() {
 
     // size_multiplier should veto because "extra large" is not handled
     assert!(
-        size_multiplier.result.is_veto(),
+        size_multiplier.result.vetoed(),
         "size_multiplier should veto for 'extra large' size"
     );
 
@@ -536,7 +542,7 @@ fn test_coffee_order_invalid_size_veto() {
 
     if let Some(price_per_cup) = price_per_cup {
         assert!(
-            price_per_cup.result.is_veto() || price_per_cup.result.value().is_none(),
+            price_per_cup.result.vetoed() || price_per_cup.result.value().is_none(),
             "price_per_cup should fail when size_multiplier vetoes"
         );
     }

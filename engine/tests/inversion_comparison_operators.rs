@@ -1,6 +1,7 @@
 use lemma::{Engine, FactPath, LiteralValue, OperationResult, Target, TargetOp};
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -20,9 +21,11 @@ fn premium_greater_than_or_equal() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Find ages where premium >= 80
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "insurance",
+            &now,
             "premium",
             Target::with_op(
                 TargetOp::Gte,
@@ -68,9 +71,11 @@ fn discount_greater_than_threshold() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Find quantities where discount > 5%
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "pricing",
+            &now,
             "discount",
             Target::with_op(
                 TargetOp::Gt,
@@ -116,9 +121,11 @@ fn price_less_than_budget() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Find combinations where total < 100
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "shopping",
+            &now,
             "total",
             Target::with_op(
                 TargetOp::Lt,
@@ -157,9 +164,11 @@ fn temperature_in_comfortable_range() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Find temps where comfort >= 2 (most comfortable)
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "climate",
+            &now,
             "comfort_level",
             Target::with_op(
                 TargetOp::Gte,
@@ -200,9 +209,11 @@ fn get_valid_domain_with_threshold() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // First, find when shipping_cost <= 0 (free shipping)
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "shipping",
+            &now,
             "shipping_cost",
             Target::with_op(
                 TargetOp::Lte,
@@ -251,9 +262,11 @@ fn all_comparison_operators() {
 
     println!("\n=== Testing all comparison operators ===");
     for (name, op, description) in test_cases {
+        let now = DateTimeValue::now();
         let solutions = engine
             .invert(
                 "test",
+                &now,
                 "result",
                 Target::with_op(
                     op,

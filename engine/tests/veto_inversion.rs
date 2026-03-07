@@ -1,6 +1,7 @@
 use lemma::{Bound, Domain, Engine, FactPath, LiteralValue, Target};
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 
 #[test]
 fn veto_query_specific_message() {
@@ -17,9 +18,11 @@ fn veto_query_specific_message() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Query: "What weight values trigger 'too heavy' veto?"
+    let now = DateTimeValue::now();
     let response = engine
         .invert(
             "shipping",
+            &now,
             "shipping_cost",
             Target::veto(Some("too heavy".to_string())),
             std::collections::HashMap::new(),
@@ -51,9 +54,11 @@ fn veto_query_any_veto() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Query: "What weight values trigger ANY veto?"
+    let now = DateTimeValue::now();
     let response = engine
         .invert(
             "shipping",
+            &now,
             "shipping_cost",
             Target::any_veto(),
             std::collections::HashMap::new(),
@@ -89,9 +94,11 @@ fn veto_query_with_value_branches_filters_correctly() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Query: "What discount values trigger any veto?"
+    let now = DateTimeValue::now();
     let response = engine
         .invert(
             "pricing",
+            &now,
             "final_price",
             Target::any_veto(),
             std::collections::HashMap::new(),
@@ -182,9 +189,11 @@ fn veto_non_veto_value_queries_exclude_vetoes() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Query: "What discount values give final_price = 90?"
+    let now = DateTimeValue::now();
     let response = engine
         .invert(
             "pricing",
+            &now,
             "final_price",
             Target::value(LiteralValue::number(90.into())),
             std::collections::HashMap::new(),
@@ -218,9 +227,11 @@ fn veto_multiple_facts_multiple_vetoes() {
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     // Query: "What conditions trigger any veto?"
+    let now = DateTimeValue::now();
     let response = engine
         .invert(
             "shipping",
+            &now,
             "can_ship",
             Target::any_veto(),
             std::collections::HashMap::new(),

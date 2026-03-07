@@ -1,10 +1,11 @@
 mod common;
 use common::add_lemma_code_blocking;
-use lemma::{Engine, LemmaResult};
+use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, Error};
 use std::collections::HashMap;
 
 #[test]
-fn test_inline_type_import() -> LemmaResult<()> {
+fn test_inline_type_import() -> Result<(), Error> {
     let mut engine = Engine::new();
 
     // Define a type in one document
@@ -20,13 +21,14 @@ fact user_age: [age from age]
 rule is_adult: user_age >= 18
 "#;
 
-    add_lemma_code_blocking(&mut engine, age_doc, "age.lemma")?;
-    add_lemma_code_blocking(&mut engine, test_doc, "test.lemma")?;
+    add_lemma_code_blocking(&mut engine, age_doc, "age.lemma").expect("add age doc");
+    add_lemma_code_blocking(&mut engine, test_doc, "test.lemma").expect("add test doc");
+    let now = DateTimeValue::now();
 
     let mut facts = HashMap::new();
     facts.insert("user_age".to_string(), "25".to_string());
 
-    let response = engine.evaluate("test", vec![], facts)?;
+    let response = engine.evaluate("test", None, &now, vec![], facts)?;
 
     // The fact should be evaluated correctly with the imported type
 
@@ -52,7 +54,7 @@ rule is_adult: user_age >= 18
 }
 
 #[test]
-fn test_inline_type_import_with_constraints() -> LemmaResult<()> {
+fn test_inline_type_import_with_constraints() -> Result<(), Error> {
     let mut engine = Engine::new();
 
     // Define a type in one document
@@ -68,13 +70,14 @@ fact user_age: [age from age -> maximum 120]
 rule is_senior: user_age >= 65
 "#;
 
-    add_lemma_code_blocking(&mut engine, age_doc, "age.lemma")?;
-    add_lemma_code_blocking(&mut engine, test_doc, "test.lemma")?;
+    add_lemma_code_blocking(&mut engine, age_doc, "age.lemma").expect("add age doc");
+    add_lemma_code_blocking(&mut engine, test_doc, "test.lemma").expect("add test doc");
+    let now = DateTimeValue::now();
 
     let mut facts = HashMap::new();
     facts.insert("user_age".to_string(), "70".to_string());
 
-    let response = engine.evaluate("test", vec![], facts)?;
+    let response = engine.evaluate("test", None, &now, vec![], facts)?;
 
     // Check the rule result
     let is_senior_result = response

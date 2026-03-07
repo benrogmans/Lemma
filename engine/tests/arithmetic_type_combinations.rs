@@ -8,6 +8,7 @@
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 fn eval_rule(
@@ -18,8 +19,9 @@ fn eval_rule(
 ) -> String {
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse and plan");
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate(doc_name, vec![], facts)
+        .evaluate(doc_name, None, &now, vec![], facts)
         .expect("Should evaluate");
     let result = response
         .results
@@ -44,7 +46,12 @@ fn expect_plan_error(code: &str, expected_substring: &str) {
         result.is_err(),
         "Should reject invalid type combination, but planning succeeded"
     );
-    let error_msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    let error_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         error_msg.contains(expected_substring),
         "Error should contain '{}'. Got: {}",

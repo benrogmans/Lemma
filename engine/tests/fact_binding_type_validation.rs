@@ -5,6 +5,7 @@
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 #[test]
@@ -21,7 +22,8 @@ rule doubled: age * 2
     let mut facts = HashMap::new();
     facts.insert("age".to_string(), "twenty".to_string());
 
-    let result = engine.evaluate("test", vec![], facts);
+    let now = DateTimeValue::now();
+    let result = engine.evaluate("test", None, &now, vec![], facts);
 
     assert!(result.is_err(), "Expected error but got: {:?}", result);
     let error = result.unwrap_err().to_string();
@@ -50,7 +52,8 @@ rule total: price * quantity
     facts.insert("quantity".to_string(), "5".to_string());
     facts.insert("active".to_string(), "true".to_string());
 
-    let result = engine.evaluate("test", vec![], facts);
+    let now = DateTimeValue::now();
+    let result = engine.evaluate("test", None, &now, vec![], facts);
     assert!(result.is_err(), "Expected type mismatch error");
     assert!(result
         .unwrap_err()
@@ -62,7 +65,7 @@ rule total: price * quantity
     facts.insert("quantity".to_string(), "five".to_string());
     facts.insert("active".to_string(), "true".to_string());
 
-    let result = engine.evaluate("test", vec![], facts);
+    let result = engine.evaluate("test", None, &now, vec![], facts);
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
@@ -74,7 +77,7 @@ rule total: price * quantity
     facts.insert("quantity".to_string(), "5".to_string());
     facts.insert("active".to_string(), "maybe".to_string());
 
-    let result = engine.evaluate("test", vec![], facts);
+    let result = engine.evaluate("test", None, &now, vec![], facts);
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
@@ -86,7 +89,7 @@ rule total: price * quantity
     facts.insert("quantity".to_string(), "5".to_string());
     facts.insert("active".to_string(), "true".to_string());
 
-    let result = engine.evaluate("test", vec![], facts);
+    let result = engine.evaluate("test", None, &now, vec![], facts);
     assert!(result.is_ok());
 }
 
@@ -104,7 +107,8 @@ rule total: base_price * 1.2
     let mut facts = HashMap::new();
     facts.insert("base_price".to_string(), "sixty".to_string());
 
-    let result = engine.evaluate("test", vec![], facts);
+    let now = DateTimeValue::now();
+    let result = engine.evaluate("test", None, &now, vec![], facts);
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
@@ -114,7 +118,7 @@ rule total: base_price * 1.2
     let mut facts = HashMap::new();
     facts.insert("base_price".to_string(), "60".to_string());
 
-    let result = engine.evaluate("test", vec![], facts);
+    let result = engine.evaluate("test", None, &now, vec![], facts);
     assert!(result.is_ok());
 }
 
@@ -133,7 +137,8 @@ rule total: price * 1.1
     facts.insert("price".to_string(), "100".to_string());
     facts.insert("unknown_fact".to_string(), "42".to_string());
 
-    let result = engine.evaluate("test", vec![], facts);
+    let now = DateTimeValue::now();
+    let result = engine.evaluate("test", None, &now, vec![], facts);
     assert!(result.is_err(), "Expected error for unknown fact binding");
     assert!(result.unwrap_err().to_string().contains("unknown_fact"));
 }
@@ -159,7 +164,12 @@ rule result: line.total
         "Expected error when overriding typed fact with type definition"
     );
 
-    let error_msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    let error_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         error_msg.contains("quantity")
             || error_msg.contains("type")

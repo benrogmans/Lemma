@@ -1,6 +1,7 @@
 use lemma::{Engine, LiteralValue, Target, TargetOp};
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 
 #[test]
 fn piecewise_value_guard_pruning_equality() {
@@ -16,9 +17,11 @@ fn piecewise_value_guard_pruning_equality() {
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "shipping",
+            &now,
             "shipping_cost",
             Target::value(LiteralValue::number(10.into())),
             std::collections::HashMap::new(),
@@ -46,9 +49,11 @@ fn piecewise_value_guard_pruning_inequality() {
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
+    let now = DateTimeValue::now();
     let solutions = engine
         .invert(
             "shipping",
+            &now,
             "shipping_cost",
             Target::with_op(
                 TargetOp::Gt,

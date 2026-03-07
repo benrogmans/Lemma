@@ -1,5 +1,6 @@
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -27,8 +28,9 @@ rule line_total: pricing.final_price * quantity
     add_lemma_code_blocking(&mut engine, base_doc, "pricing.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, line_item_doc, "line_item.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("line_item", vec![], HashMap::new())
+        .evaluate("line_item", None, &now, vec![], HashMap::new())
         .unwrap();
     let line_total = response
         .results
@@ -75,7 +77,10 @@ rule top_calc: middle_ref.middle_calc
     add_lemma_code_blocking(&mut engine, middle_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, top_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("top", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let top_calc = response
         .results
@@ -131,7 +136,10 @@ rule order_total: line.line_total
     add_lemma_code_blocking(&mut engine, line_item_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, order_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("order", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("order", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let order_total = response
         .results
@@ -174,7 +182,10 @@ rule final_value: settings.config.value * 2
     add_lemma_code_blocking(&mut engine, middle_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, top_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("top", None, &now, vec![], HashMap::new())
+        .unwrap();
     let final_value = response
         .results
         .values()
@@ -223,7 +234,10 @@ rule order_total: line.line_total
     add_lemma_code_blocking(&mut engine, line_item_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, order_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("order", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("order", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let order_total = response
         .results
@@ -274,8 +288,9 @@ rule difference: total2 - total1
     add_lemma_code_blocking(&mut engine, wrapper_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, comparison_doc, "test.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("comparison", vec![], HashMap::new())
+        .evaluate("comparison", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let total1 = response
@@ -350,7 +365,10 @@ rule product: c1.value * c2.value
     add_lemma_code_blocking(&mut engine, config2_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, combined_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("combined", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("combined", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let sum = response
         .results
@@ -410,7 +428,10 @@ rule final_result: middle_config.x_squared_plus_ten * 2
     add_lemma_code_blocking(&mut engine, middle_doc, "middle.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, top_doc, "top.lemma").unwrap();
 
-    let response = engine.evaluate("top", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("top", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let final_result = response
         .results
@@ -458,8 +479,9 @@ rule price_difference: retail_final - wholesale_final
     add_lemma_code_blocking(&mut engine, pricing_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, scenario_doc, "test.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("scenarios", vec![], HashMap::new())
+        .evaluate("scenarios", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let retail_final = response
@@ -536,9 +558,12 @@ rule yy: cc.y
     add_lemma_code_blocking(&mut engine, doc_a, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, doc_b, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, doc_c, "test.lemma").unwrap();
-    let err = add_lemma_code_blocking(&mut engine, doc_d, "test.lemma").unwrap_err();
-
-    let err_str = err.to_string();
+    let errs = add_lemma_code_blocking(&mut engine, doc_d, "test.lemma").unwrap_err();
+    let err_str = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     // We must reject the bad binding. Either we report at the binding site (preferred)
     // or the expression type checker reports the comparison error.
     let binding_site_error = err_str.contains("Fact binding 'cc.aa'")

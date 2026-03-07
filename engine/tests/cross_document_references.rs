@@ -1,6 +1,7 @@
 use lemma::Engine;
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 /// Test cross-document fact references (should work)
@@ -23,7 +24,10 @@ rule total: base_data.price * base_data.quantity
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("derived", None, &now, vec![], HashMap::new())
+        .unwrap();
     let total = response
         .results
         .values()
@@ -53,7 +57,10 @@ rule derived_value: base_data.doubled + 10
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("derived", None, &now, vec![], HashMap::new())
+        .unwrap();
     let derived_value = response
         .results
         .values()
@@ -84,7 +91,10 @@ rule manager_bonus: employee.annual_salary * 0.15
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("manager", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("manager", None, &now, vec![], HashMap::new())
+        .unwrap();
     let bonus = response
         .results
         .values()
@@ -117,7 +127,10 @@ rule derived_total: config.total
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("derived", None, &now, vec![], HashMap::new())
+        .unwrap();
     let total = response
         .results
         .values()
@@ -156,7 +169,10 @@ rule total_days: settings.standard_processing_days + order_info.processing_days
     add_lemma_code_blocking(&mut engine, order_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("derived", None, &now, vec![], HashMap::new())
+        .unwrap();
     let total = response
         .results
         .values()
@@ -188,7 +204,10 @@ rule status: "invalid"
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("derived", None, &now, vec![], HashMap::new())
+        .unwrap();
     let status = response
         .results
         .values()
@@ -218,7 +237,10 @@ rule combined: base_data.input + base_data.calculated
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("derived", None, &now, vec![], HashMap::new())
+        .unwrap();
     let combined = response
         .results
         .values()
@@ -251,7 +273,10 @@ rule sum: data.x + data.y + data.z
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("derived", None, &now, vec![], HashMap::new())
+        .unwrap();
     let sum = response
         .results
         .values()
@@ -285,7 +310,10 @@ rule total: config.price * config.quantity
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("derived", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("derived", None, &now, vec![], HashMap::new())
+        .unwrap();
     let total = response
         .results
         .values()
@@ -327,7 +355,10 @@ rule total2: base2.base.total
     add_lemma_code_blocking(&mut engine, example2_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, example3_doc, "test.lemma").unwrap();
 
-    let response = engine.evaluate("example3", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("example3", None, &now, vec![], HashMap::new())
+        .unwrap();
 
     let total1 = response
         .results
@@ -349,17 +380,11 @@ rule total2: base2.base.total
 }
 
 #[test]
-fn unversioned_ref_evaluates_latest_version() {
+fn doc_ref_evaluates_to_referenced_document() {
     let mut engine = Engine::new();
 
     let code = r#"
-doc pricing.v1
-fact base_price: 100
-
-doc pricing.v2
-fact base_price: 150
-
-doc pricing.v10
+doc pricing
 fact base_price: 200
 
 doc order
@@ -369,7 +394,10 @@ rule total: p.base_price
 
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("order", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("order", None, &now, vec![], HashMap::new())
+        .unwrap();
     let total = response
         .results
         .values()
@@ -379,7 +407,7 @@ rule total: p.base_price
     assert_eq!(
         total.result.value().unwrap().to_string(),
         "200",
-        "Unversioned ref should evaluate against pricing.v10 (latest by natural sort)"
+        "Doc ref should evaluate against the referenced pricing document"
     );
 }
 
@@ -407,8 +435,9 @@ rule employee_summary: employee.monthly_salary
     add_lemma_code_blocking(&mut engine, base_doc, "test.lemma").unwrap();
     add_lemma_code_blocking(&mut engine, derived_doc, "test.lemma").unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("specific_employee", vec![], HashMap::new())
+        .evaluate("specific_employee", None, &now, vec![], HashMap::new())
         .unwrap();
 
     let mut result_names: Vec<&str> = response.results.keys().map(|k| k.as_str()).collect();
@@ -434,27 +463,24 @@ rule employee_summary: employee.monthly_salary
 }
 
 #[test]
-fn versioned_ref_evaluates_exact_version() {
+fn doc_ref_from_order_to_pricing_evaluates_correctly() {
     let mut engine = Engine::new();
 
     let code = r#"
-doc pricing.v1
-fact base_price: 100
-
-doc pricing.v2
+doc pricing
 fact base_price: 150
 
-doc pricing.v10
-fact base_price: 200
-
 doc order
-fact p: doc pricing.v2
+fact p: doc pricing
 rule total: p.base_price
 "#;
 
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
-    let response = engine.evaluate("order", vec![], HashMap::new()).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("order", None, &now, vec![], HashMap::new())
+        .unwrap();
     let total = response
         .results
         .values()
@@ -464,6 +490,6 @@ rule total: p.base_price
     assert_eq!(
         total.result.value().unwrap().to_string(),
         "150",
-        "Versioned ref should evaluate against pricing.v2 exactly"
+        "Doc ref should evaluate against the referenced pricing document"
     );
 }

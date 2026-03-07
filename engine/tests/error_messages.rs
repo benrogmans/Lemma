@@ -1,5 +1,6 @@
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, Error};
 use std::collections::HashMap;
 
@@ -24,23 +25,23 @@ fn test_duplicate_fact_definition_error() {
         "test.lemma",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(
-                msg.to_lowercase().contains("duplicate") && msg.to_lowercase().contains("fact"),
-                "Error should mention duplicate fact, got: {}",
-                msg
-            );
-            assert!(
-                msg.contains("salary"),
-                "Error should mention fact name, got: {}",
-                msg
-            );
-        }
-        Err(e) => panic!("Expected Engine error for duplicate fact, got: {e:?}"),
-        Ok(_) => panic!("Expected error for duplicate fact"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    let msg = &details.message;
+    assert!(
+        msg.to_lowercase().contains("duplicate") && msg.to_lowercase().contains("fact"),
+        "Error should mention duplicate fact, got: {msg}"
+    );
+    assert!(
+        msg.contains("salary"),
+        "Error should mention fact name, got: {msg}"
+    );
 }
 
 #[test]
@@ -58,23 +59,23 @@ fn test_duplicate_rule_definition_error() {
         "test.lemma",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(
-                msg.to_lowercase().contains("duplicate") && msg.to_lowercase().contains("rule"),
-                "Error should mention duplicate rule, got: {}",
-                msg
-            );
-            assert!(
-                msg.contains("total"),
-                "Error should mention rule name, got: {}",
-                msg
-            );
-        }
-        Err(e) => panic!("Expected Engine error for duplicate rule, got: {e:?}"),
-        Ok(_) => panic!("Expected error for duplicate rule"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    let msg = &details.message;
+    assert!(
+        msg.to_lowercase().contains("duplicate") && msg.to_lowercase().contains("rule"),
+        "Error should mention duplicate rule, got: {msg}"
+    );
+    assert!(
+        msg.contains("total"),
+        "Error should mention rule name, got: {msg}"
+    );
 }
 
 #[test]
@@ -92,23 +93,23 @@ fn test_duplicate_fact_shows_name() {
         "test.lemma",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(
-                msg.contains("Duplicate"),
-                "Error should mention duplicate, got: {}",
-                msg
-            );
-            assert!(
-                msg.contains("name"),
-                "Error should mention fact name, got: {}",
-                msg
-            );
-        }
-        Err(e) => panic!("Expected Engine error for duplicate fact, got: {e:?}"),
-        Ok(_) => panic!("Expected error for duplicate fact"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    let msg = &details.message;
+    assert!(
+        msg.contains("Duplicate"),
+        "Error should mention duplicate, got: {msg}"
+    );
+    assert!(
+        msg.contains("name"),
+        "Error should mention fact name, got: {msg}"
+    );
 }
 
 // ============================================================================
@@ -131,8 +132,9 @@ fn test_runtime_error_division_by_zero() {
     )
     .unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], HashMap::new())
+        .evaluate("test", None, &now, vec![], HashMap::new())
         .expect("Division by zero should return Veto, not Error");
 
     let result_rule = response
@@ -142,7 +144,7 @@ fn test_runtime_error_division_by_zero() {
         .expect("result rule should exist");
 
     assert!(
-        result_rule.result.is_veto(),
+        result_rule.result.vetoed(),
         "Division by zero should return Veto, got: {:?}",
         result_rule.result
     );
@@ -175,8 +177,9 @@ fn test_runtime_error_division_by_zero_with_cli_facts() {
     let mut facts = std::collections::HashMap::new();
     facts.insert("hours_worked".to_string(), "0".to_string());
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], facts)
+        .evaluate("test", None, &now, vec![], facts)
         .expect("Division by zero should return Veto, not Error");
 
     let hourly_rate = response
@@ -186,7 +189,7 @@ fn test_runtime_error_division_by_zero_with_cli_facts() {
         .expect("hourly_rate rule should exist");
 
     assert!(
-        hourly_rate.result.is_veto(),
+        hourly_rate.result.vetoed(),
         "Division by zero should return Veto, got: {:?}",
         hourly_rate.result
     );
@@ -212,17 +215,17 @@ fn test_transpile_error_self_referencing_rule() {
         "test.lemma",
     );
 
-    match result {
-        Err(Error::CircularDependency { details, .. }) => {
-            let msg = &details.message;
-            assert!(
-                msg.to_lowercase().contains("circular") || msg.to_lowercase().contains("itself")
-            );
-            assert!(msg.contains("x"));
-        }
-        Err(e) => panic!("Expected CircularDependency error, got: {e:?}"),
-        Ok(_) => panic!("Expected error for self-referencing rule"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    let msg = &details.message;
+    assert!(msg.to_lowercase().contains("circular") || msg.to_lowercase().contains("itself"));
+    assert!(msg.contains("x"));
 }
 
 // ============================================================================
@@ -244,18 +247,15 @@ fn test_validation_error_type_mismatch_text_in_arithmetic() {
         "test.lemma",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(
-                msg.contains("Cannot apply"),
-                "Error should mention invalid operation, got: {}",
-                msg
-            );
-        }
-        Err(e) => panic!("Expected Engine error for type mismatch, got: {e:?}"),
-        Ok(_) => panic!("Expected validation error for type mismatch"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    assert!(details.message.contains("Cannot apply"));
 }
 
 #[test]
@@ -273,18 +273,15 @@ fn test_validation_error_boolean_in_arithmetic() {
         "test.lemma",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(
-                msg.contains("Cannot apply"),
-                "Error should mention invalid operation, got: {}",
-                msg
-            );
-        }
-        Err(e) => panic!("Expected Engine error for invalid arithmetic, got: {e:?}"),
-        Ok(_) => panic!("Expected validation error for boolean in arithmetic"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    assert!(details.message.contains("Cannot apply"));
 }
 
 // ============================================================================
@@ -305,15 +302,16 @@ fn test_duplicate_error_contains_fact_name() {
         "my_file.lemma",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
-            assert!(msg.contains("price"), "Error should mention fact name");
-        }
-        Err(e) => panic!("Expected Engine error, got: {e:?}"),
-        Ok(_) => panic!("Expected error"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("price"));
 }
 
 #[test]
@@ -330,15 +328,16 @@ fn test_duplicate_error_is_reported() {
         "test.lemma",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
-            assert!(msg.contains("x"), "Error should mention fact name");
-        }
-        Err(e) => panic!("Expected Engine error, got: {e:?}"),
-        Ok(_) => panic!("Expected error"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("x"));
 }
 
 #[test]
@@ -358,15 +357,16 @@ fn test_duplicate_in_second_doc_is_caught() {
         "multi.lemma",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
-            assert!(msg.contains("b"), "Error should mention fact name");
-        }
-        Err(e) => panic!("Expected Engine error, got: {e:?}"),
-        Ok(_) => panic!("Expected error"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("b"));
 }
 
 // ============================================================================
@@ -387,15 +387,16 @@ fn test_error_display_contains_duplicate_info() {
         "test.lemma",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
-            assert!(msg.contains("value"), "Error should mention fact name");
-        }
-        Err(e) => panic!("Expected Engine error, got: {e:?}"),
-        Ok(_) => panic!("Expected error"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("value"));
 }
 
 // ============================================================================
@@ -418,8 +419,9 @@ fn test_division_by_zero_returns_veto_with_message() {
     )
     .unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], HashMap::new())
+        .evaluate("test", None, &now, vec![], HashMap::new())
         .expect("Should return Veto, not Error");
 
     let result_rule = response
@@ -457,17 +459,17 @@ fn test_circular_dependency_has_helpful_suggestion() {
         "test.lemma",
     );
 
-    match result {
-        Err(Error::CircularDependency { details, .. }) => {
-            let msg = &details.message;
-            assert!(
-                msg.to_lowercase().contains("circular") || msg.to_lowercase().contains("cycle")
-            );
-            assert!(msg.contains("x") && msg.contains("y"));
-        }
-        Err(e) => panic!("Expected CircularDependency error, got: {e:?}"),
-        Ok(_) => panic!("Expected error for circular dependency"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    let msg = &details.message;
+    assert!(msg.to_lowercase().contains("circular") || msg.to_lowercase().contains("cycle"));
+    assert!(msg.contains("x") && msg.contains("y"));
 }
 
 // ============================================================================
@@ -486,18 +488,16 @@ fact line4: 4"#;
 
     let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
-            assert!(
-                msg.contains("line4"),
-                "Error should mention the duplicated fact name"
-            );
-        }
-        Err(e) => panic!("Expected Engine error, got: {e:?}"),
-        Ok(_) => panic!("Expected error"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("line4"));
 }
 
 #[test]
@@ -516,8 +516,9 @@ fn test_division_by_zero_returns_veto() {
     )
     .unwrap();
 
+    let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test", vec![], HashMap::new())
+        .evaluate("test", None, &now, vec![], HashMap::new())
         .expect("Should return Veto, not Error");
 
     let division_result = response
@@ -527,7 +528,7 @@ fn test_division_by_zero_returns_veto() {
         .expect("division_result rule should exist");
 
     assert!(
-        division_result.result.is_veto(),
+        division_result.result.vetoed(),
         "Division by zero should return Veto, got: {:?}",
         division_result.result
     );
@@ -551,15 +552,16 @@ fn test_duplicate_detected_from_database_source() {
         "db://contracts/123",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
-            assert!(msg.contains("amount"), "Error should mention fact name");
-        }
-        Err(e) => panic!("Expected Engine error, got: {e:?}"),
-        Ok(_) => panic!("Expected error"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("amount"));
 }
 
 #[test]
@@ -576,15 +578,16 @@ fn test_duplicate_detected_from_api_source() {
         "api://policies/endpoint",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
-            assert!(msg.contains("rate"), "Error should mention rule name");
-        }
-        Err(e) => panic!("Expected Engine error, got: {e:?}"),
-        Ok(_) => panic!("Expected error"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("rate"));
 }
 
 #[test]
@@ -601,15 +604,16 @@ fn test_duplicate_detected_from_runtime_source() {
         "<runtime>",
     );
 
-    match result {
-        Err(Error::Planning(details)) => {
-            let msg = &details.message;
-            assert!(msg.contains("Duplicate"), "Error should mention duplicate");
-            assert!(msg.contains("x"), "Error should mention fact name");
-        }
-        Err(e) => panic!("Expected Engine error, got: {e:?}"),
-        Ok(_) => panic!("Expected error"),
-    }
+    let errs = result.unwrap_err();
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected at least one Validation error");
+    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("x"));
 }
 
 // ============================================================================
@@ -648,27 +652,20 @@ fn test_multiple_error_phases_reported_together() {
         "pricing.lemma",
     );
 
-    match result {
-        Err(Error::MultipleErrors(errors)) => {
-            let messages: Vec<String> = errors.iter().map(|e| format!("{e}")).collect();
-            let has_rule_ref_error = messages
-                .iter()
-                .any(|m| m.contains("non_existent_rule") && m.contains("not found"));
-            let has_type_mismatch = messages
-                .iter()
-                .any(|m| m.contains("Type mismatch") || m.contains("type mismatch"));
-            assert!(
-                has_rule_ref_error,
-                "Should report missing reference. Got: {messages:?}"
-            );
-            assert!(
-                has_type_mismatch,
-                "Should report type mismatch (15 is number, not ratio). Got: {messages:?}"
-            );
-        }
-        Err(e) => {
-            panic!("Expected MultipleErrors with both rule-ref and type errors, got single: {e}")
-        }
-        Ok(_) => panic!("Expected errors"),
-    }
+    let errs = result.unwrap_err();
+    let messages: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
+    let has_rule_ref_error = messages
+        .iter()
+        .any(|m| m.contains("non_existent_rule") && m.contains("not found"));
+    let has_type_mismatch = messages
+        .iter()
+        .any(|m| m.contains("Type mismatch") || m.contains("type mismatch"));
+    assert!(
+        has_rule_ref_error,
+        "Should report missing reference. Got: {messages:?}"
+    );
+    assert!(
+        has_type_mismatch,
+        "Should report type mismatch (15 is number, not ratio). Got: {messages:?}"
+    );
 }

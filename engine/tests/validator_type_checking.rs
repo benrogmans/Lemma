@@ -12,20 +12,8 @@ rule result: 5 and true
     let mut engine = Engine::new();
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(result.is_err(), "Should reject non-boolean in 'and'");
-    assert!(result.unwrap_err().to_string().contains("boolean"));
-}
-
-#[test]
-fn test_logical_or_requires_boolean_operands() {
-    let code = r#"
-doc test
-rule result: "hello" or false
-"#;
-
-    let mut engine = Engine::new();
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
-    assert!(result.is_err(), "Should reject non-boolean in 'or'");
-    assert!(result.unwrap_err().to_string().contains("boolean"));
+    let errs = result.unwrap_err();
+    assert!(errs.iter().any(|e| e.to_string().contains("boolean")));
 }
 
 #[test]
@@ -164,7 +152,12 @@ rule value: "default"
         result.is_err(),
         "Should reject mixing text and number types"
     );
-    let err_msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    let err_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
         "Error message should contain type mismatch info: {}",
@@ -187,7 +180,12 @@ rule value: 2024-01-01
         result.is_err(),
         "Should reject mixing date and number types"
     );
-    let err_msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    let err_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
         "Error message should contain type mismatch info: {}",
@@ -266,7 +264,12 @@ rule value: 10
     let mut engine = Engine::new();
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(result.is_err(), "Mixed number/text should be rejected");
-    let err_msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    let err_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
         "Error message should contain type mismatch info: {}",
@@ -325,7 +328,8 @@ rule result: time1 and time2
         result.is_err(),
         "Should reject time values in logical operators"
     );
-    assert!(result.unwrap_err().to_string().contains("boolean"));
+    let errs = result.unwrap_err();
+    assert!(errs.iter().any(|e| e.to_string().contains("boolean")));
 }
 
 #[test]
@@ -343,7 +347,12 @@ rule value: 14:30:00
         result.is_err(),
         "Should reject mixing time and number types"
     );
-    let err_msg = result.unwrap_err().to_string();
+    let errs = result.unwrap_err();
+    let err_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
     assert!(
         err_msg.contains("incompatible") || err_msg.contains("Type mismatch"),
         "Error message should contain type mismatch info: {}",

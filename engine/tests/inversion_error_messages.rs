@@ -1,6 +1,7 @@
 use lemma::{Engine, LiteralValue, Target};
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 #[test]
@@ -18,8 +19,10 @@ fn test_better_error_for_invalid_value() {
     add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
 
     // Try to invert for a value that doesn't exist (15)
+    let now = DateTimeValue::now();
     let result = engine.invert(
         "shipping",
+        &now,
         "shipping_cost",
         Target::value(LiteralValue::number(15.into())),
         HashMap::new(),
@@ -48,8 +51,10 @@ fn test_better_error_for_veto_mismatch() {
     add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
 
     // Try to find a veto that doesn't exist
+    let now = DateTimeValue::now();
     let result = engine.invert(
         "validation",
+        &now,
         "eligibility",
         Target::veto(Some("not a real veto".to_string())),
         HashMap::new(),
@@ -83,8 +88,10 @@ fn test_error_with_no_satisfiable_branches() {
     given.insert("y".to_string(), "3".to_string());
 
     // Even though result = 200 exists as a branch, x > 10 is false with given facts
+    let now = DateTimeValue::now();
     let result = engine.invert(
         "test",
+        &now,
         "result",
         Target::value(LiteralValue::number(200.into())),
         given,
