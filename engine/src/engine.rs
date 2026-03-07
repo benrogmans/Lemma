@@ -1,9 +1,319 @@
 use crate::evaluation::Evaluator;
-use crate::parsing::ast::LemmaDoc;
+use crate::parsing::ast::{DateTimeValue, LemmaDoc};
 use crate::registry::Registry;
-use crate::{parse, Error, LemmaResult, ResourceLimits, Response};
-use std::collections::HashMap;
+use crate::{parse, Error, ResourceLimits, Response};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+
+// ─── Temporal bound for Option<DateTimeValue> comparisons ────────────
+
+/// Explicit representation of a temporal bound, eliminating the ambiguity
+/// of `Option<DateTimeValue>` where `None` means `-∞` for start bounds
+/// and `+∞` for end bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TemporalBound {
+    NegInf,
+    At(DateTimeValue),
+    PosInf,
+}
+
+impl PartialOrd for TemporalBound {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TemporalBound {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (TemporalBound::NegInf, TemporalBound::NegInf) => Ordering::Equal,
+            (TemporalBound::NegInf, _) => Ordering::Less,
+            (_, TemporalBound::NegInf) => Ordering::Greater,
+            (TemporalBound::PosInf, TemporalBound::PosInf) => Ordering::Equal,
+            (TemporalBound::PosInf, _) => Ordering::Greater,
+            (_, TemporalBound::PosInf) => Ordering::Less,
+            (TemporalBound::At(a), TemporalBound::At(b)) => a.cmp(b),
+        }
+    }
+}
+
+impl TemporalBound {
+    /// Convert an `Option<&DateTimeValue>` used as a start bound (None = -∞).
+    pub(crate) fn from_start(opt: Option<&DateTimeValue>) -> Self {
+        match opt {
+            None => TemporalBound::NegInf,
+            Some(d) => TemporalBound::At(d.clone()),
+        }
+    }
+
+    /// Convert an `Option<&DateTimeValue>` used as an end bound (None = +∞).
+    pub(crate) fn from_end(opt: Option<&DateTimeValue>) -> Self {
+        match opt {
+            None => TemporalBound::PosInf,
+            Some(d) => TemporalBound::At(d.clone()),
+        }
+    }
+
+    /// Convert back to `Option<DateTimeValue>` for a start bound (NegInf → None).
+    pub(crate) fn to_start(&self) -> Option<DateTimeValue> {
+        match self {
+            TemporalBound::NegInf => None,
+            TemporalBound::At(d) => Some(d.clone()),
+            TemporalBound::PosInf => {
+                unreachable!("BUG: PosInf cannot represent a start bound")
+            }
+        }
+    }
+
+    /// Convert back to `Option<DateTimeValue>` for an end bound (PosInf → None).
+    pub(crate) fn to_end(&self) -> Option<DateTimeValue> {
+        match self {
+            TemporalBound::NegInf => {
+                unreachable!("BUG: NegInf cannot represent an end bound")
+            }
+            TemporalBound::At(d) => Some(d.clone()),
+            TemporalBound::PosInf => None,
+        }
+    }
+}
+
+// ─── Document store with temporal resolution ─────────────────────────
+
+/// Ordered set of documents with temporal versioning.
+///
+/// Documents with the same name are ordered by effective_from.
+/// A temporal version's end is derived from the next temporal version's effective_from, or +inf.
+#[derive(Debug, Default)]
+pub struct Context {
+    docs: BTreeSet<Arc<LemmaDoc>>,
+}
+
+impl Context {
+    pub fn new() -> Self {
+        Self {
+            docs: BTreeSet::new(),
+        }
+    }
+
+    pub(crate) fn docs_for_name(&self, name: &str) -> Vec<Arc<LemmaDoc>> {
+        self.docs
+            .iter()
+            .filter(|a| a.name == name)
+            .cloned()
+            .collect()
+    }
+
+    /// Exact identity lookup by (name, effective_from).
+    ///
+    /// None matches documents without temporal versioning.
+    /// Some(d) matches the temporal version whose effective_from equals d.
+    pub fn get_doc_effective_from(
+        &self,
+        name: &str,
+        effective_from: Option<&DateTimeValue>,
+    ) -> Option<Arc<LemmaDoc>> {
+        self.docs_for_name(name)
+            .into_iter()
+            .find(|doc| doc.effective_from() == effective_from)
+    }
+
+    /// Temporal range resolution: find the temporal version of `name` that is active at `effective`.
+    ///
+    /// A doc is active at `effective` when:
+    ///   effective_from <= effective < effective_to
+    /// where effective_to is the next temporal version's effective_from, or +inf if no successor.
+    pub fn get_doc(&self, name: &str, effective: &DateTimeValue) -> Option<Arc<LemmaDoc>> {
+        let versions = self.docs_for_name(name);
+        if versions.is_empty() {
+            return None;
+        }
+
+        for (i, doc) in versions.iter().enumerate() {
+            let from_ok = doc
+                .effective_from()
+                .map(|f| *effective >= *f)
+                .unwrap_or(true);
+            if !from_ok {
+                continue;
+            }
+
+            let effective_to: Option<&DateTimeValue> =
+                versions.get(i + 1).and_then(|next| next.effective_from());
+            let to_ok = effective_to.map(|end| *effective < *end).unwrap_or(true);
+
+            if to_ok {
+                return Some(doc.clone());
+            }
+        }
+
+        None
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Arc<LemmaDoc>> + '_ {
+        self.docs.iter().cloned()
+    }
+
+    /// Insert a document. Validates no duplicate (name, effective_from).
+    pub fn insert_doc(&mut self, doc: Arc<LemmaDoc>) -> Result<(), Error> {
+        let existing = self.docs_for_name(&doc.name);
+
+        if existing
+            .iter()
+            .any(|o| o.effective_from() == doc.effective_from())
+        {
+            return Err(Error::validation(
+                format!(
+                    "Duplicate document '{}' (same name and effective_from already in context)",
+                    doc.name
+                ),
+                None,
+                None::<String>,
+            ));
+        }
+
+        self.docs.insert(doc);
+        Ok(())
+    }
+
+    pub fn remove_doc(&mut self, doc: &Arc<LemmaDoc>) -> bool {
+        self.docs.remove(doc)
+    }
+
+    pub fn len(&self) -> usize {
+        self.docs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.docs.is_empty()
+    }
+
+    // ─── Temporal helpers ────────────────────────────────────────────
+
+    /// Returns the effective range `[from, to)` for a document in this context.
+    ///
+    /// - `from`: `doc.effective_from()` (None = -∞)
+    /// - `to`: next temporal version's `effective_from`, or None (+∞) if no successor.
+    pub fn effective_range(
+        &self,
+        doc: &Arc<LemmaDoc>,
+    ) -> (Option<DateTimeValue>, Option<DateTimeValue>) {
+        let from = doc.effective_from().cloned();
+        let versions = self.docs_for_name(&doc.name);
+        let pos = versions
+            .iter()
+            .position(|v| Arc::ptr_eq(v, doc))
+            .unwrap_or_else(|| {
+                unreachable!(
+                    "BUG: effective_range called with doc '{}' not in context",
+                    doc.name
+                )
+            });
+        let to = versions
+            .get(pos + 1)
+            .and_then(|next| next.effective_from().cloned());
+        (from, to)
+    }
+
+    /// Returns all `effective_from` dates for temporal versions of `name`, sorted ascending.
+    /// Temporal versions without `effective_from` are excluded (they represent -∞).
+    pub fn version_boundaries(&self, name: &str) -> Vec<DateTimeValue> {
+        self.docs_for_name(name)
+            .iter()
+            .filter_map(|doc| doc.effective_from().cloned())
+            .collect()
+    }
+
+    /// Check if temporal versions of `dep_name` fully cover the range
+    /// `[required_from, required_to)`.
+    ///
+    /// Returns gaps as `(start, end)` intervals. Empty vec = fully covered.
+    /// Start: None = -∞, End: None = +∞.
+    pub fn dep_coverage_gaps(
+        &self,
+        dep_name: &str,
+        required_from: Option<&DateTimeValue>,
+        required_to: Option<&DateTimeValue>,
+    ) -> Vec<(Option<DateTimeValue>, Option<DateTimeValue>)> {
+        let versions = self.docs_for_name(dep_name);
+        if versions.is_empty() {
+            return vec![(required_from.cloned(), required_to.cloned())];
+        }
+
+        let req_start = TemporalBound::from_start(required_from);
+        let req_end = TemporalBound::from_end(required_to);
+
+        let intervals: Vec<(TemporalBound, TemporalBound)> = versions
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let start = TemporalBound::from_start(v.effective_from());
+                let end = match versions.get(i + 1).and_then(|next| next.effective_from()) {
+                    Some(next_from) => TemporalBound::At(next_from.clone()),
+                    None => TemporalBound::PosInf,
+                };
+                (start, end)
+            })
+            .collect();
+
+        let mut gaps = Vec::new();
+        let mut cursor = req_start.clone();
+
+        for (v_start, v_end) in &intervals {
+            if cursor >= req_end {
+                break;
+            }
+
+            if *v_end <= cursor {
+                continue;
+            }
+
+            if *v_start > cursor {
+                let gap_end = std::cmp::min(v_start.clone(), req_end.clone());
+                if cursor < gap_end {
+                    gaps.push((cursor.to_start(), gap_end.to_end()));
+                }
+            }
+
+            if *v_end > cursor {
+                cursor = v_end.clone();
+            }
+        }
+
+        if cursor < req_end {
+            gaps.push((cursor.to_start(), req_end.to_end()));
+        }
+
+        gaps
+    }
+}
+
+// ─── Slice plan lookup ───────────────────────────────────────────────
+
+/// Find the plan whose `[valid_from, valid_to)` interval contains `effective`.
+fn find_slice_plan<'a>(
+    plans: &'a [crate::planning::ExecutionPlan],
+    effective: &DateTimeValue,
+) -> Option<&'a crate::planning::ExecutionPlan> {
+    for plan in plans {
+        let from_ok = plan
+            .valid_from
+            .as_ref()
+            .map(|f| *effective >= *f)
+            .unwrap_or(true);
+        let to_ok = plan
+            .valid_to
+            .as_ref()
+            .map(|t| *effective < *t)
+            .unwrap_or(true);
+        if from_ok && to_ok {
+            return Some(plan);
+        }
+    }
+    None
+}
+
+// ─── Engine ──────────────────────────────────────────────────────────
 
 /// Engine for evaluating Lemma rules
 ///
@@ -15,23 +325,25 @@ use std::sync::Arc;
 /// references by fetching source text from the Registry, parsing it, and including
 /// the resulting Lemma docs in the document set before planning.
 pub struct Engine {
-    execution_plans: HashMap<String, crate::planning::ExecutionPlan>,
-    documents: HashMap<String, LemmaDoc>,
+    execution_plans: HashMap<Arc<LemmaDoc>, Vec<crate::planning::ExecutionPlan>>,
+    documents: Context,
     sources: HashMap<String, String>,
     evaluator: Evaluator,
     limits: ResourceLimits,
     registry: Option<Arc<dyn Registry>>,
+    hash_pins: HashMap<Arc<LemmaDoc>, String>,
 }
 
 impl Default for Engine {
     fn default() -> Self {
         Self {
             execution_plans: HashMap::new(),
-            documents: HashMap::new(),
+            documents: Context::new(),
             sources: HashMap::new(),
             evaluator: Evaluator,
             limits: ResourceLimits::default(),
             registry: Self::default_registry(),
+            hash_pins: HashMap::new(),
         }
     }
 }
@@ -65,11 +377,12 @@ impl Engine {
     pub fn with_limits(limits: ResourceLimits) -> Self {
         Self {
             execution_plans: HashMap::new(),
-            documents: HashMap::new(),
+            documents: Context::new(),
             sources: HashMap::new(),
             evaluator: Evaluator,
             limits,
             registry: Self::default_registry(),
+            hash_pins: HashMap::new(),
         }
     }
 
@@ -80,6 +393,51 @@ impl Engine {
     pub fn with_registry(mut self, registry: Arc<dyn Registry>) -> Self {
         self.registry = Some(registry);
         self
+    }
+
+    /// Get the content hash (hash pin) for the temporal version active at `effective`.
+    pub fn hash_pin(&self, doc_name: &str, effective: &DateTimeValue) -> Option<&str> {
+        let doc_arc = self.get_document(doc_name, effective)?;
+        self.hash_pin_for_doc(&doc_arc)
+    }
+
+    /// Get the content hash for a specific document (by arc). Used when the resolved doc is already known.
+    pub fn hash_pin_for_doc(&self, doc: &Arc<LemmaDoc>) -> Option<&str> {
+        self.hash_pins.get(doc).map(|s| s.as_str())
+    }
+
+    /// Get all hash pins as (doc_name, effective_from_display, hash) triples.
+    pub fn all_hash_pins(&self) -> Vec<(&str, Option<String>, &str)> {
+        self.hash_pins
+            .iter()
+            .map(|(doc, hash)| {
+                (
+                    doc.name.as_str(),
+                    doc.effective_from().map(|af| af.to_string()),
+                    hash.as_str(),
+                )
+            })
+            .collect()
+    }
+
+    /// Get the document with the given name whose content hash matches `hash_pin`.
+    /// Returns `None` if no such document exists or if multiple versions match (hash collision).
+    pub fn get_document_by_hash_pin(
+        &self,
+        doc_name: &str,
+        hash_pin: &str,
+    ) -> Option<Arc<LemmaDoc>> {
+        let mut matched: Option<Arc<LemmaDoc>> = None;
+        for doc in self.documents.docs_for_name(doc_name) {
+            let computed = self.hash_pins.get(&doc).map(|s| s.as_str()).unwrap_or("");
+            if crate::planning::content_hash::content_hash_matches(hash_pin, computed) {
+                if matched.is_some() {
+                    return None;
+                }
+                matched = Some(doc);
+            }
+        }
+        matched
     }
 
     /// Add Lemma source files and (when a registry is configured) resolve any `@...` references.
@@ -95,83 +453,73 @@ impl Engine {
         files: HashMap<String, String>,
     ) -> Result<(), Vec<Error>> {
         let mut errors: Vec<Error> = Vec::new();
-        let mut all_new_docs: Vec<LemmaDoc> = Vec::new();
 
-        // 1. Parse all files, collect parse errors and detect duplicate document names.
-        //    Duplicates are checked against both existing documents (from prior calls)
-        //    and documents parsed earlier in this same call.
         for (source_id, code) in &files {
             match parse(code, source_id, &self.limits) {
                 Ok(new_docs) => {
                     let source_text: Arc<str> = Arc::from(code.as_str());
                     for doc in new_docs {
-                        let doc_id = doc.full_id();
-                        let attribute = doc.attribute.clone().unwrap_or_else(|| doc_id.clone());
+                        let attribute = doc.attribute.clone().unwrap_or_else(|| doc.name.clone());
+                        let start_line = doc.start_line;
+                        let doc_name = doc.name.clone();
 
-                        if let Some(existing) = self.documents.get(&doc_id) {
-                            let earlier_attr =
-                                existing.attribute.as_deref().unwrap_or(&existing.name);
-                            errors.push(Error::planning(
-                                format!(
-                                    "Duplicate document name '{}' (previously declared in '{}')",
-                                    doc_id, earlier_attr
-                                ),
-                                Some(crate::Source::new(
+                        match self.documents.insert_doc(Arc::new(doc)) {
+                            Ok(()) => {
+                                self.sources.insert(attribute, code.clone());
+                            }
+                            Err(e) => {
+                                let source = crate::Source::new(
                                     &attribute,
                                     crate::parsing::ast::Span {
                                         start: 0,
                                         end: 0,
-                                        line: doc.start_line,
+                                        line: start_line,
                                         col: 0,
                                     },
-                                    &doc_id,
-                                    source_text.clone(),
-                                )),
-                                None::<String>,
-                            ));
-                        } else {
-                            self.sources.insert(attribute, code.clone());
-                            self.documents.insert(doc_id, doc.clone());
+                                    &doc_name,
+                                    Arc::clone(&source_text),
+                                );
+                                errors.push(Error::validation(
+                                    e.to_string(),
+                                    Some(source),
+                                    None::<String>,
+                                ));
+                            }
                         }
-
-                        all_new_docs.push(doc);
                     }
                 }
                 Err(e) => errors.push(e),
             }
         }
 
-        // 2. Resolve registry references once for all documents
         if let Some(registry) = &self.registry {
-            let docs_to_resolve: Vec<LemmaDoc> = self.documents.values().cloned().collect();
-            match crate::registry::resolve_registry_references(
-                docs_to_resolve,
+            if let Err(registry_errors) = crate::registry::resolve_registry_references(
+                &mut self.documents,
                 &mut self.sources,
                 registry.as_ref(),
                 &self.limits,
             )
             .await
             {
-                Ok(resolved_docs) => {
-                    self.documents.clear();
-                    for doc in resolved_docs {
-                        self.documents.insert(doc.full_id(), doc);
-                    }
-                }
-                Err(e) => match e {
-                    Error::MultipleErrors(inner) => errors.extend(inner),
-                    other => errors.push(other),
-                },
+                errors.extend(registry_errors);
             }
         }
 
-        // 3. Plan all new documents at once (validates and resolves types once)
-        let docs_to_plan: Vec<&LemmaDoc> = all_new_docs.iter().collect();
-        let all_docs: Vec<LemmaDoc> = self.documents.values().cloned().collect();
-        let (plans, plan_errors) =
-            crate::planning::plan(&docs_to_plan, &all_docs, self.sources.clone());
-        self.execution_plans.extend(plans);
-        errors.extend(plan_errors);
+        let planning_result = crate::planning::plan(&self.documents, self.sources.clone());
+        for doc_result in &planning_result.per_document {
+            self.execution_plans
+                .insert(Arc::clone(&doc_result.document), doc_result.plans.clone());
+            self.hash_pins.insert(
+                Arc::clone(&doc_result.document),
+                doc_result.hash_pin.clone(),
+            );
+        }
+        errors.extend(planning_result.global_errors);
+        for doc_result in planning_result.per_document {
+            for err in doc_result.errors {
+                errors.push(err.with_document_context(Arc::clone(&doc_result.document)));
+            }
+        }
 
         if errors.is_empty() {
             Ok(())
@@ -180,33 +528,113 @@ impl Engine {
         }
     }
 
-    pub fn remove_document(&mut self, doc_name: &str) {
-        self.execution_plans.remove(doc_name);
-        self.documents.remove(doc_name);
+    pub fn remove_document(&mut self, doc: Arc<LemmaDoc>) {
+        self.execution_plans.remove(&doc);
+        self.documents.remove_doc(&doc);
     }
 
-    pub fn list_documents(&self) -> Vec<String> {
-        self.documents.keys().cloned().collect()
+    /// All documents, all temporal versions, ordered by (name, effective_from).
+    pub fn list_documents(&self) -> Vec<Arc<LemmaDoc>> {
+        self.documents.iter().collect()
     }
 
-    pub fn get_document(&self, doc_name: &str) -> Option<&LemmaDoc> {
-        self.documents.get(doc_name)
+    /// Documents active at `effective` (one per name).
+    pub fn list_documents_effective(&self, effective: &DateTimeValue) -> Vec<Arc<LemmaDoc>> {
+        let mut seen_names = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        for doc in self.documents.iter() {
+            if seen_names.contains(&doc.name) {
+                continue;
+            }
+            if let Some(active) = self.documents.get_doc(&doc.name, effective) {
+                if seen_names.insert(active.name.clone()) {
+                    result.push(active);
+                }
+            }
+        }
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        result
+    }
+
+    /// All temporal slice plans for a specific temporal version (of the main document).
+    pub fn get_execution_plans(
+        &self,
+        doc: &Arc<LemmaDoc>,
+    ) -> Option<&[crate::planning::ExecutionPlan]> {
+        self.execution_plans.get(doc).map(|v| v.as_slice())
+    }
+
+    /// Get document by name at a specific time.
+    pub fn get_document(
+        &self,
+        doc_name: &str,
+        effective: &DateTimeValue,
+    ) -> Option<std::sync::Arc<LemmaDoc>> {
+        self.documents.get_doc(doc_name, effective)
+    }
+
+    /// Build a "not found" error that includes the effective date and lists
+    /// available temporal versions when the document name exists but no temporal version
+    /// matches the requested time.
+    fn doc_not_found_error(&self, doc_name: &str, effective: &DateTimeValue) -> Error {
+        let versions = self.documents.docs_for_name(doc_name);
+        let msg = if versions.is_empty() {
+            format!("Document '{}' not found", doc_name)
+        } else {
+            let version_list: Vec<String> = versions
+                .iter()
+                .map(|d| match d.effective_from() {
+                    Some(dt) => format!("  {} (effective from {})", d.name, dt),
+                    None => format!("  {} (no effective_from)", d.name),
+                })
+                .collect();
+            format!(
+                "Document '{}' not found for effective {}. Available temporal versions:\n{}",
+                doc_name,
+                effective,
+                version_list.join("\n")
+            )
+        };
+        Error::request(msg, None, None::<String>)
     }
 
     /// Get the execution plan for a document.
     ///
-    /// The execution plan contains the resolved fact schema, default values,
-    /// and topologically sorted rules ready for evaluation.
-    pub fn get_execution_plan(&self, doc_name: &str) -> Option<&crate::planning::ExecutionPlan> {
-        self.execution_plans.get(doc_name)
+    /// When `hash_pin` is `Some`, resolves the document by content hash for that name,
+    /// then returns the slice plan that covers `effective`. When `hash_pin` is `None`,
+    /// resolves the temporal version active at `effective` then finds the covering slice plan.
+    /// Returns `None` when the document does not exist or has no matching plan.
+    pub fn get_execution_plan(
+        &self,
+        doc_name: &str,
+        hash_pin: Option<&str>,
+        effective: &DateTimeValue,
+    ) -> Option<&crate::planning::ExecutionPlan> {
+        let arc = if let Some(pin) = hash_pin {
+            self.get_document_by_hash_pin(doc_name, pin)?
+        } else {
+            self.get_document(doc_name, effective)?
+        };
+        let slice_plans = self.execution_plans.get(&arc)?;
+        let plan = find_slice_plan(slice_plans, effective);
+        if plan.is_none() && !slice_plans.is_empty() {
+            unreachable!(
+                "BUG: document '{}' has {} slice plans but none covers effective={} — slice partition is broken",
+                doc_name, slice_plans.len(), effective
+            );
+        }
+        plan
     }
 
-    pub fn get_document_rules(&self, doc_name: &str) -> Vec<&crate::LemmaRule> {
-        if let Some(doc) = self.documents.get(doc_name) {
-            doc.rules.iter().collect()
-        } else {
-            Vec::new()
-        }
+    pub fn get_document_rules(
+        &self,
+        doc_name: &str,
+        effective: &DateTimeValue,
+    ) -> Result<Vec<crate::LemmaRule>, Error> {
+        let arc = self
+            .get_document(doc_name, effective)
+            .ok_or_else(|| self.doc_not_found_error(doc_name, effective))?;
+        Ok(arc.rules.clone())
     }
 
     /// Evaluate rules in a document with JSON values for facts.
@@ -219,19 +647,20 @@ impl Engine {
     ///
     /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
     /// They are automatically parsed to the expected type based on the document schema.
+    ///
+    /// When `hash_pin` is `Some`, the document is resolved by that content hash; otherwise
+    /// by temporal resolution at `effective`. Evaluation uses the resolved plan.
     pub fn evaluate_json(
         &self,
         doc_name: &str,
+        hash_pin: Option<&str>,
+        effective: &DateTimeValue,
         rule_names: Vec<String>,
         json: &[u8],
-    ) -> LemmaResult<Response> {
-        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
-            Error::planning(
-                format!("Document '{}' not found", doc_name),
-                None,
-                None::<String>,
-            )
-        })?;
+    ) -> Result<Response, Error> {
+        let base_plan = self
+            .get_execution_plan(doc_name, hash_pin, effective)
+            .ok_or_else(|| self.doc_not_found_error(doc_name, effective))?;
 
         let values = crate::serialization::from_json(json)?;
         let plan = base_plan.clone().with_fact_values(values, &self.limits)?;
@@ -250,19 +679,20 @@ impl Engine {
     ///
     /// Fact values are provided as name -> value string pairs (e.g., "type" -> "latte").
     /// They are automatically parsed to the expected type based on the document schema.
+    ///
+    /// When `hash_pin` is `Some`, the document is resolved by that content hash; otherwise
+    /// by temporal resolution at `effective`. Evaluation uses the resolved plan.
     pub fn evaluate(
         &self,
         doc_name: &str,
+        hash_pin: Option<&str>,
+        effective: &DateTimeValue,
         rule_names: Vec<String>,
         fact_values: HashMap<String, String>,
-    ) -> LemmaResult<Response> {
-        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
-            Error::planning(
-                format!("Document '{}' not found", doc_name),
-                None,
-                None::<String>,
-            )
-        })?;
+    ) -> Result<Response, Error> {
+        let base_plan = self
+            .get_execution_plan(doc_name, hash_pin, effective)
+            .ok_or_else(|| self.doc_not_found_error(doc_name, effective))?;
 
         let plan = base_plan
             .clone()
@@ -278,12 +708,13 @@ impl Engine {
     pub fn invert_json(
         &self,
         doc_name: &str,
+        effective: &DateTimeValue,
         rule_name: &str,
         target: crate::inversion::Target,
         json: &[u8],
-    ) -> LemmaResult<crate::InversionResponse> {
+    ) -> Result<crate::InversionResponse, Error> {
         let values = crate::serialization::from_json(json)?;
-        self.invert(doc_name, rule_name, target, values)
+        self.invert(doc_name, effective, rule_name, target, values)
     }
 
     /// Invert a rule to find input domains that produce a desired outcome.
@@ -293,17 +724,14 @@ impl Engine {
     pub fn invert(
         &self,
         doc_name: &str,
+        effective: &DateTimeValue,
         rule_name: &str,
         target: crate::inversion::Target,
         values: HashMap<String, String>,
-    ) -> LemmaResult<crate::InversionResponse> {
-        let base_plan = self.execution_plans.get(doc_name).ok_or_else(|| {
-            Error::planning(
-                format!("Document '{}' not found", doc_name),
-                None,
-                None::<String>,
-            )
-        })?;
+    ) -> Result<crate::InversionResponse, Error> {
+        let base_plan = self
+            .get_execution_plan(doc_name, None, effective)
+            .ok_or_else(|| self.doc_not_found_error(doc_name, effective))?;
 
         let plan = base_plan.clone().with_fact_values(values, &self.limits)?;
         let provided_facts: std::collections::HashSet<_> = plan
@@ -320,7 +748,7 @@ impl Engine {
         &self,
         plan: crate::planning::ExecutionPlan,
         rule_names: Vec<String>,
-    ) -> LemmaResult<Response> {
+    ) -> Result<Response, Error> {
         let mut response = self.evaluator.evaluate(&plan);
 
         if !rule_names.is_empty() {
@@ -337,17 +765,174 @@ mod tests {
     use rust_decimal::Decimal;
     use std::str::FromStr;
 
-    fn add_lemma_code_blocking(engine: &mut Engine, code: &str, source: &str) -> LemmaResult<()> {
+    fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
+        DateTimeValue {
+            year,
+            month,
+            day,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            timezone: None,
+        }
+    }
+
+    fn make_doc(name: &str) -> LemmaDoc {
+        LemmaDoc::new(name.to_string())
+    }
+
+    fn make_doc_with_range(name: &str, effective_from: Option<DateTimeValue>) -> LemmaDoc {
+        let mut doc = LemmaDoc::new(name.to_string());
+        doc.effective_from = effective_from;
+        doc
+    }
+
+    // ─── Context::effective_range tests ──────────────────────────────
+
+    #[test]
+    fn effective_range_unbounded_single_version() {
+        let mut ctx = Context::new();
+        let doc = Arc::new(make_doc("a"));
+        ctx.insert_doc(Arc::clone(&doc)).unwrap();
+
+        let (from, to) = ctx.effective_range(&doc);
+        assert_eq!(from, None);
+        assert_eq!(to, None);
+    }
+
+    #[test]
+    fn effective_range_soft_end_from_next_version() {
+        let mut ctx = Context::new();
+        let v1 = Arc::new(make_doc_with_range("a", Some(date(2025, 1, 1))));
+        let v2 = Arc::new(make_doc_with_range("a", Some(date(2025, 6, 1))));
+        ctx.insert_doc(Arc::clone(&v1)).unwrap();
+        ctx.insert_doc(Arc::clone(&v2)).unwrap();
+
+        let (from, to) = ctx.effective_range(&v1);
+        assert_eq!(from, Some(date(2025, 1, 1)));
+        assert_eq!(to, Some(date(2025, 6, 1)));
+
+        let (from, to) = ctx.effective_range(&v2);
+        assert_eq!(from, Some(date(2025, 6, 1)));
+        assert_eq!(to, None);
+    }
+
+    #[test]
+    fn effective_range_unbounded_start_with_successor() {
+        let mut ctx = Context::new();
+        let v1 = Arc::new(make_doc("a"));
+        let v2 = Arc::new(make_doc_with_range("a", Some(date(2025, 3, 1))));
+        ctx.insert_doc(Arc::clone(&v1)).unwrap();
+        ctx.insert_doc(Arc::clone(&v2)).unwrap();
+
+        let (from, to) = ctx.effective_range(&v1);
+        assert_eq!(from, None);
+        assert_eq!(to, Some(date(2025, 3, 1)));
+    }
+
+    // ─── Context::version_boundaries tests ───────────────────────────
+
+    #[test]
+    fn version_boundaries_single_unversioned() {
+        let mut ctx = Context::new();
+        ctx.insert_doc(Arc::new(make_doc("a"))).unwrap();
+
+        assert!(ctx.version_boundaries("a").is_empty());
+    }
+
+    #[test]
+    fn version_boundaries_multiple_versions() {
+        let mut ctx = Context::new();
+        ctx.insert_doc(Arc::new(make_doc("a"))).unwrap();
+        ctx.insert_doc(Arc::new(make_doc_with_range("a", Some(date(2025, 3, 1)))))
+            .unwrap();
+        ctx.insert_doc(Arc::new(make_doc_with_range("a", Some(date(2025, 6, 1)))))
+            .unwrap();
+
+        let boundaries = ctx.version_boundaries("a");
+        assert_eq!(boundaries, vec![date(2025, 3, 1), date(2025, 6, 1)]);
+    }
+
+    #[test]
+    fn version_boundaries_nonexistent_name() {
+        let ctx = Context::new();
+        assert!(ctx.version_boundaries("nope").is_empty());
+    }
+
+    // ─── Context::dep_coverage_gaps tests ────────────────────────────
+
+    #[test]
+    fn dep_coverage_no_versions_is_full_gap() {
+        let ctx = Context::new();
+        let gaps =
+            ctx.dep_coverage_gaps("missing", Some(&date(2025, 1, 1)), Some(&date(2025, 6, 1)));
+        assert_eq!(gaps, vec![(Some(date(2025, 1, 1)), Some(date(2025, 6, 1)))]);
+    }
+
+    #[test]
+    fn dep_coverage_single_unbounded_version_covers_everything() {
+        let mut ctx = Context::new();
+        ctx.insert_doc(Arc::new(make_doc("dep"))).unwrap();
+
+        let gaps = ctx.dep_coverage_gaps("dep", None, None);
+        assert!(gaps.is_empty());
+
+        let gaps = ctx.dep_coverage_gaps("dep", Some(&date(2025, 1, 1)), Some(&date(2025, 12, 1)));
+        assert!(gaps.is_empty());
+    }
+
+    #[test]
+    fn dep_coverage_single_version_with_from_leaves_leading_gap() {
+        let mut ctx = Context::new();
+        ctx.insert_doc(Arc::new(make_doc_with_range("dep", Some(date(2025, 3, 1)))))
+            .unwrap();
+
+        let gaps = ctx.dep_coverage_gaps("dep", None, None);
+        assert_eq!(gaps, vec![(None, Some(date(2025, 3, 1)))]);
+    }
+
+    #[test]
+    fn dep_coverage_continuous_versions_no_gaps() {
+        let mut ctx = Context::new();
+        ctx.insert_doc(Arc::new(make_doc_with_range("dep", Some(date(2025, 1, 1)))))
+            .unwrap();
+        ctx.insert_doc(Arc::new(make_doc_with_range("dep", Some(date(2025, 6, 1)))))
+            .unwrap();
+
+        let gaps = ctx.dep_coverage_gaps("dep", Some(&date(2025, 1, 1)), Some(&date(2025, 12, 1)));
+        assert!(gaps.is_empty());
+    }
+
+    #[test]
+    fn dep_coverage_dep_starts_after_required_start() {
+        let mut ctx = Context::new();
+        ctx.insert_doc(Arc::new(make_doc_with_range("dep", Some(date(2025, 6, 1)))))
+            .unwrap();
+
+        let gaps = ctx.dep_coverage_gaps("dep", Some(&date(2025, 1, 1)), Some(&date(2025, 12, 1)));
+        assert_eq!(gaps, vec![(Some(date(2025, 1, 1)), Some(date(2025, 6, 1)))]);
+    }
+
+    #[test]
+    fn dep_coverage_unbounded_required_range() {
+        let mut ctx = Context::new();
+        ctx.insert_doc(Arc::new(make_doc_with_range("dep", Some(date(2025, 6, 1)))))
+            .unwrap();
+
+        let gaps = ctx.dep_coverage_gaps("dep", None, None);
+        assert_eq!(gaps, vec![(None, Some(date(2025, 6, 1)))]);
+    }
+
+    fn add_lemma_code_blocking(
+        engine: &mut Engine,
+        code: &str,
+        source: &str,
+    ) -> Result<(), Vec<Error>> {
         let files: HashMap<String, String> =
             std::iter::once((source.to_string(), code.to_string())).collect();
         tokio::runtime::Runtime::new()
             .expect("tokio runtime")
             .block_on(engine.add_lemma_files(files))
-            .map_err(|errs| match errs.len() {
-                0 => unreachable!("add_lemma_files returned Err with empty error list"),
-                1 => errs.into_iter().next().unwrap(),
-                _ => Error::MultipleErrors(errs),
-            })
     }
 
     #[test]
@@ -366,7 +951,10 @@ mod tests {
         )
         .unwrap();
 
-        let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+        let now = DateTimeValue::now();
+        let response = engine
+            .evaluate("test", None, &now, vec![], HashMap::new())
+            .unwrap();
         assert_eq!(response.results.len(), 2);
 
         let sum_result = response
@@ -408,7 +996,10 @@ mod tests {
         )
         .unwrap();
 
-        let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+        let now = DateTimeValue::now();
+        let response = engine
+            .evaluate("test", None, &now, vec![], HashMap::new())
+            .unwrap();
         assert_eq!(response.results.len(), 1);
         assert_eq!(
             response.results.values().next().unwrap().result,
@@ -432,7 +1023,10 @@ mod tests {
         )
         .unwrap();
 
-        let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+        let now = DateTimeValue::now();
+        let response = engine
+            .evaluate("test", None, &now, vec![], HashMap::new())
+            .unwrap();
         assert_eq!(
             response.results.values().next().unwrap().result,
             crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::from_bool(true)))
@@ -454,7 +1048,10 @@ mod tests {
         )
         .unwrap();
 
-        let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+        let now = DateTimeValue::now();
+        let response = engine
+            .evaluate("test", None, &now, vec![], HashMap::new())
+            .unwrap();
         assert_eq!(
             response.results.values().next().unwrap().result,
             crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
@@ -466,7 +1063,8 @@ mod tests {
     #[test]
     fn test_document_not_found() {
         let engine = Engine::new();
-        let result = engine.evaluate("nonexistent", vec![], HashMap::new());
+        let now = DateTimeValue::now();
+        let result = engine.evaluate("nonexistent", None, &now, vec![], HashMap::new());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -496,7 +1094,10 @@ mod tests {
         )
         .unwrap();
 
-        let response1 = engine.evaluate("doc1", vec![], HashMap::new()).unwrap();
+        let now = DateTimeValue::now();
+        let response1 = engine
+            .evaluate("doc1", None, &now, vec![], HashMap::new())
+            .unwrap();
         assert_eq!(
             response1.results[0].result,
             crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
@@ -504,7 +1105,9 @@ mod tests {
             )))
         );
 
-        let response2 = engine.evaluate("doc2", vec![], HashMap::new()).unwrap();
+        let response2 = engine
+            .evaluate("doc2", None, &now, vec![], HashMap::new())
+            .unwrap();
         assert_eq!(
             response2.results[0].result,
             crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
@@ -528,7 +1131,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = engine.evaluate("test", vec![], HashMap::new());
+        let now = DateTimeValue::now();
+        let result = engine.evaluate("test", None, &now, vec![], HashMap::new());
         // Division by zero returns a Veto (not an error)
         assert!(result.is_ok(), "Evaluation should succeed");
         let response = result.unwrap();
@@ -572,7 +1176,10 @@ mod tests {
         )
         .unwrap();
 
-        let response = engine.evaluate("test", vec![], HashMap::new()).unwrap();
+        let now = DateTimeValue::now();
+        let response = engine
+            .evaluate("test", None, &now, vec![], HashMap::new())
+            .unwrap();
         assert_eq!(response.results.len(), 3);
 
         // Verify source positions increase (z < y < x)
@@ -625,8 +1232,15 @@ mod tests {
         .unwrap();
 
         // Request only 'total', but it depends on 'subtotal' and 'tax'
+        let now = DateTimeValue::now();
         let response = engine
-            .evaluate("test", vec!["total".to_string()], HashMap::new())
+            .evaluate(
+                "test",
+                None,
+                &now,
+                vec!["total".to_string()],
+                HashMap::new(),
+            )
             .unwrap();
 
         // Only 'total' should be in results
@@ -647,9 +1261,9 @@ mod tests {
     // Registry integration tests
     // -------------------------------------------------------------------
 
+    use crate::parsing::ast::DateTimeValue;
     use crate::registry::{RegistryBundle, RegistryError};
 
-    /// Minimal test registry for engine-level tests.
     struct EngineTestRegistry {
         bundles: std::collections::HashMap<String, RegistryBundle>,
     }
@@ -675,30 +1289,29 @@ mod tests {
     #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
     #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
     impl Registry for EngineTestRegistry {
-        async fn resolve_doc(
-            &self,
-            name: &str,
-            _version: Option<&str>,
-        ) -> Result<RegistryBundle, RegistryError> {
+        async fn fetch_docs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             self.bundles.get(name).cloned().ok_or(RegistryError {
                 message: format!("not found: {}", name),
                 kind: crate::registry::RegistryErrorKind::NotFound,
             })
         }
 
-        async fn resolve_type(
-            &self,
-            name: &str,
-            _version: Option<&str>,
-        ) -> Result<RegistryBundle, RegistryError> {
+        async fn fetch_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             self.bundles.get(name).cloned().ok_or(RegistryError {
                 message: format!("not found: {}", name),
                 kind: crate::registry::RegistryErrorKind::NotFound,
             })
         }
 
-        fn url_for_id(&self, name: &str, _version: Option<&str>) -> Option<String> {
-            Some(format!("https://test/{}", name))
+        fn url_for_id(&self, name: &str, effective: Option<&DateTimeValue>) -> Option<String> {
+            if self.bundles.contains_key(name) {
+                Some(match effective {
+                    None => format!("https://test/{}", name),
+                    Some(d) => format!("https://test/{}?effective={}", name, d),
+                })
+            } else {
+                None
+            }
         }
     }
 
@@ -706,11 +1319,12 @@ mod tests {
     fn engine_without_registry() -> Engine {
         Engine {
             execution_plans: HashMap::new(),
-            documents: HashMap::new(),
+            documents: Context::new(),
             sources: HashMap::new(),
             evaluator: Evaluator,
             limits: ResourceLimits::default(),
             registry: None,
+            hash_pins: HashMap::new(),
         }
     }
 
@@ -733,8 +1347,9 @@ rule value: external.quantity"#,
         )
         .expect("add_lemma_files should succeed with registry resolving the external doc");
 
+        let now = DateTimeValue::now();
         let response = engine
-            .evaluate("main_doc", vec![], HashMap::new())
+            .evaluate("main_doc", None, &now, vec![], HashMap::new())
             .expect("evaluate should succeed");
 
         let value_result = response
@@ -764,8 +1379,9 @@ rule doubled: price * 2"#,
             "add_lemma_files should succeed without registry when there are no @... references",
         );
 
+        let now = DateTimeValue::now();
         let response = engine
-            .evaluate("local_only", vec![], HashMap::new())
+            .evaluate("local_only", None, &now, vec![], HashMap::new())
             .expect("evaluate should succeed");
 
         assert!(response.results.contains_key("doubled"));
@@ -808,15 +1424,12 @@ rule value: external.quantity"#,
             result.is_err(),
             "Should fail when registry cannot resolve the @... reference"
         );
-        let error = result.unwrap_err();
-        let registry_err = match &error {
-            Error::Registry { .. } => &error,
-            Error::MultipleErrors(inner) => inner
-                .iter()
-                .find(|e| matches!(e, Error::Registry { .. }))
-                .expect("MultipleErrors should contain at least one Registry error"),
-            other => panic!("Expected Error::Registry or MultipleErrors, got: {}", other),
-        };
+        let errs = result.unwrap_err();
+        assert!(!errs.is_empty(), "expected at least one error");
+        let registry_err = errs
+            .iter()
+            .find(|e| matches!(e, Error::Registry { .. }))
+            .expect("error list should contain at least one Registry error");
         match registry_err {
             Error::Registry {
                 identifier, kind, ..
@@ -826,8 +1439,11 @@ rule value: external.quantity"#,
             }
             _ => unreachable!(),
         }
-        // The Display output should also mention the identifier and kind.
-        let error_message = error.to_string();
+        let error_message = errs
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
         assert!(
             error_message.contains("org/project/missing"),
             "Error should mention the unresolved identifier: {}",
@@ -856,8 +1472,9 @@ rule val: ext.x"#,
         )
         .expect("with_registry should replace the default registry");
 
+        let now = DateTimeValue::now();
         let response = engine
-            .evaluate("main_doc", vec![], HashMap::new())
+            .evaluate("main_doc", None, &now, vec![], HashMap::new())
             .expect("evaluate should succeed");
 
         let val_result = response
@@ -890,27 +1507,26 @@ rule total: helper.value + price"#,
         );
 
         assert!(result.is_err(), "Should fail with multiple errors");
-        let error = result.unwrap_err();
-        let error_message = error.to_string();
+        let errs = result.unwrap_err();
+        assert!(
+            errs.len() >= 2,
+            "expected at least 2 errors (type + doc ref), got {}",
+            errs.len()
+        );
+        let error_message = errs
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
 
-        // The type resolution error should be present
         assert!(
             error_message.contains("money"),
             "Should mention type error about 'money'. Got:\n{}",
             error_message
         );
-
-        // The doc reference error should ALSO be present (not swallowed)
         assert!(
             error_message.contains("nonexistent_doc"),
             "Should mention doc reference error about 'nonexistent_doc'. Got:\n{}",
-            error_message
-        );
-
-        // The error should be a MultipleErrors variant since there are 2+ errors
-        assert!(
-            matches!(error, Error::MultipleErrors(_)),
-            "Expected MultipleErrors, got: {}",
             error_message
         );
     }

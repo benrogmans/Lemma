@@ -10,12 +10,14 @@
 //! Input to all methods is the identifier **without** the leading `@`
 //! (for example `"user/workspace/somedoc"` for `doc @user/workspace/somedoc`).
 
+use crate::engine::Context;
 use crate::error::Error;
 use crate::limits::ResourceLimits;
-use crate::parsing::ast::{FactValue, LemmaDoc, TypeDef};
+use crate::parsing::ast::{DateTimeValue, FactValue, TypeDef};
 use crate::parsing::source::Source;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Trait and types
@@ -89,38 +91,31 @@ impl std::error::Error for RegistryError {}
 /// Implementations must be `Send + Sync` so they can be shared across threads.
 /// Resolution is async so that WASM can use `fetch()` and native can use async HTTP.
 ///
-/// `name` is the base identifier **without** the leading `@` or version suffix.
-/// `version` is the optional version tag (e.g. `Some("v2")` for `@org/doc.v2`).
-/// On native the future is `Send` (for axum/tokio); on wasm we use `?Send` (gloo_net is !Send).
+/// `fetch_docs` / `fetch_types` return a bundle containing ALL temporal versions
+/// for the requested identifier. The engine handles temporal resolution
+/// locally using `effective_from` on the parsed documents.
+///
+/// `name` is the base identifier **without** the leading `@`.
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait Registry: Send + Sync {
-    /// Resolve a `doc @...` reference.
+    /// Fetch all temporal versions for a `doc @...` reference.
     ///
     /// `name` is the base name (e.g. `"user/workspace/somedoc"`).
-    /// `version` is the optional version tag (e.g. `Some("v2")`).
-    async fn resolve_doc(
-        &self,
-        name: &str,
-        version: Option<&str>,
-    ) -> Result<RegistryBundle, RegistryError>;
+    /// Returns a bundle whose `lemma_source` contains all temporal versions of the document.
+    async fn fetch_docs(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
 
-    /// Resolve a `type ... from @...` reference.
+    /// Fetch all temporal versions for a `type ... from @...` reference.
     ///
     /// `name` is the base name (e.g. `"lemma/std/finance"`).
-    /// `version` is the optional version tag.
-    async fn resolve_type(
-        &self,
-        name: &str,
-        version: Option<&str>,
-    ) -> Result<RegistryBundle, RegistryError>;
+    /// Returns a bundle whose `lemma_source` contains all temporal versions of the type source.
+    async fn fetch_types(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
 
     /// Map a Registry identifier to a human-facing address for navigation.
     ///
-    /// `name` is the base name after `@`.
-    /// `version` is the optional version tag.
-    /// Returning `None` means no address is available for this identifier.
-    fn url_for_id(&self, name: &str, version: Option<&str>) -> Option<String>;
+    /// `name` is the base name after `@`. `effective` is an optional datetime for
+    /// linking directly to a specific temporal version in the registry UI.
+    fn url_for_id(&self, name: &str, effective: Option<&DateTimeValue>) -> Option<String>;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,38 +243,37 @@ impl LemmaBase {
         Self { fetcher }
     }
 
-    /// Version is in the path (e.g. `doc.v2.lemma`), not a query param, so the requested version is explicit.
-    fn source_url(&self, name: &str, version: Option<&str>) -> String {
-        match version {
-            None => format!("{}/@{}.lemma", Self::BASE_URL, name),
-            Some(v) => format!("{}/@{}.{}.lemma", Self::BASE_URL, name, v),
+    /// Base URL for the document; when effective is set, appends ?effective=... for temporal resolution.
+    fn source_url(&self, name: &str, effective: Option<&DateTimeValue>) -> String {
+        let base = format!("{}/@{}.lemma", Self::BASE_URL, name);
+        match effective {
+            None => base,
+            Some(d) => format!("{}?effective={}", base, d),
         }
     }
 
-    /// Version is in the path (e.g. `doc.v2`), not a query param.
-    fn navigation_url(&self, name: &str, version: Option<&str>) -> String {
-        match version {
-            None => format!("{}/@{}", Self::BASE_URL, name),
-            Some(v) => format!("{}/@{}.{}", Self::BASE_URL, name, v),
+    /// Human-facing URL for navigation; when effective is set, appends ?effective=... for linking to a specific temporal version.
+    fn navigation_url(&self, name: &str, effective: Option<&DateTimeValue>) -> String {
+        let base = format!("{}/@{}", Self::BASE_URL, name);
+        match effective {
+            None => base,
+            Some(d) => format!("{}?effective={}", base, d),
         }
     }
 
-    /// Format a display identifier for error messages, e.g. `"@owner/repo/doc.v2"`.
-    fn display_id(name: &str, version: Option<&str>) -> String {
-        match version {
+    /// Format a display identifier for error messages, e.g. `"@owner/repo/doc"` or `"@owner/repo/doc 2026-01-01"`.
+    fn display_id(name: &str, effective: Option<&DateTimeValue>) -> String {
+        match effective {
             None => format!("@{}", name),
-            Some(v) => format!("@{}.{}", name, v),
+            Some(d) => format!("@{} {}", name, d),
         }
     }
 
-    async fn fetch_source(
-        &self,
-        name: &str,
-        version: Option<&str>,
-    ) -> Result<RegistryBundle, RegistryError> {
-        let url = self.source_url(name, version);
-        let display = Self::display_id(name, version);
-        let source_url = self.source_url(name, version);
+    /// Fetch all zones for the given identifier (no temporal filtering).
+    async fn fetch_source(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+        let url = self.source_url(name, None);
+        let display = Self::display_id(name, None);
+        let source_url = self.source_url(name, None);
 
         let lemma_source = self.fetcher.get(&url).await.map_err(|error| {
             if let Some(code) = error.status_code {
@@ -325,24 +319,16 @@ impl Default for LemmaBase {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl Registry for LemmaBase {
-    async fn resolve_doc(
-        &self,
-        name: &str,
-        version: Option<&str>,
-    ) -> Result<RegistryBundle, RegistryError> {
-        self.fetch_source(name, version).await
+    async fn fetch_docs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+        self.fetch_source(name).await
     }
 
-    async fn resolve_type(
-        &self,
-        name: &str,
-        version: Option<&str>,
-    ) -> Result<RegistryBundle, RegistryError> {
-        self.fetch_source(name, version).await
+    async fn fetch_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+        self.fetch_source(name).await
     }
 
-    fn url_for_id(&self, name: &str, version: Option<&str>) -> Option<String> {
-        Some(self.navigation_url(name, version))
+    fn url_for_id(&self, name: &str, effective: Option<&DateTimeValue>) -> Option<String> {
+        Some(self.navigation_url(name, effective))
     }
 }
 
@@ -359,31 +345,21 @@ impl Registry for LemmaBase {
 /// 4. Recurses: checks the newly added docs for further `@...` references.
 /// 5. Repeats until no unresolved references remain.
 ///
-/// Returns the complete document set (local docs plus all Registry-resolved docs)
-/// and an updated sources map (with entries for the Registry-returned source texts).
+/// Fetches unresolved `@...` references from the registry and inserts resulting docs into `ctx`.
+/// Updates `sources` with Registry-returned source texts.
 ///
 /// Errors are fatal: if the Registry returns an error, or if a `@...` reference
 /// cannot be resolved after calling the Registry, this function returns a `Error`.
 pub async fn resolve_registry_references(
-    local_docs: Vec<LemmaDoc>,
+    ctx: &mut Context,
     sources: &mut HashMap<String, String>,
     registry: &dyn Registry,
     limits: &ResourceLimits,
-) -> Result<Vec<LemmaDoc>, Error> {
-    let mut all_docs = local_docs;
-    // Dedup key: (name, version, kind)
-    let mut already_requested: HashSet<(String, Option<String>, RegistryReferenceKind)> =
-        HashSet::new();
-
-    let mut known_document_ids: HashSet<String> =
-        all_docs.iter().map(|doc| doc.full_id()).collect();
+) -> Result<(), Vec<Error>> {
+    let mut already_requested: HashSet<(String, RegistryReferenceKind)> = HashSet::new();
 
     loop {
-        let unresolved = collect_unresolved_registry_references(
-            &all_docs,
-            &known_document_ids,
-            &already_requested,
-        );
+        let unresolved = collect_unresolved_registry_references(ctx, &already_requested);
 
         if unresolved.is_empty() {
             break;
@@ -398,22 +374,11 @@ pub async fn resolve_registry_references(
             already_requested.insert(dedup);
 
             let bundle_result = match reference.kind {
-                RegistryReferenceKind::Document => {
-                    registry
-                        .resolve_doc(&reference.name, reference.version.as_deref())
-                        .await
-                }
-                RegistryReferenceKind::TypeImport => {
-                    registry
-                        .resolve_type(&reference.name, reference.version.as_deref())
-                        .await
-                }
+                RegistryReferenceKind::Document => registry.fetch_docs(&reference.name).await,
+                RegistryReferenceKind::TypeImport => registry.fetch_types(&reference.name).await,
             };
 
-            let display_id = match &reference.version {
-                None => reference.name.clone(),
-                Some(v) => format!("{}:{}", reference.name, v),
-            };
+            let display_id = reference.name.clone();
 
             let bundle = match bundle_result {
                 Ok(b) => b,
@@ -446,20 +411,28 @@ pub async fn resolve_registry_references(
 
             sources.insert(bundle.attribute.clone(), bundle.lemma_source.clone());
 
-            let new_docs = crate::parsing::parse(&bundle.lemma_source, &bundle.attribute, limits)?;
+            let new_docs =
+                match crate::parsing::parse(&bundle.lemma_source, &bundle.attribute, limits) {
+                    Ok(docs) => docs,
+                    Err(e) => {
+                        round_errors.push(e);
+                        return Err(round_errors);
+                    }
+                };
 
             for doc in new_docs {
-                known_document_ids.insert(doc.full_id());
-                all_docs.push(doc);
+                if let Err(e) = ctx.insert_doc(Arc::new(doc)) {
+                    round_errors.push(e);
+                }
             }
         }
 
         if !round_errors.is_empty() {
-            return Err(Error::MultipleErrors(round_errors));
+            return Err(round_errors);
         }
     }
 
-    Ok(all_docs)
+    Ok(())
 }
 
 /// The kind of `@...` reference: a document reference or a type import.
@@ -469,40 +442,31 @@ enum RegistryReferenceKind {
     TypeImport,
 }
 
-/// A collected `@...` reference with separate name and version fields.
+/// A collected `@...` reference needing registry fetch.
 #[derive(Debug, Clone)]
 struct RegistryReference {
     name: String,
-    version: Option<String>,
     kind: RegistryReferenceKind,
     source: Source,
 }
 
 impl RegistryReference {
-    /// Deduplication key: `(name, version, kind)`.
-    fn dedup_key(&self) -> (String, Option<String>, RegistryReferenceKind) {
-        (self.name.clone(), self.version.clone(), self.kind.clone())
+    fn dedup_key(&self) -> (String, RegistryReferenceKind) {
+        (self.name.clone(), self.kind.clone())
     }
 }
 
-/// Collect all unresolved `@...` references from the given docs.
-///
-/// An `@...` reference is "unresolved" if:
-/// - Its full identifier does not match any known document.
-/// - Its `(name, version, kind)` has not already been requested from the Registry.
-///
-/// When a doc has no `attribute`, refs from that doc are skipped (with a panic for
-/// the invariant violation).
+/// Collect all unresolved `@...` references from docs in `ctx`.
+/// Unresolved = not satisfied by ctx.get_doc(name, effective) and not already in already_requested.
 fn collect_unresolved_registry_references(
-    docs: &[LemmaDoc],
-    known_document_ids: &HashSet<String>,
-    already_requested: &HashSet<(String, Option<String>, RegistryReferenceKind)>,
+    ctx: &Context,
+    already_requested: &HashSet<(String, RegistryReferenceKind)>,
 ) -> Vec<RegistryReference> {
     let mut unresolved: Vec<RegistryReference> = Vec::new();
-    let mut seen_in_this_round: HashSet<(String, Option<String>, RegistryReferenceKind)> =
-        HashSet::new();
+    let mut seen_in_this_round: HashSet<(String, RegistryReferenceKind)> = HashSet::new();
 
-    for doc in docs {
+    for doc in ctx.iter() {
+        let doc = doc.as_ref();
         if doc.attribute.is_none() {
             let has_registry_refs =
                 doc.facts.iter().any(
@@ -525,19 +489,16 @@ fn collect_unresolved_registry_references(
                 if !doc_ref.is_registry {
                     continue;
                 }
-                let full_id = doc_ref.full_id();
-                let dedup = (
-                    doc_ref.name.clone(),
-                    doc_ref.version.clone(),
-                    RegistryReferenceKind::Document,
-                );
-                if !known_document_ids.contains(&full_id)
+                let already_satisfied = ctx
+                    .get_doc_effective_from(doc_ref.name.as_str(), None)
+                    .is_some();
+                let dedup = (doc_ref.name.clone(), RegistryReferenceKind::Document);
+                if !already_satisfied
                     && !already_requested.contains(&dedup)
                     && seen_in_this_round.insert(dedup)
                 {
                     unresolved.push(RegistryReference {
                         name: doc_ref.name.clone(),
-                        version: doc_ref.version.clone(),
                         kind: RegistryReferenceKind::Document,
                         source: fact.source_location.clone(),
                     });
@@ -555,19 +516,16 @@ fn collect_unresolved_registry_references(
                 if !from.is_registry {
                     continue;
                 }
-                let full_id = from.full_id();
-                let dedup = (
-                    from.name.clone(),
-                    from.version.clone(),
-                    RegistryReferenceKind::TypeImport,
-                );
-                if !known_document_ids.contains(&full_id)
+                let already_satisfied = ctx
+                    .get_doc_effective_from(from.name.as_str(), None)
+                    .is_some();
+                let dedup = (from.name.clone(), RegistryReferenceKind::TypeImport);
+                if !already_satisfied
                     && !already_requested.contains(&dedup)
                     && seen_in_this_round.insert(dedup)
                 {
                     unresolved.push(RegistryReference {
                         name: from.name.clone(),
-                        version: from.version.clone(),
                         kind: RegistryReferenceKind::TypeImport,
                         source: source_location.clone(),
                     });
@@ -587,7 +545,7 @@ fn collect_unresolved_registry_references(
 mod tests {
     use super::*;
 
-    /// A test Registry that returns predefined bundles for specific identifiers.
+    /// A test Registry that returns predefined bundles keyed by name.
     struct TestRegistry {
         bundles: HashMap<String, RegistryBundle>,
     }
@@ -599,6 +557,7 @@ mod tests {
             }
         }
 
+        /// Add a bundle containing all zones for this identifier.
         fn add_doc_bundle(&mut self, identifier: &str, lemma_source: &str) {
             self.bundles.insert(
                 identifier.to_string(),
@@ -613,11 +572,7 @@ mod tests {
     #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
     #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
     impl Registry for TestRegistry {
-        async fn resolve_doc(
-            &self,
-            name: &str,
-            _version: Option<&str>,
-        ) -> Result<RegistryBundle, RegistryError> {
+        async fn fetch_docs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             self.bundles
                 .get(name)
                 .cloned()
@@ -627,11 +582,7 @@ mod tests {
                 })
         }
 
-        async fn resolve_type(
-            &self,
-            name: &str,
-            _version: Option<&str>,
-        ) -> Result<RegistryBundle, RegistryError> {
+        async fn fetch_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             self.bundles
                 .get(name)
                 .cloned()
@@ -641,8 +592,15 @@ mod tests {
                 })
         }
 
-        fn url_for_id(&self, name: &str, _version: Option<&str>) -> Option<String> {
-            Some(format!("https://test.registry/{}", name))
+        fn url_for_id(&self, name: &str, effective: Option<&DateTimeValue>) -> Option<String> {
+            if self.bundles.contains_key(name) {
+                Some(match effective {
+                    None => format!("https://test.registry/{}", name),
+                    Some(d) => format!("https://test.registry/{}?effective={}", name, d),
+                })
+            } else {
+                None
+            }
         }
     }
 
@@ -651,12 +609,16 @@ mod tests {
         let source = r#"doc example
 fact price: 100"#;
         let local_docs = crate::parse(source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let mut store = Context::new();
+        for doc in &local_docs {
+            store.insert_doc(Arc::new(doc.clone())).unwrap();
+        }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), source.to_string());
 
         let registry = TestRegistry::new();
-        let result = resolve_registry_references(
-            local_docs.clone(),
+        resolve_registry_references(
+            &mut store,
             &mut sources,
             &registry,
             &ResourceLimits::default(),
@@ -664,8 +626,9 @@ fact price: 100"#;
         .await
         .unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "example");
+        assert_eq!(store.len(), 1);
+        let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
+        assert_eq!(names, ["example"]);
     }
 
     #[tokio::test]
@@ -675,6 +638,10 @@ fact external: doc @org/project/helper
 rule value: external.quantity"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let mut store = Context::new();
+        for doc in local_docs {
+            store.insert_doc(Arc::new(doc)).unwrap();
+        }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
@@ -685,8 +652,8 @@ rule value: external.quantity"#;
 fact quantity: 42"#,
         );
 
-        let result = resolve_registry_references(
-            local_docs,
+        resolve_registry_references(
+            &mut store,
             &mut sources,
             &registry,
             &ResourceLimits::default(),
@@ -694,10 +661,41 @@ fact quantity: 42"#,
         .await
         .unwrap();
 
-        assert_eq!(result.len(), 2);
-        let names: Vec<&str> = result.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"main_doc"));
-        assert!(names.contains(&"org/project/helper"));
+        assert_eq!(store.len(), 2);
+        let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
+        assert!(names.iter().any(|n| n == "main_doc"));
+        assert!(names.iter().any(|n| n == "org/project/helper"));
+    }
+
+    #[tokio::test]
+    async fn fetch_docs_returns_all_zones_and_url_for_id_supports_effective() {
+        let effective = DateTimeValue {
+            year: 2026,
+            month: 1,
+            day: 15,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            timezone: None,
+        };
+        let mut registry = TestRegistry::new();
+        registry.add_doc_bundle(
+            "org/doc",
+            "doc org/doc 2025-01-01\nfact x: 1\n\ndoc org/doc 2026-01-15\nfact x: 2",
+        );
+
+        let bundle = registry.fetch_docs("org/doc").await.unwrap();
+        assert!(bundle.lemma_source.contains("fact x: 1"));
+        assert!(bundle.lemma_source.contains("fact x: 2"));
+
+        assert_eq!(
+            registry.url_for_id("org/doc", None),
+            Some("https://test.registry/org/doc".to_string())
+        );
+        assert_eq!(
+            registry.url_for_id("org/doc", Some(&effective)),
+            Some("https://test.registry/org/doc?effective=2026-01-15".to_string())
+        );
     }
 
     #[tokio::test]
@@ -706,6 +704,10 @@ fact quantity: 42"#,
 fact a: doc @org/project/doc_a"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let mut store = Context::new();
+        for doc in local_docs {
+            store.insert_doc(Arc::new(doc)).unwrap();
+        }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
@@ -722,8 +724,8 @@ fact b: doc @org/project/doc_b"#,
 fact value: 99"#,
         );
 
-        let result = resolve_registry_references(
-            local_docs,
+        resolve_registry_references(
+            &mut store,
             &mut sources,
             &registry,
             &ResourceLimits::default(),
@@ -731,11 +733,11 @@ fact value: 99"#,
         .await
         .unwrap();
 
-        assert_eq!(result.len(), 3);
-        let names: Vec<&str> = result.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"main_doc"));
-        assert!(names.contains(&"org/project/doc_a"));
-        assert!(names.contains(&"org/project/doc_b"));
+        assert_eq!(store.len(), 3);
+        let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
+        assert!(names.iter().any(|n| n == "main_doc"));
+        assert!(names.iter().any(|n| n == "org/project/doc_a"));
+        assert!(names.iter().any(|n| n == "org/project/doc_b"));
     }
 
     #[tokio::test]
@@ -744,6 +746,10 @@ fact value: 99"#,
 fact a: doc @org/project/doc_a"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let mut store = Context::new();
+        for doc in local_docs {
+            store.insert_doc(Arc::new(doc)).unwrap();
+        }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
@@ -758,8 +764,8 @@ doc org/project/doc_b
 fact value: 99"#,
         );
 
-        let result = resolve_registry_references(
-            local_docs,
+        resolve_registry_references(
+            &mut store,
             &mut sources,
             &registry,
             &ResourceLimits::default(),
@@ -767,11 +773,11 @@ fact value: 99"#,
         .await
         .unwrap();
 
-        assert_eq!(result.len(), 3);
-        let names: Vec<&str> = result.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"main_doc"));
-        assert!(names.contains(&"org/project/doc_a"));
-        assert!(names.contains(&"org/project/doc_b"));
+        assert_eq!(store.len(), 3);
+        let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
+        assert!(names.iter().any(|n| n == "main_doc"));
+        assert!(names.iter().any(|n| n == "org/project/doc_a"));
+        assert!(names.iter().any(|n| n == "org/project/doc_b"));
     }
 
     #[tokio::test]
@@ -780,13 +786,17 @@ fact value: 99"#,
 fact external: doc @org/project/missing"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let mut store = Context::new();
+        for doc in local_docs {
+            store.insert_doc(Arc::new(doc)).unwrap();
+        }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
         let registry = TestRegistry::new(); // empty — no bundles
 
         let result = resolve_registry_references(
-            local_docs,
+            &mut store,
             &mut sources,
             &registry,
             &ResourceLimits::default(),
@@ -794,17 +804,11 @@ fact external: doc @org/project/missing"#;
         .await;
 
         assert!(result.is_err(), "Should fail when Registry cannot resolve");
-        let error = result.unwrap_err();
-
-        // May be Registry or MultipleErrors containing Registry (we collect all failures)
-        let registry_err = match &error {
-            Error::Registry { .. } => &error,
-            Error::MultipleErrors(inner) => inner
-                .iter()
-                .find(|e| matches!(e, Error::Registry { .. }))
-                .expect("MultipleErrors should contain at least one Registry error"),
-            other => panic!("Expected Error::Registry or MultipleErrors, got: {}", other),
-        };
+        let errs = result.unwrap_err();
+        let registry_err = errs
+            .iter()
+            .find(|e| matches!(e, Error::Registry { .. }))
+            .expect("expected at least one Registry error");
         match registry_err {
             Error::Registry {
                 identifier,
@@ -821,7 +825,11 @@ fact external: doc @org/project/missing"#;
             _ => unreachable!(),
         }
 
-        let error_message = error.to_string();
+        let error_message = errs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
             error_message.contains("org/project/missing"),
             "Error should mention the identifier: {}",
@@ -836,13 +844,17 @@ fact helper: doc @org/example/helper
 type money from @lemma/std/finance"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let mut store = Context::new();
+        for doc in local_docs {
+            store.insert_doc(Arc::new(doc)).unwrap();
+        }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
         let registry = TestRegistry::new(); // empty — no bundles
 
         let result = resolve_registry_references(
-            local_docs,
+            &mut store,
             &mut sources,
             &registry,
             &ResourceLimits::default(),
@@ -850,14 +862,7 @@ type money from @lemma/std/finance"#;
         .await;
 
         assert!(result.is_err(), "Should fail when Registry cannot resolve");
-        let error = result.unwrap_err();
-        let errors = match &error {
-            Error::MultipleErrors(inner) => inner,
-            other => panic!(
-                "Expected MultipleErrors (doc + type both fail), got: {}",
-                other
-            ),
-        };
+        let errors = result.unwrap_err();
         assert_eq!(
             errors.len(),
             2,
@@ -894,6 +899,10 @@ doc doc_two
 fact b: doc @org/shared"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let mut store = Context::new();
+        for doc in local_docs {
+            store.insert_doc(Arc::new(doc)).unwrap();
+        }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
@@ -904,8 +913,8 @@ fact b: doc @org/shared"#;
 fact value: 1"#,
         );
 
-        let result = resolve_registry_references(
-            local_docs,
+        resolve_registry_references(
+            &mut store,
             &mut sources,
             &registry,
             &ResourceLimits::default(),
@@ -914,9 +923,9 @@ fact value: 1"#,
         .unwrap();
 
         // Should have doc_one, doc_two, and org/shared (fetched only once).
-        assert_eq!(result.len(), 3);
-        let names: Vec<&str> = result.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"org/shared"));
+        assert_eq!(store.len(), 3);
+        let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
+        assert!(names.iter().any(|n| n == "org/shared"));
     }
 
     #[tokio::test]
@@ -926,6 +935,10 @@ type money from @lemma/std/finance
 fact price: [money]"#;
         let local_docs =
             crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let mut store = Context::new();
+        for doc in local_docs {
+            store.insert_doc(Arc::new(doc)).unwrap();
+        }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
@@ -939,8 +952,8 @@ type money: scale
  -> decimals 2"#,
         );
 
-        let result = resolve_registry_references(
-            local_docs,
+        resolve_registry_references(
+            &mut store,
             &mut sources,
             &registry,
             &ResourceLimits::default(),
@@ -948,10 +961,10 @@ type money: scale
         .await
         .unwrap();
 
-        assert_eq!(result.len(), 2);
-        let names: Vec<&str> = result.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"main_doc"));
-        assert!(names.contains(&"lemma/std/finance"));
+        assert_eq!(store.len(), 2);
+        let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
+        assert!(names.iter().any(|n| n == "main_doc"));
+        assert!(names.iter().any(|n| n == "lemma/std/finance"));
     }
 
     // -----------------------------------------------------------------------
@@ -1024,7 +1037,7 @@ type money: scale
         // -------------------------------------------------------------------
 
         #[test]
-        fn source_url_without_version() {
+        fn source_url_without_effective() {
             let registry = LemmaBase::new();
             let url = registry.source_url("user/workspace/somedoc", None);
             assert_eq!(
@@ -1034,12 +1047,24 @@ type money: scale
         }
 
         #[test]
-        fn source_url_with_version() {
+        fn source_url_with_effective() {
             let registry = LemmaBase::new();
-            let url = registry.source_url("user/workspace/somedoc", Some("v2"));
+            let effective = DateTimeValue {
+                year: 2026,
+                month: 1,
+                day: 15,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                timezone: None,
+            };
+            let url = registry.source_url("user/workspace/somedoc", Some(&effective));
             assert_eq!(
                 url,
-                format!("{}/@user/workspace/somedoc.v2.lemma", LemmaBase::BASE_URL)
+                format!(
+                    "{}/@user/workspace/somedoc.lemma?effective=2026-01-15",
+                    LemmaBase::BASE_URL
+                )
             );
         }
 
@@ -1054,7 +1079,7 @@ type money: scale
         }
 
         #[test]
-        fn navigation_url_without_version() {
+        fn navigation_url_without_effective() {
             let registry = LemmaBase::new();
             let url = registry.navigation_url("user/workspace/somedoc", None);
             assert_eq!(
@@ -1064,12 +1089,24 @@ type money: scale
         }
 
         #[test]
-        fn navigation_url_with_version() {
+        fn navigation_url_with_effective() {
             let registry = LemmaBase::new();
-            let url = registry.navigation_url("user/workspace/somedoc", Some("v2"));
+            let effective = DateTimeValue {
+                year: 2026,
+                month: 1,
+                day: 15,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                timezone: None,
+            };
+            let url = registry.navigation_url("user/workspace/somedoc", Some(&effective));
             assert_eq!(
                 url,
-                format!("{}/@user/workspace/somedoc.v2", LemmaBase::BASE_URL)
+                format!(
+                    "{}/@user/workspace/somedoc?effective=2026-01-15",
+                    LemmaBase::BASE_URL
+                )
             );
         }
 
@@ -1094,12 +1131,24 @@ type money: scale
         }
 
         #[test]
-        fn url_for_id_with_version() {
+        fn url_for_id_with_effective() {
             let registry = LemmaBase::new();
-            let url = registry.url_for_id("owner/repo/doc", Some("v2"));
+            let effective = DateTimeValue {
+                year: 2026,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                timezone: None,
+            };
+            let url = registry.url_for_id("owner/repo/doc", Some(&effective));
             assert_eq!(
                 url,
-                Some(format!("{}/@owner/repo/doc.v2", LemmaBase::BASE_URL))
+                Some(format!(
+                    "{}/@owner/repo/doc?effective=2026-01-01",
+                    LemmaBase::BASE_URL
+                ))
             );
         }
 
@@ -1133,7 +1182,7 @@ type money: scale
                 "doc org/my_doc\nfact x: 1",
             )));
 
-            let bundle = registry.fetch_source("org/my_doc", None).await.unwrap();
+            let bundle = registry.fetch_source("org/my_doc").await.unwrap();
 
             assert_eq!(bundle.lemma_source, "doc org/my_doc\nfact x: 1");
             assert_eq!(bundle.attribute, "@org/my_doc");
@@ -1149,7 +1198,7 @@ type money: scale
             });
             let registry = LemmaBase::with_fetcher(Box::new(mock));
 
-            let _ = registry.fetch_source("user/workspace/somedoc", None).await;
+            let _ = registry.fetch_source("user/workspace/somedoc").await;
 
             assert_eq!(
                 *captured_url.lock().unwrap(),
@@ -1162,10 +1211,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
 
-            let err = registry
-                .fetch_source("org/missing", None)
-                .await
-                .unwrap_err();
+            let err = registry.fetch_source("org/missing").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::NotFound);
             assert!(
@@ -1185,7 +1231,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(500)));
 
-            let err = registry.fetch_source("org/broken", None).await.unwrap_err();
+            let err = registry.fetch_source("org/broken").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::ServerError);
             assert!(
@@ -1200,7 +1246,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(502)));
 
-            let err = registry.fetch_source("org/broken", None).await.unwrap_err();
+            let err = registry.fetch_source("org/broken").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::ServerError);
         }
@@ -1210,7 +1256,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(401)));
 
-            let err = registry.fetch_source("org/secret", None).await.unwrap_err();
+            let err = registry.fetch_source("org/secret").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::Unauthorized);
             assert!(err.message.contains("HTTP 401"));
@@ -1221,10 +1267,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(403)));
 
-            let err = registry
-                .fetch_source("org/private", None)
-                .await
-                .unwrap_err();
+            let err = registry.fetch_source("org/private").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::Unauthorized);
             assert!(
@@ -1239,7 +1282,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(418)));
 
-            let err = registry.fetch_source("org/teapot", None).await.unwrap_err();
+            let err = registry.fetch_source("org/teapot").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::Other);
             assert!(err.message.contains("HTTP 418"));
@@ -1251,10 +1294,7 @@ type money: scale
                 MockHttpFetcher::always_failing_with_network_error("connection refused"),
             ));
 
-            let err = registry
-                .fetch_source("org/unreachable", None)
-                .await
-                .unwrap_err();
+            let err = registry.fetch_source("org/unreachable").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::NetworkError);
             assert!(
@@ -1277,7 +1317,7 @@ type money: scale
                 ),
             ));
 
-            let err = registry.fetch_source("org/doc", None).await.unwrap_err();
+            let err = registry.fetch_source("org/doc").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::NetworkError);
             assert!(
@@ -1297,27 +1337,24 @@ type money: scale
         // -------------------------------------------------------------------
 
         #[tokio::test]
-        async fn resolve_doc_delegates_to_fetch_source() {
+        async fn fetch_docs_delegates_to_fetch_source() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
                 "doc org/resolved\nfact a: 1",
             )));
 
-            let bundle = registry.resolve_doc("org/resolved", None).await.unwrap();
+            let bundle = registry.fetch_docs("org/resolved").await.unwrap();
 
             assert_eq!(bundle.lemma_source, "doc org/resolved\nfact a: 1");
             assert_eq!(bundle.attribute, "@org/resolved");
         }
 
         #[tokio::test]
-        async fn resolve_type_delegates_to_fetch_source() {
+        async fn fetch_types_delegates_to_fetch_source() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
                 "doc lemma/std/finance\ntype money: scale\n -> unit eur 1.00",
             )));
 
-            let bundle = registry
-                .resolve_type("lemma/std/finance", None)
-                .await
-                .unwrap();
+            let bundle = registry.fetch_types("lemma/std/finance").await.unwrap();
 
             assert_eq!(bundle.attribute, "@lemma/std/finance");
             assert!(
@@ -1328,25 +1365,22 @@ type money: scale
         }
 
         #[tokio::test]
-        async fn resolve_doc_propagates_http_error() {
+        async fn fetch_docs_propagates_http_error() {
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
 
-            let err = registry.resolve_doc("org/missing", None).await.unwrap_err();
+            let err = registry.fetch_docs("org/missing").await.unwrap_err();
 
             assert!(err.message.contains("HTTP 404"));
         }
 
         #[tokio::test]
-        async fn resolve_type_propagates_network_error() {
+        async fn fetch_types_propagates_network_error() {
             let registry = LemmaBase::with_fetcher(Box::new(
                 MockHttpFetcher::always_failing_with_network_error("timeout"),
             ));
 
-            let err = registry
-                .resolve_type("lemma/std/types", None)
-                .await
-                .unwrap_err();
+            let err = registry.fetch_types("lemma/std/types").await.unwrap_err();
 
             assert!(err.message.contains("timeout"));
         }
@@ -1355,7 +1389,7 @@ type money: scale
         async fn fetch_source_returns_empty_body_as_valid_bundle() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning("")));
 
-            let bundle = registry.fetch_source("org/empty", None).await.unwrap();
+            let bundle = registry.fetch_source("org/empty").await.unwrap();
 
             assert_eq!(bundle.lemma_source, "");
             assert_eq!(bundle.attribute, "@org/empty");

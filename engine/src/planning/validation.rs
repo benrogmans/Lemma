@@ -14,6 +14,7 @@ use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Validate that TypeSpecification constraints are internally consistent
 ///
@@ -44,7 +45,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
@@ -58,7 +59,7 @@ pub fn validate_type_specifications(
             // Validate decimals range (0-28 is rust_decimal limit)
             if let Some(d) = decimals {
                 if *d > 28 {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
@@ -72,7 +73,7 @@ pub fn validate_type_specifications(
             // Validate precision is positive if set
             if let Some(prec) = precision {
                 if *prec <= Decimal::ZERO {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
@@ -87,7 +88,7 @@ pub fn validate_type_specifications(
             if let Some((def_value, def_unit)) = default {
                 // Validate that the default unit exists
                 if !units.iter().any(|u| u.name == *def_unit) {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' default unit '{}' is not a valid unit. Valid units: {}",
                             type_name,
@@ -104,7 +105,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(min) = minimum {
                     if *def_value < *min {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default value {} {} is less than minimum {}",
                                 type_name, def_value, def_unit, min
@@ -116,7 +117,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if *def_value > *max {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default value {} {} is greater than maximum {}",
                                 type_name, def_value, def_unit, max
@@ -130,7 +131,7 @@ pub fn validate_type_specifications(
 
             // Scale types must have at least one unit (required for parsing and conversion)
             if units.is_empty() {
-                errors.push(Error::planning(
+                errors.push(Error::validation(
                     format!(
                         "Type '{}' is a scale type but has no units. Scale types must define at least one unit (e.g. -> unit eur 1).",
                         type_name
@@ -146,7 +147,7 @@ pub fn validate_type_specifications(
                 for unit in units.iter() {
                     // Validate unit name is not empty
                     if unit.name.trim().is_empty() {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
@@ -162,7 +163,7 @@ pub fn validate_type_specifications(
                         .iter()
                         .any(|seen| seen.to_lowercase() == lower_name)
                     {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
                             Some(source.clone()),
                             None::<String>,
@@ -173,7 +174,7 @@ pub fn validate_type_specifications(
 
                     // Validate unit values are positive (conversion factors relative to type base of 1)
                     if unit.value <= Decimal::ZERO {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
                             Some(source.clone()),
                             None::<String>,
@@ -193,7 +194,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
@@ -207,7 +208,7 @@ pub fn validate_type_specifications(
             // Validate decimals range (0-28 is rust_decimal limit)
             if let Some(d) = decimals {
                 if *d > 28 {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
@@ -221,7 +222,7 @@ pub fn validate_type_specifications(
             // Validate precision is positive if set
             if let Some(prec) = precision {
                 if *prec <= Decimal::ZERO {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
@@ -236,7 +237,7 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if *def < *min {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
@@ -248,7 +249,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if *def > *max {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
@@ -273,7 +274,7 @@ pub fn validate_type_specifications(
             // Validate decimals range (0-28 is rust_decimal limit)
             if let Some(d) = decimals {
                 if *d > 28 {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
@@ -287,7 +288,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
@@ -302,7 +303,7 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if *def < *min {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
@@ -314,7 +315,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if *def > *max {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
@@ -334,7 +335,7 @@ pub fn validate_type_specifications(
                 for unit in units.iter() {
                     // Validate unit name is not empty
                     if unit.name.trim().is_empty() {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
@@ -350,7 +351,7 @@ pub fn validate_type_specifications(
                         .iter()
                         .any(|seen| seen.to_lowercase() == lower_name)
                     {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
                             Some(source.clone()),
                             None::<String>,
@@ -361,7 +362,7 @@ pub fn validate_type_specifications(
 
                     // Validate unit values are positive (conversion factors relative to type base of 1)
                     if unit.value <= Decimal::ZERO {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
                             Some(source.clone()),
                             None::<String>,
@@ -382,7 +383,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!("Type '{}' has invalid range: minimum length {} is greater than maximum length {}", type_name, min, max),
                         Some(source.clone()),
                         None::<String>,
@@ -394,7 +395,7 @@ pub fn validate_type_specifications(
             if let Some(len) = length {
                 if let Some(min) = minimum {
                     if *len < *min {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!("Type '{}' has inconsistent length constraint: length {} is less than minimum {}", type_name, len, min),
                             Some(source.clone()),
                             None::<String>,
@@ -403,7 +404,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if *len > *max {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!("Type '{}' has inconsistent length constraint: length {} is greater than maximum {}", type_name, len, max),
                             Some(source.clone()),
                             None::<String>,
@@ -418,7 +419,7 @@ pub fn validate_type_specifications(
 
                 if let Some(min) = minimum {
                     if def_len < *min {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default value length {} is less than minimum {}",
                                 type_name, def_len, min
@@ -430,7 +431,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if def_len > *max {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default value length {} is greater than maximum {}",
                                 type_name, def_len, max
@@ -442,7 +443,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(len) = length {
                     if def_len != *len {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!("Type '{}' default value length {} does not match required length {}", type_name, def_len, len),
                             Some(source.clone()),
                             None::<String>,
@@ -450,7 +451,7 @@ pub fn validate_type_specifications(
                     }
                 }
                 if !options.is_empty() && !options.contains(def) {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' default value '{}' is not in allowed options: {:?}",
                             type_name, def, options
@@ -471,7 +472,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if compare_date_values(min, max) == Ordering::Greater {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' has invalid date range: minimum {} is after maximum {}",
                             type_name, min, max
@@ -486,7 +487,7 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if compare_date_values(def, min) == Ordering::Less {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default date {} is before minimum {}",
                                 type_name, def, min
@@ -498,7 +499,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if compare_date_values(def, max) == Ordering::Greater {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default date {} is after maximum {}",
                                 type_name, def, max
@@ -520,7 +521,7 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if compare_time_values(min, max) == Ordering::Greater {
-                    errors.push(Error::planning(
+                    errors.push(Error::validation(
                         format!(
                             "Type '{}' has invalid time range: minimum {} is after maximum {}",
                             type_name, min, max
@@ -535,7 +536,7 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if compare_time_values(def, min) == Ordering::Less {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default time {} is before minimum {}",
                                 type_name, def, min
@@ -547,7 +548,7 @@ pub fn validate_type_specifications(
                 }
                 if let Some(max) = maximum {
                     if compare_time_values(def, max) == Ordering::Greater {
-                        errors.push(Error::planning(
+                        errors.push(Error::validation(
                             format!(
                                 "Type '{}' default time {} is after maximum {}",
                                 type_name, def, max
@@ -567,8 +568,8 @@ pub fn validate_type_specifications(
             // Veto is not a user-declarable type, so validation should not be called on it
             // But if it is, there's nothing to validate
         }
-        TypeSpecification::Error => unreachable!(
-            "BUG: validate_type_specification_constraints called with Error sentinel type; this type exists only during type inference"
+        TypeSpecification::Undetermined => unreachable!(
+            "BUG: validate_type_specification_constraints called with Undetermined sentinel type; this type exists only during type inference"
         ),
     }
 
@@ -603,7 +604,7 @@ fn compare_time_values(left: &TimeValue, right: &TimeValue) -> Ordering {
 /// Rule data needed to validate document interfaces (avoids validation depending on graph).
 pub struct RuleEntryForBindingCheck {
     pub rule_type: LemmaType,
-    pub depends_on_rules: HashSet<RulePath>,
+    pub depends_on_rules: std::collections::BTreeSet<RulePath>,
     pub branches: Vec<(Option<Expression>, Expression)>,
 }
 
@@ -683,7 +684,7 @@ fn collect_expected_constraints_for_rule_ref(
                 out.push((expr.source_location.clone(), expected));
             }
         }
-        ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
+        ExpressionKind::LogicalAnd(left, right) => {
             out.extend(collect_expected_constraints_for_rule_ref(
                 left,
                 rule_path,
@@ -761,8 +762,17 @@ fn expected_constraint_name(c: ExpectedRuleTypeConstraint) -> &'static str {
     }
 }
 
-fn document_interface_error(source: &Source, message: impl Into<String>) -> Error {
-    Error::planning(message.into(), Some(source.clone()), None::<String>)
+fn document_interface_error(
+    source: &Source,
+    message: impl Into<String>,
+    related_doc: Option<Arc<LemmaDoc>>,
+) -> Error {
+    Error::validation_with_context(
+        message.into(),
+        Some(source.clone()),
+        None::<String>,
+        related_doc,
+    )
 }
 
 /// Validate that every doc-ref fact path's referenced document has the required rules
@@ -770,13 +780,12 @@ fn document_interface_error(source: &Source, message: impl Into<String>) -> Erro
 /// Type errors are reported at the binding fact's source when a binding changed the doc ref.
 pub fn validate_document_interfaces(
     referenced_rules: &HashMap<Vec<String>, HashSet<String>>,
-    doc_ref_facts: &[(FactPath, String, Source)],
+    doc_ref_facts: &[(FactPath, Arc<LemmaDoc>, Source)],
     rule_entries: &IndexMap<RulePath, RuleEntryForBindingCheck>,
-    all_docs: &[LemmaDoc],
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
 
-    for (fact_path, doc_name, fact_source) in doc_ref_facts {
+    for (fact_path, doc_arc, fact_source) in doc_ref_facts {
         let mut full_path: Vec<String> =
             fact_path.segments.iter().map(|s| s.fact.clone()).collect();
         full_path.push(fact_path.fact.clone());
@@ -785,10 +794,7 @@ pub fn validate_document_interfaces(
             continue;
         };
 
-        let doc = match all_docs.iter().find(|d| d.full_id() == *doc_name) {
-            Some(d) => d,
-            None => continue,
-        };
+        let doc = doc_arc.as_ref();
         let doc_rule_names: HashSet<&str> = doc.rules.iter().map(|r| r.name.as_str()).collect();
 
         for required_rule in required_rules {
@@ -797,8 +803,9 @@ pub fn validate_document_interfaces(
                     fact_source,
                     format!(
                         "Document '{}' referenced by '{}' is missing required rule '{}'",
-                        doc_name, fact_path, required_rule
+                        doc.name, fact_path, required_rule
                     ),
+                    Some(Arc::clone(doc_arc)),
                 ));
                 continue;
             }
@@ -841,11 +848,12 @@ pub fn validate_document_interfaces(
                                 format!(
                                     "Fact binding '{}' sets document reference to '{}', but that document's rule '{}' has result type {}; the referencing expression expects a {} value",
                                     binding_path_str,
-                                    doc_name,
+                                    doc.name,
                                     required_rule,
                                     ref_rule_type.name(),
                                     expected_constraint_name(constraint),
                                 ),
+                                Some(Arc::clone(doc_arc)),
                             ));
                         }
                     }
@@ -1118,9 +1126,11 @@ mod tests {
         // This test now validates that type specification validation works correctly.
         // The actual validation happens during graph building, but we test the validation
         // function directly here.
-        use crate::parsing::ast::TypeDef;
-        use crate::planning::types::TypeRegistry;
+        use crate::parsing::ast::{LemmaDoc, TypeDef};
+        use crate::planning::types::TypeResolver;
+        use std::sync::Arc;
 
+        let doc = Arc::new(LemmaDoc::new("test".to_string()));
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
                 "<test>",
@@ -1150,12 +1160,12 @@ mod tests {
         // Register and resolve the type to get its specifications
         let mut sources = HashMap::new();
         sources.insert("<test>".to_string(), String::new());
-        let mut type_registry = TypeRegistry::new();
-        type_registry
-            .register_type("test", type_def)
+        let mut type_resolver = TypeResolver::new();
+        type_resolver
+            .register_type(&doc, type_def)
             .expect("Should register type");
-        let resolved_types = type_registry
-            .resolve_named_types("test")
+        let resolved_types = type_resolver
+            .resolve_named_types(&doc)
             .expect("Should resolve types");
 
         // Validate the specifications

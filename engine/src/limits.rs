@@ -18,6 +18,7 @@ pub fn check_max_length(name: &str, limit: usize, kind: &str) -> Result<(), Erro
             limit_value: format!("{limit} characters"),
             actual_value: format!("{} characters", name.len()),
             suggestion: format!("Shorten the {kind} name to at most {limit} characters"),
+            document_context: None,
         });
     }
     Ok(())
