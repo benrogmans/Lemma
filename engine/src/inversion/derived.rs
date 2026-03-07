@@ -37,7 +37,6 @@ pub enum DerivedExpressionKind {
     FactPath(FactPath),
     RulePath(RulePath),
     LogicalAnd(Arc<DerivedExpression>, Arc<DerivedExpression>),
-    LogicalOr(Arc<DerivedExpression>, Arc<DerivedExpression>),
     Arithmetic(
         Arc<DerivedExpression>,
         ArithmeticComputation,
@@ -61,7 +60,6 @@ impl DerivedExpressionKind {
                 facts.insert(fp.clone());
             }
             DerivedExpressionKind::LogicalAnd(left, right)
-            | DerivedExpressionKind::LogicalOr(left, right)
             | DerivedExpressionKind::Arithmetic(left, _, right)
             | DerivedExpressionKind::Comparison(left, _, right) => {
                 left.collect_fact_paths(facts);
@@ -84,8 +82,7 @@ impl DerivedExpressionKind {
             DerivedExpressionKind::Literal(lit) => lit.hash(state),
             DerivedExpressionKind::FactPath(fp) => fp.hash(state),
             DerivedExpressionKind::RulePath(rp) => rp.hash(state),
-            DerivedExpressionKind::LogicalAnd(left, right)
-            | DerivedExpressionKind::LogicalOr(left, right) => {
+            DerivedExpressionKind::LogicalAnd(left, right) => {
                 left.semantic_hash(state);
                 right.semantic_hash(state);
             }

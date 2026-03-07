@@ -11,7 +11,7 @@ use crate::planning::semantics::{
     Source,
 };
 use crate::planning::{ExecutableRule, ExecutionPlan};
-use crate::{LemmaResult, OperationResult};
+use crate::OperationResult;
 use serde::ser::{Serialize, SerializeMap, Serializer};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -103,7 +103,7 @@ pub struct WorldEnumerator<'a> {
 
 impl<'a> WorldEnumerator<'a> {
     /// Create a new world enumerator for a target rule
-    pub fn new(plan: &'a ExecutionPlan, target_rule: &RulePath) -> LemmaResult<Self> {
+    pub fn new(plan: &'a ExecutionPlan, target_rule: &RulePath) -> Result<Self, crate::Error> {
         // Build rule lookup from execution plan
         let rule_map: HashMap<RulePath, &ExecutableRule> =
             plan.rules.iter().map(|r| (r.path.clone(), r)).collect();
@@ -141,7 +141,7 @@ impl<'a> WorldEnumerator<'a> {
     pub fn enumerate(
         &mut self,
         provided_facts: &HashSet<FactPath>,
-    ) -> LemmaResult<EnumerationResult> {
+    ) -> Result<EnumerationResult, crate::Error> {
         if self.rules_in_order.is_empty() {
             return Ok(EnumerationResult {
                 literal_solutions: vec![],
@@ -310,7 +310,7 @@ impl<'a> WorldEnumerator<'a> {
 fn collect_transitive_dependencies(
     target_rule: &RulePath,
     rule_map: &HashMap<RulePath, &ExecutableRule>,
-) -> LemmaResult<HashSet<RulePath>> {
+) -> Result<HashSet<RulePath>, crate::Error> {
     let mut result = HashSet::new();
     let mut queue = VecDeque::new();
 
@@ -352,8 +352,7 @@ fn extract_rule_paths_from_expression(expr: &Expression, paths: &mut HashSet<Rul
         }
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right)
-        | ExpressionKind::LogicalOr(left, right) => {
+        | ExpressionKind::LogicalAnd(left, right) => {
             extract_rule_paths_from_expression(left, paths);
             extract_rule_paths_from_expression(right, paths);
         }
@@ -378,13 +377,12 @@ fn substitute_rules_in_expression(
     expr: &Arc<Expression>,
     world: &World,
     plan: &ExecutionPlan,
-) -> LemmaResult<Expression> {
+) -> Result<Expression, crate::Error> {
     enum WorkItem {
         Process(usize),
         BuildArithmetic(ArithmeticComputation, Option<Source>),
         BuildComparison(ComparisonComputation, Option<Source>),
         BuildLogicalAnd(Option<Source>),
-        BuildLogicalOr(Option<Source>),
         BuildLogicalNegation(NegationType, Option<Source>),
         BuildUnitConversion(SemanticConversionTarget, Option<Source>),
         BuildMathematicalComputation(MathematicalComputation, Option<Source>),
@@ -475,19 +473,6 @@ fn substitute_rules_in_expression(
                         expr_pool.push(right_arc);
 
                         work_stack.push(WorkItem::BuildLogicalAnd(source_loc));
-                        work_stack.push(WorkItem::Process(right_idx));
-                        work_stack.push(WorkItem::Process(left_idx));
-                    }
-                    ExpressionKind::LogicalOr(left, right) => {
-                        let left_arc = Arc::clone(left);
-                        let right_arc = Arc::clone(right);
-
-                        let left_idx = expr_pool.len();
-                        expr_pool.push(left_arc);
-                        let right_idx = expr_pool.len();
-                        expr_pool.push(right_arc);
-
-                        work_stack.push(WorkItem::BuildLogicalOr(source_loc));
                         work_stack.push(WorkItem::Process(right_idx));
                         work_stack.push(WorkItem::Process(left_idx));
                     }
@@ -585,22 +570,6 @@ fn substitute_rules_in_expression(
                     source_loc,
                 ));
             }
-            WorkItem::BuildLogicalOr(source_loc) => {
-                let right = result_pool.pop().unwrap_or_else(|| {
-                    unreachable!(
-                        "BUG: missing right expression for LogicalOr during inversion hydration"
-                    )
-                });
-                let left = result_pool.pop().unwrap_or_else(|| {
-                    unreachable!(
-                        "BUG: missing left expression for LogicalOr during inversion hydration"
-                    )
-                });
-                result_pool.push(Expression::with_source(
-                    ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
-                    source_loc,
-                ));
-            }
             WorkItem::BuildLogicalNegation(neg_type, source_loc) => {
                 let inner = result_pool
                     .pop()
@@ -651,13 +620,12 @@ fn hydrate_facts_in_expression(
     expr: &Arc<Expression>,
     plan: &ExecutionPlan,
     provided_facts: &HashSet<FactPath>,
-) -> LemmaResult<Expression> {
+) -> Result<Expression, crate::Error> {
     enum WorkItem {
         Process(usize),
         BuildArithmetic(ArithmeticComputation, Option<Source>),
         BuildComparison(ComparisonComputation, Option<Source>),
         BuildLogicalAnd(Option<Source>),
-        BuildLogicalOr(Option<Source>),
         BuildLogicalNegation(NegationType, Option<Source>),
         BuildUnitConversion(SemanticConversionTarget, Option<Source>),
         BuildMathematicalComputation(MathematicalComputation, Option<Source>),
@@ -733,19 +701,6 @@ fn hydrate_facts_in_expression(
                         expr_pool.push(right_arc);
 
                         work_stack.push(WorkItem::BuildLogicalAnd(source_loc));
-                        work_stack.push(WorkItem::Process(right_idx));
-                        work_stack.push(WorkItem::Process(left_idx));
-                    }
-                    ExpressionKind::LogicalOr(left, right) => {
-                        let left_arc = Arc::clone(left);
-                        let right_arc = Arc::clone(right);
-
-                        let left_idx = expr_pool.len();
-                        expr_pool.push(left_arc);
-                        let right_idx = expr_pool.len();
-                        expr_pool.push(right_arc);
-
-                        work_stack.push(WorkItem::BuildLogicalOr(source_loc));
                         work_stack.push(WorkItem::Process(right_idx));
                         work_stack.push(WorkItem::Process(left_idx));
                     }
@@ -831,18 +786,6 @@ fn hydrate_facts_in_expression(
                     source_loc,
                 ));
             }
-            WorkItem::BuildLogicalOr(source_loc) => {
-                let right = result_pool
-                    .pop()
-                    .unwrap_or_else(|| unreachable!("BUG: missing right expression for LogicalOr"));
-                let left = result_pool
-                    .pop()
-                    .unwrap_or_else(|| unreachable!("BUG: missing left expression for LogicalOr"));
-                result_pool.push(Expression::with_source(
-                    ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
-                    source_loc,
-                ));
-            }
             WorkItem::BuildLogicalNegation(neg_type, source_loc) => {
                 let inner = result_pool
                     .pop()
@@ -899,7 +842,6 @@ fn is_boolean_expression(expr: &Expression) -> bool {
         &expr.kind,
         ExpressionKind::Comparison(_, _, _)
             | ExpressionKind::LogicalAnd(_, _)
-            | ExpressionKind::LogicalOr(_, _)
             | ExpressionKind::LogicalNegation(_, _)
     )
 }
@@ -925,7 +867,7 @@ fn create_boolean_expression_solutions(
     world: World,
     base_constraint: Constraint,
     boolean_expr: &Expression,
-) -> LemmaResult<(Vec<WorldSolution>, Vec<WorldSolution>)> {
+) -> Result<(Vec<WorldSolution>, Vec<WorldSolution>), crate::Error> {
     // Convert boolean expression to constraint
     let expr_constraint = Constraint::from_expression(boolean_expr)?;
 
@@ -1095,10 +1037,12 @@ mod tests {
     fn empty_plan() -> ExecutionPlan {
         ExecutionPlan {
             doc_name: "test".to_string(),
-            facts: HashMap::new(),
+            facts: indexmap::IndexMap::new(),
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            valid_from: None,
+            valid_to: None,
         }
     }
 

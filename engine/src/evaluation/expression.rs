@@ -7,7 +7,8 @@ use super::operations::{ComputationKind, OperationKind, OperationResult};
 use super::proof::{ProofNode, ValueSource};
 use crate::computation::{arithmetic_operation, comparison_operation};
 use crate::planning::semantics::{
-    Expression, ExpressionKind, LiteralValue, MathematicalComputation, ValueKind,
+    negated_comparison, Expression, ExpressionKind, LiteralValue, MathematicalComputation,
+    ValueKind,
 };
 use crate::planning::ExecutableRule;
 use std::collections::HashMap;
@@ -319,8 +320,7 @@ fn evaluate_expression(
         match &e.kind {
             ExpressionKind::Arithmetic(left, _, right)
             | ExpressionKind::Comparison(left, _, right)
-            | ExpressionKind::LogicalAnd(left, right)
-            | ExpressionKind::LogicalOr(left, right) => {
+            | ExpressionKind::LogicalAnd(left, right) => {
                 work_list.push(left);
                 work_list.push(right);
             }
@@ -346,8 +346,7 @@ fn evaluate_expression(
             let deps_ready = match &current.kind {
                 ExpressionKind::Arithmetic(left, _, right)
                 | ExpressionKind::Comparison(left, _, right)
-                | ExpressionKind::LogicalAnd(left, right)
-                | ExpressionKind::LogicalOr(left, right) => {
+                | ExpressionKind::LogicalAnd(left, right) => {
                     results.contains_key(left.as_ref()) && results.contains_key(right.as_ref())
                 }
                 ExpressionKind::LogicalNegation(operand, _)
@@ -590,12 +589,34 @@ fn evaluate_single_expression(
             let right_proof = get_proof_node_required(context, right, "right operand");
 
             if let OperationResult::Value(ref val) = result {
+                let is_false = matches!(val.as_ref().value, ValueKind::Boolean(false));
+                let (display_op, original_expr, substituted_expr, display_result) = if is_false {
+                    let negated_op = negated_comparison(op.clone());
+                    let orig = match (
+                        left.get_source_text(&context.sources),
+                        right.get_source_text(&context.sources),
+                    ) {
+                        (Some(l), Some(r)) => {
+                            format!("{} {} {}", l, negated_op.symbol(), r)
+                        }
+                        _ => format!("{} {} {}", left_val, negated_op.symbol(), right_val),
+                    };
+                    let sub = format!("{} {} {}", left_val, negated_op.symbol(), right_val);
+                    (negated_op, orig, sub, LiteralValue::from_bool(true))
+                } else {
+                    let expr_text = current.get_source_text(&context.sources);
+                    let original_expr = expr_text
+                        .clone()
+                        .unwrap_or_else(|| format!("{} {} {}", left_val, op.symbol(), right_val));
+                    let substituted_expr = format!("{} {} {}", left_val, op.symbol(), right_val);
+                    (
+                        op.clone(),
+                        original_expr,
+                        substituted_expr,
+                        val.as_ref().clone(),
+                    )
+                };
                 let expr_text = current.get_source_text(&context.sources);
-                // Use source text if available, otherwise construct from values for proof display
-                let original_expr = expr_text
-                    .clone()
-                    .unwrap_or_else(|| format!("{} {} {}", left_val, op.symbol(), right_val));
-                let substituted_expr = format!("{} {} {}", left_val, op.symbol(), right_val);
                 context.push_operation(OperationKind::Computation {
                     kind: ComputationKind::Comparison(op.clone()),
                     inputs: vec![left_val.clone(), right_val.clone()],
@@ -603,10 +624,10 @@ fn evaluate_single_expression(
                     expr: expr_text,
                 });
                 let proof_node = ProofNode::Computation {
-                    kind: ComputationKind::Comparison(op.clone()),
+                    kind: ComputationKind::Comparison(display_op),
                     original_expression: original_expr,
                     expression: substituted_expr,
-                    result: val.as_ref().clone(),
+                    result: display_result,
                     source_location: current.source_location.clone(),
                     operands: vec![left_proof, right_proof],
                 };
@@ -641,38 +662,6 @@ fn evaluate_single_expression(
                 let left_proof = get_proof_node_required(context, left, "left operand");
                 context.set_proof_node(current, left_proof);
                 OperationResult::Value(Box::new(LiteralValue::from_bool(false)))
-            } else {
-                let right_result = get_operand_result(results, right, "right");
-                let right_proof = get_proof_node_required(context, right, "right operand");
-                context.set_proof_node(current, right_proof);
-                right_result
-            }
-        }
-
-        ExpressionKind::LogicalOr(left, right) => {
-            let left_result = get_operand_result(results, left, "left");
-            if let OperationResult::Veto(_) = left_result {
-                return propagate_veto_proof(context, current, left, left_result, "left operand");
-            }
-
-            let left_val = unwrap_value_after_veto_check(
-                &left_result,
-                "left operand",
-                &current.source_location,
-            );
-            let left_bool = match &left_val.value {
-                ValueKind::Boolean(b) => b,
-                _ => {
-                    return OperationResult::Veto(Some(
-                        "Logical OR requires boolean operands".to_string(),
-                    ));
-                }
-            };
-
-            if *left_bool {
-                let left_proof = get_proof_node_required(context, left, "left operand");
-                context.set_proof_node(current, left_proof);
-                OperationResult::Value(Box::new(LiteralValue::from_bool(true)))
             } else {
                 let right_result = get_operand_result(results, right, "right");
                 let right_proof = get_proof_node_required(context, right, "right operand");

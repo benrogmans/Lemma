@@ -12,7 +12,7 @@ use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, FactPath,
     LiteralValue, SemanticConversionTarget, ValueKind,
 };
-use crate::{Error, LemmaResult, OperationResult};
+use crate::{Error, OperationResult};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::fmt;
 use std::sync::Arc;
@@ -101,7 +101,7 @@ impl Constraint {
     ///
     /// The primary purpose is contradiction detection (returning `Constraint::False`).
     /// For actual output, use domains extracted from the constraint instead.
-    pub fn simplify(self) -> LemmaResult<Constraint> {
+    pub fn simplify(self) -> Result<Constraint, Error> {
         let mut atoms: Vec<Constraint> = Vec::new();
         if let Some(bexpr) = to_bool_expr(&self, &mut atoms) {
             const MAX_ATOMS: usize = 64;
@@ -127,13 +127,12 @@ impl Constraint {
     /// - Boolean fact references
     /// - Logical operators (and, or, not)
     /// - Boolean literals
-    pub fn from_expression(expr: &Expression) -> LemmaResult<Constraint> {
+    pub fn from_expression(expr: &Expression) -> Result<Constraint, Error> {
         use ExpressionKind;
 
         enum WorkItem {
             Process(usize),
             BuildAnd,
-            BuildOr,
             ApplyNot,
         }
 
@@ -162,7 +161,7 @@ impl Constraint {
                                 }
                             }
                             _ => {
-                                return Err(Error::planning(
+                                return Err(Error::validation(
                                     "Constraint expression must be boolean",
                                     expr_source.clone(),
                                     None::<String>,
@@ -190,16 +189,6 @@ impl Constraint {
                             work_stack.push(WorkItem::Process(right_idx));
                             work_stack.push(WorkItem::Process(left_idx));
                         }
-                        ExpressionKind::LogicalOr(left, right) => {
-                            let left_idx = expr_pool.len();
-                            expr_pool.push((*left).clone());
-                            let right_idx = expr_pool.len();
-                            expr_pool.push((*right).clone());
-
-                            work_stack.push(WorkItem::BuildOr);
-                            work_stack.push(WorkItem::Process(right_idx));
-                            work_stack.push(WorkItem::Process(left_idx));
-                        }
                         ExpressionKind::LogicalNegation(inner, _) => {
                             let inner_idx = expr_pool.len();
                             expr_pool.push((*inner).clone());
@@ -208,7 +197,7 @@ impl Constraint {
                             work_stack.push(WorkItem::Process(inner_idx));
                         }
                         other => {
-                            return Err(Error::planning(
+                            return Err(Error::validation(
                                 format!(
                                     "Cannot convert expression kind to constraint: {:?}",
                                     std::mem::discriminant(&other)
@@ -227,15 +216,6 @@ impl Constraint {
                         .pop()
                         .expect("Internal error: missing left constraint for And");
                     constraint_stack.push(left.and(right));
-                }
-                WorkItem::BuildOr => {
-                    let right = constraint_stack
-                        .pop()
-                        .expect("Internal error: missing right constraint for Or");
-                    let left = constraint_stack
-                        .pop()
-                        .expect("Internal error: missing left constraint for Or");
-                    constraint_stack.push(left.or(right));
                 }
                 WorkItem::ApplyNot => {
                     let inner = constraint_stack
@@ -256,7 +236,7 @@ impl Constraint {
         left: &Expression,
         op: &ComparisonComputation,
         right: &Expression,
-    ) -> LemmaResult<Constraint> {
+    ) -> Result<Constraint, Error> {
         use ExpressionKind;
 
         fn inversion_err_for(
@@ -488,8 +468,7 @@ fn collect_fact_paths(expr: &Expression, out: &mut Vec<FactPath>) {
             ExpressionKind::FactPath(fp) => out.push(fp.clone()),
             ExpressionKind::Arithmetic(l, _, r)
             | ExpressionKind::Comparison(l, _, r)
-            | ExpressionKind::LogicalAnd(l, r)
-            | ExpressionKind::LogicalOr(l, r) => {
+            | ExpressionKind::LogicalAnd(l, r) => {
                 stack.push(l.as_ref());
                 stack.push(r.as_ref());
             }
@@ -819,7 +798,7 @@ fn lit_div_number(a: &LiteralValue, c: rust_decimal::Decimal) -> Option<LiteralV
 
 fn build_numeric_theory_closure(
     atoms: &[Constraint],
-) -> LemmaResult<boolean_expression::Expr<usize>> {
+) -> Result<boolean_expression::Expr<usize>, Error> {
     use boolean_expression::Expr;
 
     // Group indices of comparison atoms by fact path.
