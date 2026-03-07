@@ -1,3 +1,4 @@
+use crate::parsing::ast::DateTimeValue;
 use crate::{Engine, Error};
 use serde_json::json;
 use std::cell::RefCell;
@@ -20,7 +21,6 @@ impl WasmEngine {
         }
     }
 
-    /// Add Lemma source (e.g. file contents). Returns a Promise that resolves to a JSON string result.
     #[wasm_bindgen(js_name = addLemmaFile)]
     pub fn add_lemma_file(&self, code: &str, source: &str) -> js_sys::Promise {
         let code = code.to_string();
@@ -35,28 +35,123 @@ impl WasmEngine {
                     "message": "Document added successfully"
                 })))),
                 Err(errs) => {
-                    let error = match errs.len() {
-                        0 => unreachable!("add_lemma_files returned Err with empty error list"),
-                        1 => errs.into_iter().next().unwrap(),
-                        _ => Error::MultipleErrors(errs),
-                    };
-                    Ok(JsValue::from_str(&to_json_error(&error)))
+                    let messages: Vec<String> = errs.iter().map(format_error).collect();
+                    Ok(JsValue::from_str(&to_json_errors(&messages)))
                 }
             }
         })
     }
 
-    /// Evaluate rules in a document.
-    ///
-    /// Pass `rule_names_json` as `"[]"` or `""` to evaluate all rules.
-    /// Pass a JSON array like `'["total","discount"]'` to evaluate specific rules.
+    /// Evaluate at current time.
     #[wasm_bindgen(js_name = evaluate)]
     pub fn evaluate(
         &self,
         doc_name: &str,
+        hash: &str,
         rule_names_json: &str,
         fact_values_json: &str,
     ) -> String {
+        self.evaluate_inner(
+            doc_name,
+            &DateTimeValue::now(),
+            hash,
+            rule_names_json,
+            fact_values_json,
+        )
+    }
+
+    /// Evaluate at a specific datetime.
+    #[wasm_bindgen(js_name = evaluateEffective)]
+    pub fn evaluate_effective(
+        &self,
+        doc_name: &str,
+        effective: &str,
+        hash: &str,
+        rule_names_json: &str,
+        fact_values_json: &str,
+    ) -> String {
+        let effective_dt = match DateTimeValue::parse(effective) {
+            Some(dt) => dt,
+            None => return to_json_error_string(&format!("Invalid effective: '{}'", effective)),
+        };
+        self.evaluate_inner(
+            doc_name,
+            &effective_dt,
+            hash,
+            rule_names_json,
+            fact_values_json,
+        )
+    }
+
+    #[wasm_bindgen(js_name = listDocuments)]
+    pub fn list_documents(&self) -> String {
+        let engine = self.engine.borrow();
+        let docs = engine.list_documents();
+        to_json_response(json!({
+            "success": true,
+            "documents": docs
+        }))
+    }
+
+    /// Schema at current time.
+    #[wasm_bindgen(js_name = getSchema)]
+    pub fn get_schema(&self, doc_name: &str, rule_names_json: &str) -> String {
+        self.get_schema_inner(doc_name, &DateTimeValue::now(), rule_names_json)
+    }
+
+    /// Schema at a specific datetime.
+    #[wasm_bindgen(js_name = getSchemaEffective)]
+    pub fn get_schema_effective(
+        &self,
+        doc_name: &str,
+        effective: &str,
+        rule_names_json: &str,
+    ) -> String {
+        let effective_dt = match DateTimeValue::parse(effective) {
+            Some(dt) => dt,
+            None => return to_json_error_string(&format!("Invalid effective: '{}'", effective)),
+        };
+        self.get_schema_inner(doc_name, &effective_dt, rule_names_json)
+    }
+
+    #[wasm_bindgen(js_name = invert)]
+    pub fn invert(
+        &self,
+        _doc_name: &str,
+        _rule_name: &str,
+        _target_json: &str,
+        _provided_values_json: &str,
+    ) -> String {
+        to_json_error_string("Inversion not implemented")
+    }
+
+    #[wasm_bindgen(js_name = formatSource)]
+    pub fn format_source(&self, code: &str, source_attribute: &str) -> String {
+        match crate::format_source(code, source_attribute) {
+            Ok(formatted) => to_json_response(json!({
+                "success": true,
+                "formatted": formatted
+            })),
+            Err(e) => to_json_error(&e),
+        }
+    }
+}
+
+impl WasmEngine {
+    fn evaluate_inner(
+        &self,
+        doc_name: &str,
+        effective: &DateTimeValue,
+        hash: &str,
+        rule_names_json: &str,
+        fact_values_json: &str,
+    ) -> String {
+        let hash_pin = if hash.trim().is_empty() {
+            None
+        } else {
+            Some(hash.trim())
+        };
+
         let rule_names: Vec<String> = match parse_rule_names(rule_names_json) {
             Ok(v) => v,
             Err(msg) => return to_json_error_string(&msg),
@@ -71,7 +166,7 @@ impl WasmEngine {
         match self
             .engine
             .borrow()
-            .evaluate_json(doc_name, rule_names, json_bytes)
+            .evaluate_json(doc_name, hash_pin, effective, rule_names, json_bytes)
         {
             Ok(response) => {
                 let response_json = serde_json::to_value(&response).unwrap_or_else(|_| json!({}));
@@ -84,35 +179,14 @@ impl WasmEngine {
         }
     }
 
-    /// List all loaded documents with their full schemas.
-    ///
-    /// Returns `{ success: true, documents: [DocumentSchema, ...] }` sorted by
-    /// document name, consistent with the HTTP and MCP interfaces.
-    #[wasm_bindgen(js_name = listDocuments)]
-    pub fn list_documents(&self) -> String {
+    fn get_schema_inner(
+        &self,
+        doc_name: &str,
+        effective: &DateTimeValue,
+        rule_names_json: &str,
+    ) -> String {
         let engine = self.engine.borrow();
-        let mut names = engine.list_documents();
-        names.sort();
-        let schemas: Vec<serde_json::Value> = names
-            .iter()
-            .filter_map(|name| engine.get_execution_plan(name))
-            .map(|plan| serde_json::to_value(&plan.schema()).unwrap_or(json!({})))
-            .collect();
-        to_json_response(json!({
-            "success": true,
-            "documents": schemas
-        }))
-    }
-
-    /// Return the full document schema: all facts and rules with their types.
-    ///
-    /// Returns the `DocumentSchema` used by all Lemma interfaces, serialized as
-    /// JSON. Use `getSchema` with specific rule names to get only the facts
-    /// required by those rules.
-    #[wasm_bindgen(js_name = getSchema)]
-    pub fn get_schema(&self, doc_name: &str, rule_names_json: &str) -> String {
-        let engine = self.engine.borrow();
-        let plan = match engine.get_execution_plan(doc_name) {
+        let plan = match engine.get_execution_plan(doc_name, None, effective) {
             Some(p) => p,
             None => return to_json_error_string(&format!("Document '{}' not found", doc_name)),
         };
@@ -136,31 +210,6 @@ impl WasmEngine {
             "schema": serde_json::to_value(&schema).unwrap_or(json!({}))
         }))
     }
-
-    #[wasm_bindgen(js_name = invert)]
-    pub fn invert(
-        &self,
-        _doc_name: &str,
-        _rule_name: &str,
-        _target_json: &str,
-        _provided_values_json: &str,
-    ) -> String {
-        to_json_error_string("Inversion not implemented")
-    }
-
-    /// Format Lemma source code. Returns a JSON string: `{ "success": true, "formatted": "..." }`
-    /// or `{ "success": false, "error": "..." }`. Only formats if the source parses successfully.
-    /// Call from JS (e.g. Monaco playground) to implement "Format" without an LSP; there is no on-save in the browser.
-    #[wasm_bindgen(js_name = formatSource)]
-    pub fn format_source(&self, code: &str, source_attribute: &str) -> String {
-        match crate::format_source(code, source_attribute) {
-            Ok(formatted) => to_json_response(json!({
-                "success": true,
-                "formatted": formatted
-            })),
-            Err(e) => to_json_error(&e),
-        }
-    }
 }
 
 fn to_json_response(data: serde_json::Value) -> String {
@@ -171,6 +220,13 @@ fn to_json_response(data: serde_json::Value) -> String {
 
 fn to_json_error(error: &Error) -> String {
     to_json_error_string(&format_error(error))
+}
+
+fn to_json_errors(messages: &[String]) -> String {
+    to_json_response(json!({
+        "success": false,
+        "errors": messages
+    }))
 }
 
 fn to_json_error_string(error_msg: &str) -> String {
@@ -193,7 +249,7 @@ fn format_error(error: &Error) -> String {
     match error {
         Error::Parsing(details) => format!("Parse Error: {}", details.message),
         Error::Inversion(details) => format!("Inversion Error: {}", details.message),
-        Error::Planning(details) => format!("Planning Error: {}", details.message),
+        Error::Validation(details) => format!("Validation Error: {}", details.message),
         Error::Registry {
             details,
             identifier,
@@ -204,23 +260,17 @@ fn format_error(error: &Error) -> String {
                 kind, identifier, details.message
             )
         }
-        Error::MissingFact(details) => format!("Missing Fact: {}", details.message),
-        Error::CircularDependency { details, .. } => {
-            format!("Circular Dependency: {}", details.message)
-        }
         Error::ResourceLimitExceeded {
             limit_name,
             limit_value,
             actual_value,
             suggestion,
+            document_context: _,
         } => {
             format!(
                 "Resource Limit Exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value}). {suggestion}"
             )
         }
-        Error::MultipleErrors(errors) => {
-            let error_messages: Vec<String> = errors.iter().map(format_error).collect();
-            format!("Multiple Errors:\n{}", error_messages.join("\n"))
-        }
+        Error::Request(details) => format!("Request Error: {}", details.message),
     }
 }

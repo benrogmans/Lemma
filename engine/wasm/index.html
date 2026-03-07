@@ -90,6 +90,12 @@
             font-size: 16px;
         }
 
+        #doc-select {
+            font-size: 14px;
+            padding: 6px 10px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
         /* --- Fact input rows --- */
 
         .facts-grid {
@@ -212,8 +218,11 @@
     </div>
 
     <div class="section">
-        <h2>Documents</h2>
-        <div id="docs"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+            <h2 style="margin:0;">Documents</h2>
+            <select id="doc-select"><option value="">No documents loaded</option></select>
+        </div>
+        <div id="doc-detail"></div>
     </div>
 
     <script type="module">
@@ -240,6 +249,49 @@
             factValues: {},
             evalResults: {},
         };
+
+        function datetimeValueToString(dt) {
+            if (!dt || typeof dt !== 'object') return '';
+            var s = String(dt.year);
+            if (dt.month) {
+                s += '-' + String(dt.month).padStart(2, '0');
+                if (dt.day) {
+                    s += '-' + String(dt.day).padStart(2, '0');
+                    if (dt.hour || dt.minute || dt.second) {
+                        s += 'T' + String(dt.hour || 0).padStart(2, '0')
+                            + ':' + String(dt.minute || 0).padStart(2, '0')
+                            + ':' + String(dt.second || 0).padStart(2, '0');
+                        if (dt.timezone) {
+                            var oh = dt.timezone.offset_hours || 0;
+                            var om = dt.timezone.offset_minutes || 0;
+                            if (oh === 0 && om === 0) { s += 'Z'; }
+                            else {
+                                s += (oh >= 0 ? '+' : '-')
+                                    + String(Math.abs(oh)).padStart(2, '0')
+                                    + ':' + String(om).padStart(2, '0');
+                            }
+                        }
+                    }
+                }
+            }
+            return s;
+        }
+
+        function docKey(entry) {
+            if (entry.effective_from) return entry.name + ' ' + datetimeValueToString(entry.effective_from);
+            return entry.name;
+        }
+
+        function docAsOf(key) {
+            var entry = state.docs.find(function (d) { return docKey(d) === key; });
+            if (entry && entry.effective_from) return datetimeValueToString(entry.effective_from);
+            return null;
+        }
+
+        function docName(key) {
+            var entry = state.docs.find(function (d) { return docKey(d) === key; });
+            return entry ? entry.name : key;
+        }
 
         function factValuesStorageKey(docName) {
             return 'lemma_playground:doc:' + docName;
@@ -403,12 +455,6 @@
             const label = document.createElement('div');
             label.className = 'label';
             label.textContent = name;
-            if (fact.required) {
-                const asterisk = document.createElement('span');
-                asterisk.className = 'required';
-                asterisk.textContent = '*';
-                label.appendChild(asterisk);
-            }
             row.appendChild(label);
 
             const inputGroup = document.createElement('div');
@@ -742,23 +788,23 @@
         // DOM: Build a doc card
         // ---------------------------------------------------------------
 
-        function buildDocCard(docName) {
-            loadFactValuesFromStorage(docName);
-            const schema = state.schemas[docName];
+        function buildDocCard(key) {
+            loadFactValuesFromStorage(key);
+            const schema = state.schemas[key];
             const facts = (schema && Array.isArray(schema.facts)) ? schema.facts : [];
 
             const card = document.createElement('div');
             card.className = 'doc-card';
-            card.dataset.docName = docName;
+            card.dataset.docName = key;
 
             const heading = document.createElement('h3');
-            heading.textContent = 'doc ' + docName;
+            heading.textContent = 'doc ' + key;
             card.appendChild(heading);
 
             const factsGrid = document.createElement('div');
             factsGrid.className = 'facts-grid';
             for (const fact of facts) {
-                factsGrid.appendChild(buildFactRow(docName, fact));
+                factsGrid.appendChild(buildFactRow(key, fact));
             }
             card.appendChild(factsGrid);
 
@@ -768,7 +814,7 @@
             const evaluateButton = document.createElement('button');
             evaluateButton.textContent = 'Evaluate';
             evaluateButton.addEventListener('click', function () {
-                evaluateDoc(docName);
+                evaluateDoc(key);
             });
             actions.appendChild(evaluateButton);
 
@@ -776,7 +822,7 @@
             clearButton.className = 'secondary';
             clearButton.textContent = 'Clear inputs';
             clearButton.addEventListener('click', function () {
-                clearInputs(docName);
+                clearInputs(key);
             });
             actions.appendChild(clearButton);
 
@@ -858,103 +904,66 @@
         }
 
         function patchDocCards() {
-            const container = document.getElementById('docs');
-            const newDocs = state.docs;
+            const select = document.getElementById('doc-select');
+            const keys = state.docs.map(docKey);
+            const prevSelected = select.value;
 
-            for (const docName of newDocs) {
-                loadFactValuesFromStorage(docName);
-            }
-
-            // Build set of current card doc names
-            const existingCards = container.querySelectorAll('.doc-card[data-doc-name]');
-            const existingDocNames = new Set();
-            for (const card of existingCards) {
-                existingDocNames.add(card.dataset.docName);
-            }
-
-            const newDocNames = new Set(newDocs);
-
-            // Remove cards for docs that no longer exist
-            for (const card of existingCards) {
-                const docName = card.dataset.docName;
-                if (!newDocNames.has(docName)) {
-                    container.removeChild(card);
-                    delete state.factValues[docName];
-                    delete state.evalResults[docName];
-                    try {
-                        localStorage.removeItem(factValuesStorageKey(docName));
-                    } catch (_) {}
+            select.textContent = '';
+            if (keys.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'No documents loaded';
+                select.appendChild(opt);
+            } else {
+                for (const key of keys) {
+                    const opt = document.createElement('option');
+                    opt.value = key;
+                    opt.textContent = 'doc ' + key;
+                    select.appendChild(opt);
                 }
             }
 
-            // Add or update cards for current docs
-            for (const docName of newDocs) {
-                const existingCard = container.querySelector('.doc-card[data-doc-name="' + CSS.escape(docName) + '"]');
-                const newSchema = state.schemas[docName];
-
-                if (existingCard) {
-                    // Doc exists: diff its facts
-                    if (newSchema) {
-                        const oldFacts = [];
-                        const oldCard = existingCard.querySelector('.facts-grid');
-                        if (oldCard) {
-                            const rows = oldCard.querySelectorAll('.fact-row[data-fact-name]');
-                            for (const row of rows) {
-                                oldFacts.push({ name: row.dataset.factName, schemaType: null });
-                            }
-                        }
-                        const newFacts = Array.isArray(newSchema.facts) ? newSchema.facts : [];
-                        patchFactInputs(docName, existingCard, oldFacts, newFacts);
-                    }
-
-                    // Clear stale results
-                    const resultsContainer = existingCard.querySelector('.results-container');
-                    if (resultsContainer) {
-                        resultsContainer.textContent = '';
-                    }
-                    delete state.evalResults[docName];
-                } else if (newSchema) {
-                    // New doc: build card from pre-stored schema
-                    const card = buildDocCard(docName);
-                    container.appendChild(card);
-                }
+            if (keys.indexOf(prevSelected) !== -1) {
+                select.value = prevSelected;
+            } else if (keys.length > 0) {
+                select.value = keys[0];
             }
 
-            // Reorder cards to match doc order
-            for (const docName of newDocs) {
-                const card = container.querySelector('.doc-card[data-doc-name="' + CSS.escape(docName) + '"]');
-                if (card) {
-                    container.appendChild(card);
-                }
-            }
+            renderSelectedDoc();
+        }
 
-            // Show hint if no docs
-            let hintElement = container.querySelector('.no-docs-hint');
-            if (newDocs.length === 0) {
-                if (!hintElement) {
-                    hintElement = document.createElement('div');
-                    hintElement.className = 'hint no-docs-hint';
-                    hintElement.textContent = 'No documents loaded yet.';
-                    container.appendChild(hintElement);
-                }
-            } else if (hintElement) {
-                container.removeChild(hintElement);
-            }
+        function renderSelectedDoc() {
+            const select = document.getElementById('doc-select');
+            const detail = document.getElementById('doc-detail');
+            const key = select.value;
+            detail.textContent = '';
+
+            if (!key || !state.schemas[key]) return;
+
+            const card = buildDocCard(key);
+            detail.appendChild(card);
         }
 
         // ---------------------------------------------------------------
         // Engine interaction
         // ---------------------------------------------------------------
 
-        function fetchSchema(docName) {
+        function fetchSchema(key) {
             if (!engine) return null;
+            var name = docName(key);
+            var asOfStr = docAsOf(key);
             let response;
             try {
-                response = JSON.parse(engine.getSchema(docName, '[]'));
+                var raw = engine.getSchemaAsOf(name, asOfStr || '1', '[]');
+                response = JSON.parse(raw);
             } catch (parseError) {
+                console.error('fetchSchema exception for', key, parseError);
                 return null;
             }
-            if (!response || !response.success || !response.schema) return null;
+            if (!response || !response.success || !response.schema) {
+                console.error('fetchSchema failed for', key, response);
+                return null;
+            }
             return normalizeSchema(response.schema);
         }
 
@@ -1007,29 +1016,40 @@
             }
 
             if (!listResult || !listResult.success) {
+                console.error('listDocuments failed:', listResult);
                 state.docs = [];
                 patchDocCards();
                 return;
             }
 
-            const schemas = Array.isArray(listResult.documents) ? listResult.documents : [];
-            const newDocs = schemas.map(function (s) { return s.doc; }).sort();
+            const docEntries = Array.isArray(listResult.documents) ? listResult.documents : [];
+            const newKeys = docEntries.map(docKey);
+            const oldKeys = state.docs.map(docKey);
 
-            // Clean up state for removed docs
-            for (const oldDocName of state.docs) {
-                if (newDocs.indexOf(oldDocName) === -1) {
-                    delete state.schemas[oldDocName];
-                    delete state.factValues[oldDocName];
-                    delete state.evalResults[oldDocName];
+            for (const oldK of oldKeys) {
+                if (newKeys.indexOf(oldK) === -1) {
+                    delete state.schemas[oldK];
+                    delete state.factValues[oldK];
+                    delete state.evalResults[oldK];
                 }
             }
 
-            // Store normalized schemas from listDocuments response
-            for (const rawSchema of schemas) {
-                state.schemas[rawSchema.doc] = normalizeSchema(rawSchema);
+            state.docs = docEntries;
+
+            for (const entry of docEntries) {
+                const key = docKey(entry);
+                try {
+                    const asOf = entry.effective_from ? datetimeValueToString(entry.effective_from) : '1';
+                    const raw = engine.getSchemaAsOf(entry.name, asOf, '[]');
+                    const schemaResult = JSON.parse(raw);
+                    if (schemaResult && schemaResult.success && schemaResult.schema) {
+                        state.schemas[key] = normalizeSchema(schemaResult.schema);
+                    } else {
+                        console.error('getSchema returned error for', key, schemaResult);
+                    }
+                } catch (e) { console.error('getSchema failed for', key, e); }
             }
 
-            state.docs = newDocs;
             patchDocCards();
         }
 
@@ -1050,7 +1070,7 @@
         // Evaluate and clear
         // ---------------------------------------------------------------
 
-        async function evaluateDoc(docName) {
+        async function evaluateDoc(key) {
             if (loadTimer !== null) {
                 clearTimeout(loadTimer);
                 loadTimer = null;
@@ -1059,24 +1079,27 @@
 
             if (!engine) return;
 
-            const factsJson = JSON.stringify(serializeFactValues(docName));
+            const name = docName(key);
+            const asOf = docAsOf(key) || '1';
+            const factsJson = JSON.stringify(serializeFactValues(key));
 
             let evalResult;
             try {
-                evalResult = JSON.parse(engine.evaluate(docName, '[]', factsJson));
+                const raw = engine.evaluateAsOf(name, asOf, '', '[]', factsJson);
+                evalResult = JSON.parse(raw);
             } catch (parseError) {
-                state.evalResults[docName] = { success: false, error: parseError.message || String(parseError) };
-                renderResultsForDoc(docName);
+                state.evalResults[key] = { success: false, error: parseError.message || String(parseError) };
+                renderResultsForDoc(key);
                 return;
             }
 
-            state.evalResults[docName] = evalResult;
-            renderResultsForDoc(docName);
+            state.evalResults[key] = evalResult;
+            renderResultsForDoc(key);
         }
 
         function renderResultsForDoc(docName) {
-            const container = document.getElementById('docs');
-            const card = container.querySelector('.doc-card[data-doc-name="' + CSS.escape(docName) + '"]');
+            const detail = document.getElementById('doc-detail');
+            const card = detail.querySelector('.doc-card');
             if (!card) return;
 
             const resultsContainer = card.querySelector('.results-container');
@@ -1109,9 +1132,8 @@
             persistFactValues(docName);
             delete state.evalResults[docName];
 
-            // Re-render the fact inputs from schema with empty state
-            const container = document.getElementById('docs');
-            const card = container.querySelector('.doc-card[data-doc-name="' + CSS.escape(docName) + '"]');
+            const detail = document.getElementById('doc-detail');
+            const card = detail.querySelector('.doc-card');
             if (!card) return;
 
             const factsGrid = card.querySelector('.facts-grid');
@@ -1212,6 +1234,8 @@
                     }
                 });
 
+                document.getElementById('doc-select').addEventListener('change', renderSelectedDoc);
+
                 document.getElementById('format-btn').addEventListener('click', function (e) {
                     e.preventDefault();
                     if (!engine || !monacoEditor) return;
@@ -1244,11 +1268,11 @@
                         if (!model) return;
                         lspClient.setMonacoMarkers(model, diagnostics);
 
-                        const errorCount = diagnostics.length;
-                        if (errorCount === 0) {
+                        if (diagnostics.length === 0) {
                             setStatus('ok', 'Ready');
                         } else {
-                            setStatus('err', errorCount + (errorCount === 1 ? ' error' : ' errors'));
+                            var msgs = diagnostics.map(function (d) { return d.message; });
+                            setStatus('err', diagnostics.length + (diagnostics.length === 1 ? ' error' : ' errors'), msgs.join('\n'));
                         }
                     });
 
