@@ -7,7 +7,8 @@ use tower_lsp::lsp_types::{DocumentLink, Position, Range, Url};
 /// - `doc @user/workspace/somedoc`
 /// - `type ... from @lemma/std/finance`
 ///
-/// For each `@identifier` found, the Registry is consulted for a URL.
+/// For each `@identifier` found, the Registry is consulted for a URL (with no effective datetime;
+/// when doc reference syntax supports optional datetime, the link range and effective could be extended).
 /// If the Registry returns a URL, a DocumentLink is created.
 ///
 /// The text-based approach works regardless of whether the file parses successfully,
@@ -15,9 +16,8 @@ use tower_lsp::lsp_types::{DocumentLink, Position, Range, Url};
 pub fn find_registry_links(text: &str, registry: &dyn Registry) -> Vec<DocumentLink> {
     let mut links = Vec::new();
 
-    // Scan for `@` characters and extract the identifier that follows.
-    // Base name: ASCII_ALPHA then (ASCII_ALPHANUMERIC | "_" | "-" | "/")*  (no dot)
-    // Optional version suffix: `.` then ASCII_ALPHANUMERIC then (ASCII_ALPHANUMERIC | "_" | "-" | ".")*
+    // Scan for `@` and the identifier that follows: base name (ASCII_ALPHA then alphanumeric / _ - /).
+    // We do not parse optional datetime/hash here; pass effective datetime None so URL is for the name only.
     let bytes = text.as_bytes();
     let mut byte_index = 0;
 
@@ -29,7 +29,6 @@ pub fn find_registry_links(text: &str, registry: &dyn Registry) -> Vec<DocumentL
             if byte_index < bytes.len() && bytes[byte_index].is_ascii_alphabetic() {
                 let identifier_start = byte_index;
 
-                // Consume base name characters (no dot — dot starts version)
                 while byte_index < bytes.len() {
                     let byte = bytes[byte_index];
                     if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' || byte == b'/'
@@ -41,45 +40,13 @@ pub fn find_registry_links(text: &str, registry: &dyn Registry) -> Vec<DocumentL
                 }
 
                 let base_name = &text[identifier_start..byte_index];
-
-                // Check for version suffix: `.` followed by alphanumeric start
-                let mut version: Option<&str> = None;
-                let mut link_end_byte = byte_index;
-
-                if byte_index < bytes.len()
-                    && bytes[byte_index] == b'.'
-                    && byte_index + 1 < bytes.len()
-                    && bytes[byte_index + 1].is_ascii_alphanumeric()
-                {
-                    let version_start = byte_index + 1;
-                    let mut version_end = version_start;
-                    while version_end < bytes.len() {
-                        let byte = bytes[version_end];
-                        if byte.is_ascii_alphanumeric()
-                            || byte == b'_'
-                            || byte == b'-'
-                            || byte == b'.'
-                        {
-                            version_end += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                    version = Some(&text[version_start..version_end]);
-                    link_end_byte = version_end;
-                    byte_index = version_end;
-                }
+                let link_end_byte = byte_index;
 
                 if !base_name.is_empty() {
-                    if let Some(url_string) = registry.url_for_id(base_name, version) {
+                    if let Some(url_string) = registry.url_for_id(base_name, None) {
                         if let Ok(target_url) = Url::parse(&url_string) {
                             let start_position = byte_offset_to_position(text, at_byte_start);
                             let end_position = byte_offset_to_position(text, link_end_byte);
-
-                            let display = match version {
-                                Some(v) => format!("@{}.{}", base_name, v),
-                                None => format!("@{}", base_name),
-                            };
 
                             links.push(DocumentLink {
                                 range: Range {
@@ -87,7 +54,7 @@ pub fn find_registry_links(text: &str, registry: &dyn Registry) -> Vec<DocumentL
                                     end: end_position,
                                 },
                                 target: Some(target_url),
-                                tooltip: Some(format!("Open {} in Registry", display)),
+                                tooltip: Some(format!("Open @{} in Registry", base_name)),
                                 data: None,
                             });
                         }
@@ -135,37 +102,31 @@ mod tests {
     use super::*;
     use lemma::registry::{Registry, RegistryBundle, RegistryError, RegistryErrorKind};
 
+    use lemma::parsing::ast::DateTimeValue;
+
     /// Test-only Registry: predictable URLs for document link tests (no resolution).
     struct TestLinkRegistry;
 
     #[async_trait::async_trait]
     impl Registry for TestLinkRegistry {
-        async fn resolve_doc(
-            &self,
-            name: &str,
-            _version: Option<&str>,
-        ) -> Result<RegistryBundle, RegistryError> {
+        async fn fetch_docs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             Err(RegistryError {
                 message: format!("TestLinkRegistry does not resolve documents: '{}'", name),
                 kind: RegistryErrorKind::Other,
             })
         }
 
-        async fn resolve_type(
-            &self,
-            name: &str,
-            _version: Option<&str>,
-        ) -> Result<RegistryBundle, RegistryError> {
+        async fn fetch_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             Err(RegistryError {
                 message: format!("TestLinkRegistry does not resolve type imports: '{}'", name),
                 kind: RegistryErrorKind::Other,
             })
         }
 
-        fn url_for_id(&self, name: &str, version: Option<&str>) -> Option<String> {
-            match version {
-                Some(v) => Some(format!("https://test.lemma.dev/{}.{}", name, v)),
+        fn url_for_id(&self, name: &str, effective: Option<&DateTimeValue>) -> Option<String> {
+            match effective {
                 None => Some(format!("https://test.lemma.dev/{}", name)),
+                Some(d) => Some(format!("https://test.lemma.dev/{}?effective={}", name, d)),
             }
         }
     }
@@ -246,24 +207,8 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // Versioned document link tests (section 6.6)
-    // =====================================================================
-
     #[test]
-    fn versioned_doc_reference_produces_link_with_version() {
-        let text = "fact x: doc @owner/repo/doc.v2";
-        let registry = TestLinkRegistry;
-        let links = find_registry_links(text, &registry);
-        assert_eq!(links.len(), 1);
-        assert_eq!(
-            links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://test.lemma.dev/owner/repo/doc.v2")
-        );
-    }
-
-    #[test]
-    fn trailing_dot_without_version_excludes_dot_from_link() {
+    fn doc_reference_with_trailing_dot_excludes_dot_from_link() {
         let text = "fact x: doc @owner/repo/doc.";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
@@ -275,8 +220,20 @@ mod tests {
     }
 
     #[test]
-    fn unversioned_doc_reference_has_no_version_param() {
+    fn doc_reference_produces_link_without_effective() {
         let text = "fact x: doc @owner/repo/doc";
+        let registry = TestLinkRegistry;
+        let links = find_registry_links(text, &registry);
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].target.as_ref().map(|u| u.as_str()),
+            Some("https://test.lemma.dev/owner/repo/doc")
+        );
+    }
+
+    #[test]
+    fn identifier_with_dot_after_slash_stops_at_dot() {
+        let text = "fact x: doc @owner/repo/doc.v2";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 1);

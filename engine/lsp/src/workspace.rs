@@ -1,5 +1,6 @@
-use lemma::{parse, Error, LemmaDoc, ResourceLimits};
+use lemma::{parse, Context, Error, LemmaDoc, ResourceLimits};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tower_lsp::lsp_types::Url;
 
 /// Result of parsing a single file's content.
@@ -104,11 +105,6 @@ impl WorkspaceModel {
             .collect()
     }
 
-    /// Resource limits used for parsing and registry resolution.
-    pub fn limits(&self) -> &ResourceLimits {
-        &self.limits
-    }
-
     /// Map source attribute to (Url, text) for diagnostics. One entry per file.
     pub fn attribute_to_url_and_text(&self) -> HashMap<String, (Url, String)> {
         self.files
@@ -124,34 +120,48 @@ impl WorkspaceModel {
 
     /// Run a full workspace validation: parse errors + planning errors for all files.
     pub fn validate_workspace(&self) -> Vec<FileDiagnostics> {
-        let all_docs = self.all_parsed_docs();
+        let mut ctx = Context::new();
+        let mut insert_errors: Vec<(String, Error)> = Vec::new();
+        for doc in self.all_parsed_docs() {
+            let attr = doc.attribute.clone().unwrap_or_else(|| doc.name.clone());
+            match ctx.insert_doc(Arc::new(doc)) {
+                Ok(()) => {}
+                Err(e) => insert_errors.push((attr, e)),
+            }
+        }
         let sources = self.sources_map();
-        self.validate_workspace_with_resolved_docs(&all_docs, &sources)
+        let mut results = self.validate_workspace_with_resolved_docs(&ctx, &sources);
+        for (attr, e) in insert_errors {
+            if let Some(r) = results.iter_mut().find(|d| d.attribute == attr) {
+                r.errors.push(e);
+            } else if let Some(r) = results.first_mut() {
+                r.errors.push(e);
+            }
+        }
+        results
     }
 
-    /// Run planning with pre-resolved docs. Returns one FileDiagnostics per workspace file.
+    /// Run planning with the given context. Returns one FileDiagnostics per workspace file.
     pub fn validate_workspace_with_resolved_docs(
         &self,
-        resolved_docs: &[LemmaDoc],
+        ctx: &Context,
         sources: &HashMap<String, String>,
     ) -> Vec<FileDiagnostics> {
         let mut planning_errors_by_attribute: HashMap<String, Vec<Error>> = HashMap::new();
 
-        // Collect all docs to plan from successfully parsed files.
-        let mut docs_to_plan: Vec<&LemmaDoc> = Vec::new();
-        let mut doc_attribute_map: HashMap<String, String> = HashMap::new();
-        for (attribute, tracked) in &self.files {
-            if let ParseOutcome::Success(docs) = &tracked.parse_outcome {
-                for doc in docs {
-                    docs_to_plan.push(doc);
-                    doc_attribute_map.insert(doc.name.clone(), attribute.clone());
-                }
-            }
-        }
-
-        // Plan all documents at once (validates and resolves types once).
-        let (_plans, errors) = lemma::planning::plan(&docs_to_plan, resolved_docs, sources.clone());
-        for error in errors {
+        let planning_result = lemma::planning::plan(ctx, sources.clone());
+        let all_planning_errors: Vec<Error> = planning_result
+            .global_errors
+            .into_iter()
+            .chain(planning_result.per_document.into_iter().flat_map(|r| {
+                let doc = Arc::clone(&r.document);
+                r.errors
+                    .into_iter()
+                    .map(move |e| e.with_document_context(Arc::clone(&doc)))
+                    .collect::<Vec<_>>()
+            }))
+            .collect();
+        for error in all_planning_errors {
             let err_attr = error
                 .location()
                 .map(|s| s.attribute.clone())
@@ -195,18 +205,6 @@ impl WorkspaceModel {
         self.files
             .get_key_value(&attribute)
             .map(|(key, tracked)| (tracked.text.as_str(), key.as_str()))
-    }
-
-    /// Get parse errors for a single file (fast path, no planning).
-    pub fn get_parse_errors(&self, url: &Url) -> Vec<Error> {
-        let attribute = Self::attribute_for_url(url);
-        match self.files.get(&attribute) {
-            Some(tracked) => match &tracked.parse_outcome {
-                ParseOutcome::Failed(errors) => errors.clone(),
-                ParseOutcome::Success(_) => Vec::new(),
-            },
-            None => Vec::new(),
-        }
     }
 }
 
@@ -312,26 +310,6 @@ mod tests {
 
         let results = workspace.validate_workspace();
         assert!(results.is_empty());
-    }
-
-    #[test]
-    fn get_parse_errors_returns_empty_for_valid_file() {
-        let mut workspace = WorkspaceModel::new();
-        let url = url_from_path("/tmp/valid.lemma");
-        workspace.update_file(url.clone(), "doc test\nfact x: 10".to_string());
-
-        let errors = workspace.get_parse_errors(&url);
-        assert!(errors.is_empty());
-    }
-
-    #[test]
-    fn get_parse_errors_returns_errors_for_invalid_file() {
-        let mut workspace = WorkspaceModel::new();
-        let url = url_from_path("/tmp/invalid.lemma");
-        workspace.update_file(url.clone(), "not valid lemma".to_string());
-
-        let errors = workspace.get_parse_errors(&url);
-        assert!(!errors.is_empty());
     }
 
     #[test]

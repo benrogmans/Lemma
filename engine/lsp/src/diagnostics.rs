@@ -60,23 +60,13 @@ fn default_range() -> Range {
     }
 }
 
-/// Flatten a Error into a list of individual errors.
-///
-/// MultipleErrors is recursively flattened. All other variants yield a single-element list.
-fn flatten_errors(error: &Error) -> Vec<&Error> {
-    match error {
-        Error::MultipleErrors(errors) => errors.iter().flat_map(flatten_errors).collect(),
-        other => vec![other],
-    }
-}
-
-/// Convert a single (non-MultipleErrors) Error into an LSP Diagnostic.
+/// Convert a single Error into an LSP Diagnostic.
 ///
 /// The `text` parameter is the current editor buffer content, used to convert
 /// byte offsets to LSP positions.
 /// The `file_attribute` is the source identifier for the file being diagnosed,
 /// used to filter errors that belong to this file.
-fn single_error_to_diagnostic(error: &Error, text: &str) -> Diagnostic {
+pub fn single_error_to_diagnostic(error: &Error, text: &str) -> Diagnostic {
     let range = match error {
         Error::ResourceLimitExceeded { .. } => default_range(),
         other => {
@@ -113,7 +103,7 @@ fn single_error_to_diagnostic(error: &Error, text: &str) -> Diagnostic {
 
 /// Convert all Errors into LSP Diagnostics for a given file.
 ///
-/// - `errors`: the errors to convert (may include MultipleErrors, which are flattened).
+/// - `errors`: the errors to convert.
 /// - `text`: the current editor buffer content for the file being diagnosed.
 /// - `file_attribute`: the source identifier (filename) for the file being diagnosed.
 ///   Only errors whose source location `attribute` matches this value are included.
@@ -126,36 +116,20 @@ pub fn errors_to_diagnostics(
     let mut diagnostics = Vec::new();
 
     for error in errors {
-        let flat = flatten_errors(error);
-        for single_error in flat {
-            // Filter: only include errors that belong to this file,
-            // or errors without a source location (they apply everywhere).
-            let belongs_to_file = match single_error {
-                Error::ResourceLimitExceeded { .. } => true,
-                other => match other.location() {
-                    Some(source) => source.attribute == file_attribute,
-                    None => true,
-                },
-            };
+        let belongs_to_file = match error {
+            Error::ResourceLimitExceeded { .. } => true,
+            other => match other.location() {
+                Some(source) => source.attribute == file_attribute,
+                None => true,
+            },
+        };
 
-            if belongs_to_file {
-                diagnostics.push(single_error_to_diagnostic(single_error, text));
-            }
+        if belongs_to_file {
+            diagnostics.push(single_error_to_diagnostic(error, text));
         }
     }
 
     diagnostics
-}
-
-/// Convert a single parse error into diagnostics.
-///
-/// This is used for the fast path: immediately publishing parse errors
-/// for the active file without waiting for the debounced workspace re-plan.
-pub fn parse_error_to_diagnostics(error: &Error, text: &str) -> Vec<Diagnostic> {
-    let flat = flatten_errors(error);
-    flat.into_iter()
-        .map(|single_error| single_error_to_diagnostic(single_error, text))
-        .collect()
 }
 
 #[cfg(test)]
@@ -245,51 +219,24 @@ mod tests {
     }
 
     #[test]
-    fn flatten_single_error() {
-        let error = Error::ResourceLimitExceeded {
-            limit_name: "test".to_string(),
-            limit_value: "100".to_string(),
-            actual_value: "200".to_string(),
-            suggestion: "reduce size".to_string(),
-        };
-        let flat = flatten_errors(&error);
-        assert_eq!(flat.len(), 1);
-    }
-
-    #[test]
-    fn flatten_multiple_errors_recursively() {
+    fn errors_to_diagnostics_with_multiple_errors() {
         let error1 = Error::ResourceLimitExceeded {
             limit_name: "limit_a".to_string(),
             limit_value: "100".to_string(),
             actual_value: "200".to_string(),
             suggestion: "fix a".to_string(),
+            document_context: None,
         };
         let error2 = Error::ResourceLimitExceeded {
             limit_name: "limit_b".to_string(),
             limit_value: "50".to_string(),
             actual_value: "75".to_string(),
             suggestion: "fix b".to_string(),
+            document_context: None,
         };
-        let inner_multiple = Error::MultipleErrors(vec![error1]);
-        let outer_multiple = Error::MultipleErrors(vec![inner_multiple, error2]);
-        let flat = flatten_errors(&outer_multiple);
-        assert_eq!(flat.len(), 2);
-    }
-
-    #[test]
-    fn resource_limit_exceeded_uses_default_range() {
-        let error = Error::ResourceLimitExceeded {
-            limit_name: "max_file_size_bytes".to_string(),
-            limit_value: "5MB".to_string(),
-            actual_value: "10MB".to_string(),
-            suggestion: "reduce file size".to_string(),
-        };
-        let diagnostics = parse_error_to_diagnostics(&error, "doc test\nfact x: 10");
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].range.start.line, 0);
-        assert_eq!(diagnostics[0].range.start.character, 0);
-        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
-        assert_eq!(diagnostics[0].source, Some("lemma".to_string()));
+        let diagnostics =
+            errors_to_diagnostics(&[error1, error2], "doc test\nfact x: 10", "test.lemma");
+        assert_eq!(diagnostics.len(), 2);
     }
 
     #[test]
