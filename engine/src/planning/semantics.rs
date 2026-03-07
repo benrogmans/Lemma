@@ -20,6 +20,19 @@ pub enum LogicalComputation {
     Not,
 }
 
+/// Returns the logical negation of a comparison (for displaying conditions as true in explanations).
+#[must_use]
+pub fn negated_comparison(op: ComparisonComputation) -> ComparisonComputation {
+    match op {
+        ComparisonComputation::LessThan => ComparisonComputation::GreaterThanOrEqual,
+        ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThan,
+        ComparisonComputation::GreaterThan => ComparisonComputation::LessThanOrEqual,
+        ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThan,
+        ComparisonComputation::Equal | ComparisonComputation::Is => ComparisonComputation::IsNot,
+        ComparisonComputation::NotEqual | ComparisonComputation::IsNot => ComparisonComputation::Is,
+    }
+}
+
 // Internal-only parsing imports (used only within this module for value/type resolution).
 use crate::parsing::ast::{
     BooleanValue, CommandArg, ConversionTarget, DateTimeValue, DurationUnit, TimeValue,
@@ -211,10 +224,10 @@ pub enum TypeSpecification {
     Veto {
         message: Option<String>,
     },
-    /// Sentinel type used during type inference to represent "type could not be determined."
-    /// This propagates through expressions without generating cascading errors.
-    /// It must never appear in a successfully validated graph or execution plan.
-    Error,
+    /// Sentinel used during type inference when the type could not be determined.
+    /// Propagates through expressions without generating cascading errors.
+    /// Must never appear in a successfully validated graph or execution plan.
+    Undetermined,
 }
 
 impl TypeSpecification {
@@ -843,9 +856,9 @@ impl TypeSpecification {
                     command
                 ));
             }
-            TypeSpecification::Error => {
+            TypeSpecification::Undetermined => {
                 return Err(format!(
-                    "Invalid command '{}' for error sentinel type. Error is an internal type used during type inference and cannot have constraints",
+                    "Invalid command '{}' for undetermined sentinel type. Undetermined is an internal type used during type inference and cannot have constraints",
                     command
                 ));
             }
@@ -930,7 +943,7 @@ pub fn parse_value_from_string(
     use crate::parsing::ast::{BooleanValue, Value};
     use std::str::FromStr;
 
-    let to_err = |msg: String| Error::planning(msg, Some(source.clone()), None::<String>);
+    let to_err = |msg: String| Error::validation(msg, Some(source.clone()), None::<String>);
 
     match type_spec {
         TypeSpecification::Text { .. } => Ok(Value::Text(value_str.to_string())),
@@ -971,8 +984,8 @@ pub fn parse_value_from_string(
         TypeSpecification::Veto { .. } => Err(to_err(
             "Veto type cannot be parsed from string".to_string(),
         )),
-        TypeSpecification::Error => unreachable!(
-            "BUG: parse_value_from_string called with Error sentinel type; this type exists only during type inference"
+        TypeSpecification::Undetermined => unreachable!(
+            "BUG: parse_value_from_string called with Undetermined sentinel type; this type exists only during type inference"
         ),
     }
 }
@@ -1165,7 +1178,7 @@ impl fmt::Display for ValueKind {
 ///
 /// Used in both FactPath and RulePath to represent document traversal.
 /// Each segment contains a fact name that points to a document.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PathSegment {
     /// The fact name in this segment
     pub fact: String,
@@ -1215,7 +1228,7 @@ impl FactPath {
 /// Resolved path to a rule (created during planning from RuleReference)
 ///
 /// Represents a fully resolved path through documents to reach a rule.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RulePath {
     /// Path segments (each is a document traversal)
     pub segments: Vec<PathSegment>,
@@ -1290,7 +1303,6 @@ pub enum ExpressionKind {
     /// Resolved rule path
     RulePath(RulePath),
     LogicalAnd(Arc<Expression>, Arc<Expression>),
-    LogicalOr(Arc<Expression>, Arc<Expression>),
     Arithmetic(Arc<Expression>, ArithmeticComputation, Arc<Expression>),
     Comparison(Arc<Expression>, ComparisonComputation, Arc<Expression>),
     UnitConversion(Arc<Expression>, SemanticConversionTarget),
@@ -1307,7 +1319,6 @@ impl ExpressionKind {
                 facts.insert(fp.clone());
             }
             ExpressionKind::LogicalAnd(left, right)
-            | ExpressionKind::LogicalOr(left, right)
             | ExpressionKind::Arithmetic(left, _, right)
             | ExpressionKind::Comparison(left, _, right) => {
                 left.collect_fact_paths(facts);
@@ -1331,7 +1342,7 @@ impl ExpressionKind {
             ExpressionKind::Literal(lit) => lit.hash(state),
             ExpressionKind::FactPath(fp) => fp.hash(state),
             ExpressionKind::RulePath(rp) => rp.hash(state),
-            ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
+            ExpressionKind::LogicalAnd(left, right) => {
                 left.semantic_hash(state);
                 right.semantic_hash(state);
             }
@@ -1441,7 +1452,7 @@ impl LemmaType {
                 TypeSpecification::Duration { .. } => "duration",
                 TypeSpecification::Ratio { .. } => "ratio",
                 TypeSpecification::Veto { .. } => "veto",
-                TypeSpecification::Error => "error",
+                TypeSpecification::Undetermined => "undetermined",
             }
             .to_string()
         })
@@ -1496,13 +1507,13 @@ impl LemmaType {
     }
 
     /// Check if this type is veto
-    pub fn is_veto(&self) -> bool {
+    pub fn vetoed(&self) -> bool {
         matches!(&self.specifications, TypeSpecification::Veto { .. })
     }
 
-    /// Check if this type is the error sentinel (type could not be determined during inference)
-    pub fn is_error(&self) -> bool {
-        matches!(&self.specifications, TypeSpecification::Error)
+    /// True if this type is the undetermined sentinel (type could not be inferred).
+    pub fn is_undetermined(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::Undetermined)
     }
 
     /// Check if two types have the same base type specification (ignoring constraints)
@@ -1519,7 +1530,7 @@ impl LemmaType {
                 | (Duration { .. }, Duration { .. })
                 | (Ratio { .. }, Ratio { .. })
                 | (Veto { .. }, Veto { .. })
-                | (Error, Error)
+                | (Undetermined, Undetermined)
         )
     }
 
@@ -1570,7 +1581,7 @@ impl LemmaType {
                 .map(|(v, u)| ValueKind::Duration(v, duration_unit_to_semantic(&u))),
             TypeSpecification::Ratio { .. } => None, // Ratio default requires (value, unit); type spec has only Decimal
             TypeSpecification::Veto { .. } => None,
-            TypeSpecification::Error => None,
+            TypeSpecification::Undetermined => None,
         };
 
         value.map(|v| LiteralValue {
@@ -1584,10 +1595,10 @@ impl LemmaType {
         Self::primitive(TypeSpecification::veto())
     }
 
-    /// Create an Error sentinel LemmaType (used during type inference when a type cannot be determined).
-    /// This type propagates through expressions and is never present in a validated graph.
-    pub fn error_type() -> Self {
-        Self::primitive(TypeSpecification::Error)
+    /// LemmaType sentinel for undetermined type (used during inference when a type cannot be determined).
+    /// Propagates through expressions and is never present in a validated graph.
+    pub fn undetermined_type() -> Self {
+        Self::primitive(TypeSpecification::Undetermined)
     }
 
     /// Decimal places for display (Number, Scale, and Ratio). Used by formatters.
@@ -1613,8 +1624,8 @@ impl LemmaType {
             TypeSpecification::Time { .. } => "14:30:00",
             TypeSpecification::Duration { .. } => "90 minutes",
             TypeSpecification::Ratio { .. } => "50%",
-            TypeSpecification::Error => unreachable!(
-                "BUG: example_value called on Error sentinel type; this type must never reach user-facing code"
+            TypeSpecification::Undetermined => unreachable!(
+                "BUG: example_value called on Undetermined sentinel type; this type must never reach user-facing code"
             ),
         }
     }
@@ -1840,8 +1851,13 @@ pub enum FactData {
         resolved_type: LemmaType,
         source: Source,
     },
-    /// Document reference fact: points to another document.
-    DocumentRef { doc_name: String, source: Source },
+    /// Document reference fact: holds the resolved document.
+    /// When the source ref specified a hash pin, it is stored here for verification.
+    DocumentRef {
+        doc: Arc<crate::parsing::ast::LemmaDoc>,
+        source: Source,
+        expected_hash_pin: Option<String>,
+    },
 }
 
 impl FactData {
@@ -1871,11 +1887,29 @@ impl FactData {
         }
     }
 
+    /// Returns the expected hash pin for document reference facts when the source ref specified one; `None` otherwise.
+    pub fn expected_hash_pin(&self) -> Option<&str> {
+        match self {
+            FactData::Value { .. } | FactData::TypeDeclaration { .. } => None,
+            FactData::DocumentRef {
+                expected_hash_pin, ..
+            } => expected_hash_pin.as_deref(),
+        }
+    }
+
+    /// Returns the referenced document Arc for document reference facts; `None` otherwise.
+    pub fn doc_arc(&self) -> Option<&Arc<crate::parsing::ast::LemmaDoc>> {
+        match self {
+            FactData::Value { .. } | FactData::TypeDeclaration { .. } => None,
+            FactData::DocumentRef { doc, .. } => Some(doc),
+        }
+    }
+
     /// Returns the referenced document name for document reference facts; `None` otherwise.
     pub fn doc_ref(&self) -> Option<&str> {
         match self {
             FactData::Value { .. } | FactData::TypeDeclaration { .. } => None,
-            FactData::DocumentRef { doc_name, .. } => Some(doc_name),
+            FactData::DocumentRef { doc, .. } => Some(&doc.name),
         }
     }
 }
@@ -2072,6 +2106,20 @@ impl fmt::Display for LemmaType {
 impl fmt::Display for LiteralValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.value {
+            ValueKind::Scale(n, u) => {
+                if let TypeSpecification::Scale { decimals, .. } = &self.lemma_type.specifications {
+                    let s = match decimals {
+                        Some(d) => {
+                            let dp = u32::from(*d);
+                            let rounded = n.round_dp(dp);
+                            format!("{:.prec$}", rounded, prec = *d as usize)
+                        }
+                        None => n.normalize().to_string(),
+                    };
+                    return write!(f, "{} {}", s, u);
+                }
+                write!(f, "{}", self.value)
+            }
             ValueKind::Ratio(r, Some(unit_name)) => {
                 if let TypeSpecification::Ratio { units, .. } = &self.lemma_type.specifications {
                     if let Ok(unit) = units.get(unit_name) {
@@ -2126,6 +2174,36 @@ mod tests {
     use crate::parsing::ast::{BooleanValue, DateTimeValue, DurationUnit, TimeValue};
     use rust_decimal::Decimal;
     use std::str::FromStr;
+
+    #[test]
+    fn test_negated_comparison() {
+        assert_eq!(
+            negated_comparison(ComparisonComputation::LessThan),
+            ComparisonComputation::GreaterThanOrEqual
+        );
+        assert_eq!(
+            negated_comparison(ComparisonComputation::GreaterThanOrEqual),
+            ComparisonComputation::LessThan
+        );
+        assert_eq!(
+            negated_comparison(ComparisonComputation::Equal),
+            ComparisonComputation::IsNot,
+            "== negates to 'is not'"
+        );
+        assert_eq!(
+            negated_comparison(ComparisonComputation::NotEqual),
+            ComparisonComputation::Is,
+            "!= negates to 'is'"
+        );
+        assert_eq!(
+            negated_comparison(ComparisonComputation::Is),
+            ComparisonComputation::IsNot
+        );
+        assert_eq!(
+            negated_comparison(ComparisonComputation::IsNot),
+            ComparisonComputation::Is
+        );
+    }
 
     #[test]
     fn test_literal_value_to_primitive_type() {
@@ -2238,6 +2316,60 @@ mod tests {
         let time_display = LiteralValue::time(time_to_semantic(&time)).display_value();
         assert!(time_display.contains("14"));
         assert!(time_display.contains("30"));
+    }
+
+    #[test]
+    fn test_scale_display_respects_type_decimals() {
+        let money_type = LemmaType {
+            name: Some("money".to_string()),
+            specifications: TypeSpecification::Scale {
+                minimum: None,
+                maximum: None,
+                decimals: Some(2),
+                precision: None,
+                units: ScaleUnits::from(vec![ScaleUnit {
+                    name: "eur".to_string(),
+                    value: Decimal::from(1),
+                }]),
+                help: String::new(),
+                default: None,
+            },
+            extends: TypeExtends::Primitive,
+        };
+        let val = LiteralValue::scale_with_type(
+            Decimal::from_str("1.8").unwrap(),
+            "eur".to_string(),
+            money_type.clone(),
+        );
+        assert_eq!(val.display_value(), "1.80 eur");
+        let more_precision = LiteralValue::scale_with_type(
+            Decimal::from_str("1.80000").unwrap(),
+            "eur".to_string(),
+            money_type,
+        );
+        assert_eq!(more_precision.display_value(), "1.80 eur");
+        let scale_no_decimals = LemmaType {
+            name: Some("count".to_string()),
+            specifications: TypeSpecification::Scale {
+                minimum: None,
+                maximum: None,
+                decimals: None,
+                precision: None,
+                units: ScaleUnits::from(vec![ScaleUnit {
+                    name: "items".to_string(),
+                    value: Decimal::from(1),
+                }]),
+                help: String::new(),
+                default: None,
+            },
+            extends: TypeExtends::Primitive,
+        };
+        let val_any = LiteralValue::scale_with_type(
+            Decimal::from_str("42.50").unwrap(),
+            "items".to_string(),
+            scale_no_decimals,
+        );
+        assert_eq!(val_any.display_value(), "42.5 items");
     }
 
     #[test]

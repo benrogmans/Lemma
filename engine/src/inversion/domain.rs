@@ -8,7 +8,7 @@
 use crate::planning::semantics::{
     ComparisonComputation, FactPath, LiteralValue, SemanticConversionTarget, ValueKind,
 };
-use crate::{LemmaResult, OperationResult};
+use crate::OperationResult;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -227,7 +227,7 @@ impl Serialize for Bound {
 /// Extract domains for all facts mentioned in a constraint
 pub fn extract_domains_from_constraint(
     constraint: &Constraint,
-) -> LemmaResult<HashMap<FactPath, Domain>> {
+) -> Result<HashMap<FactPath, Domain>, crate::Error> {
     let all_facts = constraint.collect_facts();
     let mut domains = HashMap::new();
 
@@ -243,7 +243,7 @@ pub fn extract_domains_from_constraint(
 fn extract_domain_for_fact(
     constraint: &Constraint,
     fact_path: &FactPath,
-) -> LemmaResult<Option<Domain>> {
+) -> Result<Option<Domain>, crate::Error> {
     let domain = match constraint {
         Constraint::True => return Ok(None),
         Constraint::False => Some(Domain::Enumeration(Arc::new(vec![]))),
@@ -312,7 +312,10 @@ fn extract_domain_for_fact(
     Ok(domain.map(normalize_domain))
 }
 
-fn comparison_to_domain(op: &ComparisonComputation, value: &LiteralValue) -> LemmaResult<Domain> {
+fn comparison_to_domain(
+    op: &ComparisonComputation,
+    value: &LiteralValue,
+) -> Result<Domain, crate::Error> {
     if op.is_equal() {
         return Ok(Domain::Enumeration(Arc::new(vec![value.clone()])));
     }
@@ -352,7 +355,7 @@ fn comparison_to_domain(op: &ComparisonComputation, value: &LiteralValue) -> Lem
 pub(crate) fn domain_for_comparison_atom(
     op: &ComparisonComputation,
     value: &LiteralValue,
-) -> LemmaResult<Domain> {
+) -> Result<Domain, crate::Error> {
     comparison_to_domain(op, value)
 }
 
