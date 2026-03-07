@@ -34,25 +34,35 @@ fact product          : [coffee]
 fact size             : [size]
 fact number_of_cups   : [number -> maximum 10]
 
-rule base_price: veto "Unknown type of coffee"
+rule base_price:
+  veto "Unknown type of coffee"
   unless product is "espresso" then 2.5 eur
   unless product is "latte" then 3.5 eur
   unless product is "cappuccino" then 3.5 eur
   unless product is "mocha" then 4 eur
 
-rule size_multiplier: veto "Unknown size of coffee"
+rule size_multiplier:
+  veto "Unknown size of coffee"
   unless size is "small" then 80%
   unless size is "medium" then 100%
   unless size is "large" then 120%
 
-rule price_per_cup: base_price * size_multiplier
-rule subtotal: price_per_cup * number_of_cups
+rule price_per_cup:
+  base_price * size_multiplier
 
-rule loyalty_discount: 0%
+rule subtotal:
+  price_per_cup * number_of_cups
+
+rule loyalty_discount:
+  0%
   unless has_loyalty_card then 10%
 
-rule age_discount: 0%
+rule age_discount:
+  0%
   unless age >= 65 then 10%
 
-rule discount_amount: subtotal * loyalty_discount - age_discount
-rule total: subtotal - discount_amount
+rule discount_amount:
+  subtotal * loyalty_discount - age_discount
+
+rule total:
+  subtotal - discount_amount
