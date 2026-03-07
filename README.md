@@ -250,6 +250,34 @@ rule annual_leave_days: leave_policy.base_leave_days
   unless is_senior? then leave_policy.base_leave_days + leave_policy.bonus_leave_days
 ```
 
+### Document versioning
+
+Documents with the same name can have multiple versions over time by specifying an active-from date on the doc declaration. The engine resolves the correct version based on a point in time.
+
+```lemma
+doc pricing
+fact base_price: 20
+
+rule total: base_price * quantity
+```
+
+This document has no temporal metadata, so it is active from the beginning of time. When a new version is introduced, the old one is automatically superseded:
+
+```lemma
+doc pricing 2025-01-01
+
+fact base_price: 25
+
+rule total: base_price * quantity
+```
+
+The new version takes over starting 2025-01-01. The original is now effectively active until 2025-01-01 without needing any changes to it.
+
+**Resolution rules:**
+
+- Documents are sorted by `effective_from` (no `effective_from` = earliest).
+- A version is active until the next version's `effective_from`, or indefinitely if it is the latest version.
+
 ### Veto for hard constraints
 
 You should use types to constrain facts whenever possible. Sometimes though, you might need to consider multiple data points to validate a rule. This is where `veto` comes in. In the example below, we want to ensure that the review date is after the start date.
