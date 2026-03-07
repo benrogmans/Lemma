@@ -48,7 +48,7 @@ pub(crate) fn parse_literal(
             );
             parse_duration_from_string(s, &source)
         }
-        _ => Err(Error::planning(
+        _ => Err(Error::validation(
             format!("Unsupported literal type: {:?}", pair.as_rule()),
             Some(Source::new(
                 attribute,
@@ -87,7 +87,7 @@ fn parse_number_literal(
                 )?
             }
             _ => {
-                return Err(Error::planning(
+                return Err(Error::validation(
                     "Unexpected number literal structure",
                     Some(Source::new(attribute, span, doc_name, source_text.clone())),
                     None::<String>,
@@ -129,7 +129,7 @@ fn parse_boolean_literal(
         "reject" => BooleanValue::Reject,
         _ => {
             let span = Span::from_pest_span(pair.as_span());
-            return Err(Error::planning(
+            return Err(Error::validation(
                 format!("Invalid boolean: '{}'\n             Expected one of: true, false, yes, no, accept, reject", pair.as_str()),
                 Some(Source::new(attribute, span, doc_name, source_text.clone())),
                 None::<String>,
@@ -160,7 +160,7 @@ fn parse_percent_literal(
                     return Ok(Value::Ratio(ratio_value, Some("percent".to_string())));
                 }
                 _ => {
-                    return Err(Error::planning(
+                    return Err(Error::validation(
                         "Expected number in percent literal",
                         Some(Source::new(
                             attribute,
@@ -174,7 +174,7 @@ fn parse_percent_literal(
             }
         }
     }
-    Err(Error::planning(
+    Err(Error::validation(
         "Invalid percent literal: missing number",
         Some(Source::new(
             attribute,
@@ -206,7 +206,7 @@ fn parse_permille_literal(
                     return Ok(Value::Ratio(ratio_value, Some("permille".to_string())));
                 }
                 _ => {
-                    return Err(Error::planning(
+                    return Err(Error::validation(
                         "Expected number in permille literal",
                         Some(Source::new(
                             attribute,
@@ -220,7 +220,7 @@ fn parse_permille_literal(
             }
         }
     }
-    Err(Error::planning(
+    Err(Error::validation(
         "Invalid permille literal: missing number",
         Some(Source::new(
             attribute,
@@ -238,7 +238,7 @@ pub(crate) fn parse_duration_from_string(value_str: &str, source: &Source) -> Re
     let trimmed = value_str.trim();
     let mut parts: Vec<&str> = trimmed.split_whitespace().collect();
     if parts.len() < 2 {
-        return Err(Error::planning(
+        return Err(Error::validation(
             format!(
                 "Invalid duration: '{}'. Expected format: <number> <unit> (e.g. 10 hours, 2 weeks)",
                 value_str
@@ -250,7 +250,7 @@ pub(crate) fn parse_duration_from_string(value_str: &str, source: &Source) -> Re
     let unit_str = parts.pop().unwrap();
     let number_str = parts.join(" ").replace(['_', ','], "");
     let n = Decimal::from_str(&number_str).map_err(|_| {
-        Error::planning(
+        Error::validation(
             format!("Invalid duration number: '{}'", number_str),
             Some(source.clone()),
             None::<String>,
@@ -268,7 +268,7 @@ pub(crate) fn parse_duration_from_string(value_str: &str, source: &Source) -> Re
         "millisecond" | "milliseconds" => DurationUnit::Millisecond,
         "microsecond" | "microseconds" => DurationUnit::Microsecond,
         _ => {
-            return Err(Error::planning(
+            return Err(Error::validation(
                 format!(
                     "Unknown duration unit: '{}'. Expected one of: years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds",
                     unit_str
@@ -320,7 +320,7 @@ pub(crate) fn parse_number_unit_literal(
     let s = pair.as_str();
     let span = Span::from_pest_span(pair.as_span());
     parse_number_unit_string(s).map_err(|msg| {
-        Error::planning(
+        Error::validation(
             msg,
             Some(Source::new(attribute, span, doc_name, source_text.clone())),
             None::<String>,
@@ -328,17 +328,10 @@ pub(crate) fn parse_number_unit_literal(
     })
 }
 
-fn parse_datetime_literal(
-    pair: Pair<Rule>,
-    attribute: &str,
-    doc_name: &str,
-    source_text: Arc<str>,
-) -> Result<Value, Error> {
-    let datetime_str = pair.as_str();
-
-    if let Ok(dt) = datetime_str.parse::<chrono::DateTime<chrono::FixedOffset>>() {
+pub(crate) fn parse_datetime_str(s: &str) -> Option<DateTimeValue> {
+    if let Ok(dt) = s.parse::<chrono::DateTime<chrono::FixedOffset>>() {
         let offset = dt.offset().local_minus_utc();
-        return Ok(Value::Date(DateTimeValue {
+        return Some(DateTimeValue {
             year: dt.year(),
             month: dt.month(),
             day: dt.day(),
@@ -349,11 +342,10 @@ fn parse_datetime_literal(
                 offset_hours: (offset / 3600) as i8,
                 offset_minutes: ((offset % 3600) / 60) as u8,
             }),
-        }));
+        });
     }
-
-    if let Ok(dt) = datetime_str.parse::<chrono::NaiveDateTime>() {
-        return Ok(Value::Date(DateTimeValue {
+    if let Ok(dt) = s.parse::<chrono::NaiveDateTime>() {
+        return Some(DateTimeValue {
             year: dt.year(),
             month: dt.month(),
             day: dt.day(),
@@ -361,11 +353,10 @@ fn parse_datetime_literal(
             minute: dt.minute(),
             second: dt.second(),
             timezone: None,
-        }));
+        });
     }
-
-    if let Ok(d) = datetime_str.parse::<chrono::NaiveDate>() {
-        return Ok(Value::Date(DateTimeValue {
+    if let Ok(d) = s.parse::<chrono::NaiveDate>() {
+        return Some(DateTimeValue {
             year: d.year(),
             month: d.month(),
             day: d.day(),
@@ -373,10 +364,22 @@ fn parse_datetime_literal(
             minute: 0,
             second: 0,
             timezone: None,
-        }));
+        });
     }
+    None
+}
 
-    Err(Error::planning(
+fn parse_datetime_literal(
+    pair: Pair<Rule>,
+    attribute: &str,
+    doc_name: &str,
+    source_text: Arc<str>,
+) -> Result<Value, Error> {
+    let datetime_str = pair.as_str();
+    if let Some(dtv) = parse_datetime_str(datetime_str) {
+        return Ok(Value::Date(dtv));
+    }
+    Err(Error::validation(
         format!("Invalid date/time format: '{}'\n         Expected one of:\n         - Date: YYYY-MM-DD (e.g., 2024-01-15)\n         - DateTime: YYYY-MM-DDTHH:MM:SS (e.g., 2024-01-15T14:30:00)\n         - With timezone: YYYY-MM-DDTHH:MM:SSZ or +HH:MM (e.g., 2024-01-15T14:30:00Z)\n         Note: Month must be 1-12, day must be valid for the month (no Feb 30), hours 0-23, minutes/seconds 0-59", datetime_str),
         Some(Source::new(
             attribute,
@@ -418,7 +421,7 @@ fn parse_time_literal(
         }));
     }
 
-    Err(Error::planning(
+    Err(Error::validation(
         format!("Invalid time format: '{}'\n         Expected: HH:MM or HH:MM:SS (e.g., 14:30 or 14:30:00)\n         With timezone: HH:MM:SSZ or +HH:MM (e.g., 14:30:00Z or 14:30:00+01:00)\n         Note: Hours must be 0-23, minutes and seconds must be 0-59", time_str),
         Some(Source::new(
             attribute,
@@ -442,7 +445,7 @@ fn parse_scientific_number(
     let mut inner = pair.into_inner();
 
     let mantissa_pair = inner.next().ok_or_else(|| {
-        Error::planning(
+        Error::validation(
             "Missing mantissa in scientific notation",
             Some(Source::new(
                 attribute,
@@ -454,7 +457,7 @@ fn parse_scientific_number(
         )
     })?;
     let exponent_pair = inner.next().ok_or_else(|| {
-        Error::planning(
+        Error::validation(
             "Missing exponent in scientific notation",
             Some(Source::new(
                 attribute,
@@ -475,7 +478,7 @@ fn parse_scientific_number(
     )?;
     let exponent_span = Span::from_pest_span(exponent_pair.as_span());
     let exponent: i32 = exponent_pair.as_str().parse().map_err(|_| {
-        Error::planning(
+        Error::validation(
             format!(
                 "Invalid exponent: '{}'\n             Expected an integer between -{} and +{}",
                 exponent_pair.as_str(),
@@ -493,7 +496,7 @@ fn parse_scientific_number(
     })?;
 
     let power_of_ten = decimal_pow10(exponent).ok_or_else(|| {
-        Error::planning(
+        Error::validation(
             format!("Exponent {} is out of range\n             Maximum supported exponent is ±{} (values up to ~10^28)", exponent, MAX_DECIMAL_EXPONENT),
             Some(Source::new(
                 attribute,
@@ -507,7 +510,7 @@ fn parse_scientific_number(
 
     if exponent >= 0 {
         mantissa.checked_mul(power_of_ten).ok_or_else(|| {
-            Error::planning(
+            Error::validation(
                 format!(
                     "Number overflow: result of {}e{} exceeds maximum value (~10^28)",
                     mantissa, exponent
@@ -523,7 +526,7 @@ fn parse_scientific_number(
         })
     } else {
         mantissa.checked_div(power_of_ten).ok_or_else(|| {
-            Error::planning(
+            Error::validation(
                 format!(
                     "Precision error: result of {}e{} has too many decimal places (max 28)",
                     mantissa, exponent
@@ -560,7 +563,7 @@ fn parse_decimal_number(
 ) -> Result<Decimal, Error> {
     let clean_number = number_str.replace(['_', ','], "");
     Decimal::from_str(&clean_number).map_err(|_| {
-        Error::planning(
+        Error::validation(
             format!("Invalid number: '{}'\n             Expected a valid decimal number (e.g., 42, 3.14, 1_000_000, 1,000,000)\n             Note: Use underscores or commas as thousand separators if needed", number_str),
             Some(Source::new(attribute, span, doc_name, source_text)),
             None::<String>,

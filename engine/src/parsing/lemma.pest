@@ -5,7 +5,7 @@
 SPACE = _{ WHITE_SPACE | NEWLINE }
 
 reserved_keyword = _{
-    (^"doc" | ^"fact" | ^"rule" | ^"then" | ^"unless" | ^"not" | ^"in" | ^"and" | ^"or" | ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" | ^"abs" | ^"floor" | ^"ceil" | ^"round" | ^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject" | ^"veto" | ^"scale" | ^"number" | ^"text" | ^"date" | ^"time" | ^"duration" | ^"type" | ^"from" | ^"with" | ^"meta") ~ !(ASCII_ALPHANUMERIC | "_")
+    (^"doc" | ^"fact" | ^"rule" | ^"then" | ^"unless" | ^"not" | ^"in" | ^"and" | ^"sqrt" | ^"sin" | ^"cos" | ^"tan" | ^"asin" | ^"acos" | ^"atan" | ^"log" | ^"exp" | ^"abs" | ^"floor" | ^"ceil" | ^"round" | ^"true" | ^"false" | ^"yes" | ^"no" | ^"accept" | ^"reject" | ^"veto" | ^"scale" | ^"number" | ^"text" | ^"date" | ^"time" | ^"duration" | ^"type" | ^"from" | ^"with" | ^"meta") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 // Low-level identifier used by public rules; kept silent so only higher-level
@@ -57,7 +57,7 @@ type_import = {
 
 type_custom = { label }
 type_name_def    = { type_custom | type_standard }
-type_import_def = { type_name_def ~ SPACE+ ~ ^"from" ~ SPACE+ ~ doc_name }
+type_import_def = { type_name_def ~ SPACE+ ~ ^"from" ~ SPACE+ ~ doc_name ~ (SPACE+ ~ doc_ref_hash)? }
 type_arrow_chain = { (type_import_def | type_name_def) ~ (SPACE* ~ arrow_symbol ~ SPACE* ~ command)* }
 
 // ================================================================================================
@@ -108,11 +108,11 @@ doc_body = {
     (type_import | type_definition | fact_definition | fact_binding | rule_definition | meta_definition | SPACE)*
 }
 
-doc_declaration = { ^"doc" ~ SPACE+ ~ doc_name }
+doc_declaration = { ^"doc" ~ SPACE+ ~ doc_name ~ (SPACE+ ~ doc_effective_from)? }
+doc_effective_from = @{ (ASCII_DIGIT | "-" | ":" | "+" | "T" | "Z")+ }
 doc_name_at     = { "@" }
 doc_name_base   = { ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_" | "-" | "/" )* }
-doc_version_tag = { ASCII_ALPHANUMERIC ~ (ASCII_ALPHANUMERIC | "_" | "-" | ".")* }
-doc_name        = { doc_name_at? ~ doc_name_base ~ ("." ~ doc_version_tag)? }
+doc_name        = { doc_name_at? ~ doc_name_base }
 
 triple_quote = _{ "\"\"\"" }
 commentary_block = { triple_quote ~ commentary ~ triple_quote }
@@ -138,7 +138,9 @@ fact_value = {
 type_declaration = { "[" ~ type_name_def ~ "]" }
 inline_type_definition = { "[" ~ type_arrow_chain ~ "]" }
 
-doc_reference = { ^"doc" ~ SPACE+ ~ doc_name }
+doc_reference = { ^"doc" ~ SPACE+ ~ doc_name ~ ("~" ~ doc_ref_hash)? ~ (SPACE+ ~ doc_ref_datetime)? }
+doc_ref_hash = @{ ASCII_ALPHANUMERIC{8} }
+doc_ref_datetime = @{ (ASCII_DIGIT | "-" | ":" | "+" | "T" | "Z")+ }
 
 // ================================================================================================
 // RULE DEFINITIONS
@@ -164,9 +166,7 @@ veto_expression = {
 // EXPRESSIONS
 // ================================================================================================
 
-expression = {
-    and_expression ~ (SPACE+ ~ ^"or" ~ SPACE+ ~ and_expression)*
-}
+expression = { and_expression }
 
 and_expression = {
     and_operand ~ (SPACE+ ~ ^"and" ~ SPACE+ ~ and_operand)*
