@@ -11,7 +11,7 @@ pub struct RuleResultJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     /// `true` when the rule produced a Veto (no value), `false` otherwise.
-    pub is_veto: bool,
+    pub vetoed: bool,
     /// Human-readable veto reason, if the rule was vetoed with a message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub veto_reason: Option<String>,
@@ -31,7 +31,7 @@ pub fn convert_response(
         .results
         .iter()
         .map(|(name, rule_result)| {
-            let (value, is_veto, veto_reason) = match &rule_result.result {
+            let (value, vetoed, veto_reason) = match &rule_result.result {
                 lemma::OperationResult::Value(v) => (Some(v.to_string()), false, None),
                 lemma::OperationResult::Veto(msg) => (None, true, msg.clone()),
             };
@@ -47,7 +47,7 @@ pub fn convert_response(
                 name.clone(),
                 RuleResultJson {
                     value,
-                    is_veto,
+                    vetoed,
                     veto_reason,
                     rule_type: rule_result.rule_type.name(),
                     proof,

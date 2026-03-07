@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use inquire::validator::Validation;
 use inquire::{DateSelect, MultiSelect, Select, Text};
+use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, LemmaType, TypeSpecification};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -33,26 +34,27 @@ pub fn run_interactive(
     doc_name: Option<String>,
     rule_names: Option<Vec<String>>,
     provided_facts: &HashMap<String, String>,
+    now: &DateTimeValue,
 ) -> Result<InteractiveResult> {
     let doc = match doc_name {
         Some(name) => name,
-        None => select_document(engine)?,
+        None => select_document(engine, now)?,
     };
 
     let rules = match rule_names {
         Some(names) => Some(names),
-        None => select_rules(engine, &doc)?,
+        None => select_rules(engine, &doc, now)?,
     };
 
-    // let target = prompt_target(engine, &doc, &rules)?;
+    // let target = prompt_target(engine, &doc, &rules, &now)?;
     let target = None;
-    let facts = prompt_facts(engine, &doc, &rules, provided_facts)?;
+    let facts = prompt_facts(engine, &doc, &rules, provided_facts, now)?;
 
     Ok((doc, rules, facts, target))
 }
 
-fn select_document(engine: &Engine) -> Result<String> {
-    let documents = engine.list_documents();
+fn select_document(engine: &Engine, now: &DateTimeValue) -> Result<String> {
+    let documents = engine.list_documents_effective(now);
 
     if documents.is_empty() {
         anyhow::bail!("No documents found in workspace. Add .lemma files to get started.");
@@ -62,19 +64,20 @@ fn select_document(engine: &Engine) -> Result<String> {
         return Ok(documents
             .first()
             .ok_or_else(|| anyhow::anyhow!("Expected at least one document"))?
+            .name
             .clone());
     }
 
     let display_options: Vec<String> = documents
         .iter()
-        .map(|doc_name| {
+        .map(|doc| {
             let (facts_count, rules_count) = engine
-                .get_execution_plan(doc_name)
+                .get_execution_plan(&doc.name, None, now)
                 .map(|p| (p.facts.len(), p.rules.len()))
                 .unwrap_or((0, 0));
             format!(
                 "{} ({} facts, {} rules)",
-                doc_name, facts_count, rules_count
+                doc.name, facts_count, rules_count
             )
         })
         .collect();
@@ -89,12 +92,16 @@ fn select_document(engine: &Engine) -> Result<String> {
         .position(|d| d == &selected)
         .context("Failed to find selected document index")?;
 
-    Ok(documents[doc_index].clone())
+    Ok(documents[doc_index].name.clone())
 }
 
-fn select_rules(engine: &Engine, doc_name: &str) -> Result<Option<Vec<String>>> {
+fn select_rules(
+    engine: &Engine,
+    doc_name: &str,
+    now: &DateTimeValue,
+) -> Result<Option<Vec<String>>> {
     let plan = engine
-        .get_execution_plan(doc_name)
+        .get_execution_plan(doc_name, None, now)
         .context(format!("Document '{}' not found", doc_name))?;
     let rule_names: Vec<String> = plan.schema().rules.keys().cloned().collect();
 
@@ -122,6 +129,7 @@ fn _prompt_target(
     engine: &Engine,
     doc_name: &str,
     rule_names: &Option<Vec<String>>,
+    now: &DateTimeValue,
 ) -> Result<Option<String>> {
     use inquire::Confirm;
 
@@ -135,7 +143,7 @@ fn _prompt_target(
         return Ok(None);
     }
 
-    let available_rules = engine.get_document_rules(doc_name);
+    let available_rules = engine.get_document_rules(doc_name, now)?;
     if available_rules.is_empty() {
         return Ok(None);
     }
@@ -182,9 +190,10 @@ fn prompt_facts(
     doc_name: &str,
     rule_names: &Option<Vec<String>>,
     provided_facts: &HashMap<String, String>,
+    now: &DateTimeValue,
 ) -> Result<HashMap<String, String>> {
     let plan = engine
-        .get_execution_plan(doc_name)
+        .get_execution_plan(doc_name, None, now)
         .context(format!("Document '{}' not found", doc_name))?;
 
     let selected_rules: Vec<String> = rule_names.clone().unwrap_or_default();
@@ -195,10 +204,14 @@ fn prompt_facts(
             .context("Failed to get schema for rules")?
     };
 
+    // Only prompt for facts that need input: not in provided_facts and no value in plan.
+    // Facts with a value (document-defined) are not prompted. Facts with only a type default
+    // are still prompted but prefilled via default_value_from_type below.
     let promptable_facts: Vec<_> = schema
         .facts
         .into_iter()
         .filter(|(name, _)| !provided_facts.contains_key(name))
+        .filter(|(_, (_, value_opt))| value_opt.is_none())
         .collect();
 
     if promptable_facts.is_empty() {
@@ -223,7 +236,7 @@ fn prompt_facts(
             trial_facts.extend(facts.clone());
             trial_facts.insert(fact_name.clone(), input_value.clone());
 
-            match engine.evaluate(doc_name, selected_rules.clone(), trial_facts) {
+            match engine.evaluate(doc_name, None, now, selected_rules.clone(), trial_facts) {
                 Ok(_) => {
                     facts.insert(fact_name.clone(), input_value);
                     break;
@@ -253,7 +266,7 @@ fn default_value_from_type(lemma_type: &LemmaType) -> Option<String> {
             default.as_ref().map(|(v, u)| format!("{} {}", v, u))
         }
         TypeSpecification::Veto { .. } => None,
-        TypeSpecification::Error => unreachable!(
+        TypeSpecification::Undetermined => unreachable!(
             "BUG: default_value_from_type called with Error sentinel type; this type must never reach interactive mode"
         ),
     }
@@ -372,7 +385,7 @@ fn prompt_value_for_type(
         TypeSpecification::Veto { .. } => {
             anyhow::bail!("Fact '{}' has veto type which is not promptable", fact_name)
         }
-        TypeSpecification::Error => unreachable!(
+        TypeSpecification::Undetermined => unreachable!(
             "BUG: prompt_value_for_type called with Error sentinel type; this type must never reach interactive mode"
         ),
     }
