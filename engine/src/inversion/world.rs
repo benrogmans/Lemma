@@ -59,7 +59,7 @@ impl Serialize for World {
 
 /// A solution from world enumeration with a resolved outcome
 #[derive(Debug, Clone)]
-pub struct WorldSolution {
+pub(super) struct WorldSolution {
     /// The world (branch assignment) that produced this solution
     pub world: World,
     /// The constraint under which this solution applies (facts only, no rule references)
@@ -74,7 +74,7 @@ pub struct WorldSolution {
 /// that couldn't be evaluated to a literal because it contains unknown facts.
 /// These need algebraic solving to determine the input values.
 #[derive(Debug, Clone)]
-pub struct WorldArithmeticSolution {
+pub(super) struct WorldArithmeticSolution {
     /// The world (branch assignment) that produced this solution
     pub world: World,
     /// The constraint under which this solution applies (facts only, no rule references)
@@ -85,7 +85,7 @@ pub struct WorldArithmeticSolution {
 
 /// Result of world enumeration containing both literal and arithmetic solutions
 #[derive(Debug, Clone)]
-pub struct EnumerationResult {
+pub(super) struct EnumerationResult {
     /// Solutions with literal outcomes (can be directly compared to target)
     pub literal_solutions: Vec<WorldSolution>,
     /// Solutions with arithmetic outcomes (need algebraic solving)
@@ -93,7 +93,7 @@ pub struct EnumerationResult {
 }
 
 /// Enumerates valid worlds for a target rule
-pub struct WorldEnumerator<'a> {
+pub(super) struct WorldEnumerator<'a> {
     plan: &'a ExecutionPlan,
     /// Rules to process, in topological order (dependencies first)
     rules_in_order: Vec<RulePath>,
@@ -103,7 +103,10 @@ pub struct WorldEnumerator<'a> {
 
 impl<'a> WorldEnumerator<'a> {
     /// Create a new world enumerator for a target rule
-    pub fn new(plan: &'a ExecutionPlan, target_rule: &RulePath) -> Result<Self, crate::Error> {
+    pub(super) fn new(
+        plan: &'a ExecutionPlan,
+        target_rule: &RulePath,
+    ) -> Result<Self, crate::Error> {
         // Build rule lookup from execution plan
         let rule_map: HashMap<RulePath, &ExecutableRule> =
             plan.rules.iter().map(|r| (r.path.clone(), r)).collect();
@@ -138,7 +141,7 @@ impl<'a> WorldEnumerator<'a> {
     /// - `literal_solutions`: Worlds where the outcome is a concrete literal value
     /// - `arithmetic_solutions`: Worlds where the outcome is an arithmetic expression
     ///   containing unknown facts (needs algebraic solving)
-    pub fn enumerate(
+    pub(super) fn enumerate(
         &mut self,
         provided_facts: &HashSet<FactPath>,
     ) -> Result<EnumerationResult, crate::Error> {
