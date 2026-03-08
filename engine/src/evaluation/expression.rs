@@ -88,7 +88,7 @@ fn propagate_veto_proof(
 /// Evaluate a rule to produce its final result and proof.
 /// After planning, evaluation is guaranteed to complete — this function never returns
 /// a Error. It produces an OperationResult (Value or Veto) and a Proof tree.
-pub fn evaluate_rule(
+pub(crate) fn evaluate_rule(
     exec_rule: &ExecutableRule,
     context: &mut crate::evaluation::EvaluationContext,
 ) -> (OperationResult, crate::evaluation::proof::Proof) {

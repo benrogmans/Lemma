@@ -22,12 +22,11 @@
 //!     rule total: price * quantity
 //! "#.to_string());
 //!
-//! tokio::runtime::Runtime::new().unwrap()
-//!     .block_on(engine.add_lemma_files(files))
-//!     .expect("failed to add files");
+//! engine.add_lemma_files(files).expect("failed to add files");
 //!
 //! // Evaluate the spec (all rules, no fact values)
-//! let response = engine.evaluate("example", None, &lemma::parsing::ast::DateTimeValue::now(), vec![], HashMap::new()).unwrap();
+//! let now = lemma::DateTimeValue::now();
+//! let response = engine.evaluate("example", None, &now, vec![], HashMap::new()).unwrap();
 //! ```
 //!
 //! ## Core Concepts
@@ -51,7 +50,7 @@
 #[cfg(test)]
 mod tests;
 
-pub mod computation;
+pub(crate) mod computation;
 pub mod engine;
 pub mod error;
 pub mod evaluation;
@@ -61,7 +60,7 @@ pub mod limits;
 pub mod parsing;
 pub mod planning;
 pub mod registry;
-pub mod serialization;
+pub(crate) mod serialization;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
@@ -74,12 +73,12 @@ pub use evaluation::operations::{
 pub use evaluation::proof;
 pub use evaluation::response::{Facts, Response, RuleResult};
 pub use formatting::{format_source, format_specs};
-pub use inversion::{
-    invert, Bound, DerivedExpression, Domain, InversionResponse, Solution, Target, TargetOp,
-};
+pub use inversion::{Bound, Domain, InversionResponse, Solution, Target, TargetOp};
 pub use limits::ResourceLimits;
-pub use parsing::ast::*;
-pub use parsing::ast::{DepthTracker, Span};
+pub use parsing::ast::{
+    DateTimeValue, DepthTracker, LemmaFact, LemmaRule, LemmaSpec, MetaField, MetaValue, Span,
+    TypeDef,
+};
 pub use parsing::parse;
 pub use parsing::Source;
 pub use planning::semantics::{

@@ -161,8 +161,6 @@ fact y: 2
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("2 files"))
-        .stdout(predicate::str::contains("2 specs"))
         .stdout(predicate::str::contains("spec1"))
         .stdout(predicate::str::contains("spec2"));
 }

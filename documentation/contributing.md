@@ -10,10 +10,10 @@ title: Contributing
 ```bash
 git clone https://github.com/benrogmans/lemma
 cd lemma
-cargo test --workspace
+cargo nextest run --workspace
 ```
 
-### Optional Development Tools
+### Optional tools
 
 For WASM development:
 ```bash
@@ -38,14 +38,14 @@ cargo deny check --config .cargo/deny.toml
 2. Make your changes
 3. Run before submitting:
    ```bash
-   cargo test --workspace
-   cargo clippy --workspace -- -D warnings
+   cargo nextest run --workspace
+   cargo clippy --all-targets --all-features -- -D warnings
    cargo fmt --all
    ```
 
 ## Pull Requests
 
-**Automated checks that must pass:**
+Automated checks that must pass:
 - Tests (stable + beta Rust)
 - Clippy linting
 - Formatting (rustfmt)
@@ -55,62 +55,44 @@ cargo deny check --config .cargo/deny.toml
 
 ## Project Structure
 
-- `cli/` - CLI application
-- `engine/` - Core parser and evaluator
-- `engine/fuzz/` - Fuzz testing targets
-- `documentation/examples/` - Example `.lemma` files
+- `cli/` -- CLI application (HTTP server, MCP server, interactive mode, formatter)
+- `engine/` -- core parser, planner, and evaluator
+- `engine/fuzz/` -- fuzz testing targets
+- `openapi/` -- Lemma-to-OpenAPI generation
+- `documentation/examples/` -- example `.lemma` files
 
 ## Testing
 
-### Unit and Integration Tests
+### Unit and integration tests
 ```bash
-cargo test --workspace
+cargo nextest run --workspace
 ```
 
-### Fuzz Testing
-Requires nightly Rust. Uses cargo-fuzz to test parser robustness.
+### Fuzz testing
+Requires nightly Rust:
 
 ```bash
 cd engine/fuzz
-cargo +nightly fuzz list                    # List available fuzz targets
-cargo +nightly fuzz run fuzz_parser -- -max_total_time=60  # Run for 60 seconds
+cargo +nightly fuzz list
+cargo +nightly fuzz run fuzz_parser -- -max_total_time=60
 ```
 
-### WASM Build
-
-#### Build and Test
+### WASM build and test
 ```bash
-cd lemma
-
-# Build WASM package
 node wasm/build.js
-
-# Test WASM package
 node wasm/test.js
 ```
 
-The WASM scripts:
-- **wasm/build.js**: Compiles WASM using the web target (works in both browsers and Node.js)
-- **wasm/test.js**: Runs comprehensive tests on the compiled WASM module
-
-The build automatically generates a package.json from Cargo.toml metadata.
-
-For detailed JavaScript API documentation, see [lemma/wasm/README.md](../engine/wasm/README.md).
-
-This will run comprehensive tests and show results in the terminal.
-
 ## Release (maintainers only)
 
-To release:
 1. Update version in `engine/Cargo.toml` and/or `cli/Cargo.toml`
 2. Open PR and merge to main
 3. CI automatically detects version changes and publishes to crates.io
 
 Releases are independent:
-- `lemma` → tagged as `lemma-v0.2.1`
-- `lemma` CLI → tagged as `v0.2.1` with GitHub release
+- `lemma-engine` tagged as `lemma-v{version}`
+- `lemma-cli` tagged as `v{version}` with GitHub release
 
 ## License
 
 Apache 2.0
-

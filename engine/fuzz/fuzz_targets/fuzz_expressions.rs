@@ -17,8 +17,6 @@ rule test_expr: {}
         
         let files: HashMap<String, String> =
             std::iter::once(("fuzz_expr".to_string(), code)).collect();
-        let _ = tokio::runtime::Runtime::new()
-            .expect("tokio runtime")
-            .block_on(engine.add_lemma_files(files));
+        let _ = engine.add_lemma_files(files);
     }
 });

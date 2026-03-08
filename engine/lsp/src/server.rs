@@ -29,7 +29,7 @@ struct SharedState {
 ///
 /// Implements the LSP protocol for Lemma files:
 /// - Diagnostics (parse errors + planning errors) published on file open/change
-/// - Registry links for clickable `@external` spec references
+/// - Registry links for clickable `@external` spec references (url_for_id only, no fetching)
 pub struct LemmaLanguageServer {
     client: Client,
     state: Arc<SharedState>,
@@ -98,9 +98,9 @@ impl LemmaLanguageServer {
     /// Spawn the background debounce task.
     ///
     /// This task waits for change notifications, then waits for a 250ms quiet period
-    /// (no further changes) before running a full workspace validation. When a registry
-    /// is configured, runs registry resolution first so that Registry errors (e.g.
-    /// "Failed to reach LemmaBase") are published as diagnostics.
+    /// (no further changes) before running a full workspace validation. The engine
+    /// does not resolve `@` references — deps must be pre-fetched (via `lemma fetch`)
+    /// and present on disk. Unresolved `@` refs surface as planning errors.
     ///
     /// Not available on WASM — `tokio::spawn` requires `Send` futures, but on WASM
     /// the registry trait uses `?Send` futures.
@@ -134,7 +134,7 @@ impl LemmaLanguageServer {
                 };
 
                 let mut engine = lemma::Engine::new();
-                let errors = match engine.add_lemma_files(files).await {
+                let errors = match engine.add_lemma_files(files) {
                     Ok(()) => Vec::new(),
                     Err(errs) => errs,
                 };

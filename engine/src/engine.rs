@@ -1,6 +1,5 @@
 use crate::evaluation::Evaluator;
 use crate::parsing::ast::{DateTimeValue, LemmaSpec};
-use crate::registry::Registry;
 use crate::{parse, Error, ResourceLimits, Response};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -312,22 +311,21 @@ fn find_slice_plan<'a>(
 
 // ─── Engine ──────────────────────────────────────────────────────────
 
-/// Engine for evaluating Lemma rules
+/// Engine for evaluating Lemma rules.
 ///
 /// Pure Rust implementation that evaluates Lemma specs directly from the AST.
 /// Uses pre-built execution plans that are self-contained and ready for evaluation.
 ///
-/// An optional Registry can be configured to resolve external `@...` references.
-/// When a Registry is set, `add_lemma_files` will automatically resolve `@...`
-/// references by fetching source text from the Registry, parsing it, and including
-/// the resulting Lemma specs in the spec set before planning.
+/// The engine never performs network calls. External `@...` references must be
+/// pre-resolved before calling `add_lemma_files` — either by including dep files
+/// in the file map or by calling `resolve_registry_references` separately
+/// (e.g. in a `lemma fetch` command).
 pub struct Engine {
     execution_plans: HashMap<Arc<LemmaSpec>, Vec<crate::planning::ExecutionPlan>>,
     specs: Context,
     sources: HashMap<String, String>,
     evaluator: Evaluator,
     limits: ResourceLimits,
-    registry: Option<Arc<dyn Registry>>,
     hash_pins: HashMap<Arc<LemmaSpec>, String>,
 }
 
@@ -339,7 +337,6 @@ impl Default for Engine {
             sources: HashMap::new(),
             evaluator: Evaluator,
             limits: ResourceLimits::default(),
-            registry: Self::default_registry(),
             hash_pins: HashMap::new(),
         }
     }
@@ -350,27 +347,7 @@ impl Engine {
         Self::default()
     }
 
-    /// Return the default registry based on enabled features.
-    ///
-    /// When the `registry` feature is enabled, the default registry is `LemmaBase`,
-    /// which resolves `@...` references by fetching Lemma source from LemmaBase.com.
-    ///
-    /// When the `registry` feature is disabled, no registry is configured and
-    /// `@...` references will fail during resolution.
-    fn default_registry() -> Option<Arc<dyn Registry>> {
-        #[cfg(feature = "registry")]
-        {
-            Some(Arc::new(crate::registry::LemmaBase::new()))
-        }
-        #[cfg(not(feature = "registry"))]
-        {
-            None
-        }
-    }
-
     /// Create an engine with custom resource limits.
-    ///
-    /// Uses the default registry (LemmaBase when the `registry` feature is enabled).
     pub fn with_limits(limits: ResourceLimits) -> Self {
         Self {
             execution_plans: HashMap::new(),
@@ -378,18 +355,8 @@ impl Engine {
             sources: HashMap::new(),
             evaluator: Evaluator,
             limits,
-            registry: Self::default_registry(),
             hash_pins: HashMap::new(),
         }
-    }
-
-    /// Configure a Registry for resolving external `@...` references.
-    ///
-    /// When set, `add_lemma_files` will resolve `@...` references automatically
-    /// by fetching source text from the Registry before planning.
-    pub fn with_registry(mut self, registry: Arc<dyn Registry>) -> Self {
-        self.registry = Some(registry);
-        self
     }
 
     /// Get the content hash (hash pin) for the temporal version active at `effective`.
@@ -422,7 +389,10 @@ impl Engine {
     pub fn get_spec_by_hash_pin(&self, spec_name: &str, hash_pin: &str) -> Option<Arc<LemmaSpec>> {
         let mut matched: Option<Arc<LemmaSpec>> = None;
         for spec in self.specs.specs_for_name(spec_name) {
-            let computed = self.hash_pins.get(&spec).map(|s| s.as_str()).unwrap_or("");
+            let computed = match self.hash_pins.get(&spec) {
+                Some(h) => h.as_str(),
+                None => continue,
+            };
             if crate::planning::content_hash::content_hash_matches(hash_pin, computed) {
                 if matched.is_some() {
                     return None;
@@ -433,18 +403,19 @@ impl Engine {
         matched
     }
 
-    /// Add Lemma source files and (when a registry is configured) resolve any `@...` references.
+    /// Add Lemma source files, parse them, and build execution plans.
     ///
-    /// - Resolves registry references **once** for all specs
+    /// External `@...` references must already be resolved: include dependency
+    /// `.lemma` files in the `files` map. The engine never
+    /// performs network calls. Use `resolve_registry_references` separately
+    /// (e.g. in `lemma fetch`) to download dependencies before calling this.
+    ///
     /// - Validates and resolves types **once** across all specs
-    /// - Collects **all** errors across all files (parse, registry, planning) instead of aborting on the first
+    /// - Collects **all** errors across all files (parse, planning) instead of aborting on the first
     ///
     /// `files` maps source identifiers (e.g. file paths) to source code.
     /// For a single file, pass a one-entry `HashMap`.
-    pub async fn add_lemma_files(
-        &mut self,
-        files: HashMap<String, String>,
-    ) -> Result<(), Vec<Error>> {
+    pub fn add_lemma_files(&mut self, files: HashMap<String, String>) -> Result<(), Vec<Error>> {
         let mut errors: Vec<Error> = Vec::new();
 
         for (source_id, code) in &files {
@@ -482,19 +453,6 @@ impl Engine {
                     }
                 }
                 Err(e) => errors.push(e),
-            }
-        }
-
-        if let Some(registry) = &self.registry {
-            if let Err(registry_errors) = crate::registry::resolve_registry_references(
-                &mut self.specs,
-                &mut self.sources,
-                registry.as_ref(),
-                &self.limits,
-            )
-            .await
-            {
-                errors.extend(registry_errors);
             }
         }
 
@@ -919,9 +877,7 @@ mod tests {
     ) -> Result<(), Vec<Error>> {
         let files: HashMap<String, String> =
             std::iter::once((source.to_string(), code.to_string())).collect();
-        tokio::runtime::Runtime::new()
-            .expect("tokio runtime")
-            .block_on(engine.add_lemma_files(files))
+        engine.add_lemma_files(files)
     }
 
     #[test]
@@ -1247,94 +1203,29 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Registry integration tests
+    // Pre-resolved dependency tests (Engine never fetches from registry)
     // -------------------------------------------------------------------
 
     use crate::parsing::ast::DateTimeValue;
-    use crate::registry::{RegistryBundle, RegistryError};
-
-    struct EngineTestRegistry {
-        bundles: std::collections::HashMap<String, RegistryBundle>,
-    }
-
-    impl EngineTestRegistry {
-        fn new() -> Self {
-            Self {
-                bundles: std::collections::HashMap::new(),
-            }
-        }
-
-        fn add(&mut self, identifier: &str, source: &str) {
-            self.bundles.insert(
-                identifier.to_string(),
-                RegistryBundle {
-                    lemma_source: source.to_string(),
-                    attribute: format!("@{}", identifier),
-                },
-            );
-        }
-    }
-
-    #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-    #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-    impl Registry for EngineTestRegistry {
-        async fn fetch_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
-            self.bundles.get(name).cloned().ok_or(RegistryError {
-                message: format!("not found: {}", name),
-                kind: crate::registry::RegistryErrorKind::NotFound,
-            })
-        }
-
-        async fn fetch_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
-            self.bundles.get(name).cloned().ok_or(RegistryError {
-                message: format!("not found: {}", name),
-                kind: crate::registry::RegistryErrorKind::NotFound,
-            })
-        }
-
-        fn url_for_id(&self, name: &str, effective: Option<&DateTimeValue>) -> Option<String> {
-            if self.bundles.contains_key(name) {
-                Some(match effective {
-                    None => format!("https://test/{}", name),
-                    Some(d) => format!("https://test/{}?effective={}", name, d),
-                })
-            } else {
-                None
-            }
-        }
-    }
-
-    /// Build an engine with no registry (regardless of feature flags).
-    fn engine_without_registry() -> Engine {
-        Engine {
-            execution_plans: HashMap::new(),
-            specs: Context::new(),
-            sources: HashMap::new(),
-            evaluator: Evaluator,
-            limits: ResourceLimits::default(),
-            registry: None,
-            hash_pins: HashMap::new(),
-        }
-    }
 
     #[test]
-    fn add_lemma_files_with_registry_resolves_and_evaluates_external_spec() {
-        let mut registry = EngineTestRegistry::new();
-        registry.add(
-            "org/project/helper",
-            "spec org/project/helper\nfact quantity: 42",
-        );
-
-        let mut engine = engine_without_registry().with_registry(Arc::new(registry));
-
-        add_lemma_code_blocking(
-            &mut engine,
+    fn pre_resolved_deps_in_file_map_evaluates_external_spec() {
+        let mut engine = Engine::new();
+        let mut files = HashMap::new();
+        files.insert(
+            "main.lemma".to_string(),
             r#"spec main_spec
 fact external: spec @org/project/helper
-rule value: external.quantity"#,
-            "main.lemma",
-        )
-        .expect("add_lemma_files should succeed with registry resolving the external spec");
+rule value: external.quantity"#
+                .to_string(),
+        );
+        files.insert(
+            "deps/org_project_helper.lemma".to_string(),
+            "spec @org/project/helper\nfact quantity: 42".to_string(),
+        );
+        engine
+            .add_lemma_files(files)
+            .expect("should succeed with pre-resolved deps in file map");
 
         let now = DateTimeValue::now();
         let response = engine
@@ -1354,8 +1245,8 @@ rule value: external.quantity"#,
     }
 
     #[test]
-    fn add_lemma_files_without_registry_and_no_external_refs_works() {
-        let mut engine = engine_without_registry();
+    fn add_lemma_files_no_external_refs_works() {
+        let mut engine = Engine::new();
 
         add_lemma_code_blocking(
             &mut engine,
@@ -1364,9 +1255,7 @@ fact price: 100
 rule doubled: price * 2"#,
             "local.lemma",
         )
-        .expect(
-            "add_lemma_files should succeed without registry when there are no @... references",
-        );
+        .expect("should succeed when there are no @... references");
 
         let now = DateTimeValue::now();
         let response = engine
@@ -1377,8 +1266,8 @@ rule doubled: price * 2"#,
     }
 
     #[test]
-    fn add_lemma_files_without_registry_and_external_ref_fails() {
-        let mut engine = engine_without_registry();
+    fn unresolved_external_ref_without_deps_fails() {
+        let mut engine = Engine::new();
 
         let result = add_lemma_code_blocking(
             &mut engine,
@@ -1390,37 +1279,37 @@ rule value: external.quantity"#,
 
         assert!(
             result.is_err(),
-            "Should fail when @... reference exists but no registry is configured"
+            "Should fail when @... dep is not in file map"
         );
     }
 
     #[test]
-    fn add_lemma_files_with_registry_resolves_spec_and_type_refs() {
-        let mut registry = EngineTestRegistry::new();
-        registry.add(
-            "org/example/helper",
-            "spec org/example/helper\nfact value: 42",
-        );
-        registry.add(
-            "lemma/std/finance",
-            r#"spec lemma/std/finance
-type money: scale
- -> unit eur 1.00
- -> decimals 2"#,
-        );
-
-        let mut engine = engine_without_registry().with_registry(Arc::new(registry));
-
-        let main_content = r#"spec registry_demo
+    fn pre_resolved_deps_with_spec_and_type_refs() {
+        let mut engine = Engine::new();
+        let mut files = HashMap::new();
+        files.insert(
+            "main.lemma".to_string(),
+            r#"spec registry_demo
 type money from @lemma/std/finance
 fact unit_price: 5 eur
 fact helper: spec @org/example/helper
 rule helper_value: helper.value
 rule line_total: unit_price * 2
-rule formatted: helper_value + 0"#;
-
-        add_lemma_code_blocking(&mut engine, main_content, "main.lemma")
-            .expect("add_lemma_files with registry should resolve @ refs");
+rule formatted: helper_value + 0"#
+                .to_string(),
+        );
+        files.insert(
+            "deps/helper.lemma".to_string(),
+            "spec @org/example/helper\nfact value: 42".to_string(),
+        );
+        files.insert(
+            "deps/finance.lemma".to_string(),
+            "spec @lemma/std/finance\ntype money: scale\n -> unit eur 1.00\n -> decimals 2"
+                .to_string(),
+        );
+        engine
+            .add_lemma_files(files)
+            .expect("should succeed with pre-resolved spec and type deps");
 
         let now = DateTimeValue::now();
         let response = engine
@@ -1432,95 +1321,8 @@ rule formatted: helper_value + 0"#;
     }
 
     #[test]
-    fn add_lemma_files_with_registry_error_propagates_as_registry_error() {
-        // Empty registry — every lookup returns "not found"
-        let registry = EngineTestRegistry::new();
-
-        let mut engine = engine_without_registry().with_registry(Arc::new(registry));
-
-        let result = add_lemma_code_blocking(
-            &mut engine,
-            r#"spec main_spec
-fact external: spec @org/project/missing
-rule value: external.quantity"#,
-            "main.lemma",
-        );
-
-        assert!(
-            result.is_err(),
-            "Should fail when registry cannot resolve the @... reference"
-        );
-        let errs = result.unwrap_err();
-        assert!(!errs.is_empty(), "expected at least one error");
-        let registry_err = errs
-            .iter()
-            .find(|e| matches!(e, Error::Registry { .. }))
-            .expect("error list should contain at least one Registry error");
-        match registry_err {
-            Error::Registry {
-                identifier, kind, ..
-            } => {
-                assert_eq!(identifier, "org/project/missing");
-                assert_eq!(*kind, crate::registry::RegistryErrorKind::NotFound);
-            }
-            _ => unreachable!(),
-        }
-        let error_message = errs
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ");
-        assert!(
-            error_message.contains("org/project/missing"),
-            "Error should mention the unresolved identifier: {}",
-            error_message
-        );
-        assert!(
-            error_message.contains("not found"),
-            "Error should mention the error kind: {}",
-            error_message
-        );
-    }
-
-    #[test]
-    fn with_registry_replaces_default_registry() {
-        let mut registry = EngineTestRegistry::new();
-        registry.add("custom/spec", "spec custom/spec\nfact x: 99");
-
-        let mut engine = Engine::new().with_registry(Arc::new(registry));
-
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"spec main_spec
-fact ext: spec @custom/spec
-rule val: ext.x"#,
-            "main.lemma",
-        )
-        .expect("with_registry should replace the default registry");
-
-        let now = DateTimeValue::now();
-        let response = engine
-            .evaluate("main_spec", None, &now, vec![], HashMap::new())
-            .expect("evaluate should succeed");
-
-        let val_result = response
-            .results
-            .get("val")
-            .expect("rule 'val' should exist");
-        assert_eq!(
-            val_result.result,
-            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
-                Decimal::from_str("99").unwrap()
-            )))
-        );
-    }
-
-    #[test]
     fn add_lemma_files_returns_all_errors_not_just_first() {
-        // When a spec has multiple independent errors (type import from
-        // non-existing spec AND spec reference to non-existing spec), the Engine
-        // should surface all of them, not just the first one.
-        let mut engine = engine_without_registry();
+        let mut engine = Engine::new();
 
         let result = add_lemma_code_blocking(
             &mut engine,

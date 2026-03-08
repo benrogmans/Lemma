@@ -28,7 +28,7 @@ impl WasmEngine {
         let engine = self.engine.clone();
         wasm_bindgen_futures::future_to_promise(async move {
             let files: HashMap<String, String> = std::iter::once((source, code)).collect();
-            let result = engine.borrow_mut().add_lemma_files(files).await;
+            let result = engine.borrow_mut().add_lemma_files(files);
             match result {
                 Ok(()) => Ok(JsValue::from_str(&to_json_response(json!({
                     "success": true,
@@ -169,7 +169,15 @@ impl WasmEngine {
             .evaluate_json(spec_name, hash_pin, effective, rule_names, json_bytes)
         {
             Ok(response) => {
-                let response_json = serde_json::to_value(&response).unwrap_or_else(|_| json!({}));
+                let response_json = match serde_json::to_value(&response) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return to_json_error_string(&format!(
+                            "BUG: failed to serialize response: {}",
+                            e
+                        ))
+                    }
+                };
                 to_json_response(json!({
                     "success": true,
                     "response": response_json
@@ -207,15 +215,18 @@ impl WasmEngine {
 
         to_json_response(json!({
             "success": true,
-            "schema": serde_json::to_value(&schema).unwrap_or(json!({}))
+            "schema": match serde_json::to_value(&schema) {
+                Ok(v) => v,
+                Err(e) => return to_json_error_string(&format!("BUG: failed to serialize schema: {}", e)),
+            }
         }))
     }
 }
 
 fn to_json_response(data: serde_json::Value) -> String {
-    serde_json::to_string(&data).unwrap_or_else(|_| {
-        r#"{"success":false,"error":"Failed to serialize response"}"#.to_string()
-    })
+    serde_json::to_string(&data).expect(
+        "BUG: serde_json::to_string failed on a serde_json::Value — this should never happen",
+    )
 }
 
 fn to_json_error(error: &Error) -> String {

@@ -24,7 +24,8 @@ workspace = true
 default = []
 
 [dependencies]
-lemma = { package = "lemma-engine", version = "0.7.6", path = ".." }
+# Exact version: avoid resolving a newer lemma-engine patch that may be API-incompatible.
+lemma = { package = "lemma-engine", version = "=0.8.0", path = ".." }
 async-trait = "0.1"
 serde_json.workspace = true
 

@@ -6,9 +6,9 @@ use crate::parsing::source::Source;
 use crate::planning::semantics::{
     conversion_target_to_semantic, primitive_boolean, primitive_date, primitive_duration,
     primitive_number, primitive_ratio, primitive_scale, primitive_text, primitive_time,
-    value_to_semantic, ArithmeticComputation, Expression, ExpressionKind, FactData, FactPath,
-    LemmaType, LiteralValue, PathSegment, RulePath, SemanticConversionTarget, TypeExtends,
-    TypeSpecification, ValueKind,
+    value_to_semantic, ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind,
+    FactData, FactPath, LemmaType, LiteralValue, PathSegment, RulePath, SemanticConversionTarget,
+    TypeExtends, TypeSpecification, ValueKind,
 };
 use crate::planning::types::{ResolvedSpecTypes, TypeResolver};
 use crate::planning::validation::{
@@ -2045,16 +2045,16 @@ fn check_logical_operand(operand_type: &LemmaType, source: &Source) -> Result<()
 /// Check that a comparison operation has compatible operand types.
 fn check_comparison_types(
     left_type: &LemmaType,
-    op: &crate::ComparisonComputation,
+    op: &ComparisonComputation,
     right_type: &LemmaType,
     source: &Source,
 ) -> Result<(), Vec<Error>> {
     let is_equality_only = matches!(
         op,
-        crate::ComparisonComputation::Equal
-            | crate::ComparisonComputation::NotEqual
-            | crate::ComparisonComputation::Is
-            | crate::ComparisonComputation::IsNot
+        ComparisonComputation::Equal
+            | ComparisonComputation::NotEqual
+            | ComparisonComputation::Is
+            | ComparisonComputation::IsNot
     );
 
     if left_type.is_boolean() && right_type.is_boolean() {
@@ -3206,7 +3206,9 @@ mod tests {
                 segments: Vec::new(),
                 name: "contract".to_string(),
             },
-            value: ParsedFactValue::SpecReference(crate::SpecRef::local("nonexistent")),
+            value: ParsedFactValue::SpecReference(crate::parsing::ast::SpecRef::local(
+                "nonexistent",
+            )),
             source_location: test_source(),
         };
         spec = spec.add_fact(fact);

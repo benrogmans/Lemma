@@ -166,9 +166,11 @@ fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
             return cached.clone();
         }
 
-        // Defensive: graph is expected to be acyclic after validation.
         if !visiting.insert(rule_path.clone()) {
-            return direct.get(rule_path).cloned().unwrap_or_default();
+            unreachable!(
+                "BUG: cycle in rule dependency graph at {:?} — planning should have rejected this",
+                rule_path
+            );
         }
 
         let mut out = direct.get(rule_path).cloned().unwrap_or_default();
@@ -691,9 +693,7 @@ mod tests {
     ) -> Result<(), Vec<crate::Error>> {
         let files: std::collections::HashMap<String, String> =
             std::iter::once((source.to_string(), code.to_string())).collect();
-        tokio::runtime::Runtime::new()
-            .expect("tokio runtime")
-            .block_on(engine.add_lemma_files(files))
+        engine.add_lemma_files(files)
     }
 
     #[test]
@@ -1109,7 +1109,7 @@ mod tests {
                 condition: Some(Expression::new(
                     ExpressionKind::Comparison(
                         Arc::new(create_fact_path_expr(age_path.clone())),
-                        crate::ComparisonComputation::GreaterThanOrEqual,
+                        crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
                         Arc::new(create_literal_expr(create_number_literal(18.into()))),
                     ),
                     test_source(),
@@ -1272,7 +1272,7 @@ mod tests {
                     condition: Some(Expression::new(
                         ExpressionKind::Comparison(
                             Arc::new(create_fact_path_expr(points_path.clone())),
-                            crate::ComparisonComputation::GreaterThanOrEqual,
+                            crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
                             Arc::new(create_literal_expr(create_number_literal(100.into()))),
                         ),
                         test_source(),
@@ -1284,7 +1284,7 @@ mod tests {
                     condition: Some(Expression::new(
                         ExpressionKind::Comparison(
                             Arc::new(create_fact_path_expr(points_path.clone())),
-                            crate::ComparisonComputation::GreaterThanOrEqual,
+                            crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
                             Arc::new(create_literal_expr(create_number_literal(500.into()))),
                         ),
                         test_source(),
@@ -1366,7 +1366,7 @@ mod tests {
                 result: Expression::new(
                     ExpressionKind::Arithmetic(
                         Arc::new(create_fact_path_expr(x_path.clone())),
-                        crate::ArithmeticComputation::Multiply,
+                        crate::parsing::ast::ArithmeticComputation::Multiply,
                         Arc::new(create_literal_expr(create_number_literal(2.into()))),
                     ),
                     test_source(),
@@ -1390,7 +1390,7 @@ mod tests {
         assert_eq!(deserialized.rules.len(), 1);
         match &deserialized.rules[0].branches[0].result.kind {
             ExpressionKind::Arithmetic(left, op, right) => {
-                assert_eq!(*op, crate::ArithmeticComputation::Multiply);
+                assert_eq!(*op, crate::parsing::ast::ArithmeticComputation::Multiply);
                 match &left.kind {
                     ExpressionKind::FactPath(_) => {}
                     _ => panic!("Expected FactPath in left operand"),
@@ -1438,7 +1438,7 @@ mod tests {
                 condition: Some(Expression::new(
                     ExpressionKind::Comparison(
                         Arc::new(create_fact_path_expr(age_path.clone())),
-                        crate::ComparisonComputation::GreaterThanOrEqual,
+                        crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
                         Arc::new(create_literal_expr(create_number_literal(18.into()))),
                     ),
                     test_source(),

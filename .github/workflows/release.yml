@@ -196,6 +196,42 @@ jobs:
       - name: Publish CLI to crates.io
         run: cargo publish -p lemma-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
+  release-vscode:
+    name: Publish VS Code extension
+    needs: detect-version-changes
+    if: needs.detect-version-changes.outputs.version_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set extension version
+        working-directory: engine/lsp/editors/vscode
+        run: |
+          node -e "
+            const p = require('./package.json');
+            p.version = process.env.VERSION;
+            require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+        env:
+          VERSION: ${{ needs.detect-version-changes.outputs.version }}
+
+      - name: Install dependencies
+        working-directory: engine/lsp/editors/vscode
+        run: npm ci
+
+      - name: Compile extension
+        working-directory: engine/lsp/editors/vscode
+        run: npm run compile
+
+      - name: Publish to Marketplace
+        working-directory: engine/lsp/editors/vscode
+        run: npx vsce publish -p ${{ secrets.VSCE_PAT }}
+
   publish-docker:
     name: Publish Docker Image
     needs: detect-version-changes

@@ -119,7 +119,7 @@ fn parse_boolean_literal(
     spec_name: &str,
     source_text: Arc<str>,
 ) -> Result<Value, Error> {
-    use crate::BooleanValue;
+    use crate::parsing::ast::BooleanValue;
 
     let boolean_value = match pair.as_str() {
         "true" => BooleanValue::True,
