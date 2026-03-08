@@ -518,10 +518,16 @@ impl TypeResolver {
                     .unwrap_or(false);
 
                 if !type_exists {
+                    let suggestion = from.as_ref().filter(|r| r.is_registry).map(|r| {
+                        format!(
+                            "Run `lemma get` or `lemma get @{}` to fetch this dependency.",
+                            r.name
+                        )
+                    });
                     Err(vec![Error::validation(
                         format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                         Some(source.clone()),
-                        None::<String>,
+                        suggestion,
                     )])
                 } else {
                     Ok(None)

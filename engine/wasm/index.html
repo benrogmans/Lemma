@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -14,7 +15,9 @@
             line-height: 1.6;
         }
 
-        h1 { color: #333; }
+        h1 {
+            color: #333;
+        }
 
         #editor {
             width: 100%;
@@ -27,17 +30,21 @@
             gap: 6px;
             margin-top: 8px;
         }
+
         .editor-actions .hint {
             margin-top: 0;
         }
+
         .editor-actions .format-link {
             color: #666;
             font-size: 13px;
             text-decoration: none;
         }
+
         .editor-actions .format-link:hover {
             text-decoration: underline;
         }
+
         .hint {
             margin-top: 8px;
             color: #666;
@@ -51,10 +58,12 @@
             border-radius: 3px;
             overflow: hidden;
         }
+
         .editor-wrap #editor {
             border: none;
             border-radius: 0;
         }
+
         #status {
             display: flex;
             align-items: center;
@@ -67,9 +76,24 @@
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             color: #333;
         }
-        #status.ok  { background: #f4f4f4; border-top-color: #e8e8e8; }
-        #status.err { background: #f8d7da; border-top-color: #dc3545; color: #721c24; }
-        #status.warn { background: #fff3cd; border-top-color: #ffc107; color: #856404; }
+
+        #status.ok {
+            background: #f4f4f4;
+            border-top-color: #e8e8e8;
+        }
+
+        #status.err {
+            background: #f8d7da;
+            border-top-color: #dc3545;
+            color: #721c24;
+        }
+
+        #status.warn {
+            background: #fff3cd;
+            border-top-color: #ffc107;
+            color: #856404;
+        }
+
         #status .status-text {
             white-space: nowrap;
             overflow: hidden;
@@ -85,6 +109,7 @@
             padding: 12px;
             margin-top: 12px;
         }
+
         .spec-card h3 {
             margin: 0 0 10px 0;
             font-size: 16px;
@@ -103,35 +128,42 @@
             grid-template-columns: 1fr;
             gap: 10px;
         }
+
         .fact-row {
             display: grid;
             grid-template-columns: 220px 1fr;
             gap: 10px;
             align-items: center;
         }
+
         .fact-row .label {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             font-size: 13px;
             color: #111;
         }
+
         .fact-row .label .required {
             color: #dc3545;
             font-weight: 700;
             margin-left: 6px;
         }
+
         .fact-row .input-group {
             display: flex;
             gap: 8px;
             align-items: center;
         }
+
         .fact-row select,
         .fact-row input {
             width: 100%;
         }
+
         .fact-row input[type="checkbox"] {
             width: auto;
             transform: translateY(1px);
         }
+
         .fact-help {
             grid-column: 2 / 3;
             color: #666;
@@ -157,9 +189,18 @@
             cursor: pointer;
             margin: 0;
         }
-        button:hover { background: #0056b3; }
-        button.secondary { background: #6c757d; }
-        button.secondary:hover { background: #5a6268; }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        button.secondary {
+            background: #6c757d;
+        }
+
+        button.secondary:hover {
+            background: #5a6268;
+        }
 
         /* --- Results table --- */
 
@@ -169,19 +210,32 @@
             border-collapse: collapse;
             background: white;
         }
+
         .results-table th {
             background: #f0f0f0;
             padding: 10px;
             text-align: left;
             border-bottom: 2px solid #ddd;
         }
+
         .results-table td {
             padding: 8px 10px;
             border-bottom: 1px solid #eee;
         }
-        .results-table .rule-name { font-weight: 500; color: #007bff; }
-        .results-table .value { font-family: monospace; }
-        .results-table .veto { color: #dc3545; font-style: italic; }
+
+        .results-table .rule-name {
+            font-weight: 500;
+            color: #007bff;
+        }
+
+        .results-table .value {
+            font-family: monospace;
+        }
+
+        .results-table .veto {
+            color: #dc3545;
+            font-style: italic;
+        }
 
         .result-message {
             margin-top: 10px;
@@ -190,17 +244,32 @@
             white-space: pre-wrap;
             font-family: monospace;
         }
-        .result-message.error { background: #f8d7da; border: 1px solid #dc3545; }
-        .result-message.success { background: #d4edda; border: 1px solid #28a745; }
+
+        .result-message.error {
+            background: #f8d7da;
+            border: 1px solid #dc3545;
+        }
+
+        .result-message.success {
+            background: #d4edda;
+            border: 1px solid #28a745;
+        }
 
         /* --- Responsive --- */
 
         @media (max-width: 740px) {
-            .fact-row { grid-template-columns: 1fr; }
-            .fact-help { grid-column: 1 / 2; margin-top: -2px; }
+            .fact-row {
+                grid-template-columns: 1fr;
+            }
+
+            .fact-help {
+                grid-column: 1 / 2;
+                margin-top: -2px;
+            }
         }
     </style>
 </head>
+
 <body>
     <h1>Lemma WASM Playground</h1>
 
@@ -220,7 +289,9 @@
     <div class="section">
         <div style="display:flex;align-items:center;justify-content:space-between;">
             <h2 style="margin:0;">Specs</h2>
-            <select id="spec-select"><option value="">No specs loaded</option></select>
+            <select id="spec-select">
+                <option value="">No specs loaded</option>
+            </select>
         </div>
         <div id="spec-detail"></div>
     </div>
@@ -282,7 +353,7 @@
             return entry.name;
         }
 
-        function specAsOf(key) {
+        function specEffective(key) {
             var entry = state.specs.find(function (d) { return specKey(d) === key; });
             if (entry && entry.effective_from) return datetimeValueToString(entry.effective_from);
             return null;
@@ -300,7 +371,7 @@
         function persistFactValues(specName) {
             try {
                 localStorage.setItem(factValuesStorageKey(specName), JSON.stringify(state.factValues[specName] || {}));
-            } catch (_) {}
+            } catch (_) { }
         }
 
         function loadFactValuesFromStorage(specName) {
@@ -313,7 +384,7 @@
                         state.factValues[specName] = parsed;
                     }
                 }
-            } catch (_) {}
+            } catch (_) { }
             if (!state.factValues[specName]) state.factValues[specName] = {};
         }
 
@@ -577,19 +648,17 @@
 
                 if (units.length > 0) {
                     const unitSelect = document.createElement('select');
-                    const emptyOption = document.createElement('option');
-                    emptyOption.value = '';
-                    emptyOption.textContent = '';
-                    unitSelect.appendChild(emptyOption);
                     for (const unitDefinition of units) {
                         const option = document.createElement('option');
                         option.value = unitDefinition.name;
                         option.textContent = unitDefinition.name;
                         unitSelect.appendChild(option);
                     }
-                    if (storedEntry.unit) {
-                        unitSelect.value = storedEntry.unit;
-                    }
+                    const defaultUnit = storedEntry.unit && units.some(function (u) { return u.name === storedEntry.unit; })
+                        ? storedEntry.unit
+                        : units[0].name;
+                    unitSelect.value = defaultUnit;
+                    state.factValues[specName][name].unit = defaultUnit;
                     unitSelect.addEventListener('change', function () {
                         state.factValues[specName][name].unit = this.value;
                         persistFactValues(specName);
@@ -923,10 +992,8 @@
                 }
             }
 
-            if (keys.indexOf(prevSelected) !== -1) {
-                select.value = prevSelected;
-            } else if (keys.length > 0) {
-                select.value = keys[0];
+            if (keys.length > 0) {
+                select.value = keys.indexOf(prevSelected) !== -1 ? prevSelected : keys[0];
             }
 
             renderSelectedSpec();
@@ -951,10 +1018,10 @@
         function fetchSchema(key) {
             if (!engine) return null;
             var name = specName(key);
-            var asOfStr = specAsOf(key);
+            var effectiveStr = specEffective(key);
             let response;
             try {
-                var raw = engine.getSchemaAsOf(name, asOfStr || '1', '[]');
+                var raw = engine.getSchemaEffective(name, effectiveStr || '1', '[]');
                 response = JSON.parse(raw);
             } catch (parseError) {
                 console.error('fetchSchema exception for', key, parseError);
@@ -1039,8 +1106,8 @@
             for (const entry of specEntries) {
                 const key = specKey(entry);
                 try {
-                    const asOf = entry.effective_from ? datetimeValueToString(entry.effective_from) : '1';
-                    const raw = engine.getSchemaAsOf(entry.name, asOf, '[]');
+                    const effective = entry.effective_from ? datetimeValueToString(entry.effective_from) : '1';
+                    const raw = engine.getSchemaEffective(entry.name, effective, '[]');
                     const schemaResult = JSON.parse(raw);
                     if (schemaResult && schemaResult.success && schemaResult.schema) {
                         state.schemas[key] = normalizeSchema(schemaResult.schema);
@@ -1080,12 +1147,12 @@
             if (!engine) return;
 
             const name = specName(key);
-            const asOf = specAsOf(key) || '1';
+            const effective = specEffective(key) || '1';
             const factsJson = JSON.stringify(serializeFactValues(key));
 
             let evalResult;
             try {
-                const raw = engine.evaluateAsOf(name, asOf, '', '[]', factsJson);
+                const raw = engine.evaluateEffective(name, effective, '', '[]', factsJson);
                 evalResult = JSON.parse(raw);
             } catch (parseError) {
                 state.evalResults[key] = { success: false, error: parseError.message || String(parseError) };
@@ -1187,6 +1254,26 @@
             if (editorPollId) { clearInterval(editorPollId); editorPollId = null; }
         }
 
+        function formatSpec(e = null) {
+            if (e) {
+                e.preventDefault();
+            }
+            if (!engine || !monacoEditor) return;
+            const code = monacoEditor.getValue();
+            const raw = engine.formatSource(code, 'wasm.lemma');
+            try {
+                const result = JSON.parse(raw);
+                if (result.success && result.formatted !== undefined) {
+                    monacoEditor.setValue(result.formatted);
+                    scheduleLoad(true);
+                } else if (!result.success && result.error) {
+                    setStatus('err', 'Format failed', result.error);
+                }
+            } catch (_) {
+                setStatus('err', 'Format failed', raw || 'Unknown error');
+            }
+        }
+
         async function initEditor(monaco) {
             if (editorReady) return;
             clearEditorLoading();
@@ -1198,26 +1285,26 @@
                 if (!editorEl) throw new Error('DOM element #editor not found');
 
                 monacoEditor = monaco.editor.create(editorEl, {
-                    value: [
-                        'spec pricing',
-                        '',
-                        'type money: scale',
-                        '  -> unit eur 1',
-                        '  -> unit usd 1.19',
-                        '',
-                        'fact price    : [money]',
-                        'fact quantity : [number -> minimum 0]',
-                        'fact is_member: false',
-                        '',
-                        'rule discount: 0%',
-                        '  unless quantity >= 10 then 10%',
-                        '  unless quantity >= 50 then 20%',
-                        '  unless is_member then 15%',
-                        '',
-                        'rule total: price * quantity - discount',
-                        '  unless price > 100 usd then veto "This price is too high."',
-                        '',
-                    ].join('\n'),
+                    value: `spec pricing
+                            type money: scale
+                            -> unit eur 1
+                            -> unit usd 1.19
+
+                            fact price     : [money]
+                            fact quantity  : [number -> minimum 0]
+                            fact is_member : false
+
+                            rule discount:
+                            0%
+                            unless quantity >= 10 then 10%
+                            unless quantity >= 50 then 20%
+                            unless is_member then 15%
+
+                            rule total:
+                            price * quantity - discount
+                            unless price > 100 usd then veto "This price is too high."
+                    `,
+
                     language: 'lemma',
                     theme: 'vs',
                     automaticLayout: true,
@@ -1236,25 +1323,11 @@
 
                 document.getElementById('spec-select').addEventListener('change', renderSelectedSpec);
 
-                document.getElementById('format-btn').addEventListener('click', function (e) {
-                    e.preventDefault();
-                    if (!engine || !monacoEditor) return;
-                    const code = monacoEditor.getValue();
-                    const raw = engine.formatSource(code, 'wasm.lemma');
-                    try {
-                        const result = JSON.parse(raw);
-                        if (result.success && result.formatted !== undefined) {
-                            monacoEditor.setValue(result.formatted);
-                            scheduleLoad(true);
-                        } else if (!result.success && result.error) {
-                            setStatus('err', 'Format failed', result.error);
-                        }
-                    } catch (_) {
-                        setStatus('err', 'Format failed', raw || 'Unknown error');
-                    }
-                });
+                document.getElementById('format-btn').addEventListener('click', formatSpec);
+
 
                 editorReady = true;
+                formatSpec();
 
                 // Start the LSP for real-time diagnostics.
                 try {
@@ -1328,4 +1401,5 @@
         }
     </script>
 </body>
+
 </html>

@@ -7,6 +7,7 @@ COPY . .
 RUN cargo build --release --package lemma-cli
 
 FROM scratch
+ENV HOME=/root
 COPY --from=builder /build/target/release/lemma /usr/local/bin/lemma
 WORKDIR /specs
 ENTRYPOINT ["lemma"]

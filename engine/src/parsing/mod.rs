@@ -198,15 +198,7 @@ fn parse_spec(
                 for decl_inner in header_item.into_inner() {
                     match decl_inner.as_rule() {
                         Rule::spec_name => {
-                            for name_part in decl_inner.into_inner() {
-                                match name_part.as_rule() {
-                                    Rule::spec_name_base => {
-                                        spec_name = Some(name_part.as_str().to_string());
-                                    }
-                                    Rule::spec_name_at => {}
-                                    _ => {}
-                                }
-                            }
+                            spec_name = Some(decl_inner.as_str().to_string());
                         }
                         Rule::spec_effective_from => {
                             let raw = decl_inner.as_str();
@@ -660,8 +652,8 @@ fact external: spec @user/workspace/somespec"#;
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].facts.len(), 1);
         match &result[0].facts[0].value {
-            crate::FactValue::SpecReference(spec_ref) => {
-                assert_eq!(spec_ref.name, "user/workspace/somespec");
+            crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
+                assert_eq!(spec_ref.name, "@user/workspace/somespec");
                 assert!(spec_ref.is_registry, "expected registry reference");
             }
             other => panic!("Expected SpecReference, got: {:?}", other),
@@ -677,8 +669,8 @@ fact price: [money]"#;
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].types.len(), 1);
         match &result[0].types[0] {
-            crate::TypeDef::Import { from, name, .. } => {
-                assert_eq!(from.name, "lemma/std/finance");
+            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
+                assert_eq!(from.name, "@lemma/std/finance");
                 assert!(from.is_registry, "expected registry reference");
                 assert_eq!(name, "money");
             }
@@ -709,8 +701,8 @@ fact a: spec @user/workspace/spec_a"#;
         let input = "spec example\nfact x: spec @owner/repo/somespec";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
-            crate::FactValue::SpecReference(spec_ref) => {
-                assert_eq!(spec_ref.name, "owner/repo/somespec");
+            crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
+                assert_eq!(spec_ref.name, "@owner/repo/somespec");
                 assert_eq!(spec_ref.hash_pin, None);
                 assert!(spec_ref.is_registry);
             }
@@ -723,8 +715,8 @@ fact a: spec @user/workspace/spec_a"#;
         let input = "spec example\nfact x: spec @owner/repo/somespec";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
-            crate::FactValue::SpecReference(spec_ref) => {
-                assert_eq!(spec_ref.name, "owner/repo/somespec");
+            crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
+                assert_eq!(spec_ref.name, "@owner/repo/somespec");
                 assert!(spec_ref.is_registry);
             }
             other => panic!("Expected SpecReference, got: {:?}", other),
@@ -736,7 +728,7 @@ fact a: spec @user/workspace/spec_a"#;
         let input = "spec example\nfact x: spec myspec";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
-            crate::FactValue::SpecReference(spec_ref) => {
+            crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
                 assert_eq!(spec_ref.name, "myspec");
                 assert_eq!(spec_ref.hash_pin, None);
                 assert!(!spec_ref.is_registry);
@@ -760,8 +752,8 @@ fact a: spec @user/workspace/spec_a"#;
         let input = "spec example\ntype money from @lemma/std/finance\nfact price: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].types[0] {
-            crate::TypeDef::Import { from, name, .. } => {
-                assert_eq!(from.name, "lemma/std/finance");
+            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
+                assert_eq!(from.name, "@lemma/std/finance");
                 assert!(from.is_registry);
                 assert_eq!(name, "money");
             }
@@ -792,7 +784,7 @@ fact a: spec @user/workspace/spec_a"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(result.is_ok(), "spec name without hash should parse");
         let spec_ref = match &result.as_ref().unwrap()[0].facts[0].value {
-            crate::FactValue::SpecReference(r) => r,
+            crate::parsing::ast::FactValue::SpecReference(r) => r,
             _ => panic!("expected SpecReference"),
         };
         assert_eq!(spec_ref.name, "other");
@@ -804,7 +796,7 @@ fact a: spec @user/workspace/spec_a"#;
         let input = "spec consumer\nfact cfg: spec config~a1b2c3d4";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         let spec_ref = match &result[0].facts[0].value {
-            crate::FactValue::SpecReference(r) => r,
+            crate::parsing::ast::FactValue::SpecReference(r) => r,
             other => panic!("expected SpecReference, got: {:?}", other),
         };
         assert_eq!(spec_ref.name, "config");
@@ -816,10 +808,10 @@ fact a: spec @user/workspace/spec_a"#;
         let input = "spec consumer\nfact ext: spec @user/workspace/cfg~ab12cd34";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         let spec_ref = match &result[0].facts[0].value {
-            crate::FactValue::SpecReference(r) => r,
+            crate::parsing::ast::FactValue::SpecReference(r) => r,
             other => panic!("expected SpecReference, got: {:?}", other),
         };
-        assert_eq!(spec_ref.name, "user/workspace/cfg");
+        assert_eq!(spec_ref.name, "@user/workspace/cfg");
         assert!(spec_ref.is_registry);
         assert_eq!(spec_ref.hash_pin.as_deref(), Some("ab12cd34"));
     }
@@ -829,7 +821,7 @@ fact a: spec @user/workspace/spec_a"#;
         let input = "spec consumer\ntype money from finance a1b2c3d4\nfact p: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].types[0] {
-            crate::TypeDef::Import { from, name, .. } => {
+            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
                 assert_eq!(name, "money");
                 assert_eq!(from.name, "finance");
                 assert_eq!(from.hash_pin.as_deref(), Some("a1b2c3d4"));
@@ -843,9 +835,9 @@ fact a: spec @user/workspace/spec_a"#;
         let input = "spec consumer\ntype money from @lemma/std/finance ab12cd34\nfact p: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].types[0] {
-            crate::TypeDef::Import { from, name, .. } => {
+            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
                 assert_eq!(name, "money");
-                assert_eq!(from.name, "lemma/std/finance");
+                assert_eq!(from.name, "@lemma/std/finance");
                 assert!(from.is_registry);
                 assert_eq!(from.hash_pin.as_deref(), Some("ab12cd34"));
             }
@@ -858,7 +850,7 @@ fact a: spec @user/workspace/spec_a"#;
         let input = "spec consumer\nfact price: [money from finance a1b2c3d4 -> minimum 0]";
         let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
         match &result[0].facts[0].value {
-            crate::FactValue::TypeDeclaration {
+            crate::parsing::ast::FactValue::TypeDeclaration {
                 base,
                 from,
                 constraints,
@@ -880,7 +872,9 @@ fact a: spec @user/workspace/spec_a"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(result.is_ok(), "type import from registry should parse");
         match &result.unwrap()[0].types[0] {
-            crate::TypeDef::Import { from, .. } => assert_eq!(from.name, "lemma/std/finance"),
+            crate::parsing::ast::TypeDef::Import { from, .. } => {
+                assert_eq!(from.name, "@lemma/std/finance")
+            }
             _ => panic!("expected Import"),
         }
     }

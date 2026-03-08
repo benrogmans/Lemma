@@ -67,10 +67,10 @@ The `in` operator converts between units:
 type money: scale -> unit eur 1.00 -> unit usd 1.10
 
 fact price: 100 eur
-rule price_usd: price in usd  // Converts to 110 usd
+rule price_usd: price in usd
 
 fact workweek: 40 hours
-rule workweek_days: workweek in days  // Converts to ~1.67 days
+rule workweek_days: workweek in days
 ```
 
 ## Spec References
@@ -108,7 +108,7 @@ facts, rules, or state.
 
 ### Temporal version resolution and content hash
 
-- **Datetime:** `fact x: spec pricing 2025` resolves the spec as of 2025-01-01T00:00:00.
+- **Datetime:** `fact x: spec pricing 2025` resolves the spec at effective 2025-01-01T00:00:00.
   Use when you need a specific temporal version (see temporal versioning).
 - **Content hash:** `fact x: spec pricing a1b2c3d4` or `fact x: spec pricing 2025 a1b2c3d4`
   verifies that the resolved spec’s content hash equals the given value (8 hex chars, e.g. `a1b2c3d4`).
@@ -305,7 +305,7 @@ type discount_ratio: ratio
   -> minimum 0
   -> maximum 1
 
-fact discount: 0.25  // 25% as decimal ratio
+fact discount: 0.25
 ```
 
 **Use in calculations:**
@@ -318,5 +318,5 @@ rule after_discount: price * (1 - discount_rate)
 **Number to ratio conversion:**
 
 ```lemma
-rule discount_as_percent: 0.25 in percent  // Converts to 25 percent
+rule discount_as_percent: 0.25 in percent
 ```

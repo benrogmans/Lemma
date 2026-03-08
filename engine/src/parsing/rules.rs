@@ -194,8 +194,9 @@ fn parse_unless_statement(
 
 #[cfg(test)]
 mod tests {
+    use crate::parsing::ast::{ExpressionKind, Value};
     use crate::parsing::parse;
-    use crate::{ExpressionKind, ResourceLimits, Value};
+    use crate::ResourceLimits;
 
     #[test]
     fn parse_spec_with_unless_clause_records_unless_clause() {

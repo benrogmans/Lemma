@@ -155,18 +155,23 @@ rule result: x
         "POST with x-proofs should return 2xx, got {}",
         status
     );
-    let result = body
+    let results = body
         .get("result")
-        .expect("response should have 'result' key (rule name)");
+        .expect("response should have envelope 'result' key");
+    let rule_result = results
+        .get("result")
+        .expect("results should have 'result' rule");
     assert!(
-        result.get("proof").is_some(),
+        rule_result.get("proof").is_some(),
         "response should include proof when x-proofs header sent: {:?}",
         body
     );
     assert_eq!(
-        result
+        rule_result
             .get("value")
             .and_then(|v: &serde_json::Value| v.as_i64()),
         Some(42)
     );
+    assert!(body.get("spec").is_some(), "envelope should include spec");
+    assert!(body.get("hash").is_some(), "envelope should include hash");
 }

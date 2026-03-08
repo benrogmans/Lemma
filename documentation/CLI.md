@@ -5,288 +5,158 @@ title: CLI Guide
 
 # Lemma CLI
 
-The Lemma CLI provides everything you need to work with Lemma: spec evaluation, workspace management, and HTTP/MCP servers.
-
 ## Installation
 
 ```bash
-cargo install lemma
-# or
-cargo build --release
+cargo install lemma-cli
 ```
 
 ## Commands
 
-### `lemma run` - Evaluate a spec
-
-Run rules in a workspace and see the results.
+### `lemma run` -- evaluate a spec
 
 ```bash
-lemma run [<spec>[:<rules>]] [facts...] [-d <path>] [-r|--raw] [-i|--interactive]
+lemma run [<spec>[:<rules>]] [facts...] [options]
 ```
 
 **Syntax:**
-- `spec` - evaluates all rules in the spec
-- `spec:rule` - evaluates only the specified rule
-- `spec:rule1,rule2,rule3` - evaluates multiple specific rules (comma-separated)
-- No arguments with `-i` - launches interactive mode
+- `spec` -- evaluate all rules
+- `spec:rule` -- evaluate one rule
+- `spec:rule1,rule2` -- evaluate specific rules (comma-separated)
+- No arguments with `-i` -- interactive mode
 
 **Options:**
-- `-d, --dir <path>` - Workspace root directory (default: `.`)
-- `-r, --raw` - Output raw values only (for piping to other tools)
-- `-i, --interactive` - Enable interactive mode with:
-  - Fuzzy-searchable spec selection
-  - Multi-select rule picker
-  - Type-aware fact input (calendar picker for dates, examples for other types)
+- `-d, --dir <path>` -- workspace root (default: `.`)
+- `-o, --output <format>` -- `table` (default) or `json`
+- `-x, --explain` -- show facts and reasoning
+- `-i, --interactive` -- guided spec/rule/fact selection
+- `--effective <datetime>` -- evaluate at effective datetime (e.g. `2025`, `2025-03`, `2025-03-04`)
+- `--hash <hash>` -- verify spec content hash before evaluation
 
 **Examples:**
+
 ```bash
-# Evaluate all rules in a spec
-lemma run pricing -d ./policies
-
-# Evaluate only the total rule
-lemma run pricing:total base_price=200 quantity=10
-
-# Evaluate multiple specific rules
-lemma run pricing:subtotal,tax,total base_price=200
-
-# Get raw values for piping to other tools
-lemma run pricing:total -r base_price=200
-
-# Pipe result to jq or other tools
-lemma run pricing:total -r base_price=200 | xargs echo "Total:"
-
-# Interactive mode (guided prompts for spec, rules, and facts)
+lemma run pricing
+lemma run pricing:total,tax
+lemma run pricing quantity=10 is_vip=true
+lemma run pricing -o json
+lemma run pricing -x
+lemma run pricing --effective 2025-01-01
+lemma run pricing --hash a1b2c3d4
 lemma run -i
-
-# Interactive fact entry for specific spec
-lemma run pricing -i
-
-# Interactive fact entry for specific rules
-lemma run pricing:total,tax -i
-
-# Interactive mode with date picker for date fields
-lemma run coffee_order -i -d documentation/examples
-
-# Using long form flags
-lemma run pricing --dir ./policies --raw
 ```
 
-**Output Format:**
-
-Default output shows a table with evaluation steps:
-```
-┌───────────┬─────────────────────────────────────────┐
-│ Rule      │ Evaluation                              │
-├───────────┼─────────────────────────────────────────┤
-│ total     │ 242.00                              │
-│           │                                         │
-│           │   0. fact base_price: 200.00       │
-│           │   1. rule subtotal: 200.00         │
-│           │   2. rule tax: 42.00               │
-│           │   3. add(200.00, 42.00) → 242.00        │
-│           │   4. result = 242.00                │
-└───────────┴─────────────────────────────────────────┘
-```
-
-Raw output (`--raw`) shows only values (perfect for piping):
-```
-242.00
-```
-
-**Note:** When evaluating specific rules, their dependencies are still computed but only the requested rules appear in the output.
-
-### `lemma show` - Show spec structure
-
-View the structure of a spec including facts, rules, and required inputs.
+### `lemma show` -- inspect spec structure
 
 ```bash
-lemma show <spec> [-d <path>]
+lemma show <spec> [-d <path>] [--effective <datetime>]
 ```
 
-**Example:**
+### `lemma list` -- list all specs
+
 ```bash
-lemma show pricing -d ./policies
+lemma list [path] [--effective <datetime>]
 ```
 
-### `lemma list` - List all specs
-
-Load and display information about all specs in a workspace.
+### `lemma hash` -- print content hash
 
 ```bash
-lemma list [path]
+lemma hash <spec> [-d <path>] [--effective <datetime>]
 ```
 
-**Example:**
-```bash
-lemma list ./policies
-```
+### `lemma get` -- fetch registry dependencies
 
-### `lemma serve` - Start HTTP server
-
-Start an HTTP REST API server with a pre-loaded workspace.
+Resolves `@...` references and downloads specs from the registry.
 
 ```bash
-lemma server [-d <path>] [--host <host>] [-p <port>]
+lemma get [-d <path>] [-f]              # resolve all @... references in workspace
+lemma get <spec> [-f]                   # fetch a specific spec (e.g. @lemma/std/finance)
 ```
 
 **Options:**
-- `-d, --dir` - Workspace root directory (default: `.`)
-- `--host` - Host to bind to (default: `127.0.0.1`)
-- `-p, --port` - Port to bind to (default: `8012`)
+- `-f, --force` -- overwrite existing specs when content has changed on the registry
 
-**Example:**
-```bash
-lemma server -d ./policies -p 8080
-```
-
-**API Endpoints:**
+### `lemma fmt` -- format .lemma files
 
 ```bash
-# Health check
-GET /health
-
-# Evaluate pre-loaded spec with facts as query params
-GET /evaluate/{spec}?fact1=value1&fact2=value2
-
-# Evaluate inline code
-POST /evaluate
-Content-Type: application/json
-{
-  "code": "spec example\nfact x: 5\nrule y: x * 2",
-  "facts": {
-    "x": 100
-  }
-}
-```
-
-**Response Format:**
-```json
-{
-  "results": [
-    {
-      "name": "rule_name",
-      "value": "computed_value",
-      "veto_reason": null
-    }
-  ],
-  "warnings": []
-}
-```
-
-### `lemma mcp` - Start MCP server
-
-Start a Model Context Protocol server for AI assistant integration.
-
-```bash
-lemma mcp [-d <path>]
+lemma fmt [paths...] [--check] [--stdout]
 ```
 
 **Options:**
-- `-d, --dir` - Workspace root directory (default: `.`)
+- `--check` -- check formatting without modifying (exit 1 if any file would change)
+- `--stdout` -- write formatted output to stdout
 
-The MCP server provides AI assistants with tools to:
-- Add and evaluate Lemma specs
-- Inspect spec structure
-- Query rules with fact values
+### `lemma info` -- show environment
 
-## Workspace Structure
+```bash
+lemma info
+```
 
-A workspace is a directory containing `.lemma` files:
+Shows version and deps cache path.
+
+### `lemma server` -- start HTTP server
+
+```bash
+lemma server [-d <path>] [--host <host>] [-p <port>] [--watch] [--proofs]
+```
+
+**Options:**
+- `-d, --dir <path>` -- workspace root (default: `.`)
+- `--host <host>` -- bind address (default: `127.0.0.1`)
+- `-p, --port <port>` -- port (default: `8012`)
+- `--watch` -- live-reload on `.lemma` file changes
+- `--proofs` -- enable proof generation (clients send `x-proofs` header)
+
+**Routes:**
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/{spec}?fact=value` | Evaluate all rules (facts as query params) |
+| POST | `/{spec}` | Evaluate all rules (facts as JSON body) |
+| GET/POST | `/{spec}/{rules}` | Evaluate specific rules (comma-separated) |
+| GET | `/` | List all specs with schemas |
+| GET | `/openapi.json` | OpenAPI 3.1 specification |
+| GET | `/docs` | Interactive API documentation (Scalar) |
+| GET | `/health` | Health check |
+
+**Example:**
+
+```bash
+lemma server --dir ./policies --watch
+
+curl "http://localhost:8012/pricing?quantity=10&is_member=true"
+
+curl -X POST http://localhost:8012/pricing \
+  -H "Content-Type: application/json" \
+  -d '{"quantity": 10, "is_member": true}'
+```
+
+### `lemma mcp` -- start MCP server
+
+AI assistant integration via [Model Context Protocol](https://modelcontextprotocol.io) over stdio.
+
+```bash
+lemma mcp [-d <path>] [--admin]
+```
+
+**Options:**
+- `-d, --dir <path>` -- workspace root (default: `.`)
+- `--admin` -- enable write tools (`add_spec`, `get_spec_source`)
+
+## Workspace
+
+A workspace is a directory containing `.lemma` files. All commands that accept `-d` / `--dir` load every `.lemma` file recursively from that directory, plus any registry deps from the global cache.
 
 ```
 policies/
-├── pricing.lemma
-├── shipping.lemma
-└── tax.lemma
+  pricing.lemma
+  shipping.lemma
+  tax.lemma
 ```
-
-The CLI automatically loads all `.lemma` files and makes their specs available for evaluation.
-
-## Examples
-
-### Basic Workflow
-
-```bash
-# 1. Create a workspace
-mkdir policies
-cd policies
-
-# 2. Create a Lemma file
-cat > pricing.lemma << 'EOF'
-spec pricing
-fact base_price: 100
-fact quantity: 1
-rule total: base_price * quantity * 1.1
-EOF
-
-# 3. Evaluate it
-lemma run pricing
-
-# 4. Provide fact values
-lemma run pricing base_price=200 quantity=5
-
-# 5. Show spec structure
-lemma show pricing
-
-# 6. Start HTTP server
-lemma server -p 8012
-```
-
-### HTTP Server Usage
-
-```bash
-# Start server
-lemma server --workdir ./policies &
-
-# Evaluate with inline code
-curl -X POST http://localhost:8012/evaluate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "code": "spec calc\nfact x: 10\nrule double: x * 2",
-    "facts": {"x": 25}
-  }'
-
-# Response:
-# {
-#   "results": [{"name": "double", "value": "50"}],
-#   "warnings": []
-# }
-```
-
-## Features
-
-- **Spec Listing** - Load and list all specs from a directory
-- **CLI Evaluation** - Run specs from command line with operation records
-- **Interactive Mode** - Guided prompts with fuzzy search, multi-select, and calendar date picker
-- **Raw Output Mode** - Extract values for piping to other Unix tools
-- **HTTP Server** - REST API with both stateful and stateless evaluation
-- **Spec Inspection** - View spec structure and requirements
-- **MCP Server** - Model Context Protocol for AI assistant integration
-
-## Performance
-
-- Spec loading: ~1ms per spec
-- Rule evaluation: <1ms simple, <10ms complex
-- Server startup: instant with pre-loaded workspace
-- Memory: ~1KB per fact, ~2KB per rule
-
-## Troubleshooting
-
-### "Spec not found"
-Make sure your `.lemma` files are in the workspace directory and contain valid `spec` declarations.
-
-### "Address already in use"
-Another process is using the port. Try a different port:
-```bash
-lemma server --port 8080
-```
-
-### Parse errors
-Check your Lemma syntax. Use `lemma show` to verify the spec loads correctly.
 
 ## See Also
 
-- [Language Reference](index.md)
+- [Language Guide](index.md)
+- [Reference](reference.md)
+- [Registry](registry.md)
 - [Examples](examples/)
-- [API Documentation](servers.md)

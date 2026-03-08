@@ -9,8 +9,6 @@ fuzz_target!(|data: &[u8]| {
         let mut engine = Engine::new();
         let files: HashMap<String, String> =
             std::iter::once(("fuzz_input".to_string(), s.to_string())).collect();
-        let _ = tokio::runtime::Runtime::new()
-            .expect("tokio runtime")
-            .block_on(engine.add_lemma_files(files));
+        let _ = engine.add_lemma_files(files);
     }
 });

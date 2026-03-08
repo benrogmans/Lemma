@@ -83,7 +83,7 @@ enum Commands {
         /// Enable interactive mode for spec/rule/fact selection
         #[arg(short = 'i', long)]
         interactive: bool,
-        /// Evaluate as of a specific datetime (e.g. 2026, 2026-03, 2026-03-04, 2026-03-04T10:30:00Z)
+        /// Effective datetime for evaluation (e.g. 2026, 2026-03, 2026-03-04, 2026-03-04T10:30:00Z)
         #[arg(long)]
         effective: Option<String>,
         /// Verify spec content hash before evaluation; fail if mismatch
@@ -100,7 +100,7 @@ enum Commands {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
-        /// Compute hash as of a specific datetime (e.g. 2026, 2026-03-04)
+        /// Compute hash at effective datetime (e.g. 2026, 2026-03-04)
         #[arg(long)]
         effective: Option<String>,
     },
@@ -114,7 +114,7 @@ enum Commands {
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
-        /// Show as of a specific datetime (e.g. 2026, 2026-03-04)
+        /// Show at effective datetime (e.g. 2026, 2026-03-04)
         #[arg(long)]
         effective: Option<String>,
     },
@@ -126,7 +126,7 @@ enum Commands {
         /// Workspace root directory containing .lemma files
         #[arg(default_value = ".")]
         root: PathBuf,
-        /// List as of a specific datetime (e.g. 2026, 2026-03-04)
+        /// List at effective datetime (e.g. 2026, 2026-03-04)
         #[arg(long)]
         effective: Option<String>,
     },
@@ -174,6 +174,29 @@ enum Commands {
         #[arg(long)]
         admin: bool,
     },
+    /// Get dependencies from the registry
+    ///
+    /// Without arguments: parses all local .lemma files, collects @... references,
+    /// and downloads dependencies from the registry into the global deps cache.
+    ///
+    /// With a spec argument (e.g. `lemma get @user/repo/spec`): fetches all
+    /// temporal versions of that specific spec from the registry.
+    ///
+    /// Old dependency versions are kept (not pruned) so that --hash pinning
+    /// continues to work.
+    Get {
+        /// Specific spec to fetch (e.g. @user/repo/spec). If omitted, resolves all @... references.
+        #[arg(value_name = "SPEC")]
+        spec: Option<String>,
+        /// Workspace root directory containing .lemma files
+        #[arg(short = 'd', long = "dir", default_value = ".")]
+        workdir: PathBuf,
+        /// Overwrite existing registry specs when content has changed
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
+    /// Show Lemma environment info (deps path, version)
+    Info,
     /// Format .lemma files to canonical style
     ///
     /// Parses and re-emits .lemma files with consistent formatting.
@@ -243,6 +266,12 @@ fn main() {
             proofs,
         } => server_command(workdir, host, *port, *watch, *proofs),
         Commands::Mcp { workdir, admin } => mcp_command(workdir, *admin),
+        Commands::Get {
+            spec,
+            workdir,
+            force,
+        } => get_command(workdir, spec.as_deref(), *force),
+        Commands::Info => info_command(),
         Commands::Fmt {
             paths,
             check,
@@ -329,13 +358,21 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
     }
 
     let response = engine.evaluate(&spec, opts.hash, &now, rules, final_facts)?;
+    let hash = engine.hash_pin(&spec, &now).map(|h| h.to_string());
     let formatter = Formatter;
 
     match opts.output {
-        OutputFormat::Table => print!("{}", formatter.format_response(&response, opts.explain)),
+        OutputFormat::Table => {
+            print!("{}", formatter.format_response(&response, opts.explain));
+            if let Some(ref h) = hash {
+                println!("Hash: {}", h);
+            }
+        }
         OutputFormat::Json => {
-            let json = format_response_json(&response, opts.explain);
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            let json = format_response_json(&response, opts.explain, &now, hash.as_deref());
+            let json_str = serde_json::to_string_pretty(&json)
+                .expect("BUG: failed to serialize response JSON");
+            println!("{}", json_str);
         }
     }
 
@@ -344,21 +381,31 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
 
 #[derive(Serialize)]
 struct RunOutputJson {
-    spec_name: String,
+    spec: String,
+    effective: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     facts: Option<Vec<lemma::Facts>>,
-    results: indexmap::IndexMap<String, response::RuleResultJson>,
+    result: indexmap::IndexMap<String, response::RuleResultJson>,
 }
 
-fn format_response_json(response: &lemma::Response, explain: bool) -> RunOutputJson {
+fn format_response_json(
+    response: &lemma::Response,
+    explain: bool,
+    effective: &DateTimeValue,
+    hash: Option<&str>,
+) -> RunOutputJson {
     RunOutputJson {
-        spec_name: response.spec_name.clone(),
+        spec: response.spec_name.clone(),
+        effective: effective.to_string(),
+        hash: hash.map(|h| h.to_string()),
         facts: if explain {
             Some(response.facts.clone())
         } else {
             None
         },
-        results: response::convert_response(response, explain),
+        result: response::convert_response(response, explain),
     }
 }
 
@@ -406,6 +453,15 @@ fn show_command(workdir: &Path, spec_name: &str, effective_raw: Option<&String>)
     Ok(())
 }
 
+fn info_command() -> Result<()> {
+    println!("lemma {}", env!("CARGO_PKG_VERSION"));
+    match lemma_deps_dir() {
+        Ok(dir) => println!("deps: {}", dir.display()),
+        Err(e) => println!("deps: <unavailable: {}>", e),
+    }
+    Ok(())
+}
+
 fn list_command(root: &PathBuf, effective_raw: Option<&String>) -> Result<()> {
     let now = resolve_effective(effective_raw)?;
     let mut engine = Engine::new();
@@ -445,7 +501,7 @@ fn server_command(workdir: &Path, host: &str, port: u16, watch: bool, proofs: bo
     let rt = Runtime::new()?;
     rt.block_on(async {
         let mut engine = Engine::new();
-        load_workspace_async(&mut engine, workdir).await?;
+        load_workspace(&mut engine, workdir)?;
 
         let spec_names = engine.list_specs();
         let spec_count = spec_names.len();
@@ -481,10 +537,310 @@ fn mcp_command(workdir: &Path, admin: bool) -> Result<()> {
     Ok(())
 }
 
-/// Load all .lemma files from the workspace directory.
+fn get_command(workdir: &Path, spec: Option<&str>, force: bool) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(get_command_async(workdir, spec, force))
+}
+
+async fn get_command_async(workdir: &Path, spec: Option<&str>, force: bool) -> Result<()> {
+    let registry = make_fetch_registry();
+
+    match spec {
+        Some(raw) => get_single_spec(raw, &*registry, force).await,
+        None => get_all_workspace_deps(workdir, &*registry, force).await,
+    }
+}
+
+async fn get_single_spec(raw: &str, registry: &dyn lemma::Registry, force: bool) -> Result<()> {
+    let name = raw.strip_prefix('@').unwrap_or(raw);
+    if name.is_empty() {
+        anyhow::bail!("Empty spec identifier. Usage: lemma get @user/repo/spec");
+    }
+
+    let bundle = registry
+        .fetch_specs(name)
+        .await
+        .map_err(|e| anyhow::anyhow!("Registry error for @{}: {}", name, e.message))?;
+
+    let attribute = &bundle.attribute;
+    let source_text = &bundle.lemma_source;
+    let deps_dir = lemma_deps_dir()?;
+    let limits = lemma::ResourceLimits::default();
+
+    let new_specs = lemma::parse(source_text, attribute, &limits)
+        .map_err(|e| anyhow::anyhow!("Registry returned unparseable spec: {}", e.message()))?;
+    let new_spec_names: std::collections::HashSet<String> =
+        new_specs.iter().map(|s| s.name.clone()).collect();
+
+    if deps_dir.exists() {
+        for entry in WalkDir::new(&deps_dir) {
+            let entry = entry?;
+            if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
+                continue;
+            }
+            let path = entry.path();
+            let existing_content = fs::read_to_string(path)?;
+            if existing_content == *source_text {
+                eprintln!("Already up to date: @{}.", name);
+                return Ok(());
+            }
+            let existing_specs =
+                match lemma::parse(&existing_content, &path.to_string_lossy(), &limits) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+            let conflict: Vec<&str> = existing_specs
+                .iter()
+                .filter(|s| new_spec_names.contains(&s.name))
+                .map(|s| s.name.as_str())
+                .collect();
+            if !conflict.is_empty() {
+                if !force {
+                    anyhow::bail!(
+                        "Spec(s) {} already exist in {}.\n\
+                         Content has changed on the registry. Re-run with --force to overwrite.",
+                        conflict.join(", "),
+                        path.display()
+                    );
+                }
+                fs::remove_file(path)?;
+                eprintln!("  removed: {}", path.display());
+            }
+        }
+    }
+
+    let hash_suffix = lemma::planning::content_hash::hash_bytes(source_text.as_bytes());
+    let dep_path = dep_file_path(attribute, &hash_suffix);
+    let dest = deps_dir.join(&dep_path);
+
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&dest, source_text)?;
+
+    let now = DateTimeValue::now();
+    warn_past_effective(attribute, source_text, &now);
+
+    eprintln!("  fetched: {} -> {}", attribute, dep_path.display());
+    Ok(())
+}
+
+async fn get_all_workspace_deps(
+    workdir: &Path,
+    registry: &dyn lemma::Registry,
+    force: bool,
+) -> Result<()> {
+    let mut ctx = lemma::engine::Context::new();
+    let mut sources: HashMap<String, String> = HashMap::new();
+    let limits = lemma::ResourceLimits::default();
+
+    for entry in WalkDir::new(workdir) {
+        let entry = entry?;
+        if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
+            continue;
+        }
+        let path = entry.path();
+        let source_id = path.to_string_lossy().to_string();
+        let code = fs::read_to_string(path)?;
+        match lemma::parse(&code, &source_id, &limits) {
+            Ok(new_specs) => {
+                for spec in new_specs {
+                    if let Err(e) = ctx.insert_spec(std::sync::Arc::new(spec)) {
+                        eprintln!("warning: {}", e);
+                    }
+                }
+                sources.insert(source_id, code);
+            }
+            Err(e) => {
+                eprintln!("{}", error_formatter::format_error(&e));
+                anyhow::bail!("Parse error in {}", path.display());
+            }
+        }
+    }
+
+    let source_keys_before: std::collections::HashSet<String> = sources.keys().cloned().collect();
+
+    if let Err(errs) =
+        lemma::resolve_registry_references(&mut ctx, &mut sources, registry, &limits).await
+    {
+        for e in &errs {
+            eprintln!("{}", error_formatter::format_error(e));
+        }
+        anyhow::bail!("Registry resolution failed ({} error(s))", errs.len());
+    }
+
+    let deps_dir = lemma_deps_dir()?;
+
+    // Build index of spec names already on disk
+    let mut existing_specs_by_name: HashMap<String, PathBuf> = HashMap::new();
+    let mut existing_content_by_path: HashMap<PathBuf, String> = HashMap::new();
+    if deps_dir.exists() {
+        for entry in WalkDir::new(&deps_dir) {
+            let entry = entry?;
+            if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
+                continue;
+            }
+            let path = entry.path().to_path_buf();
+            let content = fs::read_to_string(&path)?;
+            if let Ok(specs) = lemma::parse(&content, &path.to_string_lossy(), &limits) {
+                for spec in &specs {
+                    existing_specs_by_name.insert(spec.name.clone(), path.clone());
+                }
+            }
+            existing_content_by_path.insert(path, content);
+        }
+    }
+
+    let mut fetched_count = 0u32;
+    let mut skipped_count = 0u32;
+    let mut removed: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let now = DateTimeValue::now();
+
+    for (attribute, source_text) in &sources {
+        if source_keys_before.contains(attribute) {
+            continue;
+        }
+
+        // Check if identical content already on disk
+        let already_on_disk = existing_content_by_path.values().any(|c| c == source_text);
+        if already_on_disk {
+            skipped_count += 1;
+            continue;
+        }
+
+        let new_specs = match lemma::parse(source_text, attribute, &limits) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        // Check for conflicting existing files by spec name
+        for spec in &new_specs {
+            if let Some(old_path) = existing_specs_by_name.get(&spec.name) {
+                if removed.contains(old_path) {
+                    continue;
+                }
+                if !force {
+                    anyhow::bail!(
+                        "Spec {} already exists in {}.\n\
+                         Content has changed on the registry. Re-run with --force to overwrite.",
+                        spec.name,
+                        old_path.display()
+                    );
+                }
+                fs::remove_file(old_path)?;
+                eprintln!("  removed: {}", old_path.display());
+                removed.insert(old_path.clone());
+            }
+        }
+
+        let hash_suffix = lemma::planning::content_hash::hash_bytes(source_text.as_bytes());
+        let dep_path = dep_file_path(attribute, &hash_suffix);
+        let dest = deps_dir.join(&dep_path);
+
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&dest, source_text)?;
+        fetched_count += 1;
+
+        warn_past_effective(attribute, source_text, &now);
+
+        eprintln!("  fetched: {} -> {}", attribute, dep_path.display());
+    }
+
+    if fetched_count == 0 && skipped_count == 0 {
+        eprintln!("No registry references found.");
+    } else if fetched_count == 0 {
+        eprintln!("All registry specs are up to date.");
+    } else {
+        eprintln!(
+            "Fetched {} registry spec(s) ({} already up to date).",
+            fetched_count, skipped_count
+        );
+    }
+
+    Ok(())
+}
+
+pub(crate) fn lemma_deps_dir() -> Result<PathBuf> {
+    let data = dirs::data_dir()
+        .ok_or_else(|| anyhow::anyhow!("could not determine platform data directory"))?;
+    Ok(data.join("lemma").join("deps"))
+}
+
+/// Load all `.lemma` files from `deps_dir` into the file map.
+/// Registry deps are expected to contain fully-qualified spec names
+/// (e.g. `spec @lemma/std/finance`), so no rewriting is needed.
+pub(crate) fn load_deps_into(
+    deps_dir: &Path,
+    files: &mut std::collections::HashMap<String, String>,
+) -> Result<()> {
+    for entry in WalkDir::new(deps_dir) {
+        let entry = entry?;
+        if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
+            continue;
+        }
+        let path = entry.path();
+        let source_id = path.to_string_lossy().to_string();
+        let code = fs::read_to_string(path)?;
+        files.insert(source_id, code);
+    }
+    Ok(())
+}
+
+/// Build the relative cache path for a fetched registry spec.
+/// Preserves the `@` prefix and `/` directory structure from the attribute.
+/// e.g. `@org/project/helper` with hash `a1b2c3d4` → `@org/project/helper~a1b2c3d4.lemma`
+fn dep_file_path(attribute: &str, hash: &str) -> PathBuf {
+    let last_slash = attribute.rfind('/');
+    let (dir_part, name_part) = match last_slash {
+        Some(pos) => (&attribute[..pos], &attribute[pos + 1..]),
+        None => ("", attribute),
+    };
+    let filename = format!("{}~{}.lemma", name_part, hash);
+    if dir_part.is_empty() {
+        PathBuf::from(filename)
+    } else {
+        PathBuf::from(dir_part).join(filename)
+    }
+}
+
+fn warn_past_effective(attribute: &str, source_text: &str, now: &DateTimeValue) {
+    let limits = lemma::ResourceLimits::default();
+    let specs = match lemma::parse(source_text, attribute, &limits) {
+        Ok(specs) => specs,
+        Err(_) => return,
+    };
+    for spec in &specs {
+        if let Some(effective_from) = spec.effective_from() {
+            if *effective_from < *now {
+                eprintln!(
+                    "  warning: {} has effective_from {} (in the past).\n\
+                     \x20          Queries with --effective in [{}, now) may return different results.",
+                    attribute, effective_from, effective_from
+                );
+            }
+        }
+    }
+}
+
+#[cfg(feature = "registry")]
+fn make_fetch_registry() -> Box<dyn lemma::Registry> {
+    Box::new(lemma::LemmaBase::new())
+}
+
+#[cfg(not(feature = "registry"))]
+fn make_fetch_registry() -> Box<dyn lemma::Registry> {
+    eprintln!("Error: `lemma get` requires the `registry` feature.");
+    eprintln!("Recompile with: cargo build --features registry");
+    std::process::exit(1);
+}
+
+/// Load all .lemma files from the workspace directory and global deps cache.
 ///
-/// Collects all files then calls `add_lemma_files` once so that registry
-/// resolution runs a single time and all errors are collected.
+/// Walks the workspace recursively for user-authored specs, then walks the
+/// global deps directory (`dirs::data_dir()/lemma/deps/`) for cached registry
+/// dependencies fetched by `lemma get`.
 fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> {
     let mut files = std::collections::HashMap::new();
     for entry in WalkDir::new(workdir) {
@@ -497,32 +853,13 @@ fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> 
         }
     }
 
-    if let Err(errs) = tokio::runtime::Runtime::new()?.block_on(engine.add_lemma_files(files)) {
-        for e in &errs {
-            eprintln!("{}", error_formatter::format_error(e));
-        }
-        anyhow::bail!("Workspace load failed ({} error(s))", errs.len());
-    }
-    Ok(())
-}
-
-/// Async version of `load_workspace` for use inside an existing tokio runtime.
-///
-/// Collects all files then calls `add_lemma_files` once so that registry
-/// resolution runs a single time and all errors are collected.
-async fn load_workspace_async(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> {
-    let mut files = std::collections::HashMap::new();
-    for entry in WalkDir::new(workdir) {
-        let entry = entry?;
-        if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
-            let path = entry.path();
-            let source_id = path.to_string_lossy().to_string();
-            let code = fs::read_to_string(path)?;
-            files.insert(source_id, code);
+    if let Ok(deps_dir) = lemma_deps_dir() {
+        if deps_dir.is_dir() {
+            load_deps_into(&deps_dir, &mut files)?;
         }
     }
 
-    if let Err(errs) = engine.add_lemma_files(files).await {
+    if let Err(errs) = engine.add_lemma_files(files) {
         for e in &errs {
             eprintln!("{}", error_formatter::format_error(e));
         }

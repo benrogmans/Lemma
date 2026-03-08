@@ -206,23 +206,11 @@ fn parse_fact_spec_reference(pair: Pair<Rule>) -> Result<FactValue, Error> {
 
 /// Extract a `SpecRef` from a `spec_name` grammar pair by reading its named inner pairs.
 pub(crate) fn parse_spec_name_pair(pair: Pair<Rule>) -> Result<SpecRef, Error> {
-    let mut is_registry = false;
-    let mut name = String::new();
-
-    for inner in pair.into_inner() {
-        match inner.as_rule() {
-            Rule::spec_name_at => {
-                is_registry = true;
-            }
-            Rule::spec_name_base => {
-                name = inner.as_str().to_string();
-            }
-            _ => {}
-        }
-    }
+    let full = pair.as_str();
+    let is_registry = full.starts_with('@');
 
     Ok(SpecRef {
-        name,
+        name: full.to_string(),
         is_registry,
         hash_pin: None,
         effective: None,
@@ -251,8 +239,8 @@ fn parse_fact_literal(
 
 #[cfg(test)]
 mod tests {
+    use crate::parsing::ast::{FactValue, Reference, Value};
     use crate::parsing::parse;
-    use crate::FactValue;
 
     #[test]
     fn test_parse_simple_spec_reference() {
@@ -286,7 +274,7 @@ fact contract.base.rate: 100"#;
 
         assert_eq!(
             result[0].facts[0].reference,
-            crate::Reference::from_path(vec!["contract".to_string()])
+            Reference::from_path(vec!["contract".to_string()])
         );
         if let FactValue::SpecReference(spec_ref) = &result[0].facts[0].value {
             assert_eq!(spec_ref.name, "employment_contract");
@@ -297,21 +285,18 @@ fact contract.base.rate: 100"#;
 
         assert_eq!(
             result[0].facts[1].reference,
-            crate::Reference::from_path(vec!["contract".to_string(), "start_date".to_string()])
+            Reference::from_path(vec!["contract".to_string(), "start_date".to_string()])
         );
         match &result[0].facts[1].value {
             FactValue::Literal(lit) => {
-                assert!(
-                    matches!(lit, crate::Value::Date(_)),
-                    "Expected Date literal"
-                );
+                assert!(matches!(lit, Value::Date(_)), "Expected Date literal");
             }
             _ => panic!("Expected Date literal"),
         }
 
         assert_eq!(
             result[0].facts[2].reference,
-            crate::Reference::from_path(vec!["contract".to_string(), "end_date".to_string()])
+            Reference::from_path(vec!["contract".to_string(), "end_date".to_string()])
         );
         assert!(
             matches!(&result[0].facts[2].value, FactValue::TypeDeclaration { .. }),
@@ -320,13 +305,10 @@ fact contract.base.rate: 100"#;
 
         assert_eq!(
             result[0].facts[3].reference,
-            crate::Reference::from_path(vec![
-                "contract".to_string(),
-                "employment_type".to_string()
-            ])
+            Reference::from_path(vec!["contract".to_string(), "employment_type".to_string()])
         );
         if let FactValue::Literal(lit) = &result[0].facts[3].value {
-            if let crate::Value::Text(s) = lit {
+            if let Value::Text(s) = lit {
                 assert_eq!(s, "contractor");
             } else {
                 panic!("Expected Text literal");
@@ -337,7 +319,7 @@ fact contract.base.rate: 100"#;
 
         assert_eq!(
             result[0].facts[4].reference,
-            crate::Reference::from_path(vec!["contract".to_string(), "base".to_string()])
+            Reference::from_path(vec!["contract".to_string(), "base".to_string()])
         );
         if let FactValue::SpecReference(spec_ref) = &result[0].facts[4].value {
             assert_eq!(spec_ref.name, "base_contract");
@@ -348,14 +330,14 @@ fact contract.base.rate: 100"#;
 
         assert_eq!(
             result[0].facts[5].reference,
-            crate::Reference::from_path(vec![
+            Reference::from_path(vec![
                 "contract".to_string(),
                 "base".to_string(),
                 "rate".to_string()
             ])
         );
         if let FactValue::Literal(lit) = &result[0].facts[5].value {
-            if let crate::Value::Number(n) = lit {
+            if let Value::Number(n) = lit {
                 assert_eq!(*n, rust_decimal::Decimal::new(100, 0));
             } else {
                 panic!("Expected Number literal");

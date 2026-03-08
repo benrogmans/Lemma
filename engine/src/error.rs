@@ -354,7 +354,7 @@ impl From<std::fmt::Error> for Error {
 }
 
 impl Error {
-    /// Get the error message
+    /// Get the error message.
     pub fn message(&self) -> &str {
         match self {
             Error::Parsing(details)
@@ -362,7 +362,7 @@ impl Error {
             | Error::Validation(details)
             | Error::Request(details) => &details.message,
             Error::Registry { details, .. } => &details.message,
-            Error::ResourceLimitExceeded { limit_name, .. } => limit_name,
+            Error::ResourceLimitExceeded { suggestion, .. } => suggestion,
         }
     }
 

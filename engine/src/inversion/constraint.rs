@@ -1062,7 +1062,13 @@ fn from_bool_expr(bool_expr: &boolean_expression::Expr<usize>, atoms: &[Constrai
                 Expr::Const(true) => constraint_stack.push(Constraint::True),
                 Expr::Const(false) => constraint_stack.push(Constraint::False),
                 Expr::Terminal(i) => {
-                    constraint_stack.push(atoms.get(i).cloned().unwrap_or(Constraint::False));
+                    constraint_stack.push(atoms.get(i).cloned().unwrap_or_else(|| {
+                        unreachable!(
+                            "BUG: bool_expr terminal index {} out of bounds (atoms len {})",
+                            i,
+                            atoms.len()
+                        )
+                    }));
                 }
                 Expr::Not(inner) => {
                     work_stack.push(Work::ApplyNot);
@@ -1080,23 +1086,35 @@ fn from_bool_expr(bool_expr: &boolean_expression::Expr<usize>, atoms: &[Constrai
                 }
             },
             Work::CombineAnd => {
-                let right = constraint_stack.pop().unwrap_or(Constraint::False);
-                let left = constraint_stack.pop().unwrap_or(Constraint::False);
+                let right = constraint_stack.pop().unwrap_or_else(|| {
+                    unreachable!("BUG: constraint stack underflow in CombineAnd (right)")
+                });
+                let left = constraint_stack.pop().unwrap_or_else(|| {
+                    unreachable!("BUG: constraint stack underflow in CombineAnd (left)")
+                });
                 constraint_stack.push(left.and(right));
             }
             Work::CombineOr => {
-                let right = constraint_stack.pop().unwrap_or(Constraint::False);
-                let left = constraint_stack.pop().unwrap_or(Constraint::False);
+                let right = constraint_stack.pop().unwrap_or_else(|| {
+                    unreachable!("BUG: constraint stack underflow in CombineOr (right)")
+                });
+                let left = constraint_stack.pop().unwrap_or_else(|| {
+                    unreachable!("BUG: constraint stack underflow in CombineOr (left)")
+                });
                 constraint_stack.push(left.or(right));
             }
             Work::ApplyNot => {
-                let inner = constraint_stack.pop().unwrap_or(Constraint::False);
+                let inner = constraint_stack
+                    .pop()
+                    .unwrap_or_else(|| unreachable!("BUG: constraint stack underflow in ApplyNot"));
                 constraint_stack.push(inner.not());
             }
         }
     }
 
-    constraint_stack.pop().unwrap_or(Constraint::False)
+    constraint_stack
+        .pop()
+        .unwrap_or_else(|| unreachable!("BUG: constraint stack empty after evaluation"))
 }
 
 // ============================================================================

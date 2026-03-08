@@ -141,7 +141,9 @@ pub fn plan(context: &Context, sources: HashMap<String, String>) -> PlanningResu
         let hash = spec_hashes
             .get(&graph::spec_hash_key(spec_arc))
             .cloned()
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                unreachable!("BUG: spec '{}' missing from spec_hashes", spec_arc.name)
+            });
 
         per_spec.push(SpecPlanningResult {
             spec: Arc::clone(spec_arc),
@@ -529,7 +531,7 @@ rule getx: one.x
 
     #[test]
     fn test_plan_with_registry_style_spec_names() {
-        let source = r#"spec user/workspace/somespec
+        let source = r#"spec @user/workspace/somespec
 fact quantity: 10
 
 spec user/workspace/example
