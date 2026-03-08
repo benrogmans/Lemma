@@ -1,9 +1,5 @@
 use crate::error::Error;
 
-/// Maximum length of a version tag (the part after `.` in `spec name.tag`).
-/// Prevents abuse via extremely long version strings in sort comparisons.
-pub const MAX_VERSION_TAG_LENGTH: usize = 8;
-
 pub const MAX_SPEC_NAME_LENGTH: usize = 128;
 pub const MAX_FACT_NAME_LENGTH: usize = 256;
 pub const MAX_RULE_NAME_LENGTH: usize = 256;

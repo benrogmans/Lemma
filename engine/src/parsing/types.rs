@@ -35,12 +35,7 @@ pub(crate) fn parse_type_definition(
     let arrow_chain_pair =
         type_arrow_chain.expect("BUG: grammar guarantees type_definition has type_arrow_chain");
 
-    let (parent, constraints, _from) = parse_type_arrow_chain_with_commands(
-        arrow_chain_pair,
-        attribute,
-        spec_name,
-        source_text.clone(),
-    )?;
+    let (parent, constraints, _from) = parse_type_arrow_chain_with_commands(arrow_chain_pair)?;
     // Regular types don't support 'from' - it's only for imports and inline types
 
     Ok(TypeDef::Regular {
@@ -119,9 +114,6 @@ type TypeArrowChainResult = (
 
 pub(crate) fn parse_type_arrow_chain_with_commands(
     pair: Pair<Rule>,
-    attribute: &str,
-    spec_name: &str,
-    source_text: Arc<str>,
 ) -> Result<TypeArrowChainResult, Error> {
     let mut inner = pair.into_inner();
     let first = inner
@@ -131,12 +123,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
     // Store the remaining items for command parsing (after the first element)
     let remaining_items: Vec<_> = inner.collect();
 
-    fn parse_type_name_def_pair(
-        pair: &Pair<Rule>,
-        _attribute: &str,
-        _spec_name: &str,
-        _source_text: Arc<str>,
-    ) -> Result<String, Error> {
+    fn parse_type_name_def_pair(pair: &Pair<Rule>) -> Result<String, Error> {
         let mut inner = pair.clone().into_inner();
         let child = inner
             .next()
@@ -152,10 +139,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
     }
 
     let (parent_name, from_spec) = match first.as_rule() {
-        Rule::type_name_def => (
-            parse_type_name_def_pair(&first, attribute, spec_name, source_text.clone())?,
-            None,
-        ),
+        Rule::type_name_def => (parse_type_name_def_pair(&first)?, None),
         Rule::type_import_def => {
             let inner = first.clone().into_inner();
             let mut type_name_def = None;
@@ -165,12 +149,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
             for item in inner {
                 match item.as_rule() {
                     Rule::type_name_def => {
-                        type_name_def = Some(parse_type_name_def_pair(
-                            &item,
-                            attribute,
-                            spec_name,
-                            source_text.clone(),
-                        )?);
+                        type_name_def = Some(parse_type_name_def_pair(&item)?);
                     }
                     Rule::spec_name => {
                         imported_spec_ref = Some(super::facts::parse_spec_name_pair(item)?);
@@ -212,8 +191,7 @@ pub(crate) fn parse_type_arrow_chain_with_commands(
                     expecting_command,
                     "BUG: grammar guarantees command follows arrow_symbol"
                 );
-                let (command_name, args) =
-                    parse_command(item, attribute, spec_name, source_text.clone())?;
+                let (command_name, args) = parse_command(item)?;
                 commands.push((command_name, args));
                 expecting_command = false;
             }
@@ -274,12 +252,7 @@ fn command_arg_value(pair: Pair<Rule>) -> CommandArg {
     }
 }
 
-fn parse_command(
-    pair: Pair<Rule>,
-    _attribute: &str,
-    _spec_name: &str,
-    _source_text: Arc<str>,
-) -> Result<(String, Vec<CommandArg>), Error> {
+fn parse_command(pair: Pair<Rule>) -> Result<(String, Vec<CommandArg>), Error> {
     let mut command_name = None;
     let mut command_args = Vec::new();
 

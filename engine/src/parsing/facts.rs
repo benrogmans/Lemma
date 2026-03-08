@@ -14,8 +14,6 @@ pub(crate) fn parse_fact_definition(
     source_text: Arc<str>,
 ) -> Result<LemmaFact, Error> {
     let span = Span::from_pest_span(pair.as_span());
-    let attribute_str = attribute;
-    let spec_name_str = spec_name;
     let mut fact_name = None;
     let mut fact_value = None;
 
@@ -25,8 +23,8 @@ pub(crate) fn parse_fact_definition(
             Rule::fact_value => {
                 fact_value = Some(parse_fact_value(
                     inner_pair,
-                    attribute_str,
-                    spec_name_str,
+                    attribute,
+                    spec_name,
                     source_text.clone(),
                 )?)
             }
@@ -58,26 +56,17 @@ pub(crate) fn parse_fact_binding(
     source_text: Arc<str>,
 ) -> Result<LemmaFact, Error> {
     let span = Span::from_pest_span(pair.as_span());
-    let attribute_str = attribute;
-    let spec_name_str = spec_name;
     let mut fact_reference_path = None;
     let mut fact_value = None;
 
     for inner_pair in pair.into_inner() {
         match inner_pair.as_rule() {
-            Rule::reference => {
-                fact_reference_path = Some(parse_fact_reference_path(
-                    inner_pair,
-                    attribute_str,
-                    spec_name_str,
-                    source_text.clone(),
-                )?)
-            }
+            Rule::reference => fact_reference_path = Some(parse_fact_reference_path(inner_pair)),
             Rule::fact_value => {
                 fact_value = Some(parse_fact_value(
                     inner_pair,
-                    attribute_str,
-                    spec_name_str,
+                    attribute,
+                    spec_name,
                     source_text.clone(),
                 )?)
             }
@@ -103,19 +92,17 @@ pub(crate) fn parse_fact_binding(
     Ok(fact)
 }
 
-fn parse_fact_reference_path(
-    pair: Pair<Rule>,
-    _attribute: &str,
-    _spec_name: &str,
-    _source_text: Arc<str>,
-) -> Result<Vec<String>, Error> {
-    let text = pair.as_str();
-    let parts: Vec<String> = text.split('.').map(|s| s.to_string()).collect();
+fn parse_fact_reference_path(pair: Pair<Rule>) -> Vec<String> {
+    let parts: Vec<String> = pair
+        .into_inner()
+        .filter(|p| p.as_rule() == Rule::reference_segment)
+        .map(|p| p.as_str().to_string())
+        .collect();
     assert!(
         !parts.is_empty(),
         "BUG: grammar guarantees fact_reference has segments"
     );
-    Ok(parts)
+    parts
 }
 
 fn parse_fact_value(
@@ -126,30 +113,9 @@ fn parse_fact_value(
 ) -> Result<FactValue, Error> {
     for inner_pair in pair.into_inner() {
         match inner_pair.as_rule() {
-            Rule::type_declaration => {
-                return parse_type_declaration(
-                    inner_pair,
-                    attribute,
-                    spec_name,
-                    source_text.clone(),
-                )
-            }
-            Rule::inline_type_definition => {
-                return parse_inline_type_definition(
-                    inner_pair,
-                    attribute,
-                    spec_name,
-                    source_text.clone(),
-                )
-            }
-            Rule::spec_reference => {
-                return parse_fact_spec_reference(
-                    inner_pair,
-                    attribute,
-                    spec_name,
-                    source_text.clone(),
-                )
-            }
+            Rule::type_declaration => return parse_type_declaration(inner_pair),
+            Rule::inline_type_definition => return parse_inline_type_definition(inner_pair),
+            Rule::spec_reference => return parse_fact_spec_reference(inner_pair),
             Rule::literal => {
                 return parse_fact_literal(inner_pair, attribute, spec_name, source_text.clone())
             }
@@ -163,12 +129,7 @@ fn parse_fact_value(
 ///
 /// This handles cases like `fact price: [money]` where `money` is a named type.
 /// No resolution happens during parsing - that's deferred to the planning phase.
-fn parse_type_declaration(
-    pair: Pair<Rule>,
-    _attribute: &str,
-    _spec_name: &str,
-    _source_text: Arc<str>,
-) -> Result<FactValue, Error> {
+fn parse_type_declaration(pair: Pair<Rule>) -> Result<FactValue, Error> {
     let type_name_def = pair
         .into_inner()
         .next()
@@ -187,23 +148,14 @@ fn parse_type_declaration(
 ///
 /// This handles cases like `fact price: [number -> minimum 0]` or `fact buyin: [money -> minimal 100]`.
 /// No resolution happens during parsing - that's deferred to the planning phase.
-fn parse_inline_type_definition(
-    pair: Pair<Rule>,
-    attribute: &str,
-    spec_name: &str,
-    source_text: Arc<str>,
-) -> Result<FactValue, Error> {
+fn parse_inline_type_definition(pair: Pair<Rule>) -> Result<FactValue, Error> {
     let type_arrow_chain = pair
         .into_inner()
         .next()
         .expect("BUG: grammar guarantees inline_type_definition has type_arrow_chain");
 
-    let (parent_name, inline_constraints, from_spec) = types::parse_type_arrow_chain_with_commands(
-        type_arrow_chain,
-        attribute,
-        spec_name,
-        source_text.clone(),
-    )?;
+    let (parent_name, inline_constraints, from_spec) =
+        types::parse_type_arrow_chain_with_commands(type_arrow_chain)?;
 
     Ok(FactValue::TypeDeclaration {
         base: parent_name,
@@ -212,12 +164,7 @@ fn parse_inline_type_definition(
     })
 }
 
-fn parse_fact_spec_reference(
-    pair: Pair<Rule>,
-    _attribute: &str,
-    _spec_name: &str,
-    _source_text: Arc<str>,
-) -> Result<FactValue, Error> {
+fn parse_fact_spec_reference(pair: Pair<Rule>) -> Result<FactValue, Error> {
     let mut spec_ref: Option<SpecRef> = None;
     let mut hash: Option<String> = None;
     let mut effective: Option<DateTimeValue> = None;

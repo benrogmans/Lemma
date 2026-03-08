@@ -460,7 +460,7 @@ fn evaluate_to_literal(expression: &Expression) -> Option<LiteralValue> {
 ///
 /// For each arithmetic solution with an expression outcome, attempts to algebraically
 /// solve for unknown facts to determine what values produce the target.
-pub fn solve_arithmetic_batch(
+pub(super) fn solve_arithmetic_batch(
     arithmetic_solutions: Vec<super::world::WorldArithmeticSolution>,
     target_value: &LiteralValue,
     provided_facts: &HashSet<FactPath>,
