@@ -132,13 +132,39 @@ jobs:
           git tag wasm-v${{ needs.detect-version-changes.outputs.version }}
           git push origin wasm-v${{ needs.detect-version-changes.outputs.version }}
 
-  release-cli:
-    name: Release lemma-cli to crates.io
+  release-openapi:
+    name: Release lemma-openapi to crates.io
     needs: [detect-version-changes, release-lemma-engine]
     if: |
       always() &&
-      needs.detect-version-changes.outputs.cli_changed == 'true' &&
+      needs.detect-version-changes.outputs.lemma_changed == 'true' &&
       (needs.release-lemma-engine.result == 'success' || needs.release-lemma-engine.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run tests
+        run: cargo nextest run -p lemma-openapi --all-features
+
+      - name: Publish to crates.io
+        run: cargo publish -p lemma-openapi --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  release-cli:
+    name: Release lemma-cli to crates.io
+    needs: [detect-version-changes, release-lemma-engine, release-openapi]
+    if: |
+      always() &&
+      needs.detect-version-changes.outputs.cli_changed == 'true' &&
+      (needs.release-lemma-engine.result == 'success' || needs.release-lemma-engine.result == 'skipped') &&
+      (needs.release-openapi.result == 'success' || needs.release-openapi.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
