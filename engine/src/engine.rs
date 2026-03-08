@@ -180,12 +180,9 @@ impl Context {
         self.specs.remove(spec)
     }
 
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         self.specs.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.specs.is_empty()
     }
 
     // ─── Temporal helpers ────────────────────────────────────────────
@@ -550,14 +547,6 @@ impl Engine {
         result
     }
 
-    /// All temporal slice plans for a specific temporal version (of the main spec).
-    pub fn get_execution_plans(
-        &self,
-        spec: &Arc<LemmaSpec>,
-    ) -> Option<&[crate::planning::ExecutionPlan]> {
-        self.execution_plans.get(spec).map(|v| v.as_slice())
-    }
-
     /// Get spec by name at a specific time.
     pub fn get_spec(
         &self,
@@ -693,22 +682,6 @@ impl Engine {
             .with_fact_values(fact_values, &self.limits)?;
 
         self.evaluate_plan(plan, rule_names, effective)
-    }
-
-    /// Invert a rule to find input domains that produce a desired outcome with JSON values.
-    ///
-    /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
-    /// They are automatically parsed to the expected type based on the spec schema.
-    pub fn invert_json(
-        &self,
-        spec_name: &str,
-        effective: &DateTimeValue,
-        rule_name: &str,
-        target: crate::inversion::Target,
-        json: &[u8],
-    ) -> Result<crate::InversionResponse, Error> {
-        let values = crate::serialization::from_json(json)?;
-        self.invert(spec_name, effective, rule_name, target, values)
     }
 
     /// Invert a rule to find input domains that produce a desired outcome.

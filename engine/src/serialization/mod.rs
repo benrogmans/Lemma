@@ -20,13 +20,9 @@
 //! ```
 
 mod json;
-mod msgpack;
-mod protobuf;
 
 pub use json::from_json;
 pub use json::{
     deserialize_fact_path_set, deserialize_resolved_fact_value_map, serialize_fact_path_set,
     serialize_resolved_fact_value_map,
 };
-pub use msgpack::from_msgpack;
-pub use protobuf::from_protobuf;

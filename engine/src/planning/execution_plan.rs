@@ -347,18 +347,6 @@ fn format_type_constraints(spec: &TypeSpecification) -> Option<String> {
 }
 
 impl ExecutionPlan {
-    /// Resolved spec references in this plan.
-    ///
-    /// Iterates facts and collects entries where `FactData::spec_arc()` returns
-    /// `Some`. No data duplication — the `Arc<LemmaSpec>` is already stored in
-    /// `FactData::SpecRef`.
-    pub fn spec_refs(&self) -> Vec<(&FactPath, &std::sync::Arc<crate::parsing::ast::LemmaSpec>)> {
-        self.facts
-            .iter()
-            .filter_map(|(path, data)| data.spec_arc().map(|arc| (path, arc)))
-            .collect()
-    }
-
     /// Build a [`SpecSchema`] summarising **all** of this plan's facts and
     /// rules.
     ///
