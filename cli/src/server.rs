@@ -20,26 +20,8 @@ pub mod http {
 
     type SharedEngine = Arc<RwLock<Engine>>;
 
-    /// Parse spec path into (spec_name, optional hash_pin). Path like "pricing", "pricing~abc1234", "ind/kennismigrant/aanvraag~xyz".
-    fn parse_spec_path(path: &str) -> (String, Option<String>) {
-        let path = path.trim_matches('/');
-        if path.is_empty() {
-            return (String::new(), None);
-        }
-        let segments: Vec<&str> = path.split('/').collect();
-        let last = segments.last().copied().unwrap_or("");
-        if let Some(tilde_pos) = last.rfind('~') {
-            let (base, hash) = last.split_at(tilde_pos);
-            let hash = hash[1..].to_string();
-            let spec_name = if segments.len() == 1 {
-                base.to_string()
-            } else {
-                format!("{}/{}", segments[..segments.len() - 1].join("/"), base)
-            };
-            (spec_name, if hash.is_empty() { None } else { Some(hash) })
-        } else {
-            (path.to_string(), None)
-        }
+    fn parse_spec_path(path: &str) -> String {
+        path.trim_matches('/').to_string()
     }
 
     /// Read Accept-Datetime (RFC 7089) from headers; fallback to now.
@@ -59,8 +41,9 @@ pub mod http {
     }
 
     #[derive(Deserialize, Default)]
-    struct RulesQuery {
+    struct SpecQuery {
         rules: Option<String>,
+        hash: Option<String>,
     }
 
     fn resolve_effective(
@@ -95,6 +78,8 @@ pub mod http {
         spec: String,
         effective_from: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        hash: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         facts: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         rules: Option<serde_json::Value>,
@@ -107,7 +92,6 @@ pub mod http {
     struct VersionEntry {
         effective_from: Option<String>,
         hash: String,
-        permalink: String,
     }
 
     /// Build ETag, Memento-Datetime, Vary for the resolved spec.
@@ -242,13 +226,8 @@ pub mod http {
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let effective = resolve_effective(q.effective.as_deref())?;
         let engine = state.engine.read().await;
-        let use_permalink = q.effective.is_some();
-        let spec = lemma_openapi::generate_openapi_effective(
-            &engine,
-            state.proofs_enabled,
-            &effective,
-            use_permalink,
-        );
+        let spec =
+            lemma_openapi::generate_openapi_effective(&engine, state.proofs_enabled, &effective);
         Ok(Json(spec))
     }
 
@@ -345,14 +324,14 @@ pub mod http {
     // Doc path (wildcard): GET = schema with versions, POST = evaluate
     // -----------------------------------------------------------------------
 
-    /// `GET /{*path}` — schema of resolved version; path = spec name with optional ~hash. Accept-Datetime for temporal. ?rules= to scope.
+    /// `GET /{*path}` — schema of resolved version; path = spec name. `?hash=` for pinning, `Accept-Datetime` for temporal, `?rules=` to scope.
     async fn spec_get_schema(
         State(state): State<AppState>,
         Path(path): Path<String>,
-        Query(q): Query<RulesQuery>,
+        Query(q): Query<SpecQuery>,
         headers: HeaderMap,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let (spec_name, hash_pin) = parse_spec_path(&path);
+        let spec_name = parse_spec_path(&path);
         if spec_name.is_empty() {
             return Err((
                 StatusCode::NOT_FOUND,
@@ -363,24 +342,12 @@ pub mod http {
         }
         let effective = accept_datetime_from_headers(&headers)?;
         let engine = state.engine.read().await;
+        let hash_pin = q.hash.as_deref();
 
-        let spec_arc = hash_pin
-            .as_deref()
-            .and_then(|pin| engine.get_spec_by_hash_pin(&spec_name, pin))
-            .or_else(|| engine.get_spec(&spec_name, &effective));
-        let spec_arc = match spec_arc {
-            Some(a) => a,
-            None => {
-                return Err((
-                    StatusCode::NOT_FOUND,
-                    Json(ErrorResponse {
-                        error: format!("Spec '{}' not found", spec_name),
-                    }),
-                ));
-            }
-        };
+        let spec_arc = resolve_spec_or_error(&engine, &spec_name, hash_pin, &effective)?;
+        verify_hash_pin(&engine, &spec_arc, hash_pin)?;
 
-        let plan = match engine.get_execution_plan(&spec_name, hash_pin.as_deref(), &effective) {
+        let plan = match engine.get_execution_plan(&spec_name, hash_pin, &effective) {
             Some(p) => p,
             None => {
                 return Err((
@@ -413,7 +380,6 @@ pub mod http {
             .map(|(_, effective_from, hash)| VersionEntry {
                 effective_from: effective_from.clone(),
                 hash: hash.to_string(),
-                permalink: format!("/{}~{}", spec_name, hash),
             })
             .collect();
 
@@ -423,9 +389,16 @@ pub mod http {
         let body = GetSpecResponse {
             spec: schema.spec.clone(),
             effective_from: effective_from_str,
-            facts: serde_json::to_value(&schema.facts).ok(),
-            rules: serde_json::to_value(&schema.rules).ok(),
-            meta: serde_json::to_value(&schema.meta).ok(),
+            hash: hash.map(|h| h.to_string()),
+            facts: Some(
+                serde_json::to_value(&schema.facts).expect("BUG: failed to serialize schema facts"),
+            ),
+            rules: Some(
+                serde_json::to_value(&schema.rules).expect("BUG: failed to serialize schema rules"),
+            ),
+            meta: Some(
+                serde_json::to_value(&schema.meta).expect("BUG: failed to serialize schema meta"),
+            ),
             versions,
         };
 
@@ -437,15 +410,15 @@ pub mod http {
         Ok(response)
     }
 
-    /// `POST /{*path}` — evaluate; path = spec name with optional ~hash. Accept-Datetime for temporal. ?rules= to limit. Body = form-encoded facts.
+    /// `POST /{*path}` — evaluate; path = spec name. `?hash=` for pinning, `Accept-Datetime` for temporal, `?rules=` to limit. Body = form-encoded facts.
     async fn spec_post_evaluate(
         State(state): State<AppState>,
         Path(path): Path<String>,
-        Query(q): Query<RulesQuery>,
+        Query(q): Query<SpecQuery>,
         headers: HeaderMap,
         Form(fact_values): Form<std::collections::HashMap<String, String>>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let (spec_name, hash_pin) = parse_spec_path(&path);
+        let spec_name = parse_spec_path(&path);
         if spec_name.is_empty() {
             return Err((
                 StatusCode::NOT_FOUND,
@@ -457,31 +430,13 @@ pub mod http {
         let effective = accept_datetime_from_headers(&headers)?;
         let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
         let engine = state.engine.read().await;
+        let hash_pin = q.hash.as_deref();
 
-        let spec_arc = hash_pin
-            .as_deref()
-            .and_then(|pin| engine.get_spec_by_hash_pin(&spec_name, pin))
-            .or_else(|| engine.get_spec(&spec_name, &effective));
-        let spec_arc = match spec_arc {
-            Some(a) => a,
-            None => {
-                return Err((
-                    StatusCode::NOT_FOUND,
-                    Json(ErrorResponse {
-                        error: format!("Spec '{}' not found", spec_name),
-                    }),
-                ));
-            }
-        };
+        let spec_arc = resolve_spec_or_error(&engine, &spec_name, hash_pin, &effective)?;
+        verify_hash_pin(&engine, &spec_arc, hash_pin)?;
 
         let response = engine
-            .evaluate(
-                &spec_name,
-                hash_pin.as_deref(),
-                &effective,
-                rule_names,
-                fact_values,
-            )
+            .evaluate(&spec_name, hash_pin, &effective, rule_names, fact_values)
             .map_err(|err| {
                 (
                     lemma_error_to_status(&err),
@@ -492,7 +447,13 @@ pub mod http {
             })?;
 
         let hash = engine.hash_pin_for_spec(&spec_arc);
-        let results = response::convert_response(&response, want_proofs(&state, &headers));
+        let results = response::convert_response_with_hash(
+            &response,
+            want_proofs(&state, &headers),
+            &spec_name,
+            &effective,
+            hash,
+        );
         let mut axum_response = Json(results).into_response();
         let headers_mut = axum_response.headers_mut();
         for (k, v) in spec_response_headers(&spec_name, spec_arc.effective_from(), hash) {
@@ -569,6 +530,49 @@ pub mod http {
                 .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
                 .map(|s: &str| !s.trim().is_empty())
                 .unwrap_or(false)
+    }
+
+    fn resolve_spec_or_error(
+        engine: &Engine,
+        spec_name: &str,
+        hash_pin: Option<&str>,
+        effective: &DateTimeValue,
+    ) -> Result<std::sync::Arc<lemma::LemmaSpec>, (StatusCode, Json<ErrorResponse>)> {
+        let spec_arc = hash_pin
+            .and_then(|pin| engine.get_spec_by_hash_pin(spec_name, pin))
+            .or_else(|| engine.get_spec(spec_name, effective));
+        spec_arc.ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Spec '{}' not found", spec_name),
+                }),
+            )
+        })
+    }
+
+    fn verify_hash_pin(
+        engine: &Engine,
+        spec_arc: &std::sync::Arc<lemma::LemmaSpec>,
+        hash_pin: Option<&str>,
+    ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+        if let Some(requested_hash) = hash_pin {
+            if let Some(actual_hash) = engine.hash_pin_for_spec(spec_arc) {
+                if !lemma::planning::content_hash::content_hash_matches(requested_hash, actual_hash)
+                {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        Json(ErrorResponse {
+                            error: format!(
+                                "Hash mismatch: requested '{}' but spec has '{}'",
+                                requested_hash, actual_hash
+                            ),
+                        }),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Map a `Error` to an HTTP status code.
@@ -734,13 +738,14 @@ pub mod http {
         Ok(())
     }
 
-    /// Create a fresh engine by loading all .lemma files from the workspace directory.
-    /// Uses `add_lemma_files` so registry resolution runs once and all errors are collected.
+    /// Create a fresh engine by loading all .lemma files from the workspace
+    /// directory and the global deps cache (`dirs::data_dir()/lemma/deps/`).
     async fn reload_engine(workdir: &std::path::Path) -> anyhow::Result<Engine> {
         use walkdir::WalkDir;
 
         let mut engine = Engine::new();
         let mut files = std::collections::HashMap::new();
+
         for entry in WalkDir::new(workdir) {
             let entry = entry?;
             if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
@@ -751,7 +756,13 @@ pub mod http {
             }
         }
 
-        if let Err(errs) = engine.add_lemma_files(files).await {
+        if let Ok(deps_dir) = crate::lemma_deps_dir() {
+            if deps_dir.is_dir() {
+                crate::load_deps_into(&deps_dir, &mut files)?;
+            }
+        }
+
+        if let Err(errs) = engine.add_lemma_files(files) {
             for e in &errs {
                 tracing::error!("{}", crate::error_formatter::format_error(e));
             }

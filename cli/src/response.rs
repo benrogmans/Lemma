@@ -61,6 +61,33 @@ fn decimal_to_json(d: &rust_decimal::Decimal) -> serde_json::Value {
     }
 }
 
+/// Evaluation response envelope with spec identity, effective datetime, and content hash.
+#[derive(Debug, Serialize)]
+pub struct EvaluationEnvelope {
+    pub spec: String,
+    pub effective: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    pub result: IndexMap<String, RuleResultJson>,
+}
+
+/// Convert an engine `Response` into an envelope with traceability fields.
+pub fn convert_response_with_hash(
+    response: &lemma::Response,
+    include_proofs: bool,
+    spec_name: &str,
+    effective: &lemma::DateTimeValue,
+    hash: Option<&str>,
+) -> EvaluationEnvelope {
+    let result = convert_response(response, include_proofs);
+    EvaluationEnvelope {
+        spec: spec_name.to_string(),
+        effective: effective.to_string(),
+        hash: hash.map(|h| h.to_string()),
+        result,
+    }
+}
+
 /// Convert an engine `Response` into a JSON-ready map of rule results,
 /// ordered by definition line in the source spec.
 pub fn convert_response(

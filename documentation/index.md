@@ -5,18 +5,21 @@ title: Lemma Documentation
 
 # Lemma Documentation
 
-**Logic for man and machine**
+**A language that means business.**
 
-Lemma is a declarative logic language for expressing rules, facts, and business logic that both humans and computers can understand.
+Lemma is a declarative language for expressing rules, facts, and business logic that both humans and computers can understand.
 
 ## Quick Links
 
-- [Main README](../README.md) - Installation and quick start
-- [Reference](reference.md) - All operators, units, and types
-- [Examples](examples/) - 10 comprehensive example files
-- [WebAssembly](wasm.md) - Using Lemma in the browser
+- [Main README](../README.md) -- installation and quick start
+- [Reference](reference.md) -- all operators, units, and types
+- [CLI Reference](CLI.md) -- all commands and flags
+- [Examples](examples/) -- example specs
+- [Registry](registry.md) -- shared specs and `@` references
+- [Veto Semantics](veto_semantics.md) -- when rules produce no value
+- [WebAssembly](wasm.md) -- using Lemma in the browser
 
-## Syntax & Formatting
+## Syntax
 
 Lemma is whitespace-insensitive. Use formatting that makes your rules readable:
 
@@ -29,35 +32,30 @@ fact is_member: false
 
 rule price_with_vat: base_price + 21%
 
-rule bulk_discount
-  : quantity >= 100 and price_with_vat > 500
+rule bulk_discount: quantity >= 100 and price_with_vat > 500
 
 rule discount: 0%
-  unless quantity >= 10	then 10%
-  unless bulk_discount then 15%
-  unless is_member		then 20%
+  unless quantity >= 10  then 10%
+  unless bulk_discount   then 15%
+  unless is_member       then 20%
 
 rule price_with_discount: base_price - discount
 ```
-
-Format for clarity - all examples below show formatting styles, not requirements.
 
 ## Language Concepts
 
 ### Specs
 
-Every Lemma file contains specs — namespaces for facts and rules:
+Every Lemma file contains specs -- namespaces for facts and rules:
 
 ```lemma
 spec employee/contract
 """
-Optional description in triple quotes
+Optional description in triple quotes.
 """
 ```
 
 Specs support hierarchical naming: `contract/employment`, `company/policies/vacation`.
-
-See: [examples/03_spec_references.lemma](examples/03_spec_references.lemma)
 
 ### Facts
 
@@ -73,25 +71,25 @@ fact is_manager: true
 fact workweek: 40 hours
 ```
 
-**Type Annotations** - Declare expected types without values:
+**Type annotations** -- declare expected types without values:
 
 ```lemma
-type length: scale -> unit meter 1.0 -> unit kilometer 1000.0
+type length: scale
+  -> unit meter 1.0
+  -> unit kilometer 1000.0
 
 fact birth_date: [date]
 fact distance: [length]
 ```
 
-Or use inline type definitions:
+Or inline:
 
 ```lemma
 fact age: [number -> minimum 0 -> maximum 120]
 fact price: [scale -> unit eur 1.00 -> unit usd 1.10]
 ```
 
-See all available types: [reference.md - Type Annotations](reference.md#type-annotations)
-
-See: [examples/01_simple_facts.lemma](examples/01_simple_facts.lemma)
+See: [reference.md -- Type Annotations](reference.md#type-annotations)
 
 ### Rules
 
@@ -103,9 +101,7 @@ rule is_senior: age >= 40
 rule total_weight: package_weight + box_weight
 ```
 
-See: [examples/02_rules_and_unless.lemma](examples/02_rules_and_unless.lemma), [examples/06_tax_calculation.lemma](examples/06_tax_calculation.lemma)
-
-### Unless Clauses
+### Unless clauses
 
 Conditional logic where **the last matching condition wins**:
 
@@ -120,11 +116,9 @@ If a VIP customer orders 75 items, they get 25% (last matching wins), not 20%.
 
 This matches natural language: "It's 0%, unless you buy 10+ then 10%, unless you buy 50+ then 20%, unless you're VIP then 25%."
 
-**Best Practice:** Place veto clauses last so they override all other logic.
+**Best practice:** place veto clauses last so they override all other logic.
 
-See: [examples/02_rules_and_unless.lemma](examples/02_rules_and_unless.lemma), [examples/07_shipping_policy.lemma](examples/07_shipping_policy.lemma)
-
-### Boolean Literals
+### Boolean literals
 
 Multiple aliases for readability:
 
@@ -136,19 +130,9 @@ Multiple aliases for readability:
 
 All aliases in each column are interchangeable.
 
-```lemma
-rule is_eligible: false
-  unless age >= 18 then true
-
-rule can_proceed: accept
-  unless is_blocked then reject
-```
-
-See: [reference.md - Boolean Literals](reference.md#boolean-literals)
-
 ### Veto
 
-Use `veto` to block a rule entirely when the input data is invalid or constraints are violated:
+Use `veto` to block a rule entirely when input data is invalid:
 
 ```lemma
 rule validated_age: age
@@ -156,9 +140,7 @@ rule validated_age: age
   unless age > 120 then veto "Invalid age value"
 ```
 
-When a veto applies, the rule produces **no valid result** - it's blocked completely. This is useful for data validation and hard constraints. Use veto when the data itself is invalid, not for negative business logic results.
-
-**Key behavior**: If a rule references a vetoed rule and needs its value, the veto applies to the dependent rule. If an unless clause provides an alternative value, the veto doesn't apply:
+A vetoed rule produces **no result**. If a rule references a vetoed rule and needs its value, the veto propagates. If an unless clause provides an alternative, the veto does not propagate:
 
 ```lemma
 rule validated_score: score
@@ -168,33 +150,26 @@ rule result: validated_score
   unless use_default then 50
 ```
 
-If `validated_score` is vetoed but `use_default` is true, `result` = 50 (veto does not apply).
+If `validated_score` is vetoed but `use_default` is true, `result` = 50.
 
-**Best practice:** Put veto clauses last so they override all other logic.
+See: [veto_semantics.md](veto_semantics.md)
 
-See: [examples/02_rules_and_unless.lemma](examples/02_rules_and_unless.lemma), [examples/08_rule_references.lemma](examples/08_rule_references.lemma), [veto_semantics.md](veto_semantics.md)
-
-### Rule References
+### Rule references
 
 Reference other rules by name (the engine resolves whether a name is a fact or a rule):
 
 ```lemma
-rule is_adult
-  : age >= 18
+rule is_adult: age >= 18
 
-rule has_license
-  : license_status == "valid"
+rule has_license: license_status == "valid"
 
-rule can_drive
-  : is_adult and has_license
+rule can_drive: is_adult and has_license
   unless license_suspended then veto "License suspended"
 ```
 
-See: [examples/08_rule_references.lemma](examples/08_rule_references.lemma)
+### Spec composition
 
-### Document References
-
-Compose specs by referencing and overriding:
+Reference facts and rules across specs:
 
 ```lemma
 spec base_employee
@@ -209,63 +184,38 @@ fact employee.salary: 8000
 rule manager_bonus: employee.salary * 0.15
 ```
 
-Spec names may include a `.version_tag` suffix (e.g. `spec pricing.v1`). Base names cannot contain a period.
-Versioned and unversioned specs with the same base name are distinct.
-An unversioned reference resolves to the latest loaded temporal version by natural sort.
-A spec cannot reference any temporal version of itself.
+Spec names may include a `.version_tag` suffix (e.g. `spec pricing.v1`). An unversioned reference resolves to the latest loaded temporal version by natural sort.
 
-See: [reference.md - Spec References](reference.md#spec-references) and
-[examples/03_spec_references.lemma](examples/03_spec_references.lemma)
+See: [reference.md -- Spec References](reference.md#spec-references)
 
 ## Expressions
 
 ### Arithmetic
 
 ```lemma
-rule total
-  : (price + tax) * quantity
-
-rule compound
-  : principal * (1 + rate) ^ years
+rule total: (price + tax) * quantity
+rule compound: principal * (1 + rate) ^ years
 ```
 
 Operators: `+`, `-`, `*`, `/`, `%`, `^`
-
-See: [reference.md - Arithmetic](reference.md#arithmetic)
 
 ### Comparison
 
 ```lemma
 rule status_ok: status is "approved"
-
-rule not_cancelled
-  : status is not "cancelled"
-
-rule is_eligible
-  : age >= 18
-    and income > 30000
-
+rule not_cancelled: status is not "cancelled"
+rule is_eligible: age >= 18 and income > 30000
 ```
 
 Operators: `>`, `<`, `>=`, `<=`, `==`, `!=`, `is`, `is not`
 
-See: [reference.md - Comparison](reference.md#comparison)
-
 ### Logical
 
 ```lemma
-rule can_approve_loan
-  : credit_score >= 650
-    and income_verified
-    and not has_bankruptcy
-
-rule needs_manager_review
-  : loan_amount > 100000
+rule can_approve_loan: credit_score >= 650 and income_verified and not has_bankruptcy
 ```
 
 Operators: `and`, `not`
-
-See: [reference.md - Logical](reference.md#logical)
 
 ### Mathematical
 
@@ -275,15 +225,9 @@ rule sine_value: sin(angle)
 rule log_value: log(10)
 ```
 
-Operators: `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `abs`, `floor`, `ceil`, `round`
-
-Note: These are prefix operators, not functions. Both `sin angle` and `sin(angle)` are valid.
-
-See: [reference.md - Mathematical](reference.md#mathematical)
+Prefix operators (parentheses optional): `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `abs`, `floor`, `ceil`, `round`
 
 ## User-Defined Types
-
-Define custom types with units, constraints, and validation:
 
 ```lemma
 type money: scale
@@ -298,43 +242,43 @@ type mass: scale
   -> unit pound 0.453592
 
 fact price: 100 eur
-fact weight: 75 kilograms
+fact weight: 75 kilogram
 ```
 
-**Type Imports** - Reuse types across specs:
+**Type imports** -- reuse types across specs:
 
 ```lemma
 type currency from base_types
 type discount_rate from pricing -> maximum 0.5
 ```
 
-See: [reference.md - User-Defined Types](reference.md#user-defined-types)
+See: [reference.md -- User-Defined Types](reference.md#user-defined-types)
 
 ## Unit Conversions
 
-Unit conversions work within the same type definition:
+Conversions work within the same type definition:
 
 ```lemma
-type money: scale -> unit eur 1.00 -> unit usd 1.10
+type money: scale
+  -> unit eur 1.00
+  -> unit usd 1.10
 
 fact price: 100 eur
-rule price_usd: price in usd  // Converts to 110 usd
+rule price_usd: price in usd
 ```
 
-**Duration conversions** (duration units are built-in):
+Duration units are built-in:
 
 ```lemma
 fact workweek: 40 hours
-rule workweek_days: workweek in days  // Converts to ~1.67 days
+rule workweek_days: workweek in days
 ```
 
-**Number to ratio conversion:**
+Number to ratio:
 
 ```lemma
-rule discount_as_percent: 0.25 in percent  // Converts to 25 percent
+rule as_percent: 0.25 in percent
 ```
-
-See: [examples/04_unit_conversions.lemma](examples/04_unit_conversions.lemma)
 
 ## Literal Types
 
@@ -342,15 +286,11 @@ See: [examples/04_unit_conversions.lemma](examples/04_unit_conversions.lemma)
 |------|---------|-------|
 | **Number** | `42`, `3.14`, `1.23e10` | Integers and floats |
 | **Text** | `"hello"` | String literals |
-| **Boolean** | `true`, `false`, `yes`, `no`, `accept`, `reject` | Aliases allowed |
-| **Date** | `2024-01-15`, `2024-01-15T14:30:00Z` | ISO 8601 format |
-| **Duration** | `5 hours`, `3 days`, `2 weeks` | Time periods (built-in units) |
+| **Boolean** | `true`, `false`, `yes`, `no`, `accept`, `reject` | Aliases |
+| **Date** | `2024-01-15`, `2024-01-15T14:30:00Z` | ISO 8601 |
+| **Duration** | `5 hours`, `3 days`, `2 weeks` | Built-in units |
 | **Ratio** | `15 percent`, `15%`, `5 permille`, `5%%` | Proportional values |
-| **Scale** | `100 eur`, `75 kilograms` | Requires user-defined type with units |
-
-**Note:** Units like `kilograms`, `eur`, `celsius` must be defined in custom types. Only duration units are built-in.
-
-See: [examples/01_simple_facts.lemma](examples/01_simple_facts.lemma), [reference.md](reference.md)
+| **Scale** | `100 eur`, `75 kilogram` | Requires user-defined type |
 
 ## Date and Time
 
@@ -363,15 +303,9 @@ rule days_until_deadline: deadline - today
 rule is_overdue: today > deadline
 ```
 
-See: [examples/05_date_handling.lemma](examples/05_date_handling.lemma)
-
 ## Inverse Reasoning
 
-Inversion allows you to find what input values produce a desired output. This is useful for questions like "What quantity gives me a 30% discount?" or "What salary produces a total compensation of €100,000?"
-
-**Note:** Inversion is available in the Rust engine library.
-
-### Example
+Find what input values produce a desired output. Available in the Rust engine library.
 
 ```rust
 use lemma::{Engine, Target, LiteralValue};
@@ -388,9 +322,8 @@ engine.add_lemma_files(HashMap::from([("pricing.lemma".into(), r#"
       unless quantity >= 10 then 10%
       unless quantity >= 50 then 20%
       unless is_vip then 25%
-"#.into())]))?;
+"#.into())])?;
 
-// Find what gives a 25% discount
 use rust_decimal::Decimal;
 let response = engine.invert(
     "pricing",
@@ -398,43 +331,21 @@ let response = engine.invert(
     Target::value(LiteralValue::Ratio(Decimal::from(25), Some("percent".to_string()))),
     HashMap::new()
 )?;
-
-// Response shows: is_vip must be true (regardless of quantity)
 ```
 
-The inversion response contains:
-- **Solutions**: Domain constraints for each variable
-- **Shape**: Symbolic representation of all valid solutions
-- **Free variables**: Facts that can vary while still satisfying the target
+The response contains **solutions** (domain constraints), **shape** (symbolic representation), and **free variables**.
 
-See the [engine README](../engine/README.md#inverse-reasoning) for detailed API documentation.
+See the [engine README](../engine/README.md#inverse-reasoning) for the full API.
 
-## Complete Examples
+## Examples
 
-Browse [examples/](examples/) directory:
+Browse [examples/](examples/) or [cli/tests/integrations/examples/](../cli/tests/integrations/examples/):
 
-1. **[01_simple_facts.lemma](examples/01_simple_facts.lemma)** - All fact types and literals
-2. **[02_rules_and_unless.lemma](examples/02_rules_and_unless.lemma)** - Conditional logic, veto usage
-3. **[03_spec_references.lemma](examples/03_spec_references.lemma)** - Spec composition
-4. **[04_unit_conversions.lemma](examples/04_unit_conversions.lemma)** - Working with typed units
-5. **[05_date_handling.lemma](examples/05_date_handling.lemma)** - Date arithmetic and comparisons
-6. **[06_tax_calculation.lemma](examples/06_tax_calculation.lemma)** - Real-world progressive tax rules
-7. **[07_shipping_policy.lemma](examples/07_shipping_policy.lemma)** - Complex business logic
-8. **[08_rule_references.lemma](examples/08_rule_references.lemma)** - Rule composition and references
-
-## Implementation
-
-Lemma uses a pure Rust evaluator for fast and deterministic execution:
-
-```bash
-# Run a spec
-lemma run spec
-
-# Provide fact values
-lemma run spec age=25 income=50000
-
-# Load multiple specs
-lemma workspace ./policies/
-```
-
-See the [main README](../README.md) for installation and CLI usage.
+1. **[01_simple_facts](../cli/tests/integrations/examples/01_simple_facts.lemma)** -- all fact types and literals
+2. **[02_rules_and_unless](../cli/tests/integrations/examples/02_rules_and_unless.lemma)** -- conditional logic, veto
+3. **[03_spec_references](../cli/tests/integrations/examples/03_spec_references.lemma)** -- spec composition
+4. **[04_unit_conversions](../cli/tests/integrations/examples/04_unit_conversions.lemma)** -- typed units
+5. **[05_date_handling](../cli/tests/integrations/examples/05_date_handling.lemma)** -- date arithmetic
+6. **[06_tax_calculation](../cli/tests/integrations/examples/06_tax_calculation.lemma)** -- progressive tax rules
+7. **[07_shipping_policy](../cli/tests/integrations/examples/07_shipping_policy.lemma)** -- complex business logic
+8. **[08_rule_references](../cli/tests/integrations/examples/08_rule_references.lemma)** -- rule composition

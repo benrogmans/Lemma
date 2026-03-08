@@ -34,8 +34,8 @@ pub struct ApiSource {
 ///
 /// Returns one [`ApiSource`] per distinct temporal version boundary across all
 /// loaded specs, plus one "current" source that uses no `effective` (i.e. the
-/// latest version). The sources are ordered from oldest to newest, with "current"
-/// last.
+/// latest version). "Current" is first (Scalar default), then boundaries in
+/// descending chronological order (newest first).
 ///
 /// If there are no temporal version boundaries (all specs are unversioned),
 /// returns a single "current" entry.
@@ -47,8 +47,6 @@ pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
     let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     for spec in &all_specs {
         if seen_names.insert(spec.name.clone()) {
-            // Collect all version boundaries for this spec name.
-            // list_specs() returns all temporal versions; we extract effective_from dates.
             for s in all_specs.iter().filter(|s| s.name == spec.name) {
                 if let Some(af) = s.effective_from() {
                     all_boundaries.insert(af.clone());
@@ -65,23 +63,22 @@ pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
         }];
     }
 
-    let mut sources: Vec<ApiSource> = all_boundaries
-        .iter()
-        .map(|boundary| {
-            let label = boundary.to_string();
-            ApiSource {
-                title: format!("As of {}", label),
-                slug: label.clone(),
-                url: format!("/openapi.json?effective={}", label),
-            }
-        })
-        .collect();
+    let mut sources: Vec<ApiSource> = Vec::with_capacity(all_boundaries.len() + 1);
 
     sources.push(ApiSource {
         title: "Current".to_string(),
         slug: "current".to_string(),
         url: "/openapi.json".to_string(),
     });
+
+    for boundary in all_boundaries.iter().rev() {
+        let label = boundary.to_string();
+        sources.push(ApiSource {
+            title: format!("Effective {}", label),
+            slug: label.clone(),
+            url: format!("/openapi.json?effective={}", label),
+        });
+    }
 
     sources
 }
@@ -91,29 +88,23 @@ pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
 /// Convenience wrapper around [`generate_openapi_effective`]. The spec reflects
 /// only the specs and interfaces active at `DateTimeValue::now()`.
 pub fn generate_openapi(engine: &Engine, proofs_enabled: bool) -> Value {
-    generate_openapi_effective(engine, proofs_enabled, &DateTimeValue::now(), false)
+    generate_openapi_effective(engine, proofs_enabled, &DateTimeValue::now())
 }
 
 /// Generate a complete OpenAPI 3.1 specification for a specific point in time.
 ///
 /// The specification includes:
-/// - Spec endpoints (`/{spec_name}/{rules}` where `rules` is optional)
-/// - GET operations with query parameters (including `effective` and `hash_pin`)
-/// - POST operations with JSON request bodies (including `effective` and `hash_pin`)
-/// - Response schemas with rule result shapes
+/// - Spec endpoints (`/{spec_name}`) with `?hash=` and `?rules=` query parameters
+/// - GET operations (schema) and POST operations (evaluate) with `Accept-Datetime` header
+/// - Response schemas with evaluation envelope (`spec`, `effective`, `hash`, `result`)
 /// - Meta routes (`/`, `/health`, `/openapi.json`, `/docs`)
 ///
 /// When `proofs_enabled` is true, the spec adds the `x-proofs` header parameter
 /// to evaluation endpoints and describes the optional `proof` object in responses.
-///
-/// The `effective` parameter determines which temporal version of each spec is
-/// visible. When `use_permalink_paths` is true (e.g. for a specific temporal version),
-/// paths use ~hash (e.g. /pricing~abc1234); otherwise bare paths (e.g. /pricing).
 pub fn generate_openapi_effective(
     engine: &Engine,
     proofs_enabled: bool,
     effective: &DateTimeValue,
-    use_permalink_paths: bool,
 ) -> Value {
     let mut paths = Map::new();
     let mut components_schemas = Map::new();
@@ -126,15 +117,6 @@ pub fn generate_openapi_effective(
             let schema = plan.schema();
             let facts = collect_input_facts_from_schema(&schema);
             let rule_names: Vec<String> = schema.rules.keys().cloned().collect();
-
-            let spec_path = if use_permalink_paths {
-                engine
-                    .hash_pin(spec_name, effective)
-                    .map(|h| format!("{}~{}", spec_name, h))
-                    .unwrap_or_else(|| spec_name.clone())
-            } else {
-                spec_name.clone()
-            };
 
             let safe_name = spec_name.replace('/', "_");
             let response_schema_name = format!("{}_response", safe_name);
@@ -149,7 +131,7 @@ pub fn generate_openapi_effective(
                 build_post_request_schema(&facts),
             );
 
-            let path = format!("/{}", spec_path);
+            let path = format!("/{}", spec_name);
             paths.insert(
                 path,
                 build_spec_path_item(
@@ -387,6 +369,23 @@ fn not_found_response_schema() -> Value {
     })
 }
 
+fn hash_conflict_response_schema() -> Value {
+    json!({
+        "description": "Hash mismatch: the ?hash= value doesn't match the resolved spec's composite content hash",
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "error": { "type": "string" }
+                    },
+                    "required": ["error"]
+                }
+            }
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Spec path items
 // ---------------------------------------------------------------------------
@@ -406,9 +405,20 @@ fn accept_datetime_header_parameter() -> Value {
         "name": "Accept-Datetime",
         "in": "header",
         "required": false,
-        "description": "RFC 7089 (Memento): resolve the spec version active at this datetime. Omit for current. Use path with ~hash for a permalink to a specific version.",
+        "description": "RFC 7089 (Memento): resolve the spec version active at this datetime. Omit for current. Use ?hash= to pin to a specific content version.",
         "schema": { "type": "string", "format": "date-time" },
         "example": "Sat, 01 Jan 2025 00:00:00 GMT"
+    })
+}
+
+fn hash_query_parameter() -> Value {
+    json!({
+        "name": "hash",
+        "in": "query",
+        "required": false,
+        "description": "Pin to a specific content hash. If the resolved spec's composite hash doesn't match, the server returns 409 Conflict.",
+        "schema": { "type": "string" },
+        "example": "a1b2c3d4"
     })
 }
 
@@ -444,7 +454,7 @@ fn build_spec_path_item(
         "example": rules_example
     });
 
-    let mut get_parameters: Vec<Value> = vec![rules_param.clone()];
+    let mut get_parameters: Vec<Value> = vec![rules_param.clone(), hash_query_parameter()];
     get_parameters.push(accept_datetime_header_parameter());
     if proofs_enabled {
         get_parameters.push(x_proofs_header_parameter());
@@ -455,13 +465,13 @@ fn build_spec_path_item(
     let get_operation_id = format!("get_{}", spec_name);
     let post_operation_id = format!("post_{}", spec_name);
 
-    let mut post_parameters: Vec<Value> = vec![rules_param];
+    let mut post_parameters: Vec<Value> = vec![rules_param, hash_query_parameter()];
     post_parameters.push(accept_datetime_header_parameter());
     if proofs_enabled {
         post_parameters.push(x_proofs_header_parameter());
     }
 
-    let path_item = json!({
+    json!({
         "get": {
             "operationId": get_operation_id,
             "summary": get_summary,
@@ -469,7 +479,7 @@ fn build_spec_path_item(
             "parameters": get_parameters,
             "responses": {
                 "200": {
-                    "description": "Schema of resolved version (spec, effective_from, facts, rules, meta, versions). Headers: ETag, Memento-Datetime, Vary.",
+                    "description": "Schema of resolved version. Includes spec identity, hash, facts, rules, meta, and versions. Headers: ETag, Memento-Datetime, Vary.",
                     "content": {
                         "application/json": {
                             "schema": response_ref
@@ -477,7 +487,8 @@ fn build_spec_path_item(
                     }
                 },
                 "400": error_response_schema(),
-                "404": not_found_response_schema()
+                "404": not_found_response_schema(),
+                "409": hash_conflict_response_schema()
             }
         },
         "post": {
@@ -495,7 +506,7 @@ fn build_spec_path_item(
             },
             "responses": {
                 "200": {
-                    "description": "Evaluation results. Headers: ETag, Memento-Datetime, Vary.",
+                    "description": "Evaluation results with traceability envelope (spec, effective, hash, result). Headers: ETag, Memento-Datetime, Vary.",
                     "content": {
                         "application/json": {
                             "schema": response_ref
@@ -503,12 +514,11 @@ fn build_spec_path_item(
                     }
                 },
                 "400": error_response_schema(),
-                "404": not_found_response_schema()
+                "404": not_found_response_schema(),
+                "409": hash_conflict_response_schema()
             }
         }
-    });
-
-    path_item
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -723,9 +733,8 @@ mod tests {
         let mut engine = Engine::new();
         let files: std::collections::HashMap<String, String> =
             std::iter::once(("test.lemma".to_string(), code.to_string())).collect();
-        tokio::runtime::Runtime::new()
-            .expect("tokio runtime")
-            .block_on(engine.add_lemma_files(files))
+        engine
+            .add_lemma_files(files)
             .expect("failed to parse lemma code");
         engine
     }
@@ -736,9 +745,8 @@ mod tests {
             .into_iter()
             .map(|(name, code)| (name.to_string(), code.to_string()))
             .collect();
-        tokio::runtime::Runtime::new()
-            .expect("tokio runtime")
-            .block_on(engine.add_lemma_files(file_map))
+        engine
+            .add_lemma_files(file_map)
             .expect("failed to parse lemma code");
         engine
     }
@@ -994,7 +1002,7 @@ mod tests {
         let engine =
             create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let effective = date(2025, 6, 15);
-        let spec = generate_openapi_effective(&engine, false, &effective, true);
+        let spec = generate_openapi_effective(&engine, false, &effective);
 
         assert_eq!(spec["openapi"], "3.1.0");
         let version = spec["info"]["version"].as_str().unwrap();
@@ -1023,14 +1031,9 @@ rule surcharge: 5
         )]);
 
         let before = date(2025, 3, 1);
-        let spec_v1 = generate_openapi_effective(&engine, false, &before, true);
+        let spec_v1 = generate_openapi_effective(&engine, false, &before);
 
-        let v1_paths = spec_v1["paths"].as_object().unwrap();
-        let policy_path_v1 = v1_paths
-            .keys()
-            .find(|k| k.starts_with("/policy"))
-            .expect("policy path in v1 spec");
-        assert!(spec_v1["paths"][policy_path_v1].is_object());
+        assert!(spec_v1["paths"]["/policy"].is_object());
         let v1_response = &spec_v1["components"]["schemas"]["policy_response"];
         assert!(
             v1_response["properties"]["discount"].is_object(),
@@ -1047,7 +1050,7 @@ rule surcharge: 5
         );
 
         let after = date(2025, 8, 1);
-        let spec_v2 = generate_openapi_effective(&engine, false, &after, true);
+        let spec_v2 = generate_openapi_effective(&engine, false, &after);
 
         let v2_response = &spec_v2["components"]["schemas"]["policy_response"];
         assert!(
@@ -1082,7 +1085,7 @@ rule surcharge: 5
         )]);
 
         let before = date(2025, 3, 1);
-        let spec_v1 = generate_openapi_effective(&engine, false, &before, true);
+        let spec_v1 = generate_openapi_effective(&engine, false, &before);
         let v1_response = &spec_v1["components"]["schemas"]["policy_response"];
         assert!(
             v1_response["properties"]["discount"].is_object(),
@@ -1094,7 +1097,7 @@ rule surcharge: 5
         );
 
         let after = date(2025, 8, 1);
-        let spec_v2 = generate_openapi_effective(&engine, false, &after, true);
+        let spec_v2 = generate_openapi_effective(&engine, false, &after);
         let v2_response = &spec_v2["components"]["schemas"]["policy_response"];
         assert!(
             v2_response["properties"]["discount"].is_object(),
@@ -1123,7 +1126,7 @@ rule surcharge: 5
         )]);
 
         let before = date(2025, 3, 1);
-        let spec_v1 = generate_openapi_effective(&engine, false, &before, true);
+        let spec_v1 = generate_openapi_effective(&engine, false, &before);
         let v1_tags: Vec<&str> = spec_v1["tags"]
             .as_array()
             .unwrap()
@@ -1133,7 +1136,7 @@ rule surcharge: 5
         assert!(v1_tags.contains(&"policy"));
 
         let after = date(2025, 8, 1);
-        let spec_v2 = generate_openapi_effective(&engine, false, &after, true);
+        let spec_v2 = generate_openapi_effective(&engine, false, &after);
         let v2_tags: Vec<&str> = spec_v2["tags"]
             .as_array()
             .unwrap()
@@ -1176,15 +1179,15 @@ rule discount: 20
 
         let sources = temporal_api_sources(&engine);
 
-        assert_eq!(sources.len(), 2, "should have 1 boundary + 1 current");
+        assert_eq!(sources.len(), 2, "should have 1 current + 1 boundary");
 
-        assert_eq!(sources[0].title, "As of 2025-06-01");
-        assert_eq!(sources[0].slug, "2025-06-01");
-        assert_eq!(sources[0].url, "/openapi.json?effective=2025-06-01");
+        assert_eq!(sources[0].title, "Current");
+        assert_eq!(sources[0].slug, "current");
+        assert_eq!(sources[0].url, "/openapi.json");
 
-        assert_eq!(sources[1].title, "Current");
-        assert_eq!(sources[1].slug, "current");
-        assert_eq!(sources[1].url, "/openapi.json");
+        assert_eq!(sources[1].title, "Effective 2025-06-01");
+        assert_eq!(sources[1].slug, "2025-06-01");
+        assert_eq!(sources[1].url, "/openapi.json?effective=2025-06-01");
     }
 
     #[test]
@@ -1256,7 +1259,7 @@ rule discount: 20
 
         let sources = temporal_api_sources(&engine);
         let slugs: Vec<&str> = sources.iter().map(|s| s.slug.as_str()).collect();
-        assert_eq!(slugs, vec!["2024-01-01", "2025-06-01", "current"]);
+        assert_eq!(slugs, vec!["current", "2025-06-01", "2024-01-01"]);
     }
 
     // =======================================================================

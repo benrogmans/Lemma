@@ -26,13 +26,9 @@ use std::sync::Arc;
 /// A bundle of Lemma source text returned by the Registry.
 ///
 /// Contains one or more `spec ...` blocks as raw Lemma source code.
-/// Spec declarations use plain names (e.g. `spec org/project/helper`); the `@`
-/// prefix is a reference qualifier and never appears in declarations.
 #[derive(Debug, Clone)]
 pub struct RegistryBundle {
     /// Lemma source containing one or more `spec ...` blocks.
-    /// Spec declarations use plain names without `@` (e.g. `spec org/project/helper`).
-    /// The `@` prefix is a reference qualifier, not part of the name.
     pub lemma_source: String,
 
     /// Source identifier used for diagnostics and proofs
@@ -225,7 +221,7 @@ pub struct LemmaBase {
 #[cfg(feature = "registry")]
 impl LemmaBase {
     /// The base URL for the LemmaBase.com registry.
-    pub const BASE_URL: &'static str = "http://localhost:4222";
+    pub const BASE_URL: &'static str = "https://lemmabase.com";
 
     /// Create a new LemmaBase registry backed by the real HTTP client (reqwest on native, fetch on WASM).
     pub fn new() -> Self {
@@ -373,9 +369,10 @@ pub async fn resolve_registry_references(
             }
             already_requested.insert(dedup);
 
+            let registry_name = reference.name.strip_prefix('@').unwrap_or(&reference.name);
             let bundle_result = match reference.kind {
-                RegistryReferenceKind::Spec => registry.fetch_specs(&reference.name).await,
-                RegistryReferenceKind::TypeImport => registry.fetch_types(&reference.name).await,
+                RegistryReferenceKind::Spec => registry.fetch_specs(registry_name).await,
+                RegistryReferenceKind::TypeImport => registry.fetch_types(registry_name).await,
             };
 
             let display_id = reference.name.clone();
@@ -649,7 +646,7 @@ rule value: external.quantity"#;
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
             "org/project/helper",
-            r#"spec org/project/helper
+            r#"spec @org/project/helper
 fact quantity: 42"#,
         );
 
@@ -665,7 +662,7 @@ fact quantity: 42"#,
         assert_eq!(store.len(), 2);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
-        assert!(names.iter().any(|n| n == "org/project/helper"));
+        assert!(names.iter().any(|n| n == "@org/project/helper"));
     }
 
     #[tokio::test]
@@ -717,12 +714,12 @@ fact a: spec @org/project/spec_a"#;
         // spec_a depends on spec_b
         registry.add_spec_bundle(
             "org/project/spec_a",
-            r#"spec org/project/spec_a
+            r#"spec @org/project/spec_a
 fact b: spec @org/project/spec_b"#,
         );
         registry.add_spec_bundle(
             "org/project/spec_b",
-            r#"spec org/project/spec_b
+            r#"spec @org/project/spec_b
 fact value: 99"#,
         );
 
@@ -738,8 +735,8 @@ fact value: 99"#,
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
-        assert!(names.iter().any(|n| n == "org/project/spec_a"));
-        assert!(names.iter().any(|n| n == "org/project/spec_b"));
+        assert!(names.iter().any(|n| n == "@org/project/spec_a"));
+        assert!(names.iter().any(|n| n == "@org/project/spec_b"));
     }
 
     #[tokio::test]
@@ -759,10 +756,10 @@ fact a: spec @org/project/spec_a"#;
         // Registry returns both spec_a and spec_b in one bundle
         registry.add_spec_bundle(
             "org/project/spec_a",
-            r#"spec org/project/spec_a
+            r#"spec @org/project/spec_a
 fact b: spec @org/project/spec_b
 
-spec org/project/spec_b
+spec @org/project/spec_b
 fact value: 99"#,
         );
 
@@ -778,8 +775,8 @@ fact value: 99"#,
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
-        assert!(names.iter().any(|n| n == "org/project/spec_a"));
-        assert!(names.iter().any(|n| n == "org/project/spec_b"));
+        assert!(names.iter().any(|n| n == "@org/project/spec_a"));
+        assert!(names.iter().any(|n| n == "@org/project/spec_b"));
     }
 
     #[tokio::test]
@@ -817,7 +814,7 @@ fact external: spec @org/project/missing"#;
                 kind,
                 details,
             } => {
-                assert_eq!(identifier, "org/project/missing");
+                assert_eq!(identifier, "@org/project/missing");
                 assert_eq!(*kind, RegistryErrorKind::NotFound);
                 assert!(
                     details.suggestion.is_some(),
@@ -881,12 +878,12 @@ type money from @lemma/std/finance"#;
             })
             .collect();
         assert!(
-            identifiers.contains(&"org/example/helper"),
+            identifiers.contains(&"@org/example/helper"),
             "Should include spec ref error: {:?}",
             identifiers
         );
         assert!(
-            identifiers.contains(&"lemma/std/finance"),
+            identifiers.contains(&"@lemma/std/finance"),
             "Should include type import error: {:?}",
             identifiers
         );
@@ -911,7 +908,7 @@ fact b: spec @org/shared"#;
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
             "org/shared",
-            r#"spec org/shared
+            r#"spec @org/shared
 fact value: 1"#,
         );
 
@@ -924,10 +921,10 @@ fact value: 1"#,
         .await
         .unwrap();
 
-        // Should have spec_one, spec_two, and org/shared (fetched only once).
+        // Should have spec_one, spec_two, and @org/shared (fetched only once).
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
-        assert!(names.iter().any(|n| n == "org/shared"));
+        assert!(names.iter().any(|n| n == "@org/shared"));
     }
 
     #[tokio::test]
@@ -947,7 +944,7 @@ fact price: [money]"#;
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
             "lemma/std/finance",
-            r#"spec lemma/std/finance
+            r#"spec @lemma/std/finance
 type money: scale
  -> unit eur 1.00
  -> unit usd 1.10
@@ -966,7 +963,7 @@ type money: scale
         assert_eq!(store.len(), 2);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
-        assert!(names.iter().any(|n| n == "lemma/std/finance"));
+        assert!(names.iter().any(|n| n == "@lemma/std/finance"));
     }
 
     // -----------------------------------------------------------------------

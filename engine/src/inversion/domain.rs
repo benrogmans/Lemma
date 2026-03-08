@@ -59,9 +59,13 @@ impl Domain {
         !self.is_satisfiable()
     }
 
-    /// Intersect this domain with another, returning Empty if no overlap
+    /// Intersect this domain with another, returning Empty if no overlap.
+    /// `domain_intersection` returns `None` exactly when the result is empty.
     pub fn intersect(&self, other: &Domain) -> Domain {
-        domain_intersection(self.clone(), other.clone()).unwrap_or(Domain::Empty)
+        match domain_intersection(self.clone(), other.clone()) {
+            Some(d) => d,
+            None => Domain::Empty,
+        }
     }
 
     /// Check if a value is contained in this domain
@@ -232,6 +236,9 @@ pub fn extract_domains_from_constraint(
     let mut domains = HashMap::new();
 
     for fact_path in all_facts {
+        // None means the fact appears in the constraint but has no extractable
+        // bound (e.g. only used in equality with another fact). Treating it as
+        // Unconstrained is correct: the solver will enumerate values.
         let domain =
             extract_domain_for_fact(constraint, &fact_path)?.unwrap_or(Domain::Unconstrained);
         domains.insert(fact_path, domain);

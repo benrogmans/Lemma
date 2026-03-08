@@ -4,7 +4,7 @@
  * Build script for Lemma WASM package
  */
 
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync, copyFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
@@ -77,6 +77,11 @@ function parseCargoMetadata() {
  */
 export function build() {
   console.log('Building WASM package (engine + LSP)...');
+
+  // wasm-pack looks for LICENSE in the crate directory; copy from workspace root
+  const licenseSrc = join(WORKSPACE_ROOT, 'LICENSE');
+  const licenseDest = join(LSP_ROOT, 'LICENSE');
+  copyFileSync(licenseSrc, licenseDest);
 
   // Build the lsp crate for wasm32; it includes the engine and re-exports WasmEngine (playground uses only that).
   // Output to engine/pkg so the playground can load lemma.js from ../pkg/

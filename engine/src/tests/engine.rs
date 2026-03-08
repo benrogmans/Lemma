@@ -5,14 +5,10 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-/// Helper to call the async `add_lemma_files` from synchronous test code.
-/// Returns the raw error list; no collapsing.
 fn add_lemma_code(engine: &mut Engine, code: &str, source: &str) -> Result<(), Vec<Error>> {
     let files: HashMap<String, String> =
         std::iter::once((source.to_string(), code.to_string())).collect();
-    tokio::runtime::Runtime::new()
-        .expect("tokio runtime")
-        .block_on(engine.add_lemma_files(files))
+    engine.add_lemma_files(files)
 }
 
 #[test]

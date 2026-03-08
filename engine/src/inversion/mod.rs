@@ -186,12 +186,11 @@ pub fn invert(
             // Track which arithmetic solutions were successfully solved
             let indices: std::collections::HashSet<usize> = algebraic_solutions
                 .iter()
-                .map(|(ws, _, _)| {
+                .filter_map(|(ws, _, _)| {
                     enumeration_result
                         .arithmetic_solutions
                         .iter()
                         .position(|orig| orig.world == ws.world)
-                        .unwrap_or(usize::MAX)
                 })
                 .collect();
 
@@ -430,9 +429,7 @@ mod tests {
     ) -> Result<(), Vec<crate::Error>> {
         let files: std::collections::HashMap<String, String> =
             std::iter::once((source.to_string(), code.to_string())).collect();
-        tokio::runtime::Runtime::new()
-            .expect("tokio runtime")
-            .block_on(engine.add_lemma_files(files))
+        engine.add_lemma_files(files)
     }
 
     #[test]

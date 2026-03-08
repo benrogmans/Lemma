@@ -336,20 +336,17 @@ mod imp {
 
             let files: std::collections::HashMap<String, String> =
                 std::iter::once((source_id.clone(), code.to_string())).collect();
-            tokio::runtime::Runtime::new()
-                .map_err(|e| McpError::internal_error(e.to_string()))?
-                .block_on(self.engine.add_lemma_files(files))
-                .map_err(|errs| {
-                    for e in &errs {
-                        error!("{}", e);
-                    }
-                    let msg = errs
-                        .iter()
-                        .map(|e| e.to_string())
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    McpError::internal_error(format!("Failed to parse spec: {}", msg))
-                })?;
+            self.engine.add_lemma_files(files).map_err(|errs| {
+                for e in &errs {
+                    error!("{}", e);
+                }
+                let msg = errs
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                McpError::internal_error(format!("Failed to parse spec: {}", msg))
+            })?;
 
             let new_spec_names: Vec<String> = self
                 .engine
@@ -452,7 +449,15 @@ mod imp {
                     McpError::internal_error(format!("Evaluation failed: {e}"))
                 })?;
 
+            let hash = self.engine.hash_pin(spec_name, &now).map(|h| h.to_string());
+
             let mut output = String::new();
+            output.push_str(&format!("spec: {}\n", spec_name));
+            output.push_str(&format!("effective: {}\n", now));
+            if let Some(ref h) = hash {
+                output.push_str(&format!("hash: {}\n", h));
+            }
+            output.push('\n');
 
             for result in response.results.values() {
                 output.push_str(&format!("{}: ", result.rule.name));

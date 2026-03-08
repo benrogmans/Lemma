@@ -1,5 +1,5 @@
+use crate::parsing::ast::FactValue;
 use crate::parsing::parse;
-use crate::FactValue;
 
 #[test]
 fn test_parse_simple_spec_reference() {
@@ -52,7 +52,7 @@ fact contract.base.rate: 100"#;
     match &result[0].facts[1].value {
         FactValue::Literal(lit) => {
             assert!(
-                matches!(lit, crate::Value::Date(_)),
+                matches!(lit, crate::parsing::ast::Value::Date(_)),
                 "Expected Date literal"
             );
         }
@@ -79,7 +79,7 @@ fact contract.base.rate: 100"#;
         ])
     );
     if let FactValue::Literal(lit) = &result[0].facts[3].value {
-        if let crate::Value::Text(s) = lit {
+        if let crate::parsing::ast::Value::Text(s) = lit {
             assert_eq!(s, "contractor");
         } else {
             panic!("Expected Text literal");
@@ -108,7 +108,7 @@ fact contract.base.rate: 100"#;
         ])
     );
     if let FactValue::Literal(lit) = &result[0].facts[5].value {
-        if let crate::Value::Number(n) = lit {
+        if let crate::parsing::ast::Value::Number(n) = lit {
             assert_eq!(n, &rust_decimal::Decimal::new(100, 0));
         } else {
             panic!("Expected Number literal");

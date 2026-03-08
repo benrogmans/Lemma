@@ -18,7 +18,7 @@ pub use response::{Facts, Response, RuleResult};
 use std::collections::HashMap;
 
 /// Evaluation context for storing intermediate results
-pub struct EvaluationContext {
+pub(crate) struct EvaluationContext {
     fact_values: HashMap<FactPath, LiteralValue>,
     pub(crate) rule_results: HashMap<RulePath, OperationResult>,
     rule_proofs: HashMap<RulePath, crate::evaluation::proof::Proof>,
@@ -47,7 +47,7 @@ impl EvaluationContext {
         }
     }
 
-    pub fn now(&self) -> &LiteralValue {
+    pub(crate) fn now(&self) -> &LiteralValue {
         &self.now
     }
 
@@ -85,13 +85,9 @@ impl EvaluationContext {
 
 /// Evaluates Lemma rules within their spec context
 #[derive(Default)]
-pub struct Evaluator;
+pub(crate) struct Evaluator;
 
 impl Evaluator {
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Evaluate an execution plan.
     ///
     /// Executes rules in pre-computed dependency order with all facts pre-loaded.
@@ -100,7 +96,7 @@ impl Evaluator {
     /// After planning, evaluation is guaranteed to complete. This function never returns
     /// a Error — runtime issues (division by zero, missing facts, user-defined veto)
     /// produce Vetoes, which are valid evaluation outcomes.
-    pub fn evaluate(&self, plan: &ExecutionPlan, now: LiteralValue) -> Response {
+    pub(crate) fn evaluate(&self, plan: &ExecutionPlan, now: LiteralValue) -> Response {
         let mut context = EvaluationContext::new(plan, now);
 
         let mut response = Response {

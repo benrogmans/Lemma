@@ -25,7 +25,8 @@ fn json_value_to_string(value: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
         Value::Bool(b) => b.to_string(),
-        Value::Array(_) | Value::Object(_) => serde_json::to_string(value).unwrap_or_default(),
+        Value::Array(_) | Value::Object(_) => serde_json::to_string(value)
+            .expect("BUG: serde_json::to_string failed on a serde_json::Value"),
         Value::Null => String::new(),
     }
 }
