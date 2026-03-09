@@ -218,7 +218,6 @@ lemma show pricing                        # inspect spec structure (includes has
 lemma list                                # list all specs
 lemma format                               # format .lemma files
 lemma get                                 # fetch registry dependencies
-lemma info                                # show environment info
 ```
 
 ### HTTP Server
