@@ -1885,7 +1885,13 @@ pub struct Fact {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FactData {
     /// Value-holding fact: current value (literal or default); type is on the value.
-    Value { value: LiteralValue, source: Source },
+    /// When `is_default` is true, the value came from a type `-> default` constraint
+    /// rather than an explicit literal in the spec.
+    Value {
+        value: LiteralValue,
+        source: Source,
+        is_default: bool,
+    },
     /// Type-only fact: schema known, value to be supplied (e.g. via with_values).
     TypeDeclaration {
         resolved_type: LemmaType,
@@ -1914,6 +1920,24 @@ impl FactData {
     pub fn value(&self) -> Option<&LiteralValue> {
         match self {
             FactData::Value { value, .. } => Some(value),
+            FactData::TypeDeclaration { .. } | FactData::SpecRef { .. } => None,
+        }
+    }
+
+    /// Returns the literal value only if it was explicitly defined in the spec
+    /// (not from a type `-> default` constraint). Used by schema methods to decide
+    /// which facts need user input.
+    pub fn explicit_value(&self) -> Option<&LiteralValue> {
+        match self {
+            FactData::Value {
+                value, is_default, ..
+            } => {
+                if *is_default {
+                    None
+                } else {
+                    Some(value)
+                }
+            }
             FactData::TypeDeclaration { .. } | FactData::SpecRef { .. } => None,
         }
     }
@@ -2025,7 +2049,7 @@ pub(crate) fn duration_unit_to_semantic(
 /// "percent", "permille").
 pub fn conversion_target_to_semantic(
     ct: &ConversionTarget,
-    unit_index: Option<&HashMap<String, LemmaType>>,
+    unit_index: Option<&HashMap<String, (LemmaType, Option<crate::parsing::ast::TypeDef>)>>,
 ) -> Result<SemanticConversionTarget, String> {
     match ct {
         ConversionTarget::Duration(u) => Ok(SemanticConversionTarget::Duration(
@@ -2035,7 +2059,7 @@ pub fn conversion_target_to_semantic(
             let index = unit_index.ok_or_else(|| {
                 "Unit conversion requires type resolution; unit index not available.".to_string()
             })?;
-            let lemma_type = index.get(name).ok_or_else(|| {
+            let (lemma_type, _) = index.get(name).ok_or_else(|| {
                 format!(
                     "Unknown unit '{}'. Unit must be defined by a scale or ratio type.",
                     name
@@ -2543,5 +2567,84 @@ mod tests {
         let number_spec = TypeSpecification::number();
         let number_type = LemmaType::new("amount".to_string(), number_spec, TypeExtends::Primitive);
         assert_eq!(number_type.scale_family_name(), None);
+    }
+
+    #[test]
+    fn test_explicit_value_returns_none_for_default() {
+        let source = crate::Source::new(
+            "test.lemma",
+            crate::parsing::ast::Span {
+                start: 0,
+                end: 1,
+                line: 1,
+                col: 0,
+            },
+            "test",
+            std::sync::Arc::from("x"),
+        );
+        let fact = FactData::Value {
+            value: LiteralValue::number(Decimal::from(25)),
+            source: source.clone(),
+            is_default: true,
+        };
+        assert!(
+            fact.explicit_value().is_none(),
+            "is_default=true should yield None from explicit_value()"
+        );
+        assert!(
+            fact.value().is_some(),
+            "value() should still return the value regardless of is_default"
+        );
+    }
+
+    #[test]
+    fn test_explicit_value_returns_some_for_non_default() {
+        let source = crate::Source::new(
+            "test.lemma",
+            crate::parsing::ast::Span {
+                start: 0,
+                end: 1,
+                line: 1,
+                col: 0,
+            },
+            "test",
+            std::sync::Arc::from("x"),
+        );
+        let fact = FactData::Value {
+            value: LiteralValue::number(Decimal::from(42)),
+            source,
+            is_default: false,
+        };
+        assert!(
+            fact.explicit_value().is_some(),
+            "is_default=false should yield Some from explicit_value()"
+        );
+        assert_eq!(
+            fact.explicit_value().unwrap().value,
+            ValueKind::Number(Decimal::from(42))
+        );
+    }
+
+    #[test]
+    fn test_explicit_value_returns_none_for_type_declaration() {
+        let source = crate::Source::new(
+            "test.lemma",
+            crate::parsing::ast::Span {
+                start: 0,
+                end: 1,
+                line: 1,
+                col: 0,
+            },
+            "test",
+            std::sync::Arc::from("x"),
+        );
+        let fact = FactData::TypeDeclaration {
+            resolved_type: primitive_number().clone(),
+            source,
+        };
+        assert!(
+            fact.explicit_value().is_none(),
+            "TypeDeclaration should yield None from explicit_value()"
+        );
     }
 }

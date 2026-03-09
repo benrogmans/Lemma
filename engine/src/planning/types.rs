@@ -24,9 +24,11 @@ pub struct ResolvedSpecTypes {
     /// Inline type definitions: fact reference -> fully resolved type
     pub inline_type_definitions: HashMap<Reference, LemmaType>,
 
-    /// Unit index: unit_name -> type that defines it
-    /// Built during resolution - if unit appears in multiple types, resolution fails
-    pub unit_index: HashMap<String, LemmaType>,
+    /// Unit index: unit_name -> (resolved type, defining AST node if user-defined)
+    /// Built during resolution - if unit appears in multiple types, resolution fails.
+    /// TypeDef is kept for conflict detection (identity, extends-check, source location).
+    /// Primitives (percent, permille) have no TypeDef.
+    pub unit_index: HashMap<String, (LemmaType, Option<TypeDef>)>,
 }
 
 /// Registry for managing and resolving custom types
@@ -214,27 +216,29 @@ impl TypeResolver {
             }
         }
 
-        for (fact_ref, resolved_type) in &existing.inline_type_definitions {
-            let inline_type_name = format!("{}::{}", spec.name, fact_ref);
-            let e: Result<(), Error> = if resolved_type.is_scale() {
-                self.add_scale_units_to_index(
-                    &mut existing.unit_index,
-                    resolved_type,
-                    spec,
-                    &inline_type_name,
-                )
-            } else if resolved_type.is_ratio() {
-                self.add_ratio_units_to_index(
-                    &mut existing.unit_index,
-                    resolved_type,
-                    spec,
-                    &inline_type_name,
-                )
-            } else {
-                Ok(())
-            };
-            if let Err(e) = e {
-                errors.push(e);
+        if let Some(spec_inline_defs) = self.inline_type_definitions.get(spec) {
+            for (fact_ref, type_def) in spec_inline_defs {
+                let Some(resolved_type) = existing.inline_type_definitions.get(fact_ref) else {
+                    continue;
+                };
+                let e: Result<(), Error> = if resolved_type.is_scale() {
+                    Self::add_scale_units_to_index(
+                        &mut existing.unit_index,
+                        resolved_type,
+                        type_def,
+                    )
+                } else if resolved_type.is_ratio() {
+                    Self::add_ratio_units_to_index(
+                        &mut existing.unit_index,
+                        resolved_type,
+                        type_def,
+                    )
+                } else {
+                    Ok(())
+                };
+                if let Err(e) = e {
+                    errors.push(e);
+                }
             }
         }
 
@@ -292,26 +296,24 @@ impl TypeResolver {
             }
         }
 
-        // Build unit index from types that have units (primitive types first, then spec types)
-        let mut unit_index: HashMap<String, LemmaType> = HashMap::new();
+        let mut unit_index: HashMap<String, (LemmaType, Option<TypeDef>)> = HashMap::new();
         let mut errors = Vec::new();
 
-        if let Err(error) = self.add_ratio_units_to_index(
-            &mut unit_index,
-            semantics::primitive_ratio(),
-            spec,
-            "ratio",
-        ) {
-            errors.push(error);
+        let prim_ratio = semantics::primitive_ratio();
+        for unit in Self::extract_units_from_type(&prim_ratio.specifications) {
+            unit_index.insert(unit, (prim_ratio.clone(), None));
         }
 
-        // Add units from named types (collect all errors)
-        for resolved_type in named_types.values() {
-            let type_name = resolved_type.name.as_deref().unwrap_or("inline");
+        for (type_name, resolved_type) in &named_types {
+            let type_def = self
+                .named_types
+                .get(spec)
+                .and_then(|defs| defs.get(type_name.as_str()))
+                .expect("BUG: named type was resolved but not in registry");
             let e: Result<(), Error> = if resolved_type.is_scale() {
-                self.add_scale_units_to_index(&mut unit_index, resolved_type, spec, type_name)
+                Self::add_scale_units_to_index(&mut unit_index, resolved_type, type_def)
             } else if resolved_type.is_ratio() {
-                self.add_ratio_units_to_index(&mut unit_index, resolved_type, spec, type_name)
+                Self::add_ratio_units_to_index(&mut unit_index, resolved_type, type_def)
             } else {
                 Ok(())
             };
@@ -320,23 +322,16 @@ impl TypeResolver {
             }
         }
 
-        // Add units from inline type definitions (collect all errors)
         for (fact_ref, resolved_type) in &inline_type_definitions {
-            let inline_type_name = format!("{}::{}", spec.name, fact_ref);
+            let type_def = self
+                .inline_type_definitions
+                .get(spec)
+                .and_then(|defs| defs.get(fact_ref))
+                .expect("BUG: inline type was resolved but not in registry");
             let e: Result<(), Error> = if resolved_type.is_scale() {
-                self.add_scale_units_to_index(
-                    &mut unit_index,
-                    resolved_type,
-                    spec,
-                    &inline_type_name,
-                )
+                Self::add_scale_units_to_index(&mut unit_index, resolved_type, type_def)
             } else if resolved_type.is_ratio() {
-                self.add_ratio_units_to_index(
-                    &mut unit_index,
-                    resolved_type,
-                    spec,
-                    &inline_type_name,
-                )
+                Self::add_ratio_units_to_index(&mut unit_index, resolved_type, type_def)
             } else {
                 Ok(())
             };
@@ -647,121 +642,103 @@ impl TypeResolver {
     }
 
     fn add_scale_units_to_index(
-        &self,
-        unit_index: &mut HashMap<String, LemmaType>,
+        unit_index: &mut HashMap<String, (LemmaType, Option<TypeDef>)>,
         resolved_type: &LemmaType,
-        spec: &Arc<LemmaSpec>,
-        type_name: &str,
+        defined_by: &TypeDef,
     ) -> Result<(), Error> {
-        let units = self.extract_units_from_specs(&resolved_type.specifications);
+        let units = Self::extract_units_from_type(&resolved_type.specifications);
         for unit in units {
-            if let Some(existing_type) = unit_index.get(&unit) {
-                let existing_name = existing_type.name.as_deref().unwrap_or("inline");
-                let same_type = existing_type.name.as_deref() == resolved_type.name.as_deref();
+            if let Some((existing_type, existing_def)) = unit_index.get(&unit) {
+                let same_type = existing_def.as_ref() == Some(defined_by);
 
                 if same_type {
-                    let source = self
-                        .named_types
-                        .get(spec)
-                        .and_then(|defs| defs.get(type_name))
-                        .map(|def| def.source_location().clone())
-                        .expect("BUG: named type definition must have source location");
-
                     return Err(Error::validation(
                         format!(
                             "Unit '{}' is defined more than once in type '{}'",
-                            unit, type_name
+                            unit,
+                            defined_by.name()
                         ),
-                        Some(source.clone()),
+                        Some(defined_by.source_location().clone()),
                         None::<String>,
                     ));
                 }
 
+                let existing_name: String = existing_def
+                    .as_ref()
+                    .map(|d| d.name().to_owned())
+                    .unwrap_or_else(|| existing_type.name());
                 let current_extends_existing = resolved_type
                     .extends
                     .parent_name()
-                    .map(|p| existing_name == p)
+                    .map(|p| p == existing_name.as_str())
                     .unwrap_or(false);
                 let existing_extends_current = existing_type
                     .extends
                     .parent_name()
-                    .map(|p| p == resolved_type.name.as_deref().unwrap_or(""))
+                    .map(|p| p == defined_by.name())
                     .unwrap_or(false);
 
                 if existing_type.is_scale()
                     && (current_extends_existing || existing_extends_current)
                 {
                     if current_extends_existing {
-                        unit_index.insert(unit, resolved_type.clone());
+                        unit_index.insert(unit, (resolved_type.clone(), Some(defined_by.clone())));
                     }
                     continue;
                 }
 
-                // Siblings in the same scale family (e.g. both extend "money")
-                // inherit the same unit — not ambiguous.
                 if existing_type.same_scale_family(resolved_type) {
                     continue;
                 }
 
-                let source = self
-                    .named_types
-                    .get(spec)
-                    .and_then(|defs| defs.get(type_name))
-                    .map(|def| def.source_location().clone())
-                    .expect("BUG: named type definition must have source location");
-
                 return Err(Error::validation(
                     format!(
-                        "Ambiguous unit '{}' in spec '{}'. Defined in multiple types: {} and {}",
-                        unit, spec.name, existing_name, type_name
+                        "Ambiguous unit '{}'. Defined in multiple types: '{}' and '{}'",
+                        unit,
+                        existing_name,
+                        defined_by.name()
                     ),
-                    Some(source.clone()),
+                    Some(defined_by.source_location().clone()),
                     None::<String>,
                 ));
             }
-            unit_index.insert(unit, resolved_type.clone());
+            unit_index.insert(unit, (resolved_type.clone(), Some(defined_by.clone())));
         }
         Ok(())
     }
 
     fn add_ratio_units_to_index(
-        &self,
-        unit_index: &mut HashMap<String, LemmaType>,
+        unit_index: &mut HashMap<String, (LemmaType, Option<TypeDef>)>,
         resolved_type: &LemmaType,
-        spec: &Arc<LemmaSpec>,
-        type_name: &str,
+        defined_by: &TypeDef,
     ) -> Result<(), Error> {
-        let units = self.extract_units_from_specs(&resolved_type.specifications);
+        let units = Self::extract_units_from_type(&resolved_type.specifications);
         for unit in units {
-            if let Some(existing_type) = unit_index.get(&unit) {
+            if let Some((existing_type, existing_def)) = unit_index.get(&unit) {
                 if existing_type.is_ratio() {
                     continue;
                 }
-                let existing_name = existing_type.name.as_deref().unwrap_or("inline");
-                let source = self
-                    .named_types
-                    .get(spec)
-                    .and_then(|defs| defs.get(type_name))
-                    .map(|def| def.source_location().clone())
-                    .expect("BUG: named type definition must have source location");
-
+                let existing_name: String = existing_def
+                    .as_ref()
+                    .map(|d| d.name().to_owned())
+                    .unwrap_or_else(|| existing_type.name());
                 return Err(Error::validation(
                     format!(
-                        "Ambiguous unit '{}' in spec '{}'. Defined in multiple types: {} and {}",
-                        unit, spec.name, existing_name, type_name
+                        "Ambiguous unit '{}'. Defined in multiple types: '{}' and '{}'",
+                        unit,
+                        existing_name,
+                        defined_by.name()
                     ),
-                    Some(source.clone()),
+                    Some(defined_by.source_location().clone()),
                     None::<String>,
                 ));
             }
-            unit_index.insert(unit, resolved_type.clone());
+            unit_index.insert(unit, (resolved_type.clone(), Some(defined_by.clone())));
         }
         Ok(())
     }
 
-    /// Extract all unit names from a TypeSpecification
-    /// Only Scale types can have units (Number types are dimensionless)
-    fn extract_units_from_specs(&self, specs: &TypeSpecification) -> Vec<String> {
+    fn extract_units_from_type(specs: &TypeSpecification) -> Vec<String> {
         match specs {
             TypeSpecification::Scale { units, .. } => {
                 units.iter().map(|unit| unit.name.clone()).collect()
@@ -1179,8 +1156,8 @@ type money2: money -> unit usd 1.24"#;
             resolved.unit_index.contains_key("usd"),
             "usd should be in unit_index"
         );
-        let eur_type = resolved.unit_index.get("eur").unwrap();
-        let usd_type = resolved.unit_index.get("usd").unwrap();
+        let (eur_type, _) = resolved.unit_index.get("eur").unwrap();
+        let (usd_type, _) = resolved.unit_index.get("usd").unwrap();
         assert_eq!(
             eur_type.name.as_deref(),
             Some("money2"),
@@ -1454,5 +1431,38 @@ type money: scale
             "Error should mention duplicate unit issue. Got: {}",
             error_msg
         );
+    }
+
+    #[test]
+    fn repro_named_type_source_location_panic() {
+        use crate::parsing::ast::CommandArg;
+        let code = r#"spec nettoloon
+type geld: scale
+  -> decimals 2
+  -> unit eur 1.00
+  -> minimum 0 eur
+fact bruto_salaris: 0 eur"#;
+        let specs = parse(code, "nettoloon.lemma", &ResourceLimits::default()).unwrap();
+        let spec_arc = Arc::new(specs[0].clone());
+        let mut registry = test_registry();
+        for td in &spec_arc.types {
+            registry.register_type(&spec_arc, td.clone()).unwrap();
+        }
+        let fact_ref = Reference::local("bruto_salaris".to_string());
+        let inline_def = TypeDef::Inline {
+            source_location: spec_arc.types[0].source_location().clone(),
+            parent: "scale".to_string(),
+            constraints: Some(vec![(
+                "unit".to_string(),
+                vec![
+                    CommandArg::Label("eur".to_string()),
+                    CommandArg::Number("1.00".to_string()),
+                ],
+            )]),
+            fact_ref: fact_ref.clone(),
+            from: None,
+        };
+        registry.register_type(&spec_arc, inline_def).unwrap();
+        let _ = registry.resolve_types(&spec_arc);
     }
 }

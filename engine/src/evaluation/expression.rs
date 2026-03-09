@@ -664,11 +664,9 @@ fn evaluate_single_expression(
             );
             let left_bool = match &left_val.value {
                 ValueKind::Boolean(b) => b,
-                _ => {
-                    return OperationResult::Veto(Some(
-                        "Logical AND requires boolean operands".to_string(),
-                    ));
-                }
+                _ => unreachable!(
+                    "BUG: logical AND with non-boolean operand; planning should have rejected this"
+                ),
             };
 
             if !*left_bool {
@@ -697,9 +695,9 @@ fn evaluate_single_expression(
                     context.set_proof_node(current, operand_proof);
                     OperationResult::Value(Box::new(LiteralValue::from_bool(result_bool)))
                 }
-                _ => {
-                    OperationResult::Veto(Some("Logical NOT requires boolean operand".to_string()))
-                }
+                _ => unreachable!(
+                    "BUG: logical NOT with non-boolean operand; planning should have rejected this"
+                ),
             }
         }
 
@@ -771,11 +769,9 @@ fn evaluate_single_expression(
 
             let date_semantic = match &date_val.value {
                 ValueKind::Date(dt) => dt,
-                _ => {
-                    return OperationResult::Veto(Some(
-                        "Date sugar 'in past/future' requires a date value".to_string(),
-                    ))
-                }
+                _ => unreachable!(
+                    "BUG: date sugar with non-date operand; planning should have rejected this"
+                ),
             };
 
             let now_val = context.now();
@@ -803,11 +799,9 @@ fn evaluate_single_expression(
                     );
                     match &tol_val.value {
                         ValueKind::Duration(amount, unit) => Some((*amount, unit.clone())),
-                        _ => {
-                            return OperationResult::Veto(Some(
-                                "Tolerance in date sugar must be a duration value".to_string(),
-                            ))
-                        }
+                        _ => unreachable!(
+                            "BUG: date sugar tolerance with non-duration; planning should have rejected this"
+                        ),
                     }
                 }
                 None => None,
@@ -845,11 +839,9 @@ fn evaluate_single_expression(
 
             let date_semantic = match &date_val.value {
                 ValueKind::Date(dt) => dt,
-                _ => {
-                    return OperationResult::Veto(Some(
-                        "Calendar sugar requires a date value".to_string(),
-                    ))
-                }
+                _ => unreachable!(
+                    "BUG: calendar sugar with non-date operand; planning should have rejected this"
+                ),
             };
 
             let now_val = context.now();
@@ -944,8 +936,8 @@ fn evaluate_mathematical_operator(
             });
             OperationResult::Value(Box::new(result_value))
         }
-        _ => OperationResult::Veto(Some(
-            "Mathematical operators require number operands".to_string(),
-        )),
+        _ => unreachable!(
+            "BUG: mathematical operator with non-number operand; planning should have rejected this"
+        ),
     }
 }

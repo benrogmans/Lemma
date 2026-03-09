@@ -2,7 +2,7 @@
 
 use crate::evaluation::OperationResult;
 use crate::planning::semantics::{
-    primitive_number, ArithmeticComputation, LiteralValue, ValueKind,
+    primitive_number, ArithmeticComputation, LiteralValue, SemanticConversionTarget, ValueKind,
 };
 use rust_decimal::Decimal;
 
@@ -52,10 +52,10 @@ pub fn arithmetic_operation(
                         left.lemma_type.clone(),
                     )))
                 }
-                _ => OperationResult::Veto(Some(format!(
-                    "Operation {:?} not supported for durations",
+                _ => unreachable!(
+                    "BUG: duration arithmetic with op {:?}; planning should have rejected this",
                     op
-                ))),
+                ),
             }
         }
 
@@ -202,21 +202,32 @@ pub fn arithmetic_operation(
         }
         // Scale operations with Scale
         (ValueKind::Scale(l_val, l_unit), ValueKind::Scale(r_val, r_unit)) => {
-            // Units must match for addition/subtraction
-            if l_unit != r_unit
-                && (matches!(
-                    op,
-                    ArithmeticComputation::Add | ArithmeticComputation::Subtract
-                ))
-            {
-                return OperationResult::Veto(Some(format!(
-                    "Cannot apply '{}' to values with different units: {:?} and {:?}",
-                    op, l_unit, r_unit
-                )));
-            }
+            // For add/subtract with different units: convert right to left's unit (same scale family).
+            // Planning rejects cross-family scale ops; this should never reach different families.
+            let (l_val, r_val) = if l_unit.eq_ignore_ascii_case(r_unit) {
+                (*l_val, *r_val)
+            } else {
+                if !left.lemma_type.same_scale_family(&right.lemma_type) {
+                    unreachable!(
+                        "BUG: scale add/subtract with different families ({} vs {}); this should be rejected during planning",
+                        left.lemma_type.name(),
+                        right.lemma_type.name()
+                    );
+                }
+                let target = SemanticConversionTarget::ScaleUnit(l_unit.clone());
+                match super::units::convert_unit(right, &target) {
+                    OperationResult::Value(converted) => match converted.as_ref().value {
+                        ValueKind::Scale(r_conv, _) => (*l_val, r_conv),
+                        _ => unreachable!("BUG: scale unit conversion returned non-scale value"),
+                    },
+                    OperationResult::Veto(msg) => {
+                        unreachable!("BUG: scale unit conversion vetoed unexpectedly: {:?}", msg)
+                    }
+                }
+            };
             // Preserve unit from left
             let preserved_unit = l_unit.clone();
-            match number_arithmetic(*l_val, op, *r_val) {
+            match number_arithmetic(l_val, op, r_val) {
                 Ok(result) => OperationResult::Value(Box::new(LiteralValue::scale_with_type(
                     result,
                     preserved_unit,
@@ -261,12 +272,10 @@ pub fn arithmetic_operation(
                     let result = match op {
                         ArithmeticComputation::Add => *scale_val + ratio_amount,
                         ArithmeticComputation::Subtract => *scale_val - ratio_amount,
-                        _ => {
-                            return OperationResult::Veto(Some(format!(
-                                "Operation '{}' not supported for ratio and scale",
-                                op
-                            )))
-                        }
+                        _ => unreachable!(
+                            "BUG: ratio+scale op {:?}; planning should have rejected this",
+                            op
+                        ),
                     };
                     OperationResult::Value(Box::new(LiteralValue::scale_with_type(
                         result,
@@ -274,10 +283,10 @@ pub fn arithmetic_operation(
                         right.lemma_type.clone(),
                     )))
                 }
-                _ => OperationResult::Veto(Some(format!(
-                    "Operation {:?} not supported for ratio and scale",
+                _ => unreachable!(
+                    "BUG: ratio+scale op {:?}; planning should have rejected this",
                     op
-                ))),
+                ),
             }
         }
         // Scale op Ratio → Scale (inherits Scale type and unit)
@@ -316,12 +325,10 @@ pub fn arithmetic_operation(
                     let result = match op {
                         ArithmeticComputation::Add => *scale_val + ratio_amount,
                         ArithmeticComputation::Subtract => *scale_val - ratio_amount,
-                        _ => {
-                            return OperationResult::Veto(Some(format!(
-                                "Operation '{}' not supported for scale and ratio",
-                                op
-                            )))
-                        }
+                        _ => unreachable!(
+                            "BUG: scale+ratio op {:?}; planning should have rejected this",
+                            op
+                        ),
                     };
                     OperationResult::Value(Box::new(LiteralValue::scale_with_type(
                         result,
@@ -329,10 +336,10 @@ pub fn arithmetic_operation(
                         left.lemma_type.clone(),
                     )))
                 }
-                _ => OperationResult::Veto(Some(format!(
-                    "Operation {:?} not supported for scale and ratio",
+                _ => unreachable!(
+                    "BUG: scale+ratio op {:?}; planning should have rejected this",
                     op
-                ))),
+                ),
             }
         }
 
@@ -379,12 +386,12 @@ pub fn arithmetic_operation(
                 Err(msg) => OperationResult::Veto(Some(msg)),
             }
         }
-        _ => OperationResult::Veto(Some(format!(
-            "Arithmetic operation {:?} not supported for types {:?} and {:?}",
+        _ => unreachable!(
+            "BUG: arithmetic {:?} for {:?} and {:?}; planning should have rejected this",
             op,
             type_name(left),
             type_name(right)
-        ))),
+        ),
     }
 }
 

@@ -333,6 +333,30 @@ rule result: time1 and time2
 }
 
 #[test]
+fn test_mathematical_function_requires_number_operand() {
+    let code = r#"
+spec test
+type money: scale -> unit eur 1.00
+fact price: 100 eur
+rule bad: sqrt price
+"#;
+
+    let mut engine = Engine::new();
+    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    assert!(
+        result.is_err(),
+        "sqrt(scale) should be rejected at planning"
+    );
+    let errs = result.unwrap_err();
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("number") || e.to_string().contains("Mathematical")),
+        "Error should mention number operand: {:?}",
+        errs
+    );
+}
+
+#[test]
 fn test_mixed_time_and_number_not_allowed() {
     let code = r#"
 spec test

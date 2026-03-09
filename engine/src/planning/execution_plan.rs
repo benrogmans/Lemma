@@ -355,27 +355,34 @@ impl ExecutionPlan {
     /// All facts with a typed schema (local and cross-spec) are included.
     /// Spec-reference facts (which have no schema type) are excluded.
     /// Only local rules (no cross-spec segments) are included.
-    /// Results are sorted alphabetically by name for deterministic output.
+    /// Facts and rules are sorted by source position (definition order).
     pub fn schema(&self) -> SpecSchema {
-        let mut fact_entries: Vec<(String, (LemmaType, Option<LiteralValue>))> = self
+        let mut fact_entries: Vec<(usize, String, (LemmaType, Option<LiteralValue>))> = self
             .facts
             .iter()
             .filter(|(_, data)| data.schema_type().is_some())
             .map(|(path, data)| {
                 let lemma_type = data.schema_type().unwrap().clone();
-                let default = data.value().cloned();
-                (path.input_key(), (lemma_type, default))
+                let value = data.explicit_value().cloned();
+                (
+                    data.source().span.start,
+                    path.input_key(),
+                    (lemma_type, value),
+                )
             })
             .collect();
-        fact_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        fact_entries.sort_by_key(|(pos, _, _)| *pos);
+        let fact_entries: Vec<(String, (LemmaType, Option<LiteralValue>))> = fact_entries
+            .into_iter()
+            .map(|(_, name, data)| (name, data))
+            .collect();
 
-        let mut rule_entries: Vec<(String, LemmaType)> = self
+        let rule_entries: Vec<(String, LemmaType)> = self
             .rules
             .iter()
             .filter(|r| r.path.segments.is_empty())
             .map(|r| (r.name.clone(), r.rule_type.clone()))
             .collect();
-        rule_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         SpecSchema {
             spec: self.spec_name.clone(),
@@ -390,6 +397,7 @@ impl ExecutionPlan {
     /// The returned schema contains only the facts **needed** by the given rules
     /// (transitively, via `needs_facts`) and only those rules. This is the
     /// "what do I need to evaluate these rules?" view.
+    /// Facts are sorted by source position (definition order).
     ///
     /// Returns `Err` if any rule name is not found in the plan.
     pub fn schema_for_rules(&self, rule_names: &[String]) -> Result<SpecSchema, Error> {
@@ -410,20 +418,27 @@ impl ExecutionPlan {
             needed_facts.extend(rule.needs_facts.iter().cloned());
             rule_entries.push((rule.name.clone(), rule.rule_type.clone()));
         }
-        rule_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let mut fact_entries: Vec<(String, (LemmaType, Option<LiteralValue>))> = self
+        let mut fact_entries: Vec<(usize, String, (LemmaType, Option<LiteralValue>))> = self
             .facts
             .iter()
             .filter(|(path, _)| needed_facts.contains(path))
             .filter(|(_, data)| data.schema_type().is_some())
             .map(|(path, data)| {
                 let lemma_type = data.schema_type().unwrap().clone();
-                let default = data.value().cloned();
-                (path.input_key(), (lemma_type, default))
+                let value = data.explicit_value().cloned();
+                (
+                    data.source().span.start,
+                    path.input_key(),
+                    (lemma_type, value),
+                )
             })
             .collect();
-        fact_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        fact_entries.sort_by_key(|(pos, _, _)| *pos);
+        let fact_entries: Vec<(String, (LemmaType, Option<LiteralValue>))> = fact_entries
+            .into_iter()
+            .map(|(_, name, data)| (name, data))
+            .collect();
 
         Ok(SpecSchema {
             spec: self.spec_name.clone(),
@@ -559,6 +574,7 @@ impl ExecutionPlan {
                 FactData::Value {
                     value: literal_value,
                     source: fact_source,
+                    is_default: false,
                 },
             );
         }
@@ -898,6 +914,7 @@ mod tests {
                     max10.clone(),
                 ),
                 source: source.clone(),
+                is_default: false,
             },
         );
 
@@ -955,6 +972,7 @@ mod tests {
                     tier.clone(),
                 ),
                 source,
+                is_default: false,
             },
         );
 
@@ -1020,6 +1038,7 @@ mod tests {
                     money.clone(),
                 ),
                 source,
+                is_default: false,
             },
         );
 
@@ -1054,6 +1073,7 @@ mod tests {
             crate::planning::semantics::FactData::Value {
                 value: create_number_literal(0.into()),
                 source: test_source(),
+                is_default: false,
             },
         );
         let plan = ExecutionPlan {
@@ -1090,6 +1110,7 @@ mod tests {
             crate::planning::semantics::FactData::Value {
                 value: create_number_literal(0.into()),
                 source: test_source(),
+                is_default: false,
             },
         );
         let mut plan = ExecutionPlan {
@@ -1156,6 +1177,7 @@ mod tests {
             crate::planning::semantics::FactData::Value {
                 value: create_number_literal(0.into()),
                 source: test_source(),
+                is_default: false,
             },
         );
         let plan = ExecutionPlan {
@@ -1190,6 +1212,7 @@ mod tests {
             crate::planning::semantics::FactData::Value {
                 value: create_text_literal("Alice".to_string()),
                 source: test_source(),
+                is_default: false,
             },
         );
         facts.insert(
@@ -1197,6 +1220,7 @@ mod tests {
             crate::planning::semantics::FactData::Value {
                 value: create_number_literal(30.into()),
                 source: test_source(),
+                is_default: false,
             },
         );
         facts.insert(
@@ -1204,6 +1228,7 @@ mod tests {
             crate::planning::semantics::FactData::Value {
                 value: create_boolean_literal(true),
                 source: test_source(),
+                is_default: false,
             },
         );
 
@@ -1247,6 +1272,7 @@ mod tests {
             crate::planning::semantics::FactData::Value {
                 value: create_number_literal(0.into()),
                 source: test_source(),
+                is_default: false,
             },
         );
         let mut plan = ExecutionPlan {
@@ -1346,6 +1372,7 @@ mod tests {
             crate::planning::semantics::FactData::Value {
                 value: create_number_literal(0.into()),
                 source: test_source(),
+                is_default: false,
             },
         );
         let mut plan = ExecutionPlan {
@@ -1415,6 +1442,7 @@ mod tests {
             crate::planning::semantics::FactData::Value {
                 value: create_number_literal(0.into()),
                 source: test_source(),
+                is_default: false,
             },
         );
         let mut plan = ExecutionPlan {

@@ -114,3 +114,129 @@ fn test_scale_type_default_after_unit_declarations() {
         "price fact should exist"
     );
 }
+
+#[test]
+fn test_schema_returns_facts_in_definition_order() {
+    let mut engine = Engine::new();
+
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
+        spec ordering
+        fact zebra: [number]
+        fact alpha: [number]
+        fact middle: [number]
+        rule total: zebra + alpha + middle
+    "#,
+        "ordering.lemma",
+    )
+    .unwrap();
+    let now = DateTimeValue::now();
+
+    let plan = engine.get_execution_plan("ordering", None, &now).unwrap();
+    let schema = plan.schema();
+    let fact_names: Vec<&String> = schema.facts.keys().collect();
+    assert_eq!(
+        fact_names,
+        vec!["zebra", "alpha", "middle"],
+        "Facts should be in definition order, not alphabetical"
+    );
+}
+
+#[test]
+fn test_schema_for_rules_returns_facts_in_definition_order() {
+    let mut engine = Engine::new();
+
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
+        spec ordering
+        fact zebra: [number]
+        fact alpha: [number]
+        fact middle: [number]
+        rule total: zebra + alpha + middle
+    "#,
+        "ordering.lemma",
+    )
+    .unwrap();
+    let now = DateTimeValue::now();
+
+    let plan = engine.get_execution_plan("ordering", None, &now).unwrap();
+    let schema = plan.schema_for_rules(&["total".to_string()]).unwrap();
+    let fact_names: Vec<&String> = schema.facts.keys().collect();
+    assert_eq!(
+        fact_names,
+        vec!["zebra", "alpha", "middle"],
+        "schema_for_rules should also preserve definition order"
+    );
+}
+
+#[test]
+fn test_schema_reports_none_for_default_valued_facts() {
+    let mut engine = Engine::new();
+
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
+        spec defaults
+        fact quantity: [number -> default 10]
+        fact name: [text]
+        fact price: 99
+        rule total: quantity * price
+    "#,
+        "defaults.lemma",
+    )
+    .unwrap();
+    let now = DateTimeValue::now();
+
+    let plan = engine.get_execution_plan("defaults", None, &now).unwrap();
+    let schema = plan.schema();
+
+    let (_, quantity_val) = schema.facts.get("quantity").expect("quantity should exist");
+    assert!(
+        quantity_val.is_none(),
+        "Default-valued fact 'quantity' should have None in schema (needs user input)"
+    );
+
+    let (_, name_val) = schema.facts.get("name").expect("name should exist");
+    assert!(
+        name_val.is_none(),
+        "Type-only fact 'name' should have None in schema"
+    );
+
+    let (_, price_val) = schema.facts.get("price").expect("price should exist");
+    assert!(
+        price_val.is_some(),
+        "Explicit-valued fact 'price' should have Some in schema (skip in interactive)"
+    );
+}
+
+#[test]
+fn test_schema_scale_default_reports_none() {
+    let mut engine = Engine::new();
+
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"
+        spec salary
+        type money: scale
+          -> unit eur 1
+          -> unit usd 1.19
+          -> default 3000 eur
+        fact salary: [money]
+        rule doubled: salary * 2
+    "#,
+        "salary.lemma",
+    )
+    .unwrap();
+    let now = DateTimeValue::now();
+
+    let plan = engine.get_execution_plan("salary", None, &now).unwrap();
+    let schema = plan.schema();
+
+    let (_, salary_val) = schema.facts.get("salary").expect("salary should exist");
+    assert!(
+        salary_val.is_none(),
+        "Scale fact with type default should have None in schema"
+    );
+}

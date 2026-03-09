@@ -1454,14 +1454,48 @@ pub fn quote_lemma_text(s: &str) -> String {
 }
 
 /// Format a Decimal for Lemma source: normalize, remove trailing zeros,
-/// and strip the fractional part when it is zero (e.g. `100.00` → `"100"`).
+/// strip the fractional part when it is zero (e.g. `100.00` → `"100"`),
+/// and insert underscore separators in the integer part when it has 4+
+/// digits (e.g. `30000000.50` → `"30_000_000.50"`).
 fn format_decimal_source(n: &Decimal) -> String {
     let norm = n.normalize();
-    if norm.fract().is_zero() {
+    let raw = if norm.fract().is_zero() {
         norm.trunc().to_string()
     } else {
         norm.to_string()
+    };
+    group_digits(&raw)
+}
+
+/// Insert `_` every 3 digits in the integer part of a numeric string.
+/// Handles optional leading `-`/`+` sign and optional fractional part.
+/// Only groups when the integer part has 4 or more digits.
+fn group_digits(s: &str) -> String {
+    let (sign, rest) = if s.starts_with('-') || s.starts_with('+') {
+        (&s[..1], &s[1..])
+    } else {
+        ("", s)
+    };
+
+    let (int_part, frac_part) = match rest.find('.') {
+        Some(pos) => (&rest[..pos], &rest[pos..]),
+        None => (rest, ""),
+    };
+
+    if int_part.len() < 4 {
+        return s.to_string();
     }
+
+    let mut grouped = String::with_capacity(int_part.len() + int_part.len() / 3);
+    for (i, ch) in int_part.chars().enumerate() {
+        let digits_remaining = int_part.len() - i;
+        if i > 0 && digits_remaining % 3 == 0 {
+            grouped.push('_');
+        }
+        grouped.push(ch);
+    }
+
+    format!("{}{}{}", sign, grouped, frac_part)
 }
 
 // -- Display for AsLemmaSource<CommandArg> ------------------------------------
@@ -1470,7 +1504,11 @@ impl<'a> fmt::Display for AsLemmaSource<'a, CommandArg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
             CommandArg::Text(s) => write!(f, "{}", quote_lemma_text(s)),
-            CommandArg::Number(s) | CommandArg::Boolean(s) | CommandArg::Label(s) => {
+            CommandArg::Number(s) => {
+                let clean: String = s.chars().filter(|c| *c != '_' && *c != ',').collect();
+                write!(f, "{}", group_digits(&clean))
+            }
+            CommandArg::Boolean(s) | CommandArg::Label(s) => {
                 write!(f, "{}", s)
             }
         }

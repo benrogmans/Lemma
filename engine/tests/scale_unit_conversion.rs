@@ -197,6 +197,45 @@ rule price_usd: 100 eur in usd
 }
 
 #[test]
+fn scale_add_subtract_converts_units_when_same_family() {
+    // Scale add/subtract with different units (same scale family) must convert, not Veto.
+    // Regression: previously returned Veto "Cannot apply '-' to values with different units".
+    let code = r#"
+spec t
+type money: scale -> unit eur 1.00 -> unit usd 1.19
+fact gross: 7600 usd
+fact pension: 0 eur
+rule taxable: gross - pension
+"#;
+
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+
+    let now = DateTimeValue::now();
+    let response = engine
+        .evaluate("t", None, &now, vec![], HashMap::new())
+        .unwrap();
+
+    let rule_result = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "taxable")
+        .unwrap();
+
+    match &rule_result.result {
+        OperationResult::Value(lit) => {
+            let (amount, unit) = match &lit.value {
+                ValueKind::Scale(a, u) => (a, u),
+                other => panic!("expected scale, got {other:?}"),
+            };
+            assert_eq!(unit.as_str(), "usd", "result unit follows left operand");
+            assert_eq!(*amount, Decimal::from(7600), "7600 usd - 0 eur = 7600 usd");
+        }
+        OperationResult::Veto(msg) => panic!("expected Value, got Veto: {msg:?}"),
+    }
+}
+
+#[test]
 fn scale_in_operator_rejects_unknown_unit() {
     let code = r#"
 spec pricing

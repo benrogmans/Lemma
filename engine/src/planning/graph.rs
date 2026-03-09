@@ -92,12 +92,14 @@ impl Graph {
             }
         }
 
+        let mut default_paths: HashSet<FactPath> = HashSet::new();
         for (path, schema_type) in &schema {
             if values.contains_key(path) {
                 continue;
             }
             if let Some(default_value) = schema_type.create_default_value() {
                 values.insert(path.clone(), default_value);
+                default_paths.insert(path.clone());
             }
         }
 
@@ -125,7 +127,15 @@ impl Graph {
                     },
                 );
             } else if let Some(value) = values.remove(path) {
-                facts.insert(path.clone(), FactData::Value { value, source });
+                let is_default = default_paths.contains(path);
+                facts.insert(
+                    path.clone(),
+                    FactData::Value {
+                        value,
+                        source,
+                        is_default,
+                    },
+                );
             } else {
                 let resolved_type = schema
                     .get(path)
@@ -910,7 +920,7 @@ impl<'a> GraphBuilder<'a> {
                         .local_types
                         .get(current_spec_arc)
                         .and_then(|dt| dt.unit_index.get(unit))
-                        .cloned()
+                        .map(|(lt, _)| lt.clone())
                         .unwrap_or_else(|| primitive_scale().clone()),
                     Value::Boolean(_) => primitive_boolean().clone(),
                     Value::Date(_) => primitive_date().clone(),
@@ -928,6 +938,7 @@ impl<'a> GraphBuilder<'a> {
                     FactData::Value {
                         value: literal_value,
                         source: effective_source,
+                        is_default: false,
                     },
                 );
             }
@@ -1622,7 +1633,7 @@ impl<'a> GraphBuilder<'a> {
                     Ok(t) => t,
                     Err(msg) => {
                         let full_msg = unit_index
-                            .map(|idx: &HashMap<String, LemmaType>| {
+                            .map(|idx| {
                                 let valid: Vec<&str> = idx.keys().map(String::as_str).collect();
                                 format!("{} Valid units: {}", msg, valid.join(", "))
                             })
@@ -1698,7 +1709,7 @@ impl<'a> GraphBuilder<'a> {
                         .local_types
                         .get(current_spec_arc)
                         .and_then(|dt| dt.unit_index.get(unit))
-                        .cloned()
+                        .map(|(lt, _)| lt.clone())
                         .unwrap_or_else(|| primitive_scale().clone()),
                     Value::Boolean(_) => primitive_boolean().clone(),
                     Value::Date(_) => primitive_date().clone(),
@@ -1722,7 +1733,7 @@ impl<'a> GraphBuilder<'a> {
             }),
 
             ast::ExpressionKind::UnresolvedUnitLiteral(value, unit) => {
-                if let Some(dt) = self
+                if let Some((lt, _)) = self
                     .local_types
                     .get(current_spec_arc)
                     .and_then(|dt| dt.unit_index.get(unit))
@@ -1730,7 +1741,7 @@ impl<'a> GraphBuilder<'a> {
                     let semantic_value = ValueKind::Scale(*value, unit.clone());
                     let literal_value = LiteralValue {
                         value: semantic_value,
-                        lemma_type: dt.clone(),
+                        lemma_type: lt.clone(),
                     };
                     Some(Expression {
                         kind: ExpressionKind::Literal(Box::new(literal_value)),
@@ -1944,7 +1955,8 @@ fn infer_expression_type(
                     if source_type.is_number() {
                         let spec_name = &expr_source.spec_name;
                         find_types_by_name(resolved_types, spec_name)
-                            .and_then(|dt| dt.unit_index.get(unit_name).cloned())
+                            .and_then(|dt| dt.unit_index.get(unit_name))
+                            .map(|(lt, _)| lt.clone())
                             .unwrap_or_else(LemmaType::undetermined_type)
                     } else {
                         source_type
@@ -1954,7 +1966,8 @@ fn infer_expression_type(
                     if source_type.is_number() {
                         let spec_name = &expr_source.spec_name;
                         find_types_by_name(resolved_types, spec_name)
-                            .and_then(|dt| dt.unit_index.get(unit_name).cloned())
+                            .and_then(|dt| dt.unit_index.get(unit_name))
+                            .map(|(lt, _)| lt.clone())
                             .unwrap_or_else(LemmaType::undetermined_type)
                     } else {
                         source_type
@@ -2345,13 +2358,13 @@ fn check_unit_conversion_types(
     }
 }
 
-/// Check that the operand of a mathematical function (sqrt, sin, etc.) is numeric.
+/// Check that the operand of a mathematical function (sqrt, sin, etc.) is a number.
 fn check_mathematical_operand(operand_type: &LemmaType, source: &Source) -> Result<(), Vec<Error>> {
-    if !operand_type.is_scale() && !operand_type.is_number() {
+    if !operand_type.is_number() {
         Err(vec![engine_error_at(
             source,
             format!(
-                "Mathematical function requires numeric operand (scale or number), got {:?}",
+                "Mathematical function requires number operand, got {:?}",
                 operand_type
             ),
         )])
@@ -2484,16 +2497,14 @@ fn check_expression(
 
             let left_type = infer_expression_type(left, graph, inferred_types, resolved_types);
             let right_type = infer_expression_type(right, graph, inferred_types, resolved_types);
-            if !left_type.is_undetermined() && !right_type.is_undetermined() {
-                let expr_source = expression
-                    .source_location
-                    .as_ref()
-                    .expect("BUG: expression missing source in check_expression");
-                collect(
-                    check_logical_operands(&left_type, &right_type, expr_source),
-                    &mut errors,
-                );
-            }
+            let expr_source = expression
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in check_expression");
+            collect(
+                check_logical_operands(&left_type, &right_type, expr_source),
+                &mut errors,
+            );
         }
 
         ExpressionKind::LogicalNegation(operand, _) => {
@@ -2504,16 +2515,14 @@ fn check_expression(
 
             let operand_type =
                 infer_expression_type(operand, graph, inferred_types, resolved_types);
-            if !operand_type.is_undetermined() {
-                let expr_source = expression
-                    .source_location
-                    .as_ref()
-                    .expect("BUG: expression missing source in check_expression");
-                collect(
-                    check_logical_operand(&operand_type, expr_source),
-                    &mut errors,
-                );
-            }
+            let expr_source = expression
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in check_expression");
+            collect(
+                check_logical_operand(&operand_type, expr_source),
+                &mut errors,
+            );
         }
 
         ExpressionKind::Comparison(left, op, right) => {
@@ -2528,16 +2537,14 @@ fn check_expression(
 
             let left_type = infer_expression_type(left, graph, inferred_types, resolved_types);
             let right_type = infer_expression_type(right, graph, inferred_types, resolved_types);
-            if !left_type.is_undetermined() && !right_type.is_undetermined() {
-                let expr_source = expression
-                    .source_location
-                    .as_ref()
-                    .expect("BUG: expression missing source in check_expression");
-                collect(
-                    check_comparison_types(&left_type, op, &right_type, expr_source),
-                    &mut errors,
-                );
-            }
+            let expr_source = expression
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in check_expression");
+            collect(
+                check_comparison_types(&left_type, op, &right_type, expr_source),
+                &mut errors,
+            );
         }
 
         ExpressionKind::Arithmetic(left, operator, right) => {
@@ -2552,16 +2559,14 @@ fn check_expression(
 
             let left_type = infer_expression_type(left, graph, inferred_types, resolved_types);
             let right_type = infer_expression_type(right, graph, inferred_types, resolved_types);
-            if !left_type.is_undetermined() && !right_type.is_undetermined() {
-                let expr_source = expression
-                    .source_location
-                    .as_ref()
-                    .expect("BUG: expression missing source in check_expression");
-                collect(
-                    check_arithmetic_types(&left_type, &right_type, operator, expr_source),
-                    &mut errors,
-                );
-            }
+            let expr_source = expression
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in check_expression");
+            collect(
+                check_arithmetic_types(&left_type, &right_type, operator, expr_source),
+                &mut errors,
+            );
         }
 
         ExpressionKind::UnitConversion(source_expression, target) => {
@@ -2572,36 +2577,34 @@ fn check_expression(
 
             let source_type =
                 infer_expression_type(source_expression, graph, inferred_types, resolved_types);
-            if !source_type.is_undetermined() {
-                let expr_source = expression
-                    .source_location
-                    .as_ref()
-                    .expect("BUG: expression missing source in check_expression");
-                collect(
-                    check_unit_conversion_types(&source_type, target, resolved_types, expr_source),
-                    &mut errors,
-                );
+            let expr_source = expression
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in check_expression");
+            collect(
+                check_unit_conversion_types(&source_type, target, resolved_types, expr_source),
+                &mut errors,
+            );
 
-                if source_type.is_number() {
-                    match target {
-                        SemanticConversionTarget::ScaleUnit(unit_name)
-                        | SemanticConversionTarget::RatioUnit(unit_name) => {
-                            if find_types_by_name(resolved_types, &expr_source.spec_name)
-                                .and_then(|dt| dt.unit_index.get(unit_name))
-                                .is_none()
-                            {
-                                errors.push(engine_error_at(
-                                    expr_source,
-                                    format!(
-                                        "Cannot resolve unit '{}' for spec '{}' (types may not have been resolved)",
-                                        unit_name,
-                                        expr_source.spec_name
-                                    ),
-                                ));
-                            }
+            if source_type.is_number() {
+                match target {
+                    SemanticConversionTarget::ScaleUnit(unit_name)
+                    | SemanticConversionTarget::RatioUnit(unit_name) => {
+                        if find_types_by_name(resolved_types, &expr_source.spec_name)
+                            .and_then(|dt| dt.unit_index.get(unit_name))
+                            .is_none()
+                        {
+                            errors.push(engine_error_at(
+                                expr_source,
+                                format!(
+                                    "Cannot resolve unit '{}' for spec '{}' (types may not have been resolved)",
+                                    unit_name,
+                                    expr_source.spec_name
+                                ),
+                            ));
                         }
-                        SemanticConversionTarget::Duration(_) => {}
                     }
+                    SemanticConversionTarget::Duration(_) => {}
                 }
             }
         }
@@ -2614,16 +2617,14 @@ fn check_expression(
 
             let operand_type =
                 infer_expression_type(operand, graph, inferred_types, resolved_types);
-            if !operand_type.is_undetermined() {
-                let expr_source = expression
-                    .source_location
-                    .as_ref()
-                    .expect("BUG: expression missing source in check_expression");
-                collect(
-                    check_mathematical_operand(&operand_type, expr_source),
-                    &mut errors,
-                );
-            }
+            let expr_source = expression
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in check_expression");
+            collect(
+                check_mathematical_operand(&operand_type, expr_source),
+                &mut errors,
+            );
         }
 
         ExpressionKind::Veto(_) => {}
@@ -2637,7 +2638,7 @@ fn check_expression(
             );
 
             let date_type = infer_expression_type(date_expr, graph, inferred_types, resolved_types);
-            if !date_type.is_undetermined() && !date_type.is_date() {
+            if !date_type.is_date() {
                 let expr_source = expression
                     .source_location
                     .as_ref()
@@ -2658,7 +2659,7 @@ fn check_expression(
                 );
 
                 let tol_type = infer_expression_type(tol, graph, inferred_types, resolved_types);
-                if !tol_type.is_undetermined() && !tol_type.is_duration() {
+                if !tol_type.is_duration() {
                     let expr_source = expression
                         .source_location
                         .as_ref()
@@ -2681,7 +2682,7 @@ fn check_expression(
             );
 
             let date_type = infer_expression_type(date_expr, graph, inferred_types, resolved_types);
-            if !date_type.is_undetermined() && !date_type.is_date() {
+            if !date_type.is_date() {
                 let expr_source = expression
                     .source_location
                     .as_ref()

@@ -282,10 +282,10 @@ pub fn datetime_arithmetic(
             )))
         }
 
-        _ => OperationResult::Veto(Some(format!(
-            "DateTime arithmetic operation {:?} not supported for these operand types",
+        _ => unreachable!(
+            "BUG: datetime arithmetic {:?} for unsupported operand types; planning should have rejected this",
             op
-        ))),
+        ),
     }
 }
 
@@ -372,7 +372,9 @@ pub fn datetime_comparison(
             OperationResult::Value(Box::new(LiteralValue::from_bool(result)))
         }
 
-        _ => OperationResult::Veto(Some("Invalid datetime comparison operands".to_string())),
+        _ => unreachable!(
+            "BUG: datetime_comparison with non-date operands; planning should have rejected this"
+        ),
     }
 }
 
@@ -551,10 +553,10 @@ pub fn time_arithmetic(
             )))
         }
 
-        _ => OperationResult::Veto(Some(format!(
-            "Time arithmetic operation {:?} not supported for these operand types",
+        _ => unreachable!(
+            "BUG: time arithmetic {:?} for unsupported operand types; planning should have rejected this",
             op
-        ))),
+        ),
     }
 }
 
