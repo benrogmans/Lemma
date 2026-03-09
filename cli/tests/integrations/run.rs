@@ -273,6 +273,65 @@ also invalid lemma syntax
 }
 
 #[test]
+fn test_cli_explain_shows_all_operands_in_nested_arithmetic() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("test.lemma"),
+        r#"
+spec nested_proof
+fact x: 10
+fact y: 20
+fact z: 30
+rule a: x + 1
+rule b: y + 2
+rule c: z + 3
+rule total: a + b + c
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("nested_proof")
+        .arg("--rules=total")
+        .arg("--explain")
+        .arg("--dir")
+        .arg(temp_dir.path());
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --explain should succeed: {}",
+        stdout
+    );
+
+    assert!(
+        stdout.contains("a:") && stdout.contains("b:") && stdout.contains("c:"),
+        "explain should expand all three rule operands (a, b, c), got:\n{}",
+        stdout
+    );
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    let a_line = lines.iter().find(|l| l.contains("a:")).unwrap();
+    let b_line = lines.iter().find(|l| l.contains("b:")).unwrap();
+    let c_line = lines.iter().find(|l| l.contains("c:")).unwrap();
+    let indent_of = |line: &str| line.len() - line.trim_start().len();
+    assert_eq!(
+        indent_of(a_line),
+        indent_of(b_line),
+        "a and b should be at the same depth (flattened), got:\n{}",
+        stdout
+    );
+    assert_eq!(
+        indent_of(b_line),
+        indent_of(c_line),
+        "b and c should be at the same depth (flattened), got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn test_cli_explain_shows_negated_comparison_not_false() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(

@@ -6,11 +6,11 @@ This example demonstrates how to reference other rules by name.
 Rule references are resolved by name, looking up facts first, then rules.
 """
 
-fact age:                  25
-fact has_drivers_license:  true
-fact has_vehicle:          true
-fact license_is_suspended: false
-fact vehicle_is_insured:   true
+fact age                  : 25
+fact has_drivers_license  : true
+fact has_vehicle          : true
+fact license_is_suspended : false
+fact vehicle_is_insured   : true
 
 rule is_of_legal_age:
   age >= 18
@@ -36,12 +36,12 @@ Eligibility Check with Rule References
 Shows complex rule composition and cross-rule dependencies.
 """
 
-fact criminal_record: false
-fact has_passport:    true
-fact has_visa:        false
-fact passport_valid:  true
-fact debt_amount:     [number -> minimum 0 -> default 0]
-fact user_age:        [number -> minimum 0 -> maximum 120 -> default 30]
+fact criminal_record : false
+fact has_passport    : true
+fact has_visa        : false
+fact passport_valid  : true
+fact debt_amount     : [number -> minimum 0 -> default 0]
+fact user_age        : [number -> minimum 0 -> maximum 120 -> default 30]
 
 rule is_adult:
   user_age >= 18
@@ -59,7 +59,7 @@ rule background_check_passed:
   not criminal_record
 
 rule financial_standing_good:
-  debt_amount < 10000
+  debt_amount < 10_000
 
 rule can_travel_internationally:
   is_adult and travel_documents_valid and background_check_passed and financial_standing_good

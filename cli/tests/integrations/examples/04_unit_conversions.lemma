@@ -9,15 +9,15 @@ This example demonstrates:
 - Duration-aware arithmetic
 """
 
-fact container_volume:    5
-fact contract_term:       52 weeks
-fact data_size:           500
-fact distance:            100
-fact package_weight:      25
-fact processing_duration: 90 minutes
-fact project_length:      14 days
-fact review_period:       2 hours
-fact temperature:         20
+fact container_volume    : 5
+fact contract_term       : 52 weeks
+fact data_size           : 500
+fact distance            : 100
+fact package_weight      : 25
+fact processing_duration : 90 minutes
+fact project_length      : 14 days
+fact review_period       : 2 hours
+fact temperature         : 20
 
 rule duration_hours:
   processing_duration in hours

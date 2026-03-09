@@ -1,9 +1,9 @@
 spec rules_and_unless
 
-fact is_premium:   yes
-fact base_price:   [number -> minimum 0]
-fact customer_age: [number -> minimum 0 -> maximum 120]
-fact quantity:     [number -> minimum 0]
+fact is_premium   : yes
+fact base_price   : [number -> minimum 0]
+fact customer_age : [number -> minimum 0 -> maximum 120]
+fact quantity     : [number -> minimum 0]
 
 rule total_before_discount:
   base_price * quantity
@@ -42,7 +42,7 @@ rule priority_processing:
 
 rule message:
   "Standard order"
-  unless final_total > 1000
+  unless final_total > 1_000
     then "High-value order - manager approval required"
   unless is_premium
     then "Premium order - expedited processing"

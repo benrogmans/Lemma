@@ -10,10 +10,10 @@ workspace and the Registry is never called. If they were not present
 locally, the engine would call the Registry (e.g. LemmaBase); a
 missing spec would then produce a Registry error.
 """
+
 type money from @lemma/std/finance
 
 fact unit_price : 5 eur
 
 rule line_total:
   unit_price * 2 in eur
-

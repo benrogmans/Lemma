@@ -11,10 +11,10 @@ type filing_status_type: text
   -> option "married"
   -> option "head_of_household"
 
-fact country:       "NL"
-fact deductions:    [number -> minimum 0]
-fact filing_status: [filing_status_type -> default "single"]
-fact income:        [number -> minimum 0]
+fact country       : "NL"
+fact deductions    : [number -> minimum 0]
+fact filing_status : [filing_status_type -> default "single"]
+fact income        : [number -> minimum 0]
 
 rule taxable_income:
   income - deductions
@@ -33,13 +33,13 @@ rule tax_bracket_4:
   49%
 
 rule bracket_1_limit:
-  73031
+  73_031
 
 rule bracket_2_limit:
-  110881
+  110_881
 
 rule bracket_3_limit:
-  201347
+  201_347
 
 rule tax_on_bracket_1:
   bracket_1_limit * tax_bracket_1

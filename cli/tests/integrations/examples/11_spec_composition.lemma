@@ -5,9 +5,9 @@ Base Pricing Configuration
 Foundation pricing rules that can be referenced and customized.
 """
 
-fact standard_discount: 5%
-fact tax_rate:          21%
-fact base_price:        [number -> minimum 0 -> default 100]
+fact standard_discount : 5%
+fact tax_rate          : 21%
+fact base_price        : [number -> minimum 0 -> default 100]
 
 rule price_with_tax:
   base_price * (1 + tax_rate)
@@ -27,9 +27,9 @@ Implements the pricing/base_config interface with wholesale-specific values.
 Provides the same interface for composability.
 """
 
-fact base_price:        75
-fact standard_discount: 15%
-fact tax_rate:          21%
+fact base_price        : 75
+fact standard_discount : 15%
+fact tax_rate          : 21%
 
 rule price_with_tax:
   base_price * (1 + tax_rate)
@@ -55,9 +55,9 @@ Implements the pricing/base_config interface with retail-specific values.
 Provides the same interface for composability.
 """
 
-fact base_price:        120
-fact standard_discount: 0%
-fact tax_rate:          21%
+fact base_price        : 120
+fact standard_discount : 0%
+fact tax_rate          : 21%
 
 rule price_with_tax:
   base_price * (1 + tax_rate)
@@ -83,9 +83,9 @@ Combines pricing with quantity calculations.
 Demonstrates nested spec references and multi-level fact access.
 """
 
-fact quantity: [number -> minimum 0 -> default 10]
+fact quantity : [number -> minimum 0 -> default 10]
 
-fact pricing: spec pricing/base_config
+fact pricing : spec pricing/base_config
 
 rule line_total:
   pricing.final_price * quantity
@@ -102,9 +102,9 @@ Uses wholesale pricing configuration for bulk orders.
 Shows how to reference a spec that itself references another spec.
 """
 
-fact line:          spec order/line_item
-fact line.pricing:  spec pricing/wholesale
-fact line.quantity: 100
+fact line          : spec order/line_item
+fact line.pricing  : spec pricing/wholesale
+fact line.quantity : 100
 
 rule order_total:
   line.line_total
@@ -121,9 +121,9 @@ Uses retail pricing for individual customer orders.
 Demonstrates different fact paths producing different results.
 """
 
-fact line:          spec order/line_item
-fact line.pricing:  spec pricing/retail
-fact line.quantity: 5
+fact line          : spec order/line_item
+fact line.pricing  : spec pricing/retail
+fact line.quantity : 5
 
 rule order_total:
   line.line_total
@@ -140,9 +140,9 @@ Compares wholesale and retail orders side-by-side.
 Shows how the same rule evaluated through different fact paths yields different results.
 """
 
-fact retail: spec order/retail_order
+fact retail : spec order/retail_order
 
-fact wholesale: spec order/wholesale_order
+fact wholesale : spec order/wholesale_order
 
 rule wholesale_total:
   wholesale.order_total
@@ -165,9 +165,9 @@ Demonstrates fine-grained bindings through nested paths.
 Shows binding facts deep in the reference chain.
 """
 
-fact order:                       spec order/wholesale_order
-fact order.line.pricing.tax_rate: 19%
-fact order.line.quantity:         250
+fact order                       : spec order/wholesale_order
+fact order.line.pricing.tax_rate : 19%
+fact order.line.quantity         : 250
 
 rule custom_total:
   order.order_total
@@ -184,11 +184,11 @@ Shows multiple independent spec references in a single spec.
 Demonstrates mixing different base specs for complex scenarios.
 """
 
-fact base_config: spec pricing/base_config
+fact base_config : spec pricing/base_config
 
-fact retail_config: spec pricing/retail
+fact retail_config : spec pricing/retail
 
-fact wholesale_config: spec pricing/wholesale
+fact wholesale_config : spec pricing/wholesale
 
 rule avg_discount:
   (wholesale_config.standard_discount

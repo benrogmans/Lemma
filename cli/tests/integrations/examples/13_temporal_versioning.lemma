@@ -17,8 +17,8 @@ Source: IND Inkomensnormen 2024.
 
 type salary from money
 
-fact threshold_age_30_plus : 5008 eur
-fact threshold_under_30    : 3672 eur
+fact threshold_age_30_plus : 5_008 eur
+fact threshold_under_30    : 3_672 eur
 fact application_fee       : 345 eur
 
 rule min_annual_salary_30_plus:
@@ -38,8 +38,8 @@ Source: IND Inkomensnormen 2025.
 
 type salary from money
 
-fact threshold_age_30_plus : 5331 eur
-fact threshold_under_30    : 3909 eur
+fact threshold_age_30_plus : 5_331 eur
+fact threshold_under_30    : 3_909 eur
 fact application_fee       : 365 eur
 
 rule min_annual_salary_30_plus:

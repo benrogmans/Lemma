@@ -21,14 +21,14 @@ type customer_tier_type: text
   -> option "gold"
   -> option "platinum"
 
-fact destination_region:  "North Holland"
-fact is_expedited:        [boolean]
-fact is_hazardous:        [boolean]
-fact is_po_box:           [boolean]
-fact customer_tier:       [customer_tier_type -> default "gold"]
-fact destination_country: [country -> default "NL"]
-fact item_weight:         [number -> minimum 0]
-fact order_total:         [number -> minimum 0]
+fact destination_region  : "North Holland"
+fact is_expedited        : [boolean]
+fact is_hazardous        : [boolean]
+fact is_po_box           : [boolean]
+fact customer_tier       : [customer_tier_type -> default "gold"]
+fact destination_country : [country -> default "NL"]
+fact item_weight         : [number -> minimum 0]
+fact order_total         : [number -> minimum 0]
 
 rule base_shipping_rate:
   35

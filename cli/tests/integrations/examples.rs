@@ -33,20 +33,46 @@ fn test_example_01_simple_facts() {
 }
 
 #[test]
-fn test_hash_simple_facts() {
+fn test_show_includes_hash() {
     let temp_dir = TempDir::new().unwrap();
     let example_file = examples_dir().join("01_simple_facts.lemma");
     fs::copy(&example_file, temp_dir.path().join("01_simple_facts.lemma")).unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("hash")
+    cmd.arg("show")
         .arg("simple_facts")
         .arg("--dir")
         .arg(temp_dir.path());
 
     cmd.assert()
         .success()
+        .stdout(predicate::str::contains("hash:"))
         .stdout(predicate::str::is_empty().not());
+}
+
+#[test]
+fn test_show_hash_only_outputs_hash() {
+    let temp_dir = TempDir::new().unwrap();
+    let example_file = examples_dir().join("01_simple_facts.lemma");
+    fs::copy(&example_file, temp_dir.path().join("01_simple_facts.lemma")).unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("show")
+        .arg("simple_facts")
+        .arg("--hash")
+        .arg("--dir")
+        .arg(temp_dir.path());
+
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let hash = stdout.trim();
+    assert!(
+        hash.len() == 8 && hash.chars().all(|c| c.is_ascii_hexdigit()),
+        "expected 8-char hex hash, got: {:?}",
+        hash
+    );
+    assert!(!stdout.contains("facts"), "should not contain structure");
 }
 
 #[test]
