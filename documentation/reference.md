@@ -113,7 +113,7 @@ facts, rules, or state.
 - **Content hash:** `fact x: spec pricing a1b2c3d4` or `fact x: spec pricing 2025 a1b2c3d4`
   verifies that the resolved spec’s content hash equals the given value (8 hex chars, e.g. `a1b2c3d4`).
   Hash is **verification only**; resolution is always by (name, effective). Mismatch ⇒ validation error.
-  Compute the hash with `lemma hash <spec> [--effective T]`.
+  Compute the hash with `lemma show <spec> [--effective T]` (hash is shown in the output).
 
 ### Self-reference restriction
 

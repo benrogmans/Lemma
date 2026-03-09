@@ -204,20 +204,19 @@ lemma get -f        # force re-fetch if content changed
 
 ```bash
 lemma run pricing                         # evaluate all rules
-lemma run pricing:total,tax               # specific rules only
+lemma run pricing --rules=total,tax       # specific rules only
 lemma run pricing quantity=10 is_vip=true # override facts
 lemma run --interactive                   # interactive mode
 
 lemma run pricing --effective 2025-01-01  # temporal query
-lemma run pricing --hash a1b2c3d4         # verify content hash
+lemma run spec~a1b2c3d4                   # pin to content hash (use lemma show for hash)
 
 lemma run pricing -o json                 # JSON output
 lemma run pricing -x                      # show reasoning
 
-lemma show pricing                        # inspect spec structure
+lemma show pricing                        # inspect spec structure (includes hash)
 lemma list                                # list all specs
-lemma hash pricing                        # print content hash
-lemma fmt                                 # format .lemma files
+lemma format                               # format .lemma files
 lemma get                                 # fetch registry dependencies
 lemma info                                # show environment info
 ```

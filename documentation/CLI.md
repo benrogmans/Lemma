@@ -16,52 +16,53 @@ cargo install lemma-cli
 ### `lemma run` -- evaluate a spec
 
 ```bash
-lemma run [<spec>[:<rules>]] [facts...] [options]
+lemma run [<spec>] [--rules=rule1,rule2] [facts...] [options]
 ```
 
 **Syntax:**
 - `spec` -- evaluate all rules
-- `spec:rule` -- evaluate one rule
-- `spec:rule1,rule2` -- evaluate specific rules (comma-separated)
+- `spec --rules=rule` -- evaluate one rule
+- `spec --rules=rule1,rule2` -- evaluate specific rules (comma-separated)
+- `spec~hash` -- pin to content hash (like HTTP `?hash=`)
 - No arguments with `-i` -- interactive mode
 
 **Options:**
 - `-d, --dir <path>` -- workspace root (default: `.`)
+- `--rules <rules>` -- comma-separated rule names (omit to evaluate all)
 - `-o, --output <format>` -- `table` (default) or `json`
 - `-x, --explain` -- show facts and reasoning
 - `-i, --interactive` -- guided spec/rule/fact selection
 - `--effective <datetime>` -- evaluate at effective datetime (e.g. `2025`, `2025-03`, `2025-03-04`)
-- `--hash <hash>` -- verify spec content hash before evaluation
 
 **Examples:**
 
 ```bash
 lemma run pricing
-lemma run pricing:total,tax
+lemma run pricing --rules=total,tax
+lemma run nl/tax/net_salary --rules=net_salary -x
 lemma run pricing quantity=10 is_vip=true
 lemma run pricing -o json
 lemma run pricing -x
 lemma run pricing --effective 2025-01-01
-lemma run pricing --hash a1b2c3d4
+lemma run spec~a1b2c3d4
 lemma run -i
 ```
 
 ### `lemma show` -- inspect spec structure
 
+Shows facts, rules, and content hash. Use the hash with `spec~hash` to pin evaluation.
+
 ```bash
-lemma show <spec> [-d <path>] [--effective <datetime>]
+lemma show <spec> [-d <path>] [--effective <datetime>] [--hash]
 ```
+
+**Options:**
+- `--hash` -- output only the content hash (for piping, e.g. `lemma run spec~$(lemma show spec --hash)`)
 
 ### `lemma list` -- list all specs
 
 ```bash
 lemma list [path] [--effective <datetime>]
-```
-
-### `lemma hash` -- print content hash
-
-```bash
-lemma hash <spec> [-d <path>] [--effective <datetime>]
 ```
 
 ### `lemma get` -- fetch registry dependencies
@@ -76,10 +77,10 @@ lemma get <spec> [-f]                   # fetch a specific spec (e.g. @lemma/std
 **Options:**
 - `-f, --force` -- overwrite existing specs when content has changed on the registry
 
-### `lemma fmt` -- format .lemma files
+### `lemma format` -- format .lemma files
 
 ```bash
-lemma fmt [paths...] [--check] [--stdout]
+lemma format [paths...] [--check] [--stdout]
 ```
 
 **Options:**

@@ -43,3 +43,15 @@ rule shipping_weight: validated_weight
 ```
 
 If `validated_weight` is vetoed but `use_estimated` is true, then `shipping_weight` = 5. The veto doesn't apply because `validated_weight` is never evaluated (the unless clause provides the value).
+
+## Veto vs Error vs Panic
+
+Lemma distinguishes three outcomes:
+
+| Outcome | When | Example |
+|---------|------|---------|
+| **Planning Error** | Invalid spec (wrong types, unsupported operations) | `5 and "text"` — logical AND requires boolean operands |
+| **Veto** | Domain "no value" at runtime | Division by zero, missing fact, user `veto "..."`, date overflow |
+| **Panic** | Bug (invariant violated; should never happen after planning) | Internal consistency failure |
+
+**Veto is only for domain-level "no value"**, not for type errors or invalid operations. Those are caught at planning time. If the engine reaches code that would have returned a type-error Veto, it panics instead — planning should have rejected the spec.

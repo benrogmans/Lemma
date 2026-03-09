@@ -46,9 +46,10 @@ Lemma aims to be reliable enough for critical domains (e.g. aerospace, global re
 
 ### 2.5 Veto is a result, not an error
 
-- Rules that **cannot produce a value** (e.g. division by zero, or user-defined `veto "reason"`) yield **Veto**, not Error.
+- Rules that **cannot produce a value** (e.g. division by zero, missing fact, user-defined `veto "reason"`, date overflow) yield **Veto**, not Error.
 - **OperationResult** is either `Value(LiteralValue)` or `Veto(Option<String>)`.
 - Veto propagates to dependent rules only when the dependent rule **needs** the vetoed value; if an `unless` branch provides a value without evaluating the vetoed rule, that branch can still succeed. See `documentation/veto_semantics.md`.
+- **Planning returns Error** for invalid specs (type mismatches, unsupported operations). **Runtime panics** for bugs that fell through validation (use `unreachable!()`). **Veto** is only for domain-level "no value".
 
 ### 2.6 No placeholders in Lemma code
 
@@ -251,7 +252,8 @@ See **documentation/reference.md** and **documentation/index.md** for full synta
 
 - **Parse/planning:** Invalid input ⇒ return **Error** with clear, localized message (include source location where possible). Do not continue with a “best effort” plan.
 - **Evaluation:**  
-  - Domain failures (e.g. division by zero, user veto) ⇒ **OperationResult::Veto(...)**.  
+  - Domain failures (e.g. division by zero, missing fact, user veto, date overflow) ⇒ **OperationResult::Veto(...)**.  
+  - Type/operator mismatches that planning should have rejected ⇒ **unreachable!()** (planning bug).  
   - Bug or invariant violation (e.g. missing node, wrong enum variant) ⇒ **panic!()** or **unreachable!()** with a message that includes context (e.g. “BUG: …”).
 - **No silent fallbacks:** Do not use default values or heuristics to avoid failing; that violates Lemma’s guarantee of certainty.
 
@@ -288,4 +290,4 @@ See **documentation/reference.md** and **documentation/index.md** for full synta
 - **Veto** is the way “this rule has no value” is expressed (e.g. division by zero, user `veto "..."`); it is not an error. Propagate Veto according to `veto_semantics.md`.
 - When editing the codebase, preserve these guarantees, use **Error** for invalid Lemma, use **Veto** for domain-level “no value,” and **panic/unreachable** for bugs. Prefer **cargo nextest** and TDD as in the project rules.
 - **Never use placeholders in Lemma code** (no dummy values, TODO literals, or fake data in `.lemma` files, docs, or tests). Placeholders destroy certainty; use real, intended values or omit/fail instead.
-- **CLI:** `lemma hash <spec> [--effective T]` prints the spec’s content hash. `lemma run <spec> [--effective T] [--hash H]` verifies hash before evaluate. **APIs:** evaluate requests take required spec_name, optional effective, optional content_hash (verify before evaluate).
+- **CLI:** `lemma show <spec> [--effective T]` displays spec structure and content hash. `lemma run <spec~hash> [--effective T]` pins to that hash. **APIs:** evaluate requests take required spec_name, optional effective, optional content_hash (verify before evaluate).
