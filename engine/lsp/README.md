@@ -27,7 +27,7 @@ The crate also supports a **WASM** build for in-browser use; the library entry p
 
 Run the binary with no arguments. It speaks LSP over stdio:
 
-- **VS Code / Cursor** — Use the extension under [editors/vscode](editors/vscode). It starts the LSP automatically and looks for `target/release/lsp` when the workspace root is the Lemma repo, or uses the `lemma.lspServerPath` setting.
+- **VS Code / Cursor** — Use the extension under [editors/vscode](editors/vscode). It starts the LSP automatically and looks for `target/release/lsp` when the workspace root is the Lemma repo, or uses the `lemma.lspServerPath` setting. Format-on-save and diagnostics only work when the LSP is running; see [editors/vscode/README.md](editors/vscode/README.md) if format on save does nothing.
 - **Other editors** — Point your editor’s LSP client at the `lsp` binary with stdio transport (no extra arguments).
 
 ## Layout

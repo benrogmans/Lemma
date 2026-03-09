@@ -53,6 +53,7 @@
     "configurationDefaults": {
       "[lemma]": {
         "editor.formatOnSave": true,
+        "editor.formatOnSaveMode": "file",
         "editor.defaultFormatter": "lemma.lemma-language"
       }
     }
