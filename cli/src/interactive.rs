@@ -254,9 +254,7 @@ fn prompt_facts(
 fn default_value_from_type(lemma_type: &LemmaType) -> Option<String> {
     match &lemma_type.specifications {
         TypeSpecification::Boolean { default, .. } => default.map(|b| b.to_string()),
-        TypeSpecification::Scale { default, .. } => default
-            .as_ref()
-            .map(|(value, unit)| format!("{} {}", value, unit)),
+        TypeSpecification::Scale { .. } => None,
         TypeSpecification::Number { default, .. } => default.map(|d| d.to_string()),
         TypeSpecification::Ratio { default, .. } => default.map(|d| d.to_string()),
         TypeSpecification::Text { default, .. } => default.clone(),
@@ -331,6 +329,7 @@ fn prompt_value_for_type(
             decimals,
             units,
             help,
+            default,
             ..
         } => {
             let constraints = NumericConstraints {
@@ -339,7 +338,7 @@ fn prompt_value_for_type(
                 decimals: *decimals,
                 help: help.clone(),
             };
-            prompt_scale_fact(fact_name, &type_str, default_value, units, &constraints)
+            prompt_scale_fact(fact_name, &type_str, default.as_ref(), units, &constraints)
         }
         TypeSpecification::Number {
             minimum,
@@ -539,32 +538,50 @@ fn prompt_number_fact(
 fn prompt_scale_fact(
     fact_name: &str,
     type_str: &str,
-    default_value: Option<&str>,
+    default: Option<&(Decimal, String)>,
     units: &lemma::ScaleUnits,
     constraints: &NumericConstraints,
 ) -> Result<String> {
     let prompt_message = format!("{} [{}]", fact_name, type_str);
 
     if units.is_empty() {
-        return prompt_decimal_input(&prompt_message, default_value, constraints, "7.65");
+        let default_str = default.map(|(v, _)| v.to_string());
+        return prompt_decimal_input(&prompt_message, default_str.as_deref(), constraints, "7.65");
     }
 
     let unit_names: Vec<String> = units.iter().map(|u| u.name.clone()).collect();
     let unit = if unit_names.len() == 1 {
         unit_names[0].clone()
     } else {
-        Select::new(&format!("Select unit for {}", fact_name), unit_names)
+        let prompt_msg = format!("Select unit for {}", fact_name);
+        let mut select = Select::new(&prompt_msg, unit_names);
+        if let Some((_, def_unit)) = default {
+            if let Some(idx) = units.iter().position(|u| u.name == *def_unit) {
+                select = select.with_starting_cursor(idx);
+            }
+        }
+        select
             .prompt()
             .context(format!("Failed to get unit for {}", fact_name))?
     };
 
+    let numeric_default = default.and_then(|(value, def_unit)| {
+        let from = units.get(def_unit).ok()?;
+        let to = units.get(&unit).ok()?;
+        Some((value * from.value / to.value).to_string())
+    });
+
     let value_constraints = NumericConstraints {
-        help: format!("Enter numeric value (unit: {})", unit),
+        help: if constraints.help.is_empty() {
+            format!("Enter numeric value (unit: {})", unit)
+        } else {
+            constraints.help.clone()
+        },
         ..constraints.clone()
     };
     let value = prompt_decimal_input(
         &format!("Enter value for {} ({})", fact_name, unit),
-        None,
+        numeric_default.as_deref(),
         &value_constraints,
         "7.65",
     )?;

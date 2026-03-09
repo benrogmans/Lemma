@@ -72,7 +72,7 @@ impl Formatter {
         output
     }
 
-    pub fn format_spec_inspection(&self, plan: &ExecutionPlan) -> String {
+    pub fn format_spec_inspection(&self, plan: &ExecutionPlan, hash: Option<&str>) -> String {
         let local_fact_paths: Vec<&FactPath> = plan
             .facts
             .keys()
@@ -112,6 +112,10 @@ impl Formatter {
                 };
                 content_lines.push(format!("{} {}", prefix, rule.name));
             }
+        }
+
+        if let Some(h) = hash {
+            content_lines.push(format!("hash: {}", h));
         }
 
         table.add_row(vec![
@@ -292,7 +296,7 @@ impl Formatter {
         let header = format!(
             "{}: {}",
             result.rule.name,
-            self.format_result_inline(&result.result)
+            self.highlight_value(&self.format_result_inline(&result.result))
         );
         table.add_row(vec![Cell::new(&header).set_alignment(CellAlignment::Left)]);
 
@@ -430,7 +434,7 @@ impl Formatter {
         ctx: &mut RenderContext,
     ) {
         let rule_key = rule_path.to_string();
-        let result_str = self.format_result_inline(result);
+        let result_str = self.highlight_value(&self.format_result_inline(result));
         ctx.rows.push(format!(
             "{}{} {}: {}",
             ctx.indent,
@@ -457,13 +461,10 @@ impl Formatter {
             .push(format!("{}└─ {}", ctx.indent, original_expression));
 
         let child_indent = format!("{}   ", ctx.indent);
-        let rule_children: Vec<&ProofNode> = operands
-            .iter()
-            .filter(|op| matches!(op, ProofNode::RuleReference { .. }))
-            .collect();
+        let expandable = Self::collect_expandable_operands(operands);
 
-        let len = rule_children.len();
-        for (i, child) in rule_children.iter().enumerate() {
+        let len = expandable.len();
+        for (i, child) in expandable.iter().enumerate() {
             let connector = if i == len - 1 {
                 Connector::Last
             } else {
@@ -477,6 +478,24 @@ impl Formatter {
                 ctx.expanded,
             );
         }
+    }
+
+    /// Recursively flatten nested Computation operands so that
+    /// `(a + b) + c` expands as `[a, b, c]` instead of nesting.
+    fn collect_expandable_operands(operands: &[ProofNode]) -> Vec<&ProofNode> {
+        let mut result = Vec::new();
+        for op in operands {
+            match op {
+                ProofNode::Value { .. } => {}
+                ProofNode::Computation {
+                    operands: nested, ..
+                } => {
+                    result.extend(Self::collect_expandable_operands(nested));
+                }
+                other => result.push(other),
+            }
+        }
+        result
     }
 
     fn render_branches(
@@ -527,7 +546,7 @@ impl Formatter {
 
                     if let Some(condition) = &branch.condition {
                         ctx.rows.push(format!(
-                            "{}✓ {}",
+                            "{}→ {}",
                             ctx.indent,
                             self.extract_condition_text(condition)
                         ));
@@ -613,13 +632,10 @@ impl Formatter {
             .push(format!("{}└─ {}", ctx.indent, original_expression));
 
         let child_indent = format!("{}   ", ctx.indent);
-        let rule_children: Vec<&ProofNode> = operands
-            .iter()
-            .filter(|op| matches!(op, ProofNode::RuleReference { .. }))
-            .collect();
+        let expandable = Self::collect_expandable_operands(operands);
 
-        let len = rule_children.len();
-        for (i, child) in rule_children.iter().enumerate() {
+        let len = expandable.len();
+        for (i, child) in expandable.iter().enumerate() {
             let connector = if i == len - 1 {
                 Connector::Last
             } else {
@@ -740,6 +756,10 @@ impl Formatter {
 
     fn gray(&self, text: &str) -> String {
         format!("\x1b[90m{}\x1b[0m", text)
+    }
+
+    fn highlight_value(&self, text: &str) -> String {
+        format!("\x1b[38;2;80;180;220m{}\x1b[0m", text)
     }
 }
 

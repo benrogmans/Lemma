@@ -37,21 +37,23 @@ enum OutputFormat {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Evaluate rules and display results (try: spec:rule1,rule2)
+    /// Evaluate rules and display results
     ///
     /// Loads all .lemma files from the workspace, evaluates the specified spec with optional fact values,
     /// and displays the computed results. Use this for command-line evaluation and testing.
     ///
-    /// Syntax: spec or spec:rule1,rule2,rule3
+    /// Syntax: spec [--rules=rule1,rule2] [spec~hash for hash pin]
     Run {
-        /// Spec and optional rules to evaluate (format: spec or spec:rule1,rule2)
+        /// Spec to evaluate (optionally suffixed with ~hash to pin to a content hash)
         ///
         /// Examples:
-        ///   pricing              - evaluate all rules in pricing spec
-        ///   pricing:total        - evaluate only the total rule
-        ///   pricing:total,tax    - evaluate total and tax rules
-        #[arg(value_name = "[SPEC[:RULES]]")]
+        ///   pricing                    - evaluate all rules in pricing spec
+        ///   nl/tax/net_salary~a1b2c3d4 - pin to specific content hash (like HTTP ?hash=)
+        #[arg(value_name = "SPEC")]
         spec_name: Option<String>,
+        /// Rules to evaluate (comma-separated); omit to evaluate all rules
+        #[arg(long, value_name = "RULES")]
+        rules: Option<String>,
         /// Fact values to provide (format: name=value or ref_spec.fact=value)
         ///
         /// Examples: price=100, quantity=5, config.tax_rate=0.21
@@ -86,23 +88,6 @@ enum Commands {
         /// Effective datetime for evaluation (e.g. 2026, 2026-03, 2026-03-04, 2026-03-04T10:30:00Z)
         #[arg(long)]
         effective: Option<String>,
-        /// Verify spec content hash before evaluation; fail if mismatch
-        #[arg(long, value_name = "HASH")]
-        hash: Option<String>,
-    },
-    /// Print content hash for a spec's plan
-    ///
-    /// Resolves the spec by name (and optional --effective), computes the canonical
-    /// content hash of its execution plan and dependency closure, and prints it.
-    Hash {
-        /// Spec name (required)
-        spec_name: String,
-        /// Workspace root directory containing .lemma files
-        #[arg(short = 'd', long = "dir", default_value = ".")]
-        workdir: PathBuf,
-        /// Compute hash at effective datetime (e.g. 2026, 2026-03-04)
-        #[arg(long)]
-        effective: Option<String>,
     },
     /// Show spec structure
     ///
@@ -117,6 +102,9 @@ enum Commands {
         /// Show at effective datetime (e.g. 2026, 2026-03-04)
         #[arg(long)]
         effective: Option<String>,
+        /// Output only the content hash (for piping, e.g. lemma run spec~$(lemma show spec --hash))
+        #[arg(long)]
+        hash: bool,
     },
     /// List all specs with facts and rules counts
     ///
@@ -182,7 +170,7 @@ enum Commands {
     /// With a spec argument (e.g. `lemma get @user/repo/spec`): fetches all
     /// temporal versions of that specific spec from the registry.
     ///
-    /// Old dependency versions are kept (not pruned) so that --hash pinning
+    /// Old dependency versions are kept (not pruned) so that spec~hash pinning
     /// continues to work.
     Get {
         /// Specific spec to fetch (e.g. @user/repo/spec). If omitted, resolves all @... references.
@@ -199,7 +187,7 @@ enum Commands {
     ///
     /// Parses and re-emits .lemma files with consistent formatting.
     /// Without flags, formats files in place. Use --check for CI.
-    Fmt {
+    Format {
         /// Files or directories to format (default: current directory)
         #[arg(default_value = ".")]
         paths: Vec<PathBuf>,
@@ -227,34 +215,30 @@ fn main() {
         Commands::Run {
             workdir,
             spec_name,
+            rules,
             facts,
             target,
             output,
             explain,
             interactive,
             effective,
-            hash,
         } => run_command(RunOptions {
             workdir,
             spec_name: spec_name.as_ref(),
+            rules: rules.as_deref(),
             facts,
             target: target.as_ref(),
             output: *output,
             explain: *explain,
             interactive: *interactive,
             effective_raw: effective.as_ref(),
-            hash: hash.as_deref(),
         }),
-        Commands::Hash {
-            workdir,
-            spec_name,
-            effective,
-        } => hash_command(workdir, spec_name, effective.as_ref()),
         Commands::Show {
             workdir,
             spec_name,
             effective,
-        } => show_command(workdir, spec_name, effective.as_ref()),
+            hash,
+        } => show_command(workdir, spec_name, effective.as_ref(), *hash),
         Commands::List { root, effective } => list_command(root, effective.as_ref()),
         Commands::Server {
             workdir,
@@ -269,11 +253,11 @@ fn main() {
             workdir,
             force,
         } => get_command(workdir, spec.as_deref(), *force),
-        Commands::Fmt {
+        Commands::Format {
             paths,
             check,
             stdout,
-        } => fmt_command(paths, *check, *stdout),
+        } => format_command(paths, *check, *stdout),
     };
 
     if let Err(e) = result {
@@ -290,13 +274,13 @@ fn main() {
 struct RunOptions<'a> {
     workdir: &'a Path,
     spec_name: Option<&'a String>,
+    rules: Option<&'a str>,
     facts: &'a [String],
     target: Option<&'a String>,
     output: OutputFormat,
     explain: bool,
     interactive: bool,
     effective_raw: Option<&'a String>,
-    hash: Option<&'a str>,
 }
 
 fn run_command(opts: RunOptions<'_>) -> Result<()> {
@@ -307,15 +291,20 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
     let (spec, rules, final_facts, final_target) = if opts.interactive || opts.spec_name.is_none() {
         if opts.spec_name.is_none() && !opts.interactive {
             eprintln!("Error: No spec specified\n");
-            eprintln!("Usage: lemma run [SPEC[:RULES]] [FACTS...] [OPTIONS]\n");
+            eprintln!("Usage: lemma run [SPEC] [--rules=rule1,rule2] [FACTS...] [OPTIONS]\n");
             eprintln!("Examples:");
             eprintln!(
                 "  lemma run pricing                    - Evaluate all rules in 'pricing' spec"
             );
-            eprintln!("  lemma run pricing:total              - Evaluate only 'total' rule");
-            eprintln!("  lemma run pricing:total,tax          - Evaluate 'total' and 'tax' rules");
-            eprintln!("  lemma run pricing price=100 qty=5    - Evaluate with fact values");
-            eprintln!("  lemma run --interactive              - Interactive mode for selection\n");
+            eprintln!("  lemma run pricing --rules=total        - Evaluate only 'total' rule");
+            eprintln!(
+                "  lemma run pricing --rules=total,tax     - Evaluate 'total' and 'tax' rules"
+            );
+            eprintln!("  lemma run pricing price=100 qty=5      - Evaluate with fact values");
+            eprintln!("  lemma run spec~a1b2c3d4                - Pin to content hash (use lemma show for hash)");
+            eprintln!(
+                "  lemma run --interactive                - Interactive mode for selection\n"
+            );
             eprintln!("To see available specs:");
             eprintln!("  lemma list\n");
             eprintln!("For more information:");
@@ -324,7 +313,8 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
         }
 
         let (parsed_spec, parsed_rules) = opts.spec_name.map_or((None, None), |name| {
-            let (spec, rules) = parse_spec_and_rules(name);
+            let (spec, _hash) = parse_spec_and_hash(name);
+            let rules = opts.rules.map(parse_rule_names);
             (Some(spec), rules)
         });
 
@@ -342,9 +332,10 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
         all_facts.extend(interactive_facts);
         (s, r.unwrap_or_default(), all_facts, interactive_target)
     } else if let Some(name) = opts.spec_name {
-        let (spec, rules) = parse_spec_and_rules(name);
+        let (spec, _) = parse_spec_and_hash(name);
+        let rules = opts.rules.map(parse_rule_names).unwrap_or_default();
         let fact_values = parse_fact_strings(opts.facts);
-        (spec, rules.unwrap_or_default(), fact_values, None)
+        (spec, rules, fact_values, None)
     } else {
         unreachable!()
     };
@@ -354,7 +345,9 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
         return Err(anyhow::anyhow!("Inversion not implemented"));
     }
 
-    let response = engine.evaluate(&spec, opts.hash, &now, rules, final_facts)?;
+    let hash_from_spec = opts.spec_name.and_then(|n| parse_spec_and_hash(n).1);
+    let hash_pin = hash_from_spec.as_deref();
+    let response = engine.evaluate(&spec, hash_pin, &now, rules, final_facts)?;
     let hash = engine.hash_pin(&spec, &now).map(|h| h.to_string());
     let formatter = Formatter;
 
@@ -417,31 +410,28 @@ fn parse_fact_strings(facts: &[String]) -> HashMap<String, String> {
         .collect()
 }
 
-fn hash_command(workdir: &Path, spec_name: &str, effective_raw: Option<&String>) -> Result<()> {
-    let now = resolve_effective(effective_raw)?;
-    let mut engine = Engine::new();
-    load_workspace(&mut engine, workdir)?;
-
-    match engine.hash_pin(spec_name, &now) {
-        Some(hash) => {
-            println!("{}", hash);
-            Ok(())
-        }
-        None => {
-            eprintln!("Error: Spec '{}' not found", spec_name);
-            std::process::exit(1);
-        }
-    }
-}
-
-fn show_command(workdir: &Path, spec_name: &str, effective_raw: Option<&String>) -> Result<()> {
+fn show_command(
+    workdir: &Path,
+    spec_name: &str,
+    effective_raw: Option<&String>,
+    hash_only: bool,
+) -> Result<()> {
     let now = resolve_effective(effective_raw)?;
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
     if let Some(plan) = engine.get_execution_plan(spec_name, None, &now) {
-        let formatter = Formatter;
-        print!("{}", formatter.format_spec_inspection(plan));
+        let hash = engine.hash_pin(spec_name, &now);
+        if hash_only {
+            if let Some(h) = hash {
+                println!("{}", h);
+            } else {
+                std::process::exit(1);
+            }
+        } else {
+            let formatter = Formatter;
+            print!("{}", formatter.format_spec_inspection(plan, hash));
+        }
     } else {
         eprintln!("Error: Spec '{}' not found", spec_name);
         std::process::exit(1);
@@ -831,16 +821,27 @@ fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> 
     Ok(())
 }
 
-/// Parse "spec:rule1,rule2" format into spec name and optional rule list
-fn parse_spec_and_rules(input: &str) -> (String, Option<Vec<String>>) {
-    if let Some(colon_pos) = input.find(':') {
-        let spec = &input[..colon_pos];
-        let rules_str = &input[colon_pos + 1..];
-        let rules: Vec<String> = rules_str.split(',').map(|s| s.trim().to_string()).collect();
-        (spec.to_string(), Some(rules))
-    } else {
-        (input.to_string(), None)
+/// Parse "spec~hash" format into spec name and optional hash pin (like HTTP ?hash=).
+/// Hash must be 8 hex chars (case-insensitive).
+fn parse_spec_and_hash(input: &str) -> (String, Option<String>) {
+    if let Some(tilde_pos) = input.rfind('~') {
+        let hash_part = input[tilde_pos + 1..].trim();
+        if hash_part.len() == 8 && hash_part.chars().all(|c| c.is_ascii_hexdigit()) {
+            return (
+                input[..tilde_pos].trim().to_string(),
+                Some(hash_part.to_lowercase()),
+            );
+        }
     }
+    (input.to_string(), None)
+}
+
+fn parse_rule_names(rules_str: &str) -> Vec<String> {
+    rules_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Collect all .lemma file paths from the given paths (each may be a file or directory).
@@ -873,7 +874,7 @@ fn collect_lemma_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, std::io::Error
     Ok(result)
 }
 
-fn fmt_command(paths: &[PathBuf], check: bool, stdout: bool) -> Result<()> {
+fn format_command(paths: &[PathBuf], check: bool, stdout: bool) -> Result<()> {
     let files = collect_lemma_files(paths)?;
     let mut any_changed = false;
     let mut parse_errors = 0u32;

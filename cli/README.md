@@ -23,7 +23,7 @@ After installation the `lemma` binary is available on your PATH.
 lemma run shipping
 
 # Evaluate specific rules
-lemma run tax_calculation:tax_owed
+lemma run tax_calculation --rules=tax_owed
 
 # Provide fact values
 lemma run tax_calculation income=75000 filing_status="married"
