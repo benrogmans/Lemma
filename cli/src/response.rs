@@ -30,37 +30,6 @@ pub struct RuleResultJson {
     pub proof: Option<serde_json::Value>,
 }
 
-/// Convert a LiteralValue to (json_value, optional_unit).
-fn literal_to_json(v: &lemma::LiteralValue) -> (serde_json::Value, Option<String>) {
-    match &v.value {
-        lemma::ValueKind::Boolean(b) => (serde_json::Value::Bool(*b), None),
-        lemma::ValueKind::Number(n) => (decimal_to_json(n), None),
-        lemma::ValueKind::Scale(n, unit) => (decimal_to_json(n), Some(unit.clone())),
-        lemma::ValueKind::Ratio(r, _) => (decimal_to_json(r), None),
-        lemma::ValueKind::Duration(n, unit) => (decimal_to_json(n), Some(unit.to_string())),
-        _ => (serde_json::Value::String(v.display_value()), None),
-    }
-}
-
-fn decimal_to_json(d: &rust_decimal::Decimal) -> serde_json::Value {
-    if d.fract().is_zero() {
-        serde_json::Value::Number(
-            i64::try_from(d.trunc())
-                .expect("BUG: integer decimal out of i64 range")
-                .into(),
-        )
-    } else {
-        serde_json::Value::Number(
-            serde_json::Number::from_f64(
-                d.to_string()
-                    .parse::<f64>()
-                    .expect("BUG: Decimal::to_string produced non-numeric output"),
-            )
-            .expect("BUG: decimal produced NaN or Infinity"),
-        )
-    }
-}
-
 /// Evaluation response envelope with spec identity, effective datetime, and content hash.
 #[derive(Debug, Serialize)]
 pub struct EvaluationEnvelope {
@@ -101,7 +70,7 @@ pub fn convert_response(
             let line = rule_result.rule.source_location.span.line;
             let (value, unit, display, vetoed, veto_reason) = match &rule_result.result {
                 lemma::OperationResult::Value(v) => {
-                    let (val, unit) = literal_to_json(v);
+                    let (val, unit) = lemma::serialization::literal_value_to_json(v);
                     (Some(val), unit, Some(v.display_value()), false, None)
                 }
                 lemma::OperationResult::Veto(msg) => (None, None, None, true, msg.clone()),

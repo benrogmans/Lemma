@@ -66,6 +66,7 @@ impl TypeResolver {
                     name,
                     crate::limits::MAX_TYPE_NAME_LENGTH,
                     "type",
+                    Some(type_def.source_location().clone()),
                 ) {
                     errors.push(e);
                     continue;

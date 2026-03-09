@@ -43,12 +43,10 @@ pub enum Error {
 
     /// Resource limit exceeded
     ResourceLimitExceeded {
+        details: Box<ErrorDetails>,
         limit_name: String,
         limit_value: String,
         actual_value: String,
-        suggestion: String,
-        /// Spec we were planning when this limit was exceeded. Used for display grouping.
-        spec_context: Option<Arc<LemmaSpec>>,
     },
 
     /// Request error: invalid or unsatisfiable API request (e.g. spec not found, invalid parameters).
@@ -135,6 +133,32 @@ impl Error {
         }))
     }
 
+    /// Create a resource-limit-exceeded error with optional source location.
+    pub fn resource_limit_exceeded(
+        limit_name: impl Into<String>,
+        limit_value: impl Into<String>,
+        actual_value: impl Into<String>,
+        suggestion: impl Into<String>,
+        source: Option<Source>,
+    ) -> Self {
+        let limit_name = limit_name.into();
+        let limit_value = limit_value.into();
+        let actual_value = actual_value.into();
+        let message = format!("{limit_name} (limit: {limit_value}, actual: {actual_value})");
+        Self::ResourceLimitExceeded {
+            details: Box::new(ErrorDetails {
+                message,
+                source,
+                suggestion: Some(suggestion.into()),
+                related_spec: None,
+                spec_context: None,
+            }),
+            limit_name,
+            limit_value,
+            actual_value,
+        }
+    }
+
     /// Create a validation error with optional related spec (for spec-interface errors).
     /// When related_spec is set, Display shows "See spec 'X' (active from Y)."
     pub fn validation_with_context(
@@ -205,18 +229,20 @@ impl Error {
                 }
             }
             Error::ResourceLimitExceeded {
+                details,
                 limit_name,
                 limit_value,
                 actual_value,
-                suggestion,
-                spec_context: _,
-            } => Error::ResourceLimitExceeded {
-                limit_name,
-                limit_value,
-                actual_value,
-                suggestion,
-                spec_context: Some(spec.clone()),
-            },
+            } => {
+                let mut d = *details;
+                d.spec_context = Some(spec.clone());
+                Error::ResourceLimitExceeded {
+                    details: Box::new(d),
+                    limit_name,
+                    limit_value,
+                    actual_value,
+                }
+            }
             Error::Request(details) => {
                 let mut d = *details;
                 d.spec_context = Some(spec);
@@ -316,19 +342,22 @@ impl fmt::Display for Error {
                 write_source_location(f, &details.source)
             }
             Error::ResourceLimitExceeded {
+                details,
                 limit_name,
                 limit_value,
                 actual_value,
-                suggestion,
-                spec_context,
             } => {
-                if let Some(ref spec) = spec_context {
+                if let Some(ref spec) = details.spec_context {
                     write_spec_context(f, spec)?;
                 }
                 write!(
                     f,
-                    "Resource limit exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value}). {suggestion}"
-                )
+                    "Resource limit exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value})"
+                )?;
+                if let Some(suggestion) = &details.suggestion {
+                    write!(f, ". {suggestion}")?;
+                }
+                write_source_location(f, &details.source)
             }
             Error::Request(details) => {
                 if let Some(ref spec) = details.spec_context {
@@ -361,8 +390,9 @@ impl Error {
             | Error::Inversion(details)
             | Error::Validation(details)
             | Error::Request(details) => &details.message,
-            Error::Registry { details, .. } => &details.message,
-            Error::ResourceLimitExceeded { suggestion, .. } => suggestion,
+            Error::Registry { details, .. } | Error::ResourceLimitExceeded { details, .. } => {
+                &details.message
+            }
         }
     }
 
@@ -373,8 +403,9 @@ impl Error {
             | Error::Inversion(details)
             | Error::Validation(details)
             | Error::Request(details) => details.source.as_ref(),
-            Error::Registry { details, .. } => details.source.as_ref(),
-            Error::ResourceLimitExceeded { .. } => None,
+            Error::Registry { details, .. } | Error::ResourceLimitExceeded { details, .. } => {
+                details.source.as_ref()
+            }
         }
     }
 
@@ -390,8 +421,9 @@ impl Error {
             | Error::Inversion(details)
             | Error::Validation(details)
             | Error::Request(details) => details.suggestion.as_deref(),
-            Error::Registry { details, .. } => details.suggestion.as_deref(),
-            Error::ResourceLimitExceeded { suggestion, .. } => Some(suggestion),
+            Error::Registry { details, .. } | Error::ResourceLimitExceeded { details, .. } => {
+                details.suggestion.as_deref()
+            }
         }
     }
 }

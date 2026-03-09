@@ -58,16 +58,15 @@ pub fn format_error(error: &Error) -> String {
             &format!("@{}", identifier),
         ),
         Error::ResourceLimitExceeded {
+            details,
             limit_name,
             limit_value,
             actual_value,
-            suggestion,
-            spec_context: _,
-        } => {
-            format!(
-                "Resource limit exceeded: {limit_name}\n  Limit: {limit_value}\n  Actual: {actual_value}\n  {suggestion}"
-            )
-        }
+        } => format_details(
+            &format!("Resource limit exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value})"),
+            details,
+            "",
+        ),
         Error::Request(details) => format_details("Request error", details, ""),
     }
 }

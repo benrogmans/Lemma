@@ -1,15 +1,8 @@
-FROM rust:1.92.0-alpine AS builder
-
-RUN apk add --no-cache musl-dev
-
-WORKDIR /build
-COPY . .
-RUN cargo build --release --package lemma-cli
-
+# Pre-built binaries are injected into binaries/${TARGETARCH}/lemma by CI.
+# See .github/workflows/release.yml publish-docker job.
 FROM scratch
-ENV HOME=/root
-COPY --from=builder /build/target/release/lemma /usr/local/bin/lemma
-WORKDIR /specs
-ENTRYPOINT ["lemma"]
+ARG TARGETARCH
+COPY binaries/${TARGETARCH}/lemma /usr/local/bin/lemma
+ENTRYPOINT ["/usr/local/bin/lemma"]
 CMD ["--help"]
 EXPOSE 8012

@@ -1,12 +1,4 @@
-target/
-.git/
-.github/
-documentation/
-engine/fuzz/
-engine/pkg/
-engine/wasm/
-*.md
-!README.md
-LICENSE
-.cargo/deny.toml
-.cursor/
+# Docker image uses pre-built binaries from CI; only Dockerfile and binaries/ are in context.
+*
+!Dockerfile
+!binaries

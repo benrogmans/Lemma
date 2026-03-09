@@ -213,19 +213,25 @@ pub(crate) fn parse_expression(
     source_text: Arc<str>,
 ) -> Result<Expression, Error> {
     if let Err(msg) = depth_tracker.push_depth() {
+        let source = Source::new(
+            attribute,
+            Span::from_pest_span(pair.as_span()),
+            spec_name,
+            source_text.clone(),
+        );
         let actual_depth = msg
             .split_whitespace()
             .nth(2)
             .and_then(|s| s.parse::<usize>().ok())
             .map(|d| d.to_string())
             .unwrap_or_else(|| format!("parse error: {}", msg));
-        return Err(Error::ResourceLimitExceeded {
-            limit_name: "max_expression_depth".to_string(),
-            limit_value: depth_tracker.max_depth().to_string(),
-            actual_value: actual_depth,
-            suggestion: "Simplify nested expressions to reduce depth".to_string(),
-            spec_context: None,
-        });
+        return Err(Error::resource_limit_exceeded(
+            "max_expression_depth",
+            depth_tracker.max_depth().to_string(),
+            actual_depth,
+            "Simplify nested expressions to reduce depth",
+            Some(source),
+        ));
     }
 
     let result = parse_expression_impl(

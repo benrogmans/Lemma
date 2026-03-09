@@ -16,11 +16,8 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     outputs:
-      version_changed: ${{ steps.check.outputs.version_changed }}
+      changed: ${{ steps.check.outputs.changed }}
       version: ${{ steps.check.outputs.version }}
-      lemma_changed: ${{ steps.check.outputs.lemma_changed }}
-      cli_changed: ${{ steps.check.outputs.cli_changed }}
-      wasm_changed: ${{ steps.check.outputs.wasm_changed }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,10 +32,7 @@ jobs:
 
           # For manual trigger, always consider changed
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "version_changed=true" >> $GITHUB_OUTPUT
-            echo "lemma_changed=true" >> $GITHUB_OUTPUT
-            echo "cli_changed=true" >> $GITHUB_OUTPUT
-            echo "wasm_changed=true" >> $GITHUB_OUTPUT
+            echo "changed=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -51,162 +45,38 @@ jobs:
 
           # Check if workspace version changed compared to latest tag
           if [ "$CURRENT_VERSION" != "$TAG_VERSION" ]; then
-            echo "version_changed=true" >> $GITHUB_OUTPUT
-            echo "lemma_changed=true" >> $GITHUB_OUTPUT
-            echo "cli_changed=true" >> $GITHUB_OUTPUT
-            echo "wasm_changed=true" >> $GITHUB_OUTPUT
+            echo "changed=true" >> $GITHUB_OUTPUT
           else
-            echo "version_changed=false" >> $GITHUB_OUTPUT
-            echo "lemma_changed=false" >> $GITHUB_OUTPUT
-            echo "cli_changed=false" >> $GITHUB_OUTPUT
-            echo "wasm_changed=false" >> $GITHUB_OUTPUT
+            echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
-  release-lemma-engine:
-    name: Release lemma-engine to crates.io
+  create-release:
+    name: Create Release
     needs: detect-version-changes
-    if: needs.detect-version-changes.outputs.lemma_changed == 'true'
+    if: needs.detect-version-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.92.0
-
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Run tests
-        run: cargo nextest run -p lemma-engine --all-features
-
-      - name: Publish to crates.io
-        run: cargo publish -p lemma-engine --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Create tag
+      - name: Create tags
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag lemma-engine-v${{ needs.detect-version-changes.outputs.version }}
-          git push origin lemma-engine-v${{ needs.detect-version-changes.outputs.version }}
+          VERSION="${{ needs.detect-version-changes.outputs.version }}"
+          for prefix in lemma-engine openapi wasm cli; do
+            git tag "${prefix}-v${VERSION}" 2>/dev/null || echo "Tag ${prefix}-v${VERSION} already exists"
+            git push origin "${prefix}-v${VERSION}" 2>/dev/null || echo "Tag ${prefix}-v${VERSION} already pushed"
+          done
 
-  release-wasm:
-    name: Release @benrogmans/lemma-engine to NPM
-    needs: detect-version-changes
-    if: needs.detect-version-changes.outputs.wasm_changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.92.0
-          targets: wasm32-unknown-unknown
-
-      - name: Install wasm-pack
-        run: curl -sSfL https://drager.github.io/wasm-pack/installer/init.sh | bash
-
-      - name: Build WASM
-        run: |
-          cd engine
-          node wasm/build.js
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Publish to NPM
-        working-directory: engine/pkg
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Create tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag wasm-v${{ needs.detect-version-changes.outputs.version }}
-          git push origin wasm-v${{ needs.detect-version-changes.outputs.version }}
-
-  release-openapi:
-    name: Release lemma-openapi to crates.io
-    needs: [detect-version-changes, release-lemma-engine]
-    if: |
-      always() &&
-      needs.detect-version-changes.outputs.lemma_changed == 'true' &&
-      (needs.release-lemma-engine.result == 'success' || needs.release-lemma-engine.result == 'skipped')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.92.0
-
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Run tests
-        run: cargo nextest run -p lemma-openapi --all-features
-
-      - name: Publish to crates.io
-        run: cargo publish -p lemma-openapi --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Create tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag openapi-v${{ needs.detect-version-changes.outputs.version }}
-          git push origin openapi-v${{ needs.detect-version-changes.outputs.version }}
-
-  release-cli:
-    name: Release lemma-cli to crates.io
-    needs: [detect-version-changes, release-lemma-engine, release-openapi]
-    if: |
-      always() &&
-      needs.detect-version-changes.outputs.cli_changed == 'true' &&
-      (needs.release-lemma-engine.result == 'success' || needs.release-lemma-engine.result == 'skipped') &&
-      (needs.release-openapi.result == 'success' || needs.release-openapi.result == 'skipped')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.92.0
-
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Run tests
-        run: cargo nextest run --workspace --all-features
-
-      - name: Build release binary
-        run: cargo build --release -p lemma-cli
-
-      - name: Create and push tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag cli-v${{ needs.detect-version-changes.outputs.version }}
-          git push origin cli-v${{ needs.detect-version-changes.outputs.version }}
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v1
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: cli-v${{ needs.detect-version-changes.outputs.version }}
-          name: Lemma CLI v${{ needs.detect-version-changes.outputs.version }}
-          files: target/release/lemma
+          name: Lemma v${{ needs.detect-version-changes.outputs.version }}
           body: |
             ## Installation
 
-            Download the binary or install from source:
+            Download the binary for your platform from the assets below, or install from source:
 
             ```bash
             cargo install lemma-cli@${{ needs.detect-version-changes.outputs.version }}
@@ -226,13 +96,143 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish CLI to crates.io
+  build-cli-binaries:
+    name: Build CLI (${{ matrix.target }})
+    needs: [detect-version-changes, create-release]
+    if: needs.detect-version-changes.outputs.changed == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            use-cross: true
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use-cross == true
+        uses: taiki-e/install-action@cross
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.use-cross }}" == "true" ]; then
+            cross build --release -p lemma-cli --target ${{ matrix.target }}
+          else
+            cargo build --release -p lemma-cli --target ${{ matrix.target }}
+          fi
+
+      - name: Package binary
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            7z a ../../../lemma-${{ matrix.target }}.zip lemma.exe
+          else
+            tar czf ../../../lemma-${{ matrix.target }}.tar.gz lemma
+          fi
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: cli-v${{ needs.detect-version-changes.outputs.version }}
+          files: lemma-${{ matrix.target }}.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publish jobs run in parallel (no dependencies between them). If one fails
+  # (e.g. auth/expired token), update the secret and use "Re-run failed jobs".
+  publish-crates:
+    name: Publish to crates.io
+    needs: [detect-version-changes, create-release]
+    if: |
+      !cancelled() &&
+      needs.create-release.result == 'success' &&
+      needs.detect-version-changes.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+
+      - name: Publish lemma-engine
+        run: cargo publish -p lemma-engine --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io index
+        run: sleep 30
+
+      - name: Publish lemma-openapi
+        run: cargo publish -p lemma-openapi --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io index
+        run: sleep 30
+
+      - name: Publish lemma-cli
         run: cargo publish -p lemma-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  release-vscode:
-    name: Publish VS Code extension
-    needs: detect-version-changes
-    if: needs.detect-version-changes.outputs.version_changed == 'true'
+  publish-npm:
+    name: Publish to npm
+    needs: [detect-version-changes, create-release]
+    if: |
+      !cancelled() &&
+      needs.create-release.result == 'success' &&
+      needs.detect-version-changes.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl -sSfL https://drager.github.io/wasm-pack/installer/init.sh | bash
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Build WASM
+        run: |
+          cd engine
+          node wasm/build.js
+
+      - name: Publish to npm
+        working-directory: engine/pkg
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-vscode:
+    name: Publish VS Code Extension
+    needs: [detect-version-changes, create-release]
+    if: |
+      !cancelled() &&
+      needs.create-release.result == 'success' &&
+      needs.detect-version-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -240,7 +240,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Set extension version
         working-directory: engine/lsp/editors/vscode
@@ -267,20 +267,27 @@ jobs:
 
   publish-docker:
     name: Publish Docker Image
-    needs: detect-version-changes
-    if: needs.detect-version-changes.outputs.version_changed == 'true'
+    needs: [detect-version-changes, create-release, build-cli-binaries]
+    if: |
+      !cancelled() &&
+      needs.create-release.result == 'success' &&
+      needs.detect-version-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       packages: write
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Download Linux binaries from release
+        run: |
+          VERSION="${{ needs.detect-version-changes.outputs.version }}"
+          gh release download "cli-v${VERSION}" --pattern 'lemma-*-linux-gnu.tar.gz'
+          mkdir -p binaries/amd64 binaries/arm64
+          tar -xzf lemma-x86_64-unknown-linux-gnu.tar.gz -C binaries/amd64
+          tar -xzf lemma-aarch64-unknown-linux-gnu.tar.gz -C binaries/arm64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -311,5 +318,3 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

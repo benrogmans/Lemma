@@ -60,7 +60,7 @@ pub mod limits;
 pub mod parsing;
 pub mod planning;
 pub mod registry;
-pub(crate) mod serialization;
+pub mod serialization;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;

@@ -1,6 +1,7 @@
-use crate::planning::semantics::{FactData, FactPath};
+use crate::planning::semantics::{FactData, FactPath, LiteralValue, ValueKind};
 use crate::Error;
 use indexmap::IndexMap;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -30,6 +31,50 @@ fn json_value_to_string(value: &Value) -> String {
         Value::Null => String::new(),
     }
 }
+
+// -----------------------------------------------------------------------------
+// Output: Lemma values → JSON (for evaluation responses)
+// -----------------------------------------------------------------------------
+
+/// Convert a Lemma literal value to a JSON value and optional unit string.
+///
+/// Used when serializing evaluation results (e.g. CLI `run --output json`, HTTP API).
+/// Returns `(value, unit)` where `unit` is present for scale and duration.
+pub fn literal_value_to_json(v: &LiteralValue) -> (Value, Option<String>) {
+    match &v.value {
+        ValueKind::Boolean(b) => (Value::Bool(*b), None),
+        ValueKind::Number(n) => (decimal_to_json(n), None),
+        ValueKind::Scale(n, unit) => (decimal_to_json(n), Some(unit.clone())),
+        ValueKind::Ratio(r, _) => (decimal_to_json(r), None),
+        ValueKind::Duration(n, unit) => (decimal_to_json(n), Some(unit.to_string())),
+        _ => (Value::String(v.display_value()), None),
+    }
+}
+
+/// Convert a decimal to a JSON number when in range; otherwise serialize as string.
+///
+/// Avoids panics for decimals outside i64 (integer case) or f64 (fractional case).
+fn decimal_to_json(d: &Decimal) -> Value {
+    if d.fract().is_zero() {
+        match i64::try_from(d.trunc()) {
+            Ok(n) => Value::Number(n.into()),
+            Err(_) => Value::String(d.to_string()),
+        }
+    } else {
+        let s = d.to_string();
+        let Ok(f) = s.parse::<f64>() else {
+            return Value::String(s);
+        };
+        match serde_json::Number::from_f64(f) {
+            Some(n) => Value::Number(n),
+            None => Value::String(s),
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Serde helpers for FactPath / FactData
+// -----------------------------------------------------------------------------
 
 /// Serializes IndexMap<FactPath, FactData> as array of [FactPath, FactData] tuples.
 pub fn serialize_resolved_fact_value_map<S>(
@@ -148,5 +193,52 @@ mod tests {
         assert!(result.is_err());
         let error_message = result.unwrap_err().to_string();
         assert!(error_message.contains("JSON parse error"));
+    }
+
+    // --- literal_value_to_json / decimal_to_json ---
+
+    #[test]
+    fn test_literal_value_to_json_number() {
+        use crate::planning::semantics::LiteralValue;
+        use std::str::FromStr;
+        let v = LiteralValue::number(rust_decimal::Decimal::from_str("42").unwrap());
+        let (val, unit) = literal_value_to_json(&v);
+        assert!(val.is_number());
+        assert_eq!(val.as_i64(), Some(42));
+        assert!(unit.is_none());
+    }
+
+    #[test]
+    fn test_literal_value_to_json_scale() {
+        use crate::planning::semantics::{primitive_scale, LiteralValue};
+        use std::str::FromStr;
+        let v = LiteralValue::scale_with_type(
+            rust_decimal::Decimal::from_str("99.50").unwrap(),
+            "eur".to_string(),
+            primitive_scale().clone(),
+        );
+        let (val, unit) = literal_value_to_json(&v);
+        assert!(val.is_number());
+        assert_eq!(unit.as_deref(), Some("eur"));
+    }
+
+    #[test]
+    fn test_literal_value_to_json_boolean() {
+        use crate::planning::semantics::LiteralValue;
+        let (val, unit) = literal_value_to_json(&LiteralValue::from_bool(true));
+        assert_eq!(val.as_bool(), Some(true));
+        assert!(unit.is_none());
+    }
+
+    #[test]
+    fn test_decimal_to_json_out_of_i64_fallback() {
+        use crate::planning::semantics::LiteralValue;
+        use std::str::FromStr;
+        // One more than i64::MAX; fits in Decimal but not i64
+        let huge = rust_decimal::Decimal::from_str("9223372036854775808").unwrap();
+        let v = LiteralValue::number(huge);
+        let (val, _) = literal_value_to_json(&v);
+        assert!(val.is_string());
+        assert_eq!(val.as_str(), Some("9223372036854775808"));
     }
 }

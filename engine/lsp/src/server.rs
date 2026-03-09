@@ -140,17 +140,7 @@ impl LemmaLanguageServer {
                 };
 
                 for (attr, (url, text)) in &attr_map {
-                    let file_errors: Vec<_> = errors
-                        .iter()
-                        .filter(|e| match e.location() {
-                            Some(src) => src.attribute == *attr,
-                            None => false,
-                        })
-                        .collect();
-                    let lsp_diagnostics = file_errors
-                        .iter()
-                        .map(|e| diagnostics::single_error_to_diagnostic(e, text))
-                        .collect::<Vec<_>>();
+                    let lsp_diagnostics = diagnostics::errors_to_diagnostics(&errors, text, attr);
                     client
                         .publish_diagnostics(url.clone(), lsp_diagnostics, None)
                         .await;

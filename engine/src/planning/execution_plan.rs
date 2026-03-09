@@ -528,16 +528,16 @@ impl ExecutionPlan {
             // Check resource limits
             let size = literal_value.byte_size();
             if size > limits.max_fact_value_bytes {
-                return Err(Error::ResourceLimitExceeded {
-                    limit_name: "max_fact_value_bytes".to_string(),
-                    limit_value: limits.max_fact_value_bytes.to_string(),
-                    actual_value: size.to_string(),
-                    suggestion: format!(
+                return Err(Error::resource_limit_exceeded(
+                    "max_fact_value_bytes",
+                    limits.max_fact_value_bytes.to_string(),
+                    size.to_string(),
+                    format!(
                         "Reduce the size of fact values to {} bytes or less",
                         limits.max_fact_value_bytes
                     ),
-                    spec_context: None,
-                });
+                    Some(fact_source.clone()),
+                ));
             }
 
             // Validate constraints

@@ -47,7 +47,7 @@ fn span_to_range(text: &str, start_byte: usize, end_byte: usize) -> Range {
 
 /// A safe default range anchored at the first character of the spec.
 ///
-/// Used for errors that have no specific source span (e.g. ResourceLimitExceeded).
+/// Used for errors that have no specific source span.
 fn default_range() -> Range {
     Range {
         start: Position {
@@ -68,23 +68,16 @@ fn default_range() -> Range {
 /// The `file_attribute` is the source identifier for the file being diagnosed,
 /// used to filter errors that belong to this file.
 pub fn single_error_to_diagnostic(error: &Error, text: &str) -> Diagnostic {
-    let range = match error {
-        Error::ResourceLimitExceeded { .. } => default_range(),
-        other => {
-            if let Some(source) = other.location() {
-                let start = source.span.start;
-                let end = source.span.end;
-                // If both start and end are 0 (e.g. from pest parse errors where byte
-                // offsets aren't available), fall back to default range.
-                if start == 0 && end == 0 {
-                    default_range()
-                } else {
-                    span_to_range(text, start, end)
-                }
-            } else {
-                default_range()
-            }
+    let range = if let Some(source) = error.location() {
+        let start = source.span.start;
+        let end = source.span.end;
+        if start == 0 && end == 0 {
+            default_range()
+        } else {
+            span_to_range(text, start, end)
         }
+    } else {
+        default_range()
     };
 
     let message = format!("{}", error);
@@ -108,7 +101,7 @@ pub fn single_error_to_diagnostic(error: &Error, text: &str) -> Diagnostic {
 /// - `text`: the current editor buffer content for the file being diagnosed.
 /// - `file_attribute`: the source identifier (filename) for the file being diagnosed.
 ///   Only errors whose source location `attribute` matches this value are included.
-///   Errors without a source location (e.g. ResourceLimitExceeded) are always included.
+///   Errors without a source location are always included.
 pub fn errors_to_diagnostics(
     errors: &[Error],
     text: &str,
@@ -117,12 +110,9 @@ pub fn errors_to_diagnostics(
     let mut diagnostics = Vec::new();
 
     for error in errors {
-        let belongs_to_file = match error {
-            Error::ResourceLimitExceeded { .. } => true,
-            other => match other.location() {
-                Some(source) => source.attribute == file_attribute,
-                None => true,
-            },
+        let belongs_to_file = match error.location() {
+            Some(source) => source.attribute == file_attribute,
+            None => true,
         };
 
         if belongs_to_file {
@@ -221,20 +211,8 @@ mod tests {
 
     #[test]
     fn errors_to_diagnostics_with_multiple_errors() {
-        let error1 = Error::ResourceLimitExceeded {
-            limit_name: "limit_a".to_string(),
-            limit_value: "100".to_string(),
-            actual_value: "200".to_string(),
-            suggestion: "fix a".to_string(),
-            spec_context: None,
-        };
-        let error2 = Error::ResourceLimitExceeded {
-            limit_name: "limit_b".to_string(),
-            limit_value: "50".to_string(),
-            actual_value: "75".to_string(),
-            suggestion: "fix b".to_string(),
-            spec_context: None,
-        };
+        let error1 = Error::resource_limit_exceeded("limit_a", "100", "200", "fix a", None);
+        let error2 = Error::resource_limit_exceeded("limit_b", "50", "75", "fix b", None);
         let diagnostics =
             errors_to_diagnostics(&[error1, error2], "spec test\nfact x: 10", "test.lemma");
         assert_eq!(diagnostics.len(), 2);

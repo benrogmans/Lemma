@@ -29,21 +29,21 @@ pub fn parse(
     limits: &ResourceLimits,
 ) -> Result<Vec<LemmaSpec>, Error> {
     if content.len() > limits.max_file_size_bytes {
-        return Err(Error::ResourceLimitExceeded {
-            limit_name: "max_file_size_bytes".to_string(),
-            limit_value: format!(
+        return Err(Error::resource_limit_exceeded(
+            "max_file_size_bytes",
+            format!(
                 "{} bytes ({} MB)",
                 limits.max_file_size_bytes,
                 limits.max_file_size_bytes / (1024 * 1024)
             ),
-            actual_value: format!(
+            format!(
                 "{} bytes ({:.2} MB)",
                 content.len(),
                 content.len() as f64 / (1024.0 * 1024.0)
             ),
-            suggestion: "Reduce file size or split into multiple specs".to_string(),
-            spec_context: None,
-        });
+            "Reduce file size or split into multiple specs",
+            None,
+        ));
     }
 
     let mut depth_tracker = DepthTracker::with_max_depth(limits.max_expression_depth);

@@ -272,15 +272,18 @@ fn format_error(error: &Error) -> String {
             )
         }
         Error::ResourceLimitExceeded {
+            details,
             limit_name,
             limit_value,
             actual_value,
-            suggestion,
-            spec_context: _,
         } => {
-            format!(
-                "Resource Limit Exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value}). {suggestion}"
-            )
+            let mut msg = format!(
+                "Resource Limit Exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value})"
+            );
+            if let Some(suggestion) = &details.suggestion {
+                msg.push_str(&format!(". {suggestion}"));
+            }
+            msg
         }
         Error::Request(details) => format!("Request Error: {}", details.message),
     }

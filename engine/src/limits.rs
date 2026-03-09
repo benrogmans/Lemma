@@ -1,4 +1,5 @@
 use crate::error::Error;
+use crate::parsing::source::Source;
 
 pub const MAX_SPEC_NAME_LENGTH: usize = 128;
 pub const MAX_FACT_NAME_LENGTH: usize = 256;
@@ -7,15 +8,20 @@ pub const MAX_TYPE_NAME_LENGTH: usize = 256;
 
 /// Validate that a name does not exceed the given character limit.
 /// `kind` is a human-readable noun like "spec", "fact", "rule", or "type".
-pub fn check_max_length(name: &str, limit: usize, kind: &str) -> Result<(), Error> {
+pub fn check_max_length(
+    name: &str,
+    limit: usize,
+    kind: &str,
+    source: Option<Source>,
+) -> Result<(), Error> {
     if name.len() > limit {
-        return Err(Error::ResourceLimitExceeded {
-            limit_name: format!("max_{kind}_name_length"),
-            limit_value: format!("{limit} characters"),
-            actual_value: format!("{} characters", name.len()),
-            suggestion: format!("Shorten the {kind} name to at most {limit} characters"),
-            spec_context: None,
-        });
+        return Err(Error::resource_limit_exceeded(
+            format!("max_{kind}_name_length"),
+            format!("{limit} characters"),
+            format!("{} characters", name.len()),
+            format!("Shorten the {kind} name to at most {limit} characters"),
+            source,
+        ));
     }
     Ok(())
 }

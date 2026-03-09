@@ -743,6 +743,7 @@ impl<'a> GraphBuilder<'a> {
                     segment,
                     crate::limits::MAX_FACT_NAME_LENGTH,
                     "fact",
+                    Some(fact.source_location.clone()),
                 ) {
                     errors.push(e);
                     name_too_long = true;
@@ -752,6 +753,7 @@ impl<'a> GraphBuilder<'a> {
                 &fact.reference.name,
                 crate::limits::MAX_FACT_NAME_LENGTH,
                 "fact",
+                Some(fact.source_location.clone()),
             ) {
                 errors.push(e);
                 name_too_long = true;
@@ -825,6 +827,7 @@ impl<'a> GraphBuilder<'a> {
             &fact.reference.name,
             crate::limits::MAX_FACT_NAME_LENGTH,
             "fact",
+            Some(fact.source_location.clone()),
         ) {
             self.errors.push(e);
             return;
@@ -834,6 +837,7 @@ impl<'a> GraphBuilder<'a> {
                 segment,
                 crate::limits::MAX_FACT_NAME_LENGTH,
                 "fact",
+                Some(fact.source_location.clone()),
             ) {
                 self.errors.push(e);
                 return;
@@ -1065,9 +1069,12 @@ impl<'a> GraphBuilder<'a> {
         type_resolver: &mut TypeResolver,
     ) -> Result<(), Vec<Error>> {
         let spec = spec_arc.as_ref();
-        if let Err(e) =
-            crate::limits::check_max_length(&spec.name, crate::limits::MAX_SPEC_NAME_LENGTH, "spec")
-        {
+        if let Err(e) = crate::limits::check_max_length(
+            &spec.name,
+            crate::limits::MAX_SPEC_NAME_LENGTH,
+            "spec",
+            None,
+        ) {
             self.errors.push(e);
         }
 
@@ -1350,9 +1357,12 @@ impl<'a> GraphBuilder<'a> {
         current_segments: &[PathSegment],
         effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
     ) {
-        if let Err(e) =
-            crate::limits::check_max_length(&rule.name, crate::limits::MAX_RULE_NAME_LENGTH, "rule")
-        {
+        if let Err(e) = crate::limits::check_max_length(
+            &rule.name,
+            crate::limits::MAX_RULE_NAME_LENGTH,
+            "rule",
+            Some(rule.source_location.clone()),
+        ) {
             self.errors.push(e);
             return;
         }
