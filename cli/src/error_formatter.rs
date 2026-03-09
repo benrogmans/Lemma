@@ -55,7 +55,7 @@ pub fn format_error(error: &Error) -> String {
         } => format_details(
             &format!("Registry error ({})", kind),
             details,
-            &format!("@{}", identifier),
+            identifier,
         ),
         Error::ResourceLimitExceeded {
             details,

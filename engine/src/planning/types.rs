@@ -521,7 +521,7 @@ impl TypeResolver {
                 if !type_exists {
                     let suggestion = from.as_ref().filter(|r| r.is_registry).map(|r| {
                         format!(
-                            "Run `lemma get` or `lemma get @{}` to fetch this dependency.",
+                            "Run `lemma get` or `lemma get {}` to fetch this dependency.",
                             r.name
                         )
                     });

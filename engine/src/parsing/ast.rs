@@ -479,12 +479,13 @@ pub enum MathematicalComputation {
 }
 
 /// A reference to a spec, with optional hash pin and optional effective datetime.
-/// The `name` field is the plain base spec name (without `@`); `is_registry`
-/// is true when the source used `@name`; `hash_pin` pins to a specific temporal version
+/// For registry references the `name` includes the leading `@` (e.g. `@org/repo/spec`);
+/// for local references it is a plain base name.  `is_registry` mirrors whether
+/// the source used the `@` qualifier; `hash_pin` pins to a specific temporal version
 /// by content hash; `effective` requests temporal resolution at that datetime.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpecRef {
-    /// Plain base spec name (never contains `@`).
+    /// Spec name as written in source. Includes `@` for registry references.
     pub name: String,
     /// `true` when the source used the `@` qualifier (registry reference).
     pub is_registry: bool,
@@ -496,11 +497,7 @@ pub struct SpecRef {
 
 impl std::fmt::Display for SpecRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.is_registry {
-            write!(f, "@{}", self.name)?;
-        } else {
-            write!(f, "{}", self.name)?;
-        }
+        write!(f, "{}", self.name)?;
         if let Some(ref h) = self.hash_pin {
             write!(f, "~{}", h)?;
         }
@@ -747,11 +744,7 @@ impl fmt::Display for FactValue {
         match self {
             FactValue::Literal(v) => write!(f, "{}", v),
             FactValue::SpecReference(spec_ref) => {
-                if spec_ref.is_registry {
-                    write!(f, "spec @{}", spec_ref.name)
-                } else {
-                    write!(f, "spec {}", spec_ref.name)
-                }
+                write!(f, "spec {}", spec_ref)
             }
             FactValue::TypeDeclaration {
                 base,
@@ -1520,11 +1513,7 @@ impl<'a> fmt::Display for AsLemmaSource<'a, FactValue> {
         match self.0 {
             FactValue::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
             FactValue::SpecReference(spec_ref) => {
-                if spec_ref.is_registry {
-                    write!(f, "spec @{}", spec_ref.name)
-                } else {
-                    write!(f, "spec {}", spec_ref.name)
-                }
+                write!(f, "spec {}", spec_ref)
             }
             FactValue::TypeDeclaration {
                 base,

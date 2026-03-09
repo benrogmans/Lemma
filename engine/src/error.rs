@@ -35,7 +35,7 @@ pub enum Error {
     /// is unreachable).
     Registry {
         details: Box<ErrorDetails>,
-        /// The `@...` identifier that failed to resolve (without the leading `@`).
+        /// The `@...` identifier that failed to resolve (includes the leading `@`).
         identifier: String,
         /// The category of failure.
         kind: RegistryErrorKind,
@@ -332,7 +332,7 @@ impl fmt::Display for Error {
                 }
                 write!(
                     f,
-                    "Registry error ({}): @{}: {}",
+                    "Registry error ({}): {}: {}",
                     kind, identifier, details.message
                 )?;
                 if let Some(suggestion) = &details.suggestion {

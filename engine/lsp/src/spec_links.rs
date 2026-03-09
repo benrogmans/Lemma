@@ -27,8 +27,6 @@ pub fn find_registry_links(text: &str, registry: &dyn Registry) -> Vec<DocumentL
             byte_index += 1; // skip the '@'
 
             if byte_index < bytes.len() && bytes[byte_index].is_ascii_alphabetic() {
-                let identifier_start = byte_index;
-
                 while byte_index < bytes.len() {
                     let byte = bytes[byte_index];
                     if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' || byte == b'/'
@@ -39,11 +37,11 @@ pub fn find_registry_links(text: &str, registry: &dyn Registry) -> Vec<DocumentL
                     }
                 }
 
-                let base_name = &text[identifier_start..byte_index];
                 let link_end_byte = byte_index;
+                let full_identifier = &text[at_byte_start..link_end_byte];
 
-                if !base_name.is_empty() {
-                    if let Some(url_string) = registry.url_for_id(base_name, None) {
+                if full_identifier.len() > 1 {
+                    if let Some(url_string) = registry.url_for_id(full_identifier, None) {
                         if let Ok(target_url) = Url::parse(&url_string) {
                             let start_position = byte_offset_to_position(text, at_byte_start);
                             let end_position = byte_offset_to_position(text, link_end_byte);
@@ -54,7 +52,7 @@ pub fn find_registry_links(text: &str, registry: &dyn Registry) -> Vec<DocumentL
                                     end: end_position,
                                 },
                                 target: Some(target_url),
-                                tooltip: Some(format!("Open @{} in Registry", base_name)),
+                                tooltip: Some(format!("Open {} in Registry", full_identifier)),
                                 data: None,
                             });
                         }
@@ -131,6 +129,24 @@ mod tests {
         }
     }
 
+    /// Verify that the scanned identifier includes `@`.
+    #[test]
+    fn identifier_passed_to_registry_includes_at_prefix() {
+        let text = "fact ext: spec @user/workspace/somespec";
+        let registry = TestLinkRegistry;
+        let links = find_registry_links(text, &registry);
+        assert_eq!(links.len(), 1);
+        assert!(
+            links[0]
+                .target
+                .as_ref()
+                .unwrap()
+                .as_str()
+                .contains("@user/workspace/somespec"),
+            "identifier passed to url_for_id should include @"
+        );
+    }
+
     #[test]
     fn finds_spec_reference_with_at_prefix() {
         let text = "spec example\nfact ext: spec @user/workspace/somespec";
@@ -139,7 +155,7 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(
             links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://test.lemma.dev/user/workspace/somespec")
+            Some("https://test.lemma.dev/@user/workspace/somespec")
         );
         // The link should span from '@' to the end of the identifier.
         assert_eq!(links[0].range.start.line, 1);
@@ -154,7 +170,7 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(
             links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://test.lemma.dev/lemma/std/finance")
+            Some("https://test.lemma.dev/@lemma/std/finance")
         );
     }
 
@@ -203,7 +219,7 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(
             links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://test.lemma.dev/user/workspace/somespec")
+            Some("https://test.lemma.dev/@user/workspace/somespec")
         );
     }
 
@@ -215,7 +231,7 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(
             links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://test.lemma.dev/owner/repo/myspec")
+            Some("https://test.lemma.dev/@owner/repo/myspec")
         );
     }
 
@@ -227,7 +243,7 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(
             links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://test.lemma.dev/owner/repo/myspec")
+            Some("https://test.lemma.dev/@owner/repo/myspec")
         );
     }
 
@@ -239,7 +255,7 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(
             links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://test.lemma.dev/owner/repo/myspec")
+            Some("https://test.lemma.dev/@owner/repo/myspec")
         );
     }
 }

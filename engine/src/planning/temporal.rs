@@ -188,7 +188,7 @@ fn format_coverage_gap(
 
     let suggestion = if gap_start.is_none() && gap_end.is_none() && dep_name.starts_with('@') {
         format!(
-            "Run `lemma get` or `lemma get @{}` to fetch this dependency.",
+            "Run `lemma get` or `lemma get {}` to fetch this dependency.",
             dep_name
         )
     } else if gap_start.is_none() && spec_from.is_none() {

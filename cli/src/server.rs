@@ -739,7 +739,7 @@ pub mod http {
     }
 
     /// Create a fresh engine by loading all .lemma files from the workspace
-    /// directory and the global deps cache (`dirs::data_dir()/lemma/deps/`).
+    /// directory (including `.deps/` for cached registry dependencies).
     async fn reload_engine(workdir: &std::path::Path) -> anyhow::Result<Engine> {
         use walkdir::WalkDir;
 
@@ -753,12 +753,6 @@ pub mod http {
                 let source_id = path.to_string_lossy().to_string();
                 let code = std::fs::read_to_string(path)?;
                 files.insert(source_id, code);
-            }
-        }
-
-        if let Ok(deps_dir) = crate::lemma_deps_dir() {
-            if deps_dir.is_dir() {
-                crate::load_deps_into(&deps_dir, &mut files)?;
             }
         }
 

@@ -10,7 +10,7 @@ You can compile Lemma without a registry for complete isolation, or implement yo
 
 The `Engine` does not hold a registry and never performs network calls. External `@...` references must be resolved before calling `add_lemma_files`:
 
-- **CLI:** `lemma get` resolves `@` references and caches them in the global deps directory. All other commands (`run`, `server`, `hash`, `show`, `list`, `mcp`) load cached deps as regular `.lemma` files.
+- **CLI:** `lemma get` resolves `@` references and caches them in `.deps/` inside the workspace directory. All other commands (`run`, `server`, `hash`, `show`, `list`, `mcp`) load cached deps as regular `.lemma` files. Since there is no lock file, `.deps/` should be checked into version control.
 - **Crate users:** Call `resolve_registry_references` to resolve deps, then include the resulting source in the file map passed to `add_lemma_files`.
 - **WASM:** Resolve deps via `resolve_registry_references` with the browser `fetch()` fetcher, then pass everything to `add_lemma_files`.
 

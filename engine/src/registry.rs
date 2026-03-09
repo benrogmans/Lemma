@@ -240,8 +240,9 @@ impl LemmaBase {
     }
 
     /// Base URL for the spec; when effective is set, appends ?effective=... for temporal resolution.
+    /// `name` includes the leading `@` (e.g. `@org/repo/spec`).
     fn source_url(&self, name: &str, effective: Option<&DateTimeValue>) -> String {
-        let base = format!("{}/@{}.lemma", Self::BASE_URL, name);
+        let base = format!("{}/{}.lemma", Self::BASE_URL, name);
         match effective {
             None => base,
             Some(d) => format!("{}?effective={}", base, d),
@@ -249,8 +250,9 @@ impl LemmaBase {
     }
 
     /// Human-facing URL for navigation; when effective is set, appends ?effective=... for linking to a specific temporal version.
+    /// `name` includes the leading `@` (e.g. `@org/repo/spec`).
     fn navigation_url(&self, name: &str, effective: Option<&DateTimeValue>) -> String {
-        let base = format!("{}/@{}", Self::BASE_URL, name);
+        let base = format!("{}/{}", Self::BASE_URL, name);
         match effective {
             None => base,
             Some(d) => format!("{}?effective={}", base, d),
@@ -258,10 +260,11 @@ impl LemmaBase {
     }
 
     /// Format a display identifier for error messages, e.g. `"@owner/repo/spec"` or `"@owner/repo/spec 2026-01-01"`.
+    /// `name` includes the leading `@`.
     fn display_id(name: &str, effective: Option<&DateTimeValue>) -> String {
         match effective {
-            None => format!("@{}", name),
-            Some(d) => format!("@{} {}", name, d),
+            None => name.to_string(),
+            Some(d) => format!("{} {}", name, d),
         }
     }
 
@@ -369,13 +372,10 @@ pub async fn resolve_registry_references(
             }
             already_requested.insert(dedup);
 
-            let registry_name = reference.name.strip_prefix('@').unwrap_or(&reference.name);
             let bundle_result = match reference.kind {
-                RegistryReferenceKind::Spec => registry.fetch_specs(registry_name).await,
-                RegistryReferenceKind::TypeImport => registry.fetch_types(registry_name).await,
+                RegistryReferenceKind::Spec => registry.fetch_specs(&reference.name).await,
+                RegistryReferenceKind::TypeImport => registry.fetch_types(&reference.name).await,
             };
-
-            let display_id = reference.name.clone();
 
             let bundle = match bundle_result {
                 Ok(b) => b,
@@ -398,7 +398,7 @@ pub async fn resolve_registry_references(
                     round_errors.push(Error::registry(
                         registry_error.message,
                         Some(reference.source.clone()),
-                        display_id,
+                        &reference.name,
                         registry_error.kind,
                         suggestion,
                     ));
@@ -555,13 +555,13 @@ mod tests {
             }
         }
 
-        /// Add a bundle containing all zones for this identifier.
+        /// Add a bundle containing all zones for this identifier (including `@` prefix).
         fn add_spec_bundle(&mut self, identifier: &str, lemma_source: &str) {
             self.bundles.insert(
                 identifier.to_string(),
                 RegistryBundle {
                     lemma_source: lemma_source.to_string(),
-                    attribute: format!("@{}", identifier),
+                    attribute: identifier.to_string(),
                 },
             );
         }
@@ -645,7 +645,7 @@ rule value: external.quantity"#;
 
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
-            "org/project/helper",
+            "@org/project/helper",
             r#"spec @org/project/helper
 fact quantity: 42"#,
         );
@@ -711,14 +711,13 @@ fact a: spec @org/project/spec_a"#;
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
         let mut registry = TestRegistry::new();
-        // spec_a depends on spec_b
         registry.add_spec_bundle(
-            "org/project/spec_a",
+            "@org/project/spec_a",
             r#"spec @org/project/spec_a
 fact b: spec @org/project/spec_b"#,
         );
         registry.add_spec_bundle(
-            "org/project/spec_b",
+            "@org/project/spec_b",
             r#"spec @org/project/spec_b
 fact value: 99"#,
         );
@@ -753,9 +752,8 @@ fact a: spec @org/project/spec_a"#;
         sources.insert("local.lemma".to_string(), local_source.to_string());
 
         let mut registry = TestRegistry::new();
-        // Registry returns both spec_a and spec_b in one bundle
         registry.add_spec_bundle(
-            "org/project/spec_a",
+            "@org/project/spec_a",
             r#"spec @org/project/spec_a
 fact b: spec @org/project/spec_b
 
@@ -907,7 +905,7 @@ fact b: spec @org/shared"#;
 
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
-            "org/shared",
+            "@org/shared",
             r#"spec @org/shared
 fact value: 1"#,
         );
@@ -943,7 +941,7 @@ fact price: [money]"#;
 
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
-            "lemma/std/finance",
+            "@lemma/std/finance",
             r#"spec @lemma/std/finance
 type money: scale
  -> unit eur 1.00
@@ -1038,7 +1036,7 @@ type money: scale
         #[test]
         fn source_url_without_effective() {
             let registry = LemmaBase::new();
-            let url = registry.source_url("user/workspace/somespec", None);
+            let url = registry.source_url("@user/workspace/somespec", None);
             assert_eq!(
                 url,
                 format!("{}/@user/workspace/somespec.lemma", LemmaBase::BASE_URL)
@@ -1058,7 +1056,7 @@ type money: scale
                 microsecond: 0,
                 timezone: None,
             };
-            let url = registry.source_url("user/workspace/somespec", Some(&effective));
+            let url = registry.source_url("@user/workspace/somespec", Some(&effective));
             assert_eq!(
                 url,
                 format!(
@@ -1071,7 +1069,7 @@ type money: scale
         #[test]
         fn source_url_for_deeply_nested_identifier() {
             let registry = LemmaBase::new();
-            let url = registry.source_url("org/team/project/subdir/spec", None);
+            let url = registry.source_url("@org/team/project/subdir/spec", None);
             assert_eq!(
                 url,
                 format!(
@@ -1084,7 +1082,7 @@ type money: scale
         #[test]
         fn navigation_url_without_effective() {
             let registry = LemmaBase::new();
-            let url = registry.navigation_url("user/workspace/somespec", None);
+            let url = registry.navigation_url("@user/workspace/somespec", None);
             assert_eq!(
                 url,
                 format!("{}/@user/workspace/somespec", LemmaBase::BASE_URL)
@@ -1104,7 +1102,7 @@ type money: scale
                 microsecond: 0,
                 timezone: None,
             };
-            let url = registry.navigation_url("user/workspace/somespec", Some(&effective));
+            let url = registry.navigation_url("@user/workspace/somespec", Some(&effective));
             assert_eq!(
                 url,
                 format!(
@@ -1117,7 +1115,7 @@ type money: scale
         #[test]
         fn navigation_url_for_deeply_nested_identifier() {
             let registry = LemmaBase::new();
-            let url = registry.navigation_url("org/team/project/subdir/spec", None);
+            let url = registry.navigation_url("@org/team/project/subdir/spec", None);
             assert_eq!(
                 url,
                 format!("{}/@org/team/project/subdir/spec", LemmaBase::BASE_URL)
@@ -1127,7 +1125,7 @@ type money: scale
         #[test]
         fn url_for_id_returns_navigation_url() {
             let registry = LemmaBase::new();
-            let url = registry.url_for_id("user/workspace/somespec", None);
+            let url = registry.url_for_id("@user/workspace/somespec", None);
             assert_eq!(
                 url,
                 Some(format!("{}/@user/workspace/somespec", LemmaBase::BASE_URL))
@@ -1147,7 +1145,7 @@ type money: scale
                 microsecond: 0,
                 timezone: None,
             };
-            let url = registry.url_for_id("owner/repo/spec", Some(&effective));
+            let url = registry.url_for_id("@owner/repo/spec", Some(&effective));
             assert_eq!(
                 url,
                 Some(format!(
@@ -1160,7 +1158,7 @@ type money: scale
         #[test]
         fn url_for_id_returns_navigation_url_for_nested_path() {
             let registry = LemmaBase::new();
-            let url = registry.url_for_id("lemma/std/finance", None);
+            let url = registry.url_for_id("@lemma/std/finance", None);
             assert_eq!(
                 url,
                 Some(format!("{}/@lemma/std/finance", LemmaBase::BASE_URL))
@@ -1187,7 +1185,7 @@ type money: scale
                 "spec org/my_spec\nfact x: 1",
             )));
 
-            let bundle = registry.fetch_source("org/my_spec").await.unwrap();
+            let bundle = registry.fetch_source("@org/my_spec").await.unwrap();
 
             assert_eq!(bundle.lemma_source, "spec org/my_spec\nfact x: 1");
             assert_eq!(bundle.attribute, "@org/my_spec");
@@ -1203,7 +1201,7 @@ type money: scale
             });
             let registry = LemmaBase::with_fetcher(Box::new(mock));
 
-            let _ = registry.fetch_source("user/workspace/somespec").await;
+            let _ = registry.fetch_source("@user/workspace/somespec").await;
 
             assert_eq!(
                 *captured_url.lock().unwrap(),
@@ -1216,7 +1214,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
 
-            let err = registry.fetch_source("org/missing").await.unwrap_err();
+            let err = registry.fetch_source("@org/missing").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::NotFound);
             assert!(
@@ -1236,7 +1234,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(500)));
 
-            let err = registry.fetch_source("org/broken").await.unwrap_err();
+            let err = registry.fetch_source("@org/broken").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::ServerError);
             assert!(
@@ -1251,7 +1249,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(502)));
 
-            let err = registry.fetch_source("org/broken").await.unwrap_err();
+            let err = registry.fetch_source("@org/broken").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::ServerError);
         }
@@ -1261,7 +1259,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(401)));
 
-            let err = registry.fetch_source("org/secret").await.unwrap_err();
+            let err = registry.fetch_source("@org/secret").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::Unauthorized);
             assert!(err.message.contains("HTTP 401"));
@@ -1272,7 +1270,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(403)));
 
-            let err = registry.fetch_source("org/private").await.unwrap_err();
+            let err = registry.fetch_source("@org/private").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::Unauthorized);
             assert!(
@@ -1287,7 +1285,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(418)));
 
-            let err = registry.fetch_source("org/teapot").await.unwrap_err();
+            let err = registry.fetch_source("@org/teapot").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::Other);
             assert!(err.message.contains("HTTP 418"));
@@ -1299,7 +1297,7 @@ type money: scale
                 MockHttpFetcher::always_failing_with_network_error("connection refused"),
             ));
 
-            let err = registry.fetch_source("org/unreachable").await.unwrap_err();
+            let err = registry.fetch_source("@org/unreachable").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::NetworkError);
             assert!(
@@ -1322,7 +1320,7 @@ type money: scale
                 ),
             ));
 
-            let err = registry.fetch_source("org/spec").await.unwrap_err();
+            let err = registry.fetch_source("@org/spec").await.unwrap_err();
 
             assert_eq!(err.kind, RegistryErrorKind::NetworkError);
             assert!(
@@ -1347,7 +1345,7 @@ type money: scale
                 "spec org/resolved\nfact a: 1",
             )));
 
-            let bundle = registry.fetch_specs("org/resolved").await.unwrap();
+            let bundle = registry.fetch_specs("@org/resolved").await.unwrap();
 
             assert_eq!(bundle.lemma_source, "spec org/resolved\nfact a: 1");
             assert_eq!(bundle.attribute, "@org/resolved");
@@ -1359,7 +1357,7 @@ type money: scale
                 "spec lemma/std/finance\ntype money: scale\n -> unit eur 1.00",
             )));
 
-            let bundle = registry.fetch_types("lemma/std/finance").await.unwrap();
+            let bundle = registry.fetch_types("@lemma/std/finance").await.unwrap();
 
             assert_eq!(bundle.attribute, "@lemma/std/finance");
             assert!(
@@ -1374,7 +1372,7 @@ type money: scale
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
 
-            let err = registry.fetch_specs("org/missing").await.unwrap_err();
+            let err = registry.fetch_specs("@org/missing").await.unwrap_err();
 
             assert!(err.message.contains("HTTP 404"));
         }
@@ -1385,7 +1383,7 @@ type money: scale
                 MockHttpFetcher::always_failing_with_network_error("timeout"),
             ));
 
-            let err = registry.fetch_types("lemma/std/types").await.unwrap_err();
+            let err = registry.fetch_types("@lemma/std/types").await.unwrap_err();
 
             assert!(err.message.contains("timeout"));
         }
@@ -1394,7 +1392,7 @@ type money: scale
         async fn fetch_source_returns_empty_body_as_valid_bundle() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning("")));
 
-            let bundle = registry.fetch_source("org/empty").await.unwrap();
+            let bundle = registry.fetch_source("@org/empty").await.unwrap();
 
             assert_eq!(bundle.lemma_source, "");
             assert_eq!(bundle.attribute, "@org/empty");

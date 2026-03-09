@@ -25,7 +25,6 @@ super-table = { version = "1.1.1", features = ["custom_styling"] }
 inquire = { version = "0.9", features = ["date"] }
 rust_decimal.workspace = true
 strip-ansi-escapes = "0.2"
-dirs = "6"
 
 # Server dependencies
 axum = "0.8.8"

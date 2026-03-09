@@ -267,7 +267,7 @@ fn format_error(error: &Error) -> String {
             kind,
         } => {
             format!(
-                "Registry Error ({}): @{}: {}",
+                "Registry Error ({}): {}: {}",
                 kind, identifier, details.message
             )
         }
