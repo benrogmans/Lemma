@@ -333,44 +333,14 @@ fn parse_expression_impl(
             )
         }
 
-        Rule::date_calendar_expression => {
-            return parse_date_calendar_expression(
+        Rule::base_with_suffix => {
+            return parse_base_with_suffix(
                 pair,
                 depth_tracker,
                 attribute,
                 spec_name,
                 source_text.clone(),
             );
-        }
-
-        Rule::date_relative_expression => {
-            return parse_date_relative_expression(
-                pair,
-                depth_tracker,
-                attribute,
-                spec_name,
-                source_text.clone(),
-            );
-        }
-
-        Rule::conversion_expression => {
-            return parse_conversion_expression(
-                pair,
-                depth_tracker,
-                attribute,
-                spec_name,
-                source_text.clone(),
-            );
-        }
-
-        Rule::comparison_expression => {
-            return parse_comparison_expression(
-                pair,
-                depth_tracker,
-                attribute,
-                spec_name,
-                source_text.clone(),
-            )
         }
 
         Rule::sqrt_expr
@@ -428,26 +398,8 @@ fn parse_expression_impl(
                 ));
             }
 
-            Rule::date_calendar_expression => {
-                return parse_date_calendar_expression(
-                    inner_pair,
-                    depth_tracker,
-                    attribute,
-                    spec_name,
-                    source_text.clone(),
-                );
-            }
-            Rule::date_relative_expression => {
-                return parse_date_relative_expression(
-                    inner_pair,
-                    depth_tracker,
-                    attribute,
-                    spec_name,
-                    source_text.clone(),
-                );
-            }
-            Rule::conversion_expression => {
-                return parse_conversion_expression(
+            Rule::base_with_suffix => {
+                return parse_base_with_suffix(
                     inner_pair,
                     depth_tracker,
                     attribute,
@@ -458,7 +410,6 @@ fn parse_expression_impl(
             Rule::expression
             | Rule::and_expression
             | Rule::and_operand
-            | Rule::comparison_expression
             | Rule::base_expression
             | Rule::term
             | Rule::power
@@ -530,73 +481,357 @@ fn parse_and_operand(
 ) -> Result<Expression, Error> {
     match pair.as_rule() {
         Rule::and_operand => {
-            let mut inner = pair.into_inner();
-            let first = inner
+            let first = pair
+                .into_inner()
                 .next()
                 .expect("BUG: grammar guarantees and_operand is non-empty");
-            parse_and_operand(
+            parse_and_operand(first, depth_tracker, attribute, spec_name, source_text)
+        }
+        Rule::not_expr => {
+            parse_not_expression(pair, depth_tracker, attribute, spec_name, source_text)
+        }
+        Rule::base_with_suffix => {
+            parse_base_with_suffix(pair, depth_tracker, attribute, spec_name, source_text)
+        }
+        Rule::base_expression => {
+            parse_base_expression(pair, depth_tracker, attribute, spec_name, source_text)
+        }
+        Rule::term | Rule::power | Rule::factor | Rule::primary => {
+            parse_expression_impl(pair, depth_tracker, attribute, spec_name, source_text)
+        }
+        _ => parse_expression_impl(pair, depth_tracker, attribute, spec_name, source_text),
+    }
+}
+
+fn parse_base_with_suffix(
+    pair: Pair<Rule>,
+    depth_tracker: &mut DepthTracker,
+    attribute: &str,
+    spec_name: &str,
+    source_text: Arc<str>,
+) -> Result<Expression, Error> {
+    let original_pair = pair.clone();
+    let mut inner = pair.into_inner();
+
+    let base_pair = inner
+        .next()
+        .expect("BUG: grammar guarantees base_with_suffix has base_expression");
+    let base = parse_base_expression(
+        base_pair,
+        depth_tracker,
+        attribute,
+        spec_name,
+        source_text.clone(),
+    )?;
+
+    let Some(suffix) = inner.next() else {
+        return Ok(base);
+    };
+
+    match suffix.as_rule() {
+        Rule::date_not_in_calendar_suffix => {
+            let unit = extract_calendar_unit(&suffix);
+            Ok(create_expression_with_location(
+                ExpressionKind::DateCalendar(DateCalendarKind::NotIn, unit, Arc::new(base)),
+                &original_pair,
+                attribute,
+                spec_name,
+                source_text,
+            ))
+        }
+        Rule::in_suffix => parse_in_suffix_expr(
+            base,
+            suffix,
+            &original_pair,
+            depth_tracker,
+            attribute,
+            spec_name,
+            source_text,
+        ),
+        Rule::comparison_suffix => parse_comparison_suffix_expr(
+            base,
+            suffix,
+            &original_pair,
+            depth_tracker,
+            attribute,
+            spec_name,
+            source_text,
+        ),
+        _ => unreachable!(
+            "BUG: unexpected suffix in base_with_suffix: {:?}",
+            suffix.as_rule()
+        ),
+    }
+}
+
+fn parse_in_suffix_expr(
+    base: Expression,
+    suffix: Pair<Rule>,
+    original_pair: &Pair<Rule>,
+    depth_tracker: &mut DepthTracker,
+    attribute: &str,
+    spec_name: &str,
+    source_text: Arc<str>,
+) -> Result<Expression, Error> {
+    let in_kind = suffix
+        .into_inner()
+        .next()
+        .expect("BUG: grammar guarantees in_suffix has inner rule");
+
+    match in_kind.as_rule() {
+        Rule::in_date_calendar_relative => {
+            let (cal_kind, unit) = extract_date_calendar_relative(&in_kind);
+            Ok(create_expression_with_location(
+                ExpressionKind::DateCalendar(cal_kind, unit, Arc::new(base)),
+                original_pair,
+                attribute,
+                spec_name,
+                source_text,
+            ))
+        }
+        Rule::in_date_calendar => {
+            let unit = extract_calendar_unit(&in_kind);
+            Ok(create_expression_with_location(
+                ExpressionKind::DateCalendar(DateCalendarKind::Current, unit, Arc::new(base)),
+                original_pair,
+                attribute,
+                spec_name,
+                source_text,
+            ))
+        }
+        Rule::in_date_relative => {
+            let mut rel_kind = None;
+            let mut tolerance = None;
+            for child in in_kind.into_inner() {
+                match child.as_rule() {
+                    Rule::date_relative_kind => {
+                        rel_kind = Some(parse_date_relative_kind(&child));
+                    }
+                    Rule::base_expression => {
+                        tolerance = Some(parse_base_expression(
+                            child,
+                            depth_tracker,
+                            attribute,
+                            spec_name,
+                            source_text.clone(),
+                        )?);
+                    }
+                    _ => {}
+                }
+            }
+            let rel_kind =
+                rel_kind.expect("BUG: grammar guarantees in_date_relative has date_relative_kind");
+            Ok(create_expression_with_location(
+                ExpressionKind::DateRelative(rel_kind, Arc::new(base), tolerance.map(Arc::new)),
+                original_pair,
+                attribute,
+                spec_name,
+                source_text,
+            ))
+        }
+        Rule::in_conversion => {
+            let mut unit_name = None;
+            let mut comp_suffix = None;
+            for child in in_kind.into_inner() {
+                match child.as_rule() {
+                    Rule::conversion_target_name => {
+                        unit_name = Some(child.as_str().to_string());
+                    }
+                    Rule::comparison_suffix => {
+                        comp_suffix = Some(child);
+                    }
+                    _ => {}
+                }
+            }
+            let unit = unit_name
+                .expect("BUG: grammar guarantees in_conversion has conversion_target_name");
+            let target = parse_conversion_target(&unit);
+            let converted = create_expression_with_location(
+                ExpressionKind::UnitConversion(Arc::new(base), target),
+                original_pair,
+                attribute,
+                spec_name,
+                source_text.clone(),
+            );
+            if let Some(comp) = comp_suffix {
+                parse_comparison_suffix_expr(
+                    converted,
+                    comp,
+                    original_pair,
+                    depth_tracker,
+                    attribute,
+                    spec_name,
+                    source_text,
+                )
+            } else {
+                Ok(converted)
+            }
+        }
+        _ => unreachable!(
+            "BUG: unexpected in_suffix inner rule: {:?}",
+            in_kind.as_rule()
+        ),
+    }
+}
+
+fn parse_comparison_suffix_expr(
+    left: Expression,
+    suffix: Pair<Rule>,
+    original_pair: &Pair<Rule>,
+    depth_tracker: &mut DepthTracker,
+    attribute: &str,
+    spec_name: &str,
+    source_text: Arc<str>,
+) -> Result<Expression, Error> {
+    let mut inner = suffix.into_inner();
+
+    let op_pair = inner
+        .next()
+        .expect("BUG: grammar guarantees comparison_suffix has operator");
+    let operator = extract_comp_operator(op_pair);
+
+    let rhs_pair = inner
+        .next()
+        .expect("BUG: grammar guarantees comparison_suffix has rhs");
+    let right = parse_comparison_rhs(
+        rhs_pair,
+        depth_tracker,
+        attribute,
+        spec_name,
+        source_text.clone(),
+    )?;
+
+    Ok(create_expression_with_location(
+        ExpressionKind::Comparison(Arc::new(left), operator, Arc::new(right)),
+        original_pair,
+        attribute,
+        spec_name,
+        source_text,
+    ))
+}
+
+fn parse_comparison_rhs(
+    pair: Pair<Rule>,
+    depth_tracker: &mut DepthTracker,
+    attribute: &str,
+    spec_name: &str,
+    source_text: Arc<str>,
+) -> Result<Expression, Error> {
+    let original_pair = pair.clone();
+    let mut inner = pair.into_inner();
+    let first = inner
+        .next()
+        .expect("BUG: grammar guarantees comparison_rhs is non-empty");
+
+    match first.as_rule() {
+        Rule::not_expr => {
+            parse_not_expression(first, depth_tracker, attribute, spec_name, source_text)
+        }
+        Rule::base_expression => {
+            let base = parse_base_expression(
                 first,
                 depth_tracker,
                 attribute,
                 spec_name,
                 source_text.clone(),
-            )
+            )?;
+            if let Some(conv_suffix) = inner.next() {
+                let unit = conv_suffix
+                    .into_inner()
+                    .next()
+                    .expect("BUG: grammar guarantees conversion_rhs_suffix has target")
+                    .as_str()
+                    .to_string();
+                let target = parse_conversion_target(&unit);
+                Ok(create_expression_with_location(
+                    ExpressionKind::UnitConversion(Arc::new(base), target),
+                    &original_pair,
+                    attribute,
+                    spec_name,
+                    source_text,
+                ))
+            } else {
+                Ok(base)
+            }
         }
-        Rule::not_expr => parse_not_expression(
-            pair,
-            depth_tracker,
-            attribute,
-            spec_name,
-            source_text.clone(),
+        _ => unreachable!(
+            "BUG: unexpected comparison_rhs inner rule: {:?}",
+            first.as_rule()
         ),
-        Rule::comparison_expression => parse_comparison_expression(
-            pair,
-            depth_tracker,
-            attribute,
-            spec_name,
-            source_text.clone(),
-        ),
-        Rule::date_calendar_expression => parse_date_calendar_expression(
-            pair,
-            depth_tracker,
-            attribute,
-            spec_name,
-            source_text.clone(),
-        ),
-        Rule::date_relative_expression => parse_date_relative_expression(
-            pair,
-            depth_tracker,
-            attribute,
-            spec_name,
-            source_text.clone(),
-        ),
-        Rule::conversion_expression => parse_conversion_expression(
-            pair,
-            depth_tracker,
-            attribute,
-            spec_name,
-            source_text.clone(),
-        ),
-        Rule::base_expression => parse_base_expression(
-            pair,
-            depth_tracker,
-            attribute,
-            spec_name,
-            source_text.clone(),
-        ),
-        Rule::term | Rule::power | Rule::factor | Rule::primary => parse_expression_impl(
-            pair,
-            depth_tracker,
-            attribute,
-            spec_name,
-            source_text.clone(),
-        ),
-        _ => parse_expression_impl(
-            pair,
-            depth_tracker,
-            attribute,
-            spec_name,
-            source_text.clone(),
+    }
+}
+
+fn extract_comp_operator(pair: Pair<Rule>) -> ComparisonComputation {
+    let inner = if pair.as_rule() == Rule::comp_operator {
+        pair.into_inner()
+            .next()
+            .expect("BUG: grammar guarantees comp_operator has inner rule")
+    } else {
+        pair
+    };
+    match inner.as_rule() {
+        Rule::comp_gt => ComparisonComputation::GreaterThan,
+        Rule::comp_lt => ComparisonComputation::LessThan,
+        Rule::comp_gte => ComparisonComputation::GreaterThanOrEqual,
+        Rule::comp_lte => ComparisonComputation::LessThanOrEqual,
+        Rule::comp_eq => ComparisonComputation::Equal,
+        Rule::comp_ne => ComparisonComputation::NotEqual,
+        Rule::comp_is => ComparisonComputation::Is,
+        Rule::comp_is_not => ComparisonComputation::IsNot,
+        _ => unreachable!("BUG: invalid comparison operator: {:?}", inner.as_rule()),
+    }
+}
+
+fn extract_calendar_unit(pair: &Pair<Rule>) -> CalendarUnit {
+    for child in pair.clone().into_inner() {
+        if child.as_rule() == Rule::calendar_unit_keyword {
+            return match child.as_str().to_lowercase().as_str() {
+                "year" => CalendarUnit::Year,
+                "month" => CalendarUnit::Month,
+                "week" => CalendarUnit::Week,
+                other => unreachable!("BUG: unexpected calendar unit: {}", other),
+            };
+        }
+    }
+    unreachable!("BUG: grammar guarantees suffix has calendar_unit_keyword")
+}
+
+fn extract_date_calendar_relative(pair: &Pair<Rule>) -> (DateCalendarKind, CalendarUnit) {
+    let mut kind = None;
+    let mut unit = None;
+    for child in pair.clone().into_inner() {
+        match child.as_rule() {
+            Rule::date_relative_kind => {
+                kind = Some(match child.as_str().to_lowercase().as_str() {
+                    "past" => DateCalendarKind::Past,
+                    "future" => DateCalendarKind::Future,
+                    other => unreachable!("BUG: unexpected date_relative_kind: {}", other),
+                });
+            }
+            Rule::calendar_unit_keyword => {
+                unit = Some(match child.as_str().to_lowercase().as_str() {
+                    "year" => CalendarUnit::Year,
+                    "month" => CalendarUnit::Month,
+                    "week" => CalendarUnit::Week,
+                    other => unreachable!("BUG: unexpected calendar unit: {}", other),
+                });
+            }
+            _ => {}
+        }
+    }
+    (
+        kind.expect("BUG: grammar guarantees has date_relative_kind"),
+        unit.expect("BUG: grammar guarantees has calendar_unit_keyword"),
+    )
+}
+
+fn parse_date_relative_kind(pair: &Pair<Rule>) -> DateRelativeKind {
+    match pair.as_str().to_lowercase().as_str() {
+        "past" => DateRelativeKind::InPast,
+        "future" => DateRelativeKind::InFuture,
+        other => unreachable!(
+            "BUG: grammar guarantees date_relative_kind is 'past' or 'future', got '{}'",
+            other
         ),
     }
 }
@@ -695,52 +930,6 @@ fn parse_base_expression(
     }
 
     Ok(left)
-}
-
-fn parse_conversion_expression(
-    pair: Pair<Rule>,
-    depth_tracker: &mut DepthTracker,
-    attribute: &str,
-    spec_name: &str,
-    source_text: Arc<str>,
-) -> Result<Expression, Error> {
-    let original_pair = pair.clone();
-    let mut base: Option<Expression> = None;
-    let mut unit: Option<String> = None;
-
-    for inner in pair.clone().into_inner() {
-        match inner.as_rule() {
-            Rule::base_expression => {
-                base = Some(parse_base_expression(
-                    inner,
-                    depth_tracker,
-                    attribute,
-                    spec_name,
-                    source_text.clone(),
-                )?);
-            }
-            Rule::conversion_target_name => {
-                unit = Some(inner.as_str().to_string());
-            }
-            _ => {}
-        }
-    }
-
-    let base_expr =
-        base.expect("BUG: grammar guarantees conversion_expression has base expression");
-    let unit_name = unit.expect("BUG: grammar guarantees conversion_expression has unit");
-
-    let target = parse_conversion_target(&unit_name);
-
-    let kind = ExpressionKind::UnitConversion(Arc::new(base_expr), target);
-
-    Ok(create_expression_with_location(
-        kind,
-        &original_pair,
-        attribute,
-        spec_name,
-        source_text.clone(),
-    ))
 }
 
 fn parse_conversion_target(unit_str: &str) -> ConversionTarget {
@@ -918,215 +1107,6 @@ fn parse_factor(
     } else {
         Ok(expr)
     }
-}
-
-fn parse_comparison_expression(
-    pair: Pair<Rule>,
-    depth_tracker: &mut DepthTracker,
-    attribute: &str,
-    spec_name: &str,
-    source_text: Arc<str>,
-) -> Result<Expression, Error> {
-    let mut pairs = pair.clone().into_inner();
-    let left = parse_expression(
-        pairs
-            .next()
-            .expect("BUG: grammar guarantees comparison has left operand"),
-        depth_tracker,
-        attribute,
-        spec_name,
-        source_text.clone(),
-    )?;
-
-    if let Some(op_pair) = pairs.next() {
-        let operator = match op_pair.as_rule() {
-            Rule::comp_operator => {
-                let inner_pair = op_pair
-                    .into_inner()
-                    .next()
-                    .expect("BUG: grammar guarantees comp_operator has inner rule");
-                match inner_pair.as_rule() {
-                    Rule::comp_gt => ComparisonComputation::GreaterThan,
-                    Rule::comp_lt => ComparisonComputation::LessThan,
-                    Rule::comp_gte => ComparisonComputation::GreaterThanOrEqual,
-                    Rule::comp_lte => ComparisonComputation::LessThanOrEqual,
-                    Rule::comp_eq => ComparisonComputation::Equal,
-                    Rule::comp_ne => ComparisonComputation::NotEqual,
-                    Rule::comp_is => ComparisonComputation::Is,
-                    Rule::comp_is_not => ComparisonComputation::IsNot,
-                    _ => {
-                        unreachable!(
-                            "BUG: invalid comparison operator: {:?}",
-                            inner_pair.as_rule()
-                        )
-                    }
-                }
-            }
-            Rule::comp_gt => ComparisonComputation::GreaterThan,
-            Rule::comp_lt => ComparisonComputation::LessThan,
-            Rule::comp_gte => ComparisonComputation::GreaterThanOrEqual,
-            Rule::comp_lte => ComparisonComputation::LessThanOrEqual,
-            Rule::comp_eq => ComparisonComputation::Equal,
-            Rule::comp_ne => ComparisonComputation::NotEqual,
-            Rule::comp_is => ComparisonComputation::Is,
-            Rule::comp_is_not => ComparisonComputation::IsNot,
-            _ => {
-                unreachable!("BUG: invalid comparison operator: {:?}", op_pair.as_rule())
-            }
-        };
-
-        let right = parse_expression(
-            pairs
-                .next()
-                .expect("BUG: grammar guarantees comparison has right operand"),
-            depth_tracker,
-            attribute,
-            spec_name,
-            source_text.clone(),
-        )?;
-
-        let kind = ExpressionKind::Comparison(Arc::new(left), operator, Arc::new(right));
-        return Ok(create_expression_with_location(
-            kind,
-            &pair,
-            attribute,
-            spec_name,
-            source_text.clone(),
-        ));
-    }
-
-    Ok(left)
-}
-
-fn parse_date_relative_expression(
-    pair: Pair<Rule>,
-    depth_tracker: &mut DepthTracker,
-    attribute: &str,
-    spec_name: &str,
-    source_text: Arc<str>,
-) -> Result<Expression, Error> {
-    let original_pair = pair.clone();
-    let mut base_expr: Option<Expression> = None;
-    let mut kind: Option<DateRelativeKind> = None;
-    let mut tolerance: Option<Expression> = None;
-
-    for inner in pair.into_inner() {
-        match inner.as_rule() {
-            Rule::base_expression => {
-                if base_expr.is_none() {
-                    base_expr = Some(parse_base_expression(
-                        inner,
-                        depth_tracker,
-                        attribute,
-                        spec_name,
-                        source_text.clone(),
-                    )?);
-                } else {
-                    tolerance = Some(parse_base_expression(
-                        inner,
-                        depth_tracker,
-                        attribute,
-                        spec_name,
-                        source_text.clone(),
-                    )?);
-                }
-            }
-            Rule::date_relative_kind => {
-                let kind_str = inner.as_str().to_lowercase();
-                kind = Some(match kind_str.as_str() {
-                    "past" => DateRelativeKind::InPast,
-                    "future" => DateRelativeKind::InFuture,
-                    other => {
-                        unreachable!(
-                            "BUG: grammar guarantees date_relative_kind is 'past' or 'future', got '{}'",
-                            other
-                        )
-                    }
-                });
-            }
-            _ => {}
-        }
-    }
-
-    let date_expr =
-        base_expr.expect("BUG: grammar guarantees date_relative_expression has base expression");
-    let relative_kind =
-        kind.expect("BUG: grammar guarantees date_relative_expression has date_relative_kind");
-
-    Ok(create_expression_with_location(
-        ExpressionKind::DateRelative(relative_kind, Arc::new(date_expr), tolerance.map(Arc::new)),
-        &original_pair,
-        attribute,
-        spec_name,
-        source_text.clone(),
-    ))
-}
-
-fn parse_date_calendar_expression(
-    pair: Pair<Rule>,
-    depth_tracker: &mut DepthTracker,
-    attribute: &str,
-    spec_name: &str,
-    source_text: Arc<str>,
-) -> Result<Expression, Error> {
-    let original_pair = pair.clone();
-    let full_text = pair.as_str().to_lowercase();
-    let mut base_expr: Option<Expression> = None;
-    let mut calendar_unit: Option<CalendarUnit> = None;
-
-    for inner in pair.into_inner() {
-        match inner.as_rule() {
-            Rule::base_expression => {
-                if base_expr.is_none() {
-                    base_expr = Some(parse_base_expression(
-                        inner,
-                        depth_tracker,
-                        attribute,
-                        spec_name,
-                        source_text.clone(),
-                    )?);
-                }
-            }
-            Rule::calendar_unit_keyword => {
-                let unit_str = inner.as_str().to_lowercase();
-                calendar_unit = Some(match unit_str.as_str() {
-                    "year" => CalendarUnit::Year,
-                    "month" => CalendarUnit::Month,
-                    "week" => CalendarUnit::Week,
-                    other => {
-                        unreachable!(
-                            "BUG: grammar guarantees calendar_unit_keyword is year/month/week, got '{}'",
-                            other
-                        )
-                    }
-                });
-            }
-            _ => {}
-        }
-    }
-
-    let date_expr =
-        base_expr.expect("BUG: grammar guarantees date_calendar_expression has base expression");
-    let unit = calendar_unit
-        .expect("BUG: grammar guarantees date_calendar_expression has calendar_unit_keyword");
-
-    let calendar_kind = if full_text.contains("not") && full_text.contains("in") {
-        DateCalendarKind::NotIn
-    } else if full_text.contains("past") {
-        DateCalendarKind::Past
-    } else if full_text.contains("future") {
-        DateCalendarKind::Future
-    } else {
-        DateCalendarKind::Current
-    };
-
-    Ok(create_expression_with_location(
-        ExpressionKind::DateCalendar(calendar_kind, unit, Arc::new(date_expr)),
-        &original_pair,
-        attribute,
-        spec_name,
-        source_text.clone(),
-    ))
 }
 
 fn parse_not_expression(
