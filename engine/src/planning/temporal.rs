@@ -242,7 +242,6 @@ mod tests {
                 line: 0,
                 col: 0,
             },
-            spec_name: "test".to_string(),
             source_text: "".into(),
         }
     }

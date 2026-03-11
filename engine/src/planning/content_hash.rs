@@ -502,7 +502,6 @@ mod tests {
                 line: 1,
                 col: 1,
             },
-            "test",
             "".into(),
         )
     }

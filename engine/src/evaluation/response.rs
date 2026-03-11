@@ -75,7 +75,6 @@ mod tests {
                 line: 1,
                 col: 1,
             },
-            "test_spec",
             std::sync::Arc::from("spec test_spec\nfact x: 1\nrule result: x"),
         )
     }

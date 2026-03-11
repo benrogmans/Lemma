@@ -225,7 +225,7 @@ mod tests {
 
         let error_in_file = Error::parsing(
             "bad syntax",
-            Some(lemma::Source::new(
+            lemma::Source::new(
                 "file_a.lemma",
                 Span {
                     start: 0,
@@ -233,14 +233,13 @@ mod tests {
                     line: 1,
                     col: 1,
                 },
-                "test",
                 Arc::from("spec test"),
-            )),
+            ),
             None::<String>,
         );
         let error_in_other_file = Error::parsing(
             "also bad",
-            Some(lemma::Source::new(
+            lemma::Source::new(
                 "file_b.lemma",
                 Span {
                     start: 0,
@@ -248,9 +247,8 @@ mod tests {
                     line: 1,
                     col: 1,
                 },
-                "other",
                 Arc::from("spec other"),
-            )),
+            ),
             None::<String>,
         );
 

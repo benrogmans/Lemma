@@ -139,9 +139,8 @@ pub fn invert(
     provided_facts: &HashSet<FactPath>,
 ) -> Result<InversionResponse, Error> {
     let executable_rule = plan.get_rule(rule_name).ok_or_else(|| {
-        Error::validation(
+        Error::request(
             format!("Rule not found: {}.{}", plan.spec_name, rule_name),
-            None,
             None::<String>,
         )
     })?;

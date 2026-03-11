@@ -133,13 +133,16 @@ fn round_trip_example(filename: &str, source: &str) {
 
     let limits = ResourceLimits::default();
     let original_specs = parse(source, filename, &limits)
-        .unwrap_or_else(|e| panic!("[{}] initial parse failed: {:?}", filename, e));
-    let reformatted_specs = parse(&formatted, filename, &limits).unwrap_or_else(|e| {
-        panic!(
-            "[{}] re-parse of formatted output failed: {:?}\nFormatted output:\n{}",
-            filename, e, formatted
-        )
-    });
+        .unwrap_or_else(|e| panic!("[{}] initial parse failed: {:?}", filename, e))
+        .specs;
+    let reformatted_specs = parse(&formatted, filename, &limits)
+        .unwrap_or_else(|e| {
+            panic!(
+                "[{}] re-parse of formatted output failed: {:?}\nFormatted output:\n{}",
+                filename, e, formatted
+            )
+        })
+        .specs;
 
     assert_eq!(
         original_specs.len(),

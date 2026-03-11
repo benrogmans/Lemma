@@ -327,6 +327,7 @@ pub struct Engine {
     evaluator: Evaluator,
     limits: ResourceLimits,
     hash_pins: HashMap<Arc<LemmaSpec>, String>,
+    total_expression_count: usize,
 }
 
 impl Default for Engine {
@@ -338,6 +339,7 @@ impl Default for Engine {
             evaluator: Evaluator,
             limits: ResourceLimits::default(),
             hash_pins: HashMap::new(),
+            total_expression_count: 0,
         }
     }
 }
@@ -356,6 +358,7 @@ impl Engine {
             evaluator: Evaluator,
             limits,
             hash_pins: HashMap::new(),
+            total_expression_count: 0,
         }
     }
 
@@ -420,12 +423,23 @@ impl Engine {
 
         for (source_id, code) in &files {
             match parse(code, source_id, &self.limits) {
-                Ok(new_specs) => {
+                Ok(result) => {
+                    self.total_expression_count += result.expression_count;
+                    if self.total_expression_count > self.limits.max_total_expression_count {
+                        errors.push(Error::resource_limit_exceeded(
+                            "max_total_expression_count",
+                            self.limits.max_total_expression_count.to_string(),
+                            self.total_expression_count.to_string(),
+                            "Split logic across fewer files or reduce expression complexity",
+                            None::<crate::Source>,
+                        ));
+                        return Err(errors);
+                    }
+                    let new_specs = result.specs;
                     let source_text: Arc<str> = Arc::from(code.as_str());
                     for spec in new_specs {
                         let attribute = spec.attribute.clone().unwrap_or_else(|| spec.name.clone());
                         let start_line = spec.start_line;
-                        let spec_name = spec.name.clone();
 
                         match self.specs.insert_spec(Arc::new(spec)) {
                             Ok(()) => {
@@ -440,7 +454,6 @@ impl Engine {
                                         line: start_line,
                                         col: 0,
                                     },
-                                    &spec_name,
                                     Arc::clone(&source_text),
                                 );
                                 errors.push(Error::validation(
@@ -536,7 +549,7 @@ impl Engine {
                 version_list.join("\n")
             )
         };
-        Error::request(msg, None, None::<String>)
+        Error::request(msg, None::<String>)
     }
 
     /// Get the execution plan for a spec.

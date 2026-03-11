@@ -23,18 +23,6 @@ pub struct Span {
     pub col: usize,
 }
 
-impl Span {
-    pub fn from_pest_span(span: pest::Span) -> Self {
-        let (line, col) = span.start_pos().line_col();
-        Self {
-            start: span.start(),
-            end: span.end(),
-            line,
-            col,
-        }
-    }
-}
-
 /// Tracks expression nesting depth during parsing to prevent stack overflow
 pub struct DepthTracker {
     depth: usize,
@@ -49,13 +37,11 @@ impl DepthTracker {
         }
     }
 
-    pub fn push_depth(&mut self) -> Result<(), String> {
+    /// Returns Ok(()) if within limits, Err(current_depth) if exceeded.
+    pub fn push_depth(&mut self) -> Result<(), usize> {
         self.depth += 1;
         if self.depth > self.max_depth {
-            return Err(format!(
-                "Expression depth {} exceeds maximum of {}",
-                self.depth, self.max_depth
-            ));
+            return Err(self.depth);
         }
         Ok(())
     }
@@ -2057,7 +2043,6 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                "test",
                 std::sync::Arc::from("spec test\nfact x: 1"),
             ),
             name: "status".to_string(),
@@ -2089,7 +2074,6 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                "test",
                 std::sync::Arc::from("spec test\nfact x: 1"),
             ),
             name: "money".to_string(),

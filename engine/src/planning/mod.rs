@@ -224,7 +224,6 @@ mod internal_tests {
                         line: 1,
                         col: 0,
                     },
-                    main_spec.name.clone(),
                     std::sync::Arc::from("spec test\nfact x: 1"),
                 )),
                 None::<String>,
@@ -239,7 +238,9 @@ fact name: "John"
 fact age: 25
 rule is_adult: age >= 18"#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
@@ -260,7 +261,9 @@ rule is_adult: age >= 18"#;
 fact name: "John"
 fact name: "Jane""#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
@@ -292,7 +295,9 @@ fact age: 25
 rule is_adult: age >= 18
 rule is_adult: age >= 21"#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
@@ -323,7 +328,9 @@ rule is_adult: age >= 21"#;
 rule a: b
 rule b: a"#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
@@ -351,7 +358,9 @@ rule is_adult: age >= 18
 rule test1: age
 rule test2: is_adult"#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
@@ -375,7 +384,9 @@ spec company
 fact name: "Acme Corp"
 fact employee: spec person"#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
@@ -395,7 +406,9 @@ fact employee: spec person"#;
 fact name: "John"
 fact contract: spec nonexistent"#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(input, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), input.to_string());
@@ -433,7 +446,6 @@ fact contract: spec nonexistent"#;
                 line: 1,
                 col: 0,
             },
-            "test",
             Arc::from("fact x: []"),
         );
         spec.facts.push(LemmaFact::new(
@@ -497,7 +509,9 @@ fact one.x: 7
 rule getx: one.x
 "#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec_two = specs.iter().find(|d| d.name == "two").unwrap();
 
         let mut sources = HashMap::new();
@@ -538,7 +552,9 @@ spec user/workspace/example
 fact inventory: spec @user/workspace/somespec
 rule total_quantity: inventory.quantity"#;
 
-        let specs = parse(source, "registry_bundle.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(source, "registry_bundle.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         assert_eq!(specs.len(), 2);
 
         let example_spec = specs
@@ -567,7 +583,9 @@ fact helper: spec nonexistent_spec
 fact price: 10
 rule total: helper.value + price"#;
 
-        let specs = parse(source, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(source, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), source.to_string());
@@ -612,7 +630,9 @@ type currency from missing_spec
 fact ext: spec also_missing
 rule val: ext.some_fact"#;
 
-        let specs = parse(source, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(source, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), source.to_string());
