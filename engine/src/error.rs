@@ -55,31 +55,31 @@ pub enum Error {
 }
 
 impl Error {
-    /// Create a parse error with source information
+    /// Create a parse error. Source is required: parsing errors always originate from source code.
     pub fn parsing(
         message: impl Into<String>,
-        source: Option<Source>,
+        source: Source,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
         Self::Parsing(Box::new(ErrorDetails {
             message: message.into(),
-            source,
+            source: Some(source),
             suggestion: suggestion.map(Into::into),
             related_spec: None,
             spec_context: None,
         }))
     }
 
-    /// Create a parse error with suggestion
+    /// Create a parse error with suggestion. Source is required.
     pub fn parsing_with_suggestion(
         message: impl Into<String>,
-        source: Option<Source>,
+        source: Source,
         suggestion: impl Into<String>,
     ) -> Self {
         Self::parsing(message, source, Some(suggestion))
     }
 
-    /// Create an inversion error with source information
+    /// Create an inversion error with source information.
     pub fn inversion(
         message: impl Into<String>,
         source: Option<Source>,
@@ -119,14 +119,11 @@ impl Error {
     }
 
     /// Create a request error (invalid API request, e.g. spec not found).
-    pub fn request(
-        message: impl Into<String>,
-        source: Option<Source>,
-        suggestion: Option<impl Into<String>>,
-    ) -> Self {
+    /// Request errors never have source locations — they are API-level.
+    pub fn request(message: impl Into<String>, suggestion: Option<impl Into<String>>) -> Self {
         Self::Request(Box::new(ErrorDetails {
             message: message.into(),
-            source,
+            source: None,
             suggestion: suggestion.map(Into::into),
             related_spec: None,
             spec_context: None,
@@ -176,10 +173,10 @@ impl Error {
         }))
     }
 
-    /// Create a registry error with source information and structured error kind.
+    /// Create a registry error. Source is required: registry errors point to `@ref` in source.
     pub fn registry(
         message: impl Into<String>,
-        source: Option<Source>,
+        source: Source,
         identifier: impl Into<String>,
         kind: RegistryErrorKind,
         suggestion: Option<impl Into<String>>,
@@ -187,7 +184,7 @@ impl Error {
         Self::Registry {
             details: Box::new(ErrorDetails {
                 message: message.into(),
-                source,
+                source: Some(source),
                 suggestion: suggestion.map(Into::into),
                 related_spec: None,
                 spec_context: None,
@@ -443,14 +440,13 @@ mod tests {
                 line: 1,
                 col: 15,
             },
-            "test_spec",
             Arc::from("fact amount: 100"),
         )
     }
 
     #[test]
     fn test_error_creation_and_display() {
-        let parse_error = Error::parsing("Invalid currency", Some(test_source()), None::<String>);
+        let parse_error = Error::parsing("Invalid currency", test_source(), None::<String>);
         let parse_error_display = format!("{parse_error}");
         assert!(parse_error_display.contains("Parse error: Invalid currency"));
         assert!(parse_error_display.contains("test.lemma:1:15"));
@@ -463,13 +459,12 @@ mod tests {
                 line: 1,
                 col: 6,
             },
-            "suggestion_spec",
             Arc::from("fact amont: 100"),
         );
 
         let parse_error_with_suggestion = Error::parsing_with_suggestion(
             "Typo in fact name",
-            Some(suggestion_source),
+            suggestion_source,
             "Did you mean 'amount'?",
         );
         let parse_error_with_suggestion_display = format!("{parse_error_with_suggestion}");

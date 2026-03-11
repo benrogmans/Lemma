@@ -17,7 +17,6 @@ fn dummy_source() -> Source {
             line: 1,
             col: 1,
         },
-        "test_spec",
         Arc::from("spec test_spec\nrule dummy: true"),
     )
 }

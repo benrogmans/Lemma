@@ -406,12 +406,11 @@ impl ExecutionPlan {
 
         for rule_name in rule_names {
             let rule = self.get_rule(rule_name).ok_or_else(|| {
-                Error::validation(
+                Error::request(
                     format!(
                         "Rule '{}' not found in spec '{}'",
                         rule_name, self.spec_name
                     ),
-                    None,
                     None::<String>,
                 )
             })?;
@@ -481,13 +480,12 @@ impl ExecutionPlan {
         for (name, raw_value) in values {
             let fact_path = self.get_fact_path_by_str(&name).ok_or_else(|| {
                 let available: Vec<String> = self.facts.keys().map(|p| p.input_key()).collect();
-                Error::validation(
+                Error::request(
                     format!(
                         "Fact '{}' not found. Available facts: {}",
                         name,
                         available.join(", ")
                     ),
-                    None,
                     None::<String>,
                 )
             })?;
@@ -500,12 +498,11 @@ impl ExecutionPlan {
 
             let fact_source = fact_data.source().clone();
             let expected_type = fact_data.schema_type().cloned().ok_or_else(|| {
-                Error::validation(
+                Error::request(
                     format!(
                         "Fact '{}' is a spec reference; cannot provide a value.",
                         name
                     ),
-                    None,
                     None::<String>,
                 )
             })?;
@@ -847,7 +844,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            spec_name: "<test>".to_string(),
             source_text: Arc::from("spec test\nfact x: 1\nrule result: x"),
         }
     }
@@ -902,7 +898,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            "test",
             Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();
@@ -960,7 +955,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            "test",
             Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();
@@ -1025,7 +1019,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            "test",
             Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();

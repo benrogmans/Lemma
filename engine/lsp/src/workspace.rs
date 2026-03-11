@@ -67,7 +67,7 @@ impl WorkspaceModel {
     pub fn update_file(&mut self, url: Url, text: String) {
         let attribute = Self::attribute_for_url(&url);
         let parse_outcome = match parse(&text, &attribute, &self.limits) {
-            Ok(specs) => ParseOutcome::Success(specs),
+            Ok(result) => ParseOutcome::Success(result.specs),
             Err(error) => ParseOutcome::Failed(vec![error]),
         };
         self.files.insert(

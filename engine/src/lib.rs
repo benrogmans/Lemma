@@ -80,6 +80,7 @@ pub use parsing::ast::{
     TypeDef,
 };
 pub use parsing::parse;
+pub use parsing::ParseResult;
 pub use parsing::Source;
 pub use planning::semantics::{
     FactPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit, ScaleUnits,

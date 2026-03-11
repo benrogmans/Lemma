@@ -901,7 +901,7 @@ mod tests {
     use rust_decimal::Decimal;
     use std::sync::Arc;
 
-    fn test_source(spec_name: &str) -> Source {
+    fn test_source() -> Source {
         Source::new(
             "<test>",
             crate::parsing::ast::Span {
@@ -910,7 +910,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            spec_name,
             Arc::from("spec test\nfact x: 1"),
         )
     }
@@ -925,7 +924,7 @@ mod tests {
             .apply_constraint("maximum", &[CommandArg::Number("50".to_string())])
             .unwrap();
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
@@ -943,7 +942,7 @@ mod tests {
             .apply_constraint("maximum", &[CommandArg::Number("100".to_string())])
             .unwrap();
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
@@ -959,7 +958,7 @@ mod tests {
             default: Some(Decimal::from(5)),
         };
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
@@ -978,7 +977,7 @@ mod tests {
             default: Some(Decimal::from(150)),
         };
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
@@ -997,7 +996,7 @@ mod tests {
             default: Some(Decimal::from(50)),
         };
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
@@ -1012,7 +1011,7 @@ mod tests {
             .apply_constraint("maximum", &[CommandArg::Number("50".to_string())])
             .unwrap();
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
@@ -1030,7 +1029,7 @@ mod tests {
             .apply_constraint("length", &[CommandArg::Number("5".to_string())])
             .unwrap();
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
@@ -1049,7 +1048,7 @@ mod tests {
             default: Some("green".to_string()),
         };
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
@@ -1068,7 +1067,7 @@ mod tests {
             default: Some("red".to_string()),
         };
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
@@ -1084,7 +1083,7 @@ mod tests {
             default: None,
         };
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
@@ -1102,7 +1101,7 @@ mod tests {
             .apply_constraint("maximum", &[CommandArg::Label("2024-01-01".to_string())])
             .unwrap();
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(
@@ -1121,7 +1120,7 @@ mod tests {
             .apply_constraint("maximum", &[CommandArg::Label("2024-12-31".to_string())])
             .unwrap();
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert!(errors.is_empty());
     }
@@ -1136,7 +1135,7 @@ mod tests {
             .apply_constraint("maximum", &[CommandArg::Label("10:00:00".to_string())])
             .unwrap();
 
-        let src = test_source("test");
+        let src = test_source();
         let errors = validate_type_specifications(&specs, "test", &src);
         assert_eq!(errors.len(), 1);
         assert!(
@@ -1164,7 +1163,6 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                "test",
                 Arc::from("spec test\nfact x: 1"),
             ),
             name: "invalid_money".to_string(),
@@ -1197,7 +1195,7 @@ mod tests {
             .named_types
             .get("invalid_money")
             .expect("Should have invalid_money type");
-        let src = test_source("test");
+        let src = test_source();
         let errors =
             validate_type_specifications(&lemma_type.specifications, "invalid_money", &src);
         assert!(!errors.is_empty());

@@ -6,7 +6,9 @@ fn test_parse_simple_spec_reference() {
     let input = r#"spec person
 fact name: "John"
 fact contract: spec employment_contract"#;
-    let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+    let result = parse(input, "test.lemma", &crate::ResourceLimits::default())
+        .unwrap()
+        .specs;
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].facts.len(), 2);
 
@@ -27,7 +29,9 @@ fact contract.end_date: [date]
 fact contract.employment_type: "contractor"
 fact contract.base: spec base_contract
 fact contract.base.rate: 100"#;
-    let result = parse(input, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+    let result = parse(input, "test.lemma", &crate::ResourceLimits::default())
+        .unwrap()
+        .specs;
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].facts.len(), 6);
 

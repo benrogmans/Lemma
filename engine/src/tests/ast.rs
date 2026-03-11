@@ -340,7 +340,7 @@ fn test_expression_get_source_text_with_location() {
         line: 1,
         col: 12,
     };
-    let source_location = Source::new("test.lemma", span, "test", Arc::from(source));
+    let source_location = Source::new("test.lemma", span, Arc::from(source));
     let expr = Expression::new(
         ExpressionKind::Literal(Value::Number(Decimal::new(42, 0))),
         source_location,
@@ -377,7 +377,7 @@ fn test_expression_get_source_text_source_not_found() {
         line: 1,
         col: 0,
     };
-    let source_location = Source::new("missing.lemma", span, "test", Arc::from("fact value: 42"));
+    let source_location = Source::new("missing.lemma", span, Arc::from("fact value: 42"));
     let expr = Expression::new(
         ExpressionKind::Literal(Value::Number(Decimal::new(42, 0))),
         source_location,

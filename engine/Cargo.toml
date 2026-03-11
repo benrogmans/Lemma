@@ -17,8 +17,6 @@ name = "lemma"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pest = "2.7"
-pest_derive = "2.7"
 chrono.workspace = true
 regex = "1.0"
 serde.workspace = true
