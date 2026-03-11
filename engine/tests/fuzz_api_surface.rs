@@ -66,17 +66,45 @@ fn fuzz_literals_api_garbage() {
 
 #[test]
 fn fuzz_deeply_nested_api() {
-    for depth in 1..=5 {
-        let mut expr = String::from("1");
-        for _ in 0..depth {
-            expr = format!("({} + 1)", expr);
+    let variants: &[fn(String, usize) -> String] = &[
+        |e, _| format!("({} + 1)", e),
+        |e, _| format!("({} * 2)", e),
+        |e, i| format!("({} - {})", e, i),
+        |e, _| format!("({})", e),
+    ];
+    for variant in variants {
+        for depth in 1..=6 {
+            let mut expr = String::from("1");
+            for i in 0..depth {
+                expr = variant(expr, i);
+            }
+            let code = format!(
+                "spec fuzz_nested\nfact x: 1\nrule deeply_nested: {}\n",
+                expr
+            );
+            engine_with_files(single_file("fuzz_nested", &code));
         }
-        let code = format!(
-            "spec fuzz_nested\nfact x: 1\nrule deeply_nested: {}\n",
-            expr
-        );
-        engine_with_files(single_file("fuzz_nested", &code));
     }
+}
+
+#[test]
+fn fuzz_deeply_nested_completes_fast() {
+    let start = std::time::Instant::now();
+    let mut expr = String::from("1");
+    for _ in 0..5 {
+        expr = format!("({} + 1)", expr);
+    }
+    let code = format!(
+        "spec fuzz_nested\nfact x: 1\nrule deeply_nested: {}\n",
+        expr
+    );
+    engine_with_files(single_file("fuzz_nested", &code));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed.as_millis() < 500,
+        "5-deep nested parse took {}ms, expected <500ms (regression guard)",
+        elapsed.as_millis()
+    );
 }
 
 // --- mirrors fuzz_fact_bindings ---

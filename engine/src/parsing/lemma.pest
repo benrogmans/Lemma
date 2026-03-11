@@ -174,11 +174,59 @@ and_expression = {
 
 and_operand = {
     not_expr
-  | comparison_expression
-  | date_calendar_expression
-  | date_relative_expression
-  | conversion_expression
-  | base_expression
+  | base_with_suffix
+}
+
+// Left-factored: parse base_expression once, then check suffix.
+// Eliminates exponential backtracking in PEG parser for nested expressions.
+base_with_suffix = {
+    base_expression ~ (
+        date_not_in_calendar_suffix
+      | in_suffix
+      | comparison_suffix
+    )?
+}
+
+date_not_in_calendar_suffix = {
+    SPACE+ ~ ^"not" ~ SPACE+ ~ ^"in" ~ SPACE+ ~ ^"calendar" ~ SPACE+ ~ calendar_unit_keyword
+}
+
+in_suffix = {
+    SPACE+ ~ ^"in" ~ SPACE+ ~ (
+        in_date_calendar_relative
+      | in_date_calendar
+      | in_date_relative
+      | in_conversion
+    )
+}
+
+in_date_calendar_relative = {
+    date_relative_kind ~ SPACE+ ~ ^"calendar" ~ SPACE+ ~ calendar_unit_keyword
+}
+
+in_date_calendar = {
+    ^"calendar" ~ SPACE+ ~ calendar_unit_keyword
+}
+
+in_date_relative = {
+    date_relative_kind ~ (SPACE+ ~ base_expression)?
+}
+
+in_conversion = {
+    conversion_target_name ~ comparison_suffix?
+}
+
+comparison_suffix = {
+    SPACE* ~ comp_operator ~ SPACE* ~ comparison_rhs
+}
+
+comparison_rhs = {
+    not_expr
+  | base_expression ~ conversion_rhs_suffix?
+}
+
+conversion_rhs_suffix = {
+    SPACE+ ~ ^"in" ~ SPACE+ ~ conversion_target_name
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -229,7 +277,6 @@ base_expression = { term ~ (SPACE* ~ (op_add | op_sub) ~ SPACE* ~ term)* }
 // Note: conversion targets are validated after parsing (domain-level error),
 // so we accept any identifier here.
 conversion_target_name = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
-conversion_expression = { base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ conversion_target_name }
 
 // ------------------------------------------------------------------------------------------------
 // DATE SUGAR EXPRESSIONS
@@ -238,15 +285,6 @@ conversion_expression = { base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ conversion
 date_relative_kind = { ^"past" | ^"future" }
 calendar_unit_keyword = { ^"year" | ^"month" | ^"week" }
 
-date_calendar_expression = {
-    base_expression ~ SPACE+ ~ ^"not" ~ SPACE+ ~ ^"in" ~ SPACE+ ~ ^"calendar" ~ SPACE+ ~ calendar_unit_keyword
-  | base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ date_relative_kind ~ SPACE+ ~ ^"calendar" ~ SPACE+ ~ calendar_unit_keyword
-  | base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ ^"calendar" ~ SPACE+ ~ calendar_unit_keyword
-}
-
-date_relative_expression = {
-    base_expression ~ SPACE+ ~ ^"in" ~ SPACE+ ~ date_relative_kind ~ (SPACE+ ~ base_expression)?
-}
 
 // Duration units for conversion
 duration_unit = {
@@ -285,11 +323,6 @@ comp_lt       = { "<" }
 comp_is       = { ^"is" }
 comp_operator = { comp_gte | comp_lte | comp_eq | comp_ne | comp_is_not | comp_gt | comp_lt | comp_is }
 
-simple_expression = { not_expr | conversion_expression | base_expression }
-
-comparison_expression = {
-    simple_expression ~ SPACE* ~ comp_operator ~ SPACE* ~ simple_expression
-}
 
 // ------------------------------------------------------------------------------------------------
 // LOGICAL EXPRESSIONS
