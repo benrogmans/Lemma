@@ -550,7 +550,8 @@ async fn get_single_spec(
     let limits = lemma::ResourceLimits::default();
 
     let new_specs = lemma::parse(source_text, attribute, &limits)
-        .map_err(|e| anyhow::anyhow!("Registry returned unparseable spec: {}", e.message()))?;
+        .map_err(|e| anyhow::anyhow!("Registry returned unparseable spec: {}", e.message()))?
+        .specs;
     let new_spec_names: std::collections::HashSet<String> =
         new_specs.iter().map(|s| s.name.clone()).collect();
 
@@ -568,7 +569,7 @@ async fn get_single_spec(
             }
             let existing_specs =
                 match lemma::parse(&existing_content, &path.to_string_lossy(), &limits) {
-                    Ok(s) => s,
+                    Ok(r) => r.specs,
                     Err(_) => continue,
                 };
             let conflict: Vec<&str> = existing_specs
@@ -625,8 +626,8 @@ async fn get_all_workspace_deps(
         let source_id = path.to_string_lossy().to_string();
         let code = fs::read_to_string(path)?;
         match lemma::parse(&code, &source_id, &limits) {
-            Ok(new_specs) => {
-                for spec in new_specs {
+            Ok(result) => {
+                for spec in result.specs {
                     if let Err(e) = ctx.insert_spec(std::sync::Arc::new(spec)) {
                         eprintln!("warning: {}", e);
                     }
@@ -664,8 +665,8 @@ async fn get_all_workspace_deps(
             }
             let path = entry.path().to_path_buf();
             let content = fs::read_to_string(&path)?;
-            if let Ok(specs) = lemma::parse(&content, &path.to_string_lossy(), &limits) {
-                for spec in &specs {
+            if let Ok(result) = lemma::parse(&content, &path.to_string_lossy(), &limits) {
+                for spec in &result.specs {
                     existing_specs_by_name.insert(spec.name.clone(), path.clone());
                 }
             }
@@ -691,7 +692,7 @@ async fn get_all_workspace_deps(
         }
 
         let new_specs = match lemma::parse(source_text, attribute, &limits) {
-            Ok(s) => s,
+            Ok(r) => r.specs,
             Err(_) => continue,
         };
 
@@ -768,7 +769,7 @@ fn dep_file_path(attribute: &str, hash: &str) -> PathBuf {
 fn warn_past_effective(attribute: &str, source_text: &str, now: &DateTimeValue) {
     let limits = lemma::ResourceLimits::default();
     let specs = match lemma::parse(source_text, attribute, &limits) {
-        Ok(specs) => specs,
+        Ok(r) => r.specs,
         Err(_) => return,
     };
     for spec in &specs {

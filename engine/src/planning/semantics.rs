@@ -44,7 +44,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::{Arc, OnceLock};
 
 // -----------------------------------------------------------------------------
@@ -1294,11 +1294,6 @@ impl Expression {
     pub fn collect_fact_paths(&self, facts: &mut std::collections::HashSet<FactPath>) {
         self.kind.collect_fact_paths(facts);
     }
-
-    /// Compute semantic hash - hashes the expression structure, ignoring source location
-    pub fn semantic_hash<H: Hasher>(&self, state: &mut H) {
-        self.kind.semantic_hash(state);
-    }
 }
 
 /// Resolved expression kind (only resolved variants, no unresolved references)
@@ -1357,58 +1352,6 @@ impl ExpressionKind {
             | ExpressionKind::RulePath(_)
             | ExpressionKind::Veto(_)
             | ExpressionKind::Now => {}
-        }
-    }
-
-    /// Compute semantic hash for resolved expression kinds
-    pub fn semantic_hash<H: Hasher>(&self, state: &mut H) {
-        // Hash discriminant first
-        std::mem::discriminant(self).hash(state);
-
-        match self {
-            ExpressionKind::Literal(lit) => lit.hash(state),
-            ExpressionKind::FactPath(fp) => fp.hash(state),
-            ExpressionKind::RulePath(rp) => rp.hash(state),
-            ExpressionKind::LogicalAnd(left, right) => {
-                left.semantic_hash(state);
-                right.semantic_hash(state);
-            }
-            ExpressionKind::Arithmetic(left, op, right) => {
-                left.semantic_hash(state);
-                op.hash(state);
-                right.semantic_hash(state);
-            }
-            ExpressionKind::Comparison(left, op, right) => {
-                left.semantic_hash(state);
-                op.hash(state);
-                right.semantic_hash(state);
-            }
-            ExpressionKind::UnitConversion(expr, target) => {
-                expr.semantic_hash(state);
-                target.hash(state);
-            }
-            ExpressionKind::LogicalNegation(expr, neg_type) => {
-                expr.semantic_hash(state);
-                neg_type.hash(state);
-            }
-            ExpressionKind::MathematicalComputation(op, expr) => {
-                op.hash(state);
-                expr.semantic_hash(state);
-            }
-            ExpressionKind::Veto(v) => v.message.hash(state),
-            ExpressionKind::Now => {}
-            ExpressionKind::DateRelative(kind, date_expr, tolerance) => {
-                kind.hash(state);
-                date_expr.semantic_hash(state);
-                if let Some(tol) = tolerance {
-                    tol.semantic_hash(state);
-                }
-            }
-            ExpressionKind::DateCalendar(kind, unit, date_expr) => {
-                kind.hash(state);
-                unit.hash(state);
-                date_expr.semantic_hash(state);
-            }
         }
     }
 }
@@ -2210,26 +2153,6 @@ impl fmt::Display for LiteralValue {
 }
 
 // -----------------------------------------------------------------------------
-// Eq and Hash implementations for Expression (for use in HashMaps)
-// -----------------------------------------------------------------------------
-
-impl Eq for Expression {}
-
-impl Hash for Expression {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.semantic_hash(state);
-    }
-}
-
-impl Eq for ExpressionKind {}
-
-impl Hash for ExpressionKind {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.semantic_hash(state);
-    }
-}
-
-// -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
 
@@ -2579,7 +2502,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            "test",
             std::sync::Arc::from("x"),
         );
         let fact = FactData::Value {
@@ -2607,7 +2529,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            "test",
             std::sync::Arc::from("x"),
         );
         let fact = FactData::Value {
@@ -2635,7 +2556,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            "test",
             std::sync::Arc::from("x"),
         );
         let fact = FactData::TypeDeclaration {

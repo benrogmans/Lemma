@@ -1,6 +1,6 @@
 use crate::engine::Context;
 use crate::parsing::ast::{
-    self as ast, DateTimeValue, LemmaFact, LemmaRule, LemmaSpec, MetaValue, TypeDef, Value,
+    self as ast, DateTimeValue, LemmaFact, LemmaRule, LemmaSpec, MetaValue, Span, TypeDef, Value,
 };
 use crate::parsing::source::Source;
 use crate::planning::semantics::{
@@ -294,6 +294,9 @@ pub(crate) struct RuleNode {
     /// Computed type of this rule's result (populated during validation)
     /// Every rule MUST have a type (Lemma is strictly typed)
     pub rule_type: LemmaType,
+
+    /// Name of the spec this rule belongs to (for type resolution during validation)
+    pub spec_name: String,
 }
 
 type ResolvedTypesMap = HashMap<Arc<LemmaSpec>, ResolvedSpecTypes>;
@@ -470,6 +473,21 @@ impl Graph {
 impl<'a> GraphBuilder<'a> {
     fn engine_error(&self, message: impl Into<String>, source: &Source) -> Error {
         Error::validation(message.into(), Some(source.clone()), None::<String>)
+    }
+
+    fn spec_source(&self, spec: &LemmaSpec) -> Option<Source> {
+        let attribute = spec.attribute.as_deref()?;
+        let source_text = self.sources.get(attribute)?;
+        Some(Source::new(
+            attribute,
+            Span {
+                start: 0,
+                end: 0,
+                line: spec.start_line,
+                col: 0,
+            },
+            Arc::from(source_text.as_str()),
+        ))
     }
 
     fn process_meta_fields(&mut self, spec: &LemmaSpec) {
@@ -1084,7 +1102,7 @@ impl<'a> GraphBuilder<'a> {
             &spec.name,
             crate::limits::MAX_SPEC_NAME_LENGTH,
             "spec",
-            None,
+            self.spec_source(spec),
         ) {
             self.errors.push(e);
         }
@@ -1347,6 +1365,7 @@ impl<'a> GraphBuilder<'a> {
             }
         }
 
+        let rule_names: HashSet<&str> = spec.rules.iter().map(|r| r.name.as_str()).collect();
         for rule in &spec.rules {
             self.add_rule(
                 rule,
@@ -1354,6 +1373,7 @@ impl<'a> GraphBuilder<'a> {
                 &facts_map,
                 &current_segments,
                 &effective_spec_refs,
+                &rule_names,
             );
         }
 
@@ -1367,6 +1387,7 @@ impl<'a> GraphBuilder<'a> {
         facts_map: &HashMap<String, &LemmaFact>,
         current_segments: &[PathSegment],
         effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
+        rule_names: &HashSet<&str>,
     ) {
         if let Err(e) = crate::limits::check_max_length(
             &rule.name,
@@ -1401,6 +1422,7 @@ impl<'a> GraphBuilder<'a> {
             current_segments,
             &mut depends_on_rules,
             effective_spec_refs,
+            rule_names,
         ) {
             Some(expr) => expr,
             None => return,
@@ -1415,6 +1437,7 @@ impl<'a> GraphBuilder<'a> {
                 current_segments,
                 &mut depends_on_rules,
                 effective_spec_refs,
+                rule_names,
             ) {
                 Some(expr) => expr,
                 None => return,
@@ -1426,6 +1449,7 @@ impl<'a> GraphBuilder<'a> {
                 current_segments,
                 &mut depends_on_rules,
                 effective_spec_refs,
+                rule_names,
             ) {
                 Some(expr) => expr,
                 None => return,
@@ -1437,7 +1461,8 @@ impl<'a> GraphBuilder<'a> {
             branches,
             source: rule.source_location.clone(),
             depends_on_rules,
-            rule_type: LemmaType::veto_type(), // Initialized to veto_type; actual type computed in compute_all_rule_types during validation
+            rule_type: LemmaType::veto_type(),
+            spec_name: current_spec_arc.name.clone(),
         };
 
         self.rules.insert(rule_path, rule_node);
@@ -1455,6 +1480,7 @@ impl<'a> GraphBuilder<'a> {
         current_segments: &[PathSegment],
         depends_on_rules: &mut BTreeSet<RulePath>,
         effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
+        rule_names: &HashSet<&str>,
     ) -> Option<(Expression, Expression)> {
         let converted_left = self.convert_expression_and_extract_dependencies(
             left,
@@ -1463,6 +1489,7 @@ impl<'a> GraphBuilder<'a> {
             current_segments,
             depends_on_rules,
             effective_spec_refs,
+            rule_names,
         )?;
         let converted_right = self.convert_expression_and_extract_dependencies(
             right,
@@ -1471,6 +1498,7 @@ impl<'a> GraphBuilder<'a> {
             current_segments,
             depends_on_rules,
             effective_spec_refs,
+            rule_names,
         )?;
         Some((converted_left, converted_right))
     }
@@ -1482,6 +1510,7 @@ impl<'a> GraphBuilder<'a> {
     /// - **current_segments**: Path from the root spec to the spec we're currently converting in. Each segment is a (fact name, spec name) pair. Used to build full [`FactPath`]s and [`RulePath`]s when resolving references like `nested_spec.fact` or `nested_spec.rule`.
     /// - **depends_on_rules**: Accumulator for the rule we're converting: every [`RulePath`] that this expression references is inserted here. Later used for topological ordering and cycle detection.
     /// - **effective_spec_refs**: For the current spec, maps **fact name → spec name** for facts that are spec references. E.g. `fact x: spec foo` gives `"x" → "foo"`. Used by [`resolve_path_segments`](Self::resolve_path_segments) when resolving the first segment of a path like `x.some_rule`.
+    #[allow(clippy::too_many_arguments)]
     fn convert_expression_and_extract_dependencies(
         &mut self,
         expr: &ast::Expression,
@@ -1490,8 +1519,8 @@ impl<'a> GraphBuilder<'a> {
         current_segments: &[PathSegment],
         depends_on_rules: &mut BTreeSet<RulePath>,
         effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
+        rule_names: &HashSet<&str>,
     ) -> Option<Expression> {
-        let current_spec = current_spec_arc.as_ref();
         let expr_src = expr
             .source_location
             .as_ref()
@@ -1499,13 +1528,13 @@ impl<'a> GraphBuilder<'a> {
         match &expr.kind {
             ast::ExpressionKind::Reference(r) => {
                 let expr_source = expr_src;
-                let facts_map_owned: HashMap<String, LemmaFact> = facts_map
-                    .iter()
-                    .map(|(k, v)| (k.clone(), (*v).clone()))
-                    .collect();
                 let (segments, target_arc_opt) = if r.segments.is_empty() {
                     (current_segments.to_vec(), None)
                 } else {
+                    let facts_map_owned: HashMap<String, LemmaFact> = facts_map
+                        .iter()
+                        .map(|(k, v)| (k.clone(), (*v).clone()))
+                        .collect();
                     let (segs, arc) = self.resolve_path_segments(
                         &r.segments,
                         expr_source,
@@ -1519,16 +1548,21 @@ impl<'a> GraphBuilder<'a> {
                 let (is_fact, is_rule, target_spec_name_opt) = match &target_arc_opt {
                     None => {
                         let is_fact = facts_map.contains_key(&r.name);
-                        let is_rule = current_spec.rules.iter().any(|rule| rule.name == r.name);
+                        let is_rule = rule_names.contains(r.name.as_str());
                         (is_fact, is_rule, None)
                     }
                     Some(target_arc) => {
                         let target_spec = target_arc.as_ref();
-                        let is_fact = target_spec
+                        let target_fact_names: HashSet<&str> = target_spec
                             .facts
                             .iter()
-                            .any(|f| f.reference.is_local() && f.reference.name == r.name);
-                        let is_rule = target_spec.rules.iter().any(|rule| rule.name == r.name);
+                            .filter(|f| f.reference.is_local())
+                            .map(|f| f.reference.name.as_str())
+                            .collect();
+                        let target_rule_names: HashSet<&str> =
+                            target_spec.rules.iter().map(|r| r.name.as_str()).collect();
+                        let is_fact = target_fact_names.contains(r.name.as_str());
+                        let is_rule = target_rule_names.contains(r.name.as_str());
                         (is_fact, is_rule, Some(target_spec.name.as_str()))
                     }
                 };
@@ -1578,6 +1612,7 @@ impl<'a> GraphBuilder<'a> {
                     current_segments,
                     depends_on_rules,
                     effective_spec_refs,
+                    rule_names,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::LogicalAnd(Arc::new(l), Arc::new(r)),
@@ -1594,6 +1629,7 @@ impl<'a> GraphBuilder<'a> {
                     current_segments,
                     depends_on_rules,
                     effective_spec_refs,
+                    rule_names,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::Arithmetic(Arc::new(l), op.clone(), Arc::new(r)),
@@ -1610,6 +1646,7 @@ impl<'a> GraphBuilder<'a> {
                     current_segments,
                     depends_on_rules,
                     effective_spec_refs,
+                    rule_names,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::Comparison(Arc::new(l), op.clone(), Arc::new(r)),
@@ -1625,6 +1662,7 @@ impl<'a> GraphBuilder<'a> {
                     current_segments,
                     depends_on_rules,
                     effective_spec_refs,
+                    rule_names,
                 )?;
 
                 let resolved_spec_types = self.local_types.get(current_spec_arc);
@@ -1664,6 +1702,7 @@ impl<'a> GraphBuilder<'a> {
                     current_segments,
                     depends_on_rules,
                     effective_spec_refs,
+                    rule_names,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::LogicalNegation(
@@ -1682,6 +1721,7 @@ impl<'a> GraphBuilder<'a> {
                     current_segments,
                     depends_on_rules,
                     effective_spec_refs,
+                    rule_names,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::MathematicalComputation(
@@ -1767,6 +1807,7 @@ impl<'a> GraphBuilder<'a> {
                     current_segments,
                     depends_on_rules,
                     effective_spec_refs,
+                    rule_names,
                 )?;
                 let converted_tolerance = match tolerance {
                     Some(tol) => Some(Arc::new(self.convert_expression_and_extract_dependencies(
@@ -1776,6 +1817,7 @@ impl<'a> GraphBuilder<'a> {
                         current_segments,
                         depends_on_rules,
                         effective_spec_refs,
+                        rule_names,
                     )?)),
                     None => None,
                 };
@@ -1797,6 +1839,7 @@ impl<'a> GraphBuilder<'a> {
                     current_segments,
                     depends_on_rules,
                     effective_spec_refs,
+                    rule_names,
                 )?;
                 Some(Expression {
                     kind: ExpressionKind::DateCalendar(*kind, *unit, Arc::new(converted_date)),
@@ -1888,6 +1931,7 @@ fn infer_expression_type(
     graph: &Graph,
     computed_rule_types: &HashMap<RulePath, LemmaType>,
     resolved_types: &ResolvedTypesMap,
+    spec_name: &str,
 ) -> LemmaType {
     match &expression.kind {
         ExpressionKind::Literal(literal_value) => literal_value.as_ref().get_type().clone(),
@@ -1900,9 +1944,10 @@ fn infer_expression_type(
             .unwrap_or_else(LemmaType::undetermined_type),
 
         ExpressionKind::LogicalAnd(left, right) => {
-            let left_type = infer_expression_type(left, graph, computed_rule_types, resolved_types);
+            let left_type =
+                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_name);
             let right_type =
-                infer_expression_type(right, graph, computed_rule_types, resolved_types);
+                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_name);
             if left_type.is_undetermined() || right_type.is_undetermined() {
                 return LemmaType::undetermined_type();
             }
@@ -1910,8 +1955,13 @@ fn infer_expression_type(
         }
 
         ExpressionKind::LogicalNegation(operand, _) => {
-            let operand_type =
-                infer_expression_type(operand, graph, computed_rule_types, resolved_types);
+            let operand_type = infer_expression_type(
+                operand,
+                graph,
+                computed_rule_types,
+                resolved_types,
+                spec_name,
+            );
             if operand_type.is_undetermined() {
                 return LemmaType::undetermined_type();
             }
@@ -1919,9 +1969,10 @@ fn infer_expression_type(
         }
 
         ExpressionKind::Comparison(left, _op, right) => {
-            let left_type = infer_expression_type(left, graph, computed_rule_types, resolved_types);
+            let left_type =
+                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_name);
             let right_type =
-                infer_expression_type(right, graph, computed_rule_types, resolved_types);
+                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_name);
             if left_type.is_undetermined() || right_type.is_undetermined() {
                 return LemmaType::undetermined_type();
             }
@@ -1929,22 +1980,20 @@ fn infer_expression_type(
         }
 
         ExpressionKind::Arithmetic(left, _operator, right) => {
-            let left_type = infer_expression_type(left, graph, computed_rule_types, resolved_types);
+            let left_type =
+                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_name);
             let right_type =
-                infer_expression_type(right, graph, computed_rule_types, resolved_types);
+                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_name);
             compute_arithmetic_result_type(left_type, right_type)
         }
 
         ExpressionKind::UnitConversion(source_expression, target) => {
-            let expr_source = expression
-                .source_location
-                .as_ref()
-                .expect("BUG: expression missing source in infer_expression_type");
             let source_type = infer_expression_type(
                 source_expression,
                 graph,
                 computed_rule_types,
                 resolved_types,
+                spec_name,
             );
             if source_type.is_undetermined() {
                 return LemmaType::undetermined_type();
@@ -1953,7 +2002,6 @@ fn infer_expression_type(
                 SemanticConversionTarget::Duration(_) => primitive_duration().clone(),
                 SemanticConversionTarget::ScaleUnit(unit_name) => {
                     if source_type.is_number() {
-                        let spec_name = &expr_source.spec_name;
                         find_types_by_name(resolved_types, spec_name)
                             .and_then(|dt| dt.unit_index.get(unit_name))
                             .map(|(lt, _)| lt.clone())
@@ -1964,7 +2012,6 @@ fn infer_expression_type(
                 }
                 SemanticConversionTarget::RatioUnit(unit_name) => {
                     if source_type.is_number() {
-                        let spec_name = &expr_source.spec_name;
                         find_types_by_name(resolved_types, spec_name)
                             .and_then(|dt| dt.unit_index.get(unit_name))
                             .map(|(lt, _)| lt.clone())
@@ -1977,8 +2024,13 @@ fn infer_expression_type(
         }
 
         ExpressionKind::MathematicalComputation(_, operand) => {
-            let operand_type =
-                infer_expression_type(operand, graph, computed_rule_types, resolved_types);
+            let operand_type = infer_expression_type(
+                operand,
+                graph,
+                computed_rule_types,
+                resolved_types,
+                spec_name,
+            );
             if operand_type.is_undetermined() {
                 return LemmaType::undetermined_type();
             }
@@ -2283,6 +2335,7 @@ fn check_unit_conversion_types(
     target: &SemanticConversionTarget,
     resolved_types: &ResolvedTypesMap,
     source: &Source,
+    spec_name: &str,
 ) -> Result<(), Vec<Error>> {
     match target {
         SemanticConversionTarget::ScaleUnit(unit_name)
@@ -2320,16 +2373,13 @@ fn check_unit_conversion_types(
                     ),
                 )]),
                 None if source_type.is_number() => {
-                    if find_types_by_name(resolved_types, &source.spec_name)
+                    if find_types_by_name(resolved_types, spec_name)
                         .and_then(|dt| dt.unit_index.get(unit_name))
                         .is_none()
                     {
                         Err(vec![engine_error_at(
                             source,
-                            format!(
-                                "Unknown unit '{}' in spec '{}'.",
-                                unit_name, source.spec_name
-                            ),
+                            format!("Unknown unit '{}' in spec '{}'.", unit_name, spec_name),
                         )])
                     } else {
                         Ok(())
@@ -2460,6 +2510,7 @@ fn check_expression(
     graph: &Graph,
     inferred_types: &HashMap<RulePath, LemmaType>,
     resolved_types: &ResolvedTypesMap,
+    spec_name: &str,
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
 
@@ -2487,16 +2538,18 @@ fn check_expression(
 
         ExpressionKind::LogicalAnd(left, right) => {
             collect(
-                check_expression(left, graph, inferred_types, resolved_types),
+                check_expression(left, graph, inferred_types, resolved_types, spec_name),
                 &mut errors,
             );
             collect(
-                check_expression(right, graph, inferred_types, resolved_types),
+                check_expression(right, graph, inferred_types, resolved_types, spec_name),
                 &mut errors,
             );
 
-            let left_type = infer_expression_type(left, graph, inferred_types, resolved_types);
-            let right_type = infer_expression_type(right, graph, inferred_types, resolved_types);
+            let left_type =
+                infer_expression_type(left, graph, inferred_types, resolved_types, spec_name);
+            let right_type =
+                infer_expression_type(right, graph, inferred_types, resolved_types, spec_name);
             let expr_source = expression
                 .source_location
                 .as_ref()
@@ -2509,12 +2562,12 @@ fn check_expression(
 
         ExpressionKind::LogicalNegation(operand, _) => {
             collect(
-                check_expression(operand, graph, inferred_types, resolved_types),
+                check_expression(operand, graph, inferred_types, resolved_types, spec_name),
                 &mut errors,
             );
 
             let operand_type =
-                infer_expression_type(operand, graph, inferred_types, resolved_types);
+                infer_expression_type(operand, graph, inferred_types, resolved_types, spec_name);
             let expr_source = expression
                 .source_location
                 .as_ref()
@@ -2527,16 +2580,18 @@ fn check_expression(
 
         ExpressionKind::Comparison(left, op, right) => {
             collect(
-                check_expression(left, graph, inferred_types, resolved_types),
+                check_expression(left, graph, inferred_types, resolved_types, spec_name),
                 &mut errors,
             );
             collect(
-                check_expression(right, graph, inferred_types, resolved_types),
+                check_expression(right, graph, inferred_types, resolved_types, spec_name),
                 &mut errors,
             );
 
-            let left_type = infer_expression_type(left, graph, inferred_types, resolved_types);
-            let right_type = infer_expression_type(right, graph, inferred_types, resolved_types);
+            let left_type =
+                infer_expression_type(left, graph, inferred_types, resolved_types, spec_name);
+            let right_type =
+                infer_expression_type(right, graph, inferred_types, resolved_types, spec_name);
             let expr_source = expression
                 .source_location
                 .as_ref()
@@ -2549,16 +2604,18 @@ fn check_expression(
 
         ExpressionKind::Arithmetic(left, operator, right) => {
             collect(
-                check_expression(left, graph, inferred_types, resolved_types),
+                check_expression(left, graph, inferred_types, resolved_types, spec_name),
                 &mut errors,
             );
             collect(
-                check_expression(right, graph, inferred_types, resolved_types),
+                check_expression(right, graph, inferred_types, resolved_types, spec_name),
                 &mut errors,
             );
 
-            let left_type = infer_expression_type(left, graph, inferred_types, resolved_types);
-            let right_type = infer_expression_type(right, graph, inferred_types, resolved_types);
+            let left_type =
+                infer_expression_type(left, graph, inferred_types, resolved_types, spec_name);
+            let right_type =
+                infer_expression_type(right, graph, inferred_types, resolved_types, spec_name);
             let expr_source = expression
                 .source_location
                 .as_ref()
@@ -2571,18 +2628,35 @@ fn check_expression(
 
         ExpressionKind::UnitConversion(source_expression, target) => {
             collect(
-                check_expression(source_expression, graph, inferred_types, resolved_types),
+                check_expression(
+                    source_expression,
+                    graph,
+                    inferred_types,
+                    resolved_types,
+                    spec_name,
+                ),
                 &mut errors,
             );
 
-            let source_type =
-                infer_expression_type(source_expression, graph, inferred_types, resolved_types);
+            let source_type = infer_expression_type(
+                source_expression,
+                graph,
+                inferred_types,
+                resolved_types,
+                spec_name,
+            );
             let expr_source = expression
                 .source_location
                 .as_ref()
                 .expect("BUG: expression missing source in check_expression");
             collect(
-                check_unit_conversion_types(&source_type, target, resolved_types, expr_source),
+                check_unit_conversion_types(
+                    &source_type,
+                    target,
+                    resolved_types,
+                    expr_source,
+                    spec_name,
+                ),
                 &mut errors,
             );
 
@@ -2590,7 +2664,7 @@ fn check_expression(
                 match target {
                     SemanticConversionTarget::ScaleUnit(unit_name)
                     | SemanticConversionTarget::RatioUnit(unit_name) => {
-                        if find_types_by_name(resolved_types, &expr_source.spec_name)
+                        if find_types_by_name(resolved_types, spec_name)
                             .and_then(|dt| dt.unit_index.get(unit_name))
                             .is_none()
                         {
@@ -2599,7 +2673,7 @@ fn check_expression(
                                 format!(
                                     "Cannot resolve unit '{}' for spec '{}' (types may not have been resolved)",
                                     unit_name,
-                                    expr_source.spec_name
+                                    spec_name
                                 ),
                             ));
                         }
@@ -2611,12 +2685,12 @@ fn check_expression(
 
         ExpressionKind::MathematicalComputation(_, operand) => {
             collect(
-                check_expression(operand, graph, inferred_types, resolved_types),
+                check_expression(operand, graph, inferred_types, resolved_types, spec_name),
                 &mut errors,
             );
 
             let operand_type =
-                infer_expression_type(operand, graph, inferred_types, resolved_types);
+                infer_expression_type(operand, graph, inferred_types, resolved_types, spec_name);
             let expr_source = expression
                 .source_location
                 .as_ref()
@@ -2633,11 +2707,12 @@ fn check_expression(
 
         ExpressionKind::DateRelative(_, date_expr, tolerance) => {
             collect(
-                check_expression(date_expr, graph, inferred_types, resolved_types),
+                check_expression(date_expr, graph, inferred_types, resolved_types, spec_name),
                 &mut errors,
             );
 
-            let date_type = infer_expression_type(date_expr, graph, inferred_types, resolved_types);
+            let date_type =
+                infer_expression_type(date_expr, graph, inferred_types, resolved_types, spec_name);
             if !date_type.is_date() {
                 let expr_source = expression
                     .source_location
@@ -2654,11 +2729,12 @@ fn check_expression(
 
             if let Some(tol) = tolerance {
                 collect(
-                    check_expression(tol, graph, inferred_types, resolved_types),
+                    check_expression(tol, graph, inferred_types, resolved_types, spec_name),
                     &mut errors,
                 );
 
-                let tol_type = infer_expression_type(tol, graph, inferred_types, resolved_types);
+                let tol_type =
+                    infer_expression_type(tol, graph, inferred_types, resolved_types, spec_name);
                 if !tol_type.is_duration() {
                     let expr_source = expression
                         .source_location
@@ -2677,11 +2753,12 @@ fn check_expression(
 
         ExpressionKind::DateCalendar(_, _, date_expr) => {
             collect(
-                check_expression(date_expr, graph, inferred_types, resolved_types),
+                check_expression(date_expr, graph, inferred_types, resolved_types, spec_name),
                 &mut errors,
             );
 
-            let date_type = infer_expression_type(date_expr, graph, inferred_types, resolved_types);
+            let date_type =
+                infer_expression_type(date_expr, graph, inferred_types, resolved_types, spec_name);
             if !date_type.is_date() {
                 let expr_source = expression
                     .source_location
@@ -2725,13 +2802,12 @@ fn check_rule_types(
     };
 
     for rule_path in execution_order {
-        let branches = {
-            let rule_node = match graph.rules().get(rule_path) {
-                Some(node) => node,
-                None => continue,
-            };
-            rule_node.branches.clone()
+        let rule_node = match graph.rules().get(rule_path) {
+            Some(node) => node,
+            None => continue,
         };
+        let branches = &rule_node.branches;
+        let spec_name = rule_node.spec_name.as_str();
 
         if branches.is_empty() {
             continue;
@@ -2739,11 +2815,22 @@ fn check_rule_types(
 
         let (_, default_result) = &branches[0];
         collect(
-            check_expression(default_result, graph, inferred_types, resolved_types),
+            check_expression(
+                default_result,
+                graph,
+                inferred_types,
+                resolved_types,
+                spec_name,
+            ),
             &mut errors,
         );
-        let default_type =
-            infer_expression_type(default_result, graph, inferred_types, resolved_types);
+        let default_type = infer_expression_type(
+            default_result,
+            graph,
+            inferred_types,
+            resolved_types,
+            spec_name,
+        );
 
         let mut non_veto_type: Option<LemmaType> = None;
         if !default_type.vetoed() && !default_type.is_undetermined() {
@@ -2753,7 +2840,13 @@ fn check_rule_types(
         for (branch_index, (condition, result)) in branches.iter().enumerate().skip(1) {
             if let Some(condition_expression) = condition {
                 collect(
-                    check_expression(condition_expression, graph, inferred_types, resolved_types),
+                    check_expression(
+                        condition_expression,
+                        graph,
+                        inferred_types,
+                        resolved_types,
+                        spec_name,
+                    ),
                     &mut errors,
                 );
                 let condition_type = infer_expression_type(
@@ -2761,6 +2854,7 @@ fn check_rule_types(
                     graph,
                     inferred_types,
                     resolved_types,
+                    spec_name,
                 );
                 if !condition_type.is_boolean() && !condition_type.is_undetermined() {
                     let condition_source = condition_expression
@@ -2778,10 +2872,11 @@ fn check_rule_types(
             }
 
             collect(
-                check_expression(result, graph, inferred_types, resolved_types),
+                check_expression(result, graph, inferred_types, resolved_types, spec_name),
                 &mut errors,
             );
-            let result_type = infer_expression_type(result, graph, inferred_types, resolved_types);
+            let result_type =
+                infer_expression_type(result, graph, inferred_types, resolved_types, spec_name);
 
             if !result_type.vetoed() && !result_type.is_undetermined() {
                 if non_veto_type.is_none() {
@@ -2818,7 +2913,7 @@ fn check_rule_types(
                         errors.push(Error::validation(
                             format!("Type mismatch in rule '{}' in spec '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same primitive type.",
                             rule_path.rule,
-                            rule_source.spec_name,
+                            spec_name,
                             location_parts.join(", "),
                             existing_type.name(),
                             branch_index,
@@ -2865,21 +2960,25 @@ fn infer_rule_types(
     let mut computed_types: HashMap<RulePath, LemmaType> = HashMap::new();
 
     for rule_path in execution_order {
-        let branches = {
-            let rule_node = match graph.rules().get(rule_path) {
-                Some(node) => node,
-                None => continue,
-            };
-            rule_node.branches.clone()
+        let rule_node = match graph.rules().get(rule_path) {
+            Some(node) => node,
+            None => continue,
         };
+        let branches = &rule_node.branches;
+        let spec_name = rule_node.spec_name.as_str();
 
         if branches.is_empty() {
             continue;
         }
 
         let (_, default_result) = &branches[0];
-        let default_type =
-            infer_expression_type(default_result, graph, &computed_types, resolved_types);
+        let default_type = infer_expression_type(
+            default_result,
+            graph,
+            &computed_types,
+            resolved_types,
+            spec_name,
+        );
 
         let mut non_veto_type: Option<LemmaType> = None;
         if !default_type.vetoed() && !default_type.is_undetermined() {
@@ -2893,10 +2992,12 @@ fn infer_rule_types(
                     graph,
                     &computed_types,
                     resolved_types,
+                    spec_name,
                 );
             }
 
-            let result_type = infer_expression_type(result, graph, &computed_types, resolved_types);
+            let result_type =
+                infer_expression_type(result, graph, &computed_types, resolved_types, spec_name);
             if !result_type.vetoed() && !result_type.is_undetermined() && non_veto_type.is_none() {
                 non_veto_type = Some(result_type.clone());
             }
@@ -2944,7 +3045,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            "test",
             Arc::from("spec test\nfact x: 1\nrule result: x"),
         )
     }
@@ -3382,7 +3482,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            "spec_a",
             Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let spec_a = create_test_spec("spec_a")
@@ -3408,7 +3507,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            "spec_b",
             Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let spec_b = create_test_spec("spec_b")
@@ -3472,7 +3570,9 @@ fact x: 10
 spec consumer
 fact m: spec myspec
 rule result: m.x"#;
-        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default())
+            .unwrap()
+            .specs;
         let consumer = specs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
@@ -3492,7 +3592,9 @@ fact x: 10
 spec consumer
 fact m: spec myspec
 rule result: m.x"#;
-        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default())
+            .unwrap()
+            .specs;
         let consumer = specs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
@@ -3520,7 +3622,9 @@ fact x: 10
 spec consumer
 fact m: spec nonexistent
 rule result: m.x"#;
-        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default())
+            .unwrap()
+            .specs;
         let consumer = specs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
@@ -3536,7 +3640,9 @@ fact x: 10
 spec consumer
 fact m: spec myspec
 rule result: m.x"#;
-        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default())
+            .unwrap()
+            .specs;
         let consumer = specs.iter().find(|d| d.name == "consumer").unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
@@ -3555,7 +3661,9 @@ rule result: m.x"#;
     #[test]
     fn self_reference_is_error() {
         let code = "spec myspec\nfact m: spec myspec";
-        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default())
+            .unwrap()
+            .specs;
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
         let result = build_graph(&specs[0], &specs, sources);
@@ -3578,7 +3686,9 @@ fact x: 10
 spec other_spec
 fact m: spec myspec
 rule result: m.x"#;
-        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default()).unwrap();
+        let specs = crate::parse(code, "test.lemma", &crate::ResourceLimits::default())
+            .unwrap()
+            .specs;
         let other_spec = specs.iter().find(|d| d.name == "other_spec").unwrap();
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());

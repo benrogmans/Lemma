@@ -37,8 +37,17 @@ pub struct ResourceLimits {
     pub max_file_size_bytes: usize,
 
     /// Maximum expression nesting depth
-    /// Real usage: ~3 levels, Limit: 5. Deeper logic via rule composition.
+    /// Real usage: ~3 levels, Limit: 7. Deeper logic via rule composition.
     pub max_expression_depth: usize,
+
+    /// Maximum expression nodes per file (parser-level)
+    /// Quick-reject for pathological single files.
+    pub max_expression_count: usize,
+
+    /// Maximum total expression nodes across all files (engine-level)
+    /// The real capacity ceiling. pi (~3.1M) — generous for national-scale
+    /// regulatory systems while bounding total engine workload.
+    pub max_total_expression_count: usize,
 
     /// Maximum size of a single fact value in bytes
     /// Real usage: ~100 bytes, Limit: 1KB (10x)
@@ -50,7 +59,9 @@ impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
             max_file_size_bytes: 5 * 1024 * 1024, // 5 MB
-            max_expression_depth: 5,
+            max_expression_depth: 7,
+            max_expression_count: 4096,
+            max_total_expression_count: 3_141_592,
             max_fact_value_bytes: 1024, // 1 KB
         }
     }

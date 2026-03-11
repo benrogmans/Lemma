@@ -810,7 +810,6 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                "test_spec",
                 Arc::from("spec test\nfact x: 1"),
             ),
             name: "money".to_string(),
@@ -836,7 +835,6 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                "test_spec",
                 Arc::from("spec test\nfact x: 1"),
             ),
             parent: "number".to_string(),
@@ -873,7 +871,6 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                "test_spec",
                 Arc::from("spec test\nfact x: 1"),
             ),
             name: "money".to_string(),
@@ -899,7 +896,6 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                "test_spec",
                 Arc::from("spec test\nfact x: 1"),
             ),
             name: "money".to_string(),
@@ -921,7 +917,9 @@ mod tests {
         let code = r#"spec test
 type dice: number -> minimum 0 -> maximum 6"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         // Use TypeResolver to resolve the type
@@ -950,7 +948,9 @@ type dice: number -> minimum 0 -> maximum 6"#;
         let code = r#"spec test
 type money: scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
         let type_def = &spec.types[0];
 
@@ -981,7 +981,9 @@ type money: scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#;
         let code = r#"spec test
 type price: number -> decimals 2 -> minimum 0"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         // Use TypeResolver to resolve the type
@@ -1010,7 +1012,9 @@ type price: number -> decimals 2 -> minimum 0"#;
         let code = r#"spec test
 type precise_number: number -> decimals 4"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1034,7 +1038,9 @@ type precise_number: number -> decimals 4"#;
         let code = r#"spec test
 type weight: scale -> unit kg 1 -> decimals 3"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1058,7 +1064,9 @@ type weight: scale -> unit kg 1 -> decimals 3"#;
         let code = r#"spec test
 type ratio_type: ratio -> decimals 2"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1086,7 +1094,9 @@ type ratio_type: ratio -> decimals 2"#;
         let code = r#"spec test
 type percentage: ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1130,7 +1140,9 @@ type percentage: ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
 type money: scale -> unit eur 1
 type money2: money -> unit usd 1.24"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1171,7 +1183,9 @@ type money2: money -> unit usd 1.24"#;
         let code = r#"spec test
 type invalid: nonexistent_type -> minimum 0"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1198,7 +1212,9 @@ type invalid: nonexistent_type -> minimum 0"#;
         let code = r#"spec test
 type invalid: choice -> option "a""#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1232,7 +1248,9 @@ type money2: money
   -> unit usd 1.21
   -> unit gbp 1.30"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1280,7 +1298,9 @@ type length_a: scale
 type length_b: scale
   -> unit meter 1.0"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1316,7 +1336,9 @@ type length_b: scale
 type price: number
   -> unit eur 1.00"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1344,7 +1366,9 @@ type money: scale
   -> unit eur 1.00
   -> unit usd 1.19"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1375,7 +1399,9 @@ type money: scale
 type my_money: money
   -> unit gbp 1.30"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1406,7 +1432,9 @@ type money: scale
   -> unit eur 1.00
   -> unit eur 1.19"#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec = &specs[0];
 
         let mut registry = test_registry();
@@ -1442,7 +1470,9 @@ type geld: scale
   -> unit eur 1.00
   -> minimum 0 eur
 fact bruto_salaris: 0 eur"#;
-        let specs = parse(code, "nettoloon.lemma", &ResourceLimits::default()).unwrap();
+        let specs = parse(code, "nettoloon.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let spec_arc = Arc::new(specs[0].clone());
         let mut registry = test_registry();
         for td in &spec_arc.types {

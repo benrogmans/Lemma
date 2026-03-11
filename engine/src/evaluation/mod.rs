@@ -24,7 +24,7 @@ pub(crate) struct EvaluationContext {
     rule_proofs: HashMap<RulePath, crate::evaluation::proof::Proof>,
     operations: Vec<crate::OperationRecord>,
     pub(crate) sources: HashMap<String, String>,
-    proof_nodes: HashMap<Expression, crate::evaluation::proof::ProofNode>,
+    proof_nodes: HashMap<usize, crate::evaluation::proof::ProofNode>,
     /// The effective datetime (`now` keyword resolves to this).
     now: LiteralValue,
 }
@@ -64,14 +64,16 @@ impl EvaluationContext {
         expression: &Expression,
         node: crate::evaluation::proof::ProofNode,
     ) {
-        self.proof_nodes.insert(expression.clone(), node);
+        self.proof_nodes
+            .insert(expression as *const Expression as usize, node);
     }
 
     fn get_proof_node(
         &self,
         expression: &Expression,
     ) -> Option<&crate::evaluation::proof::ProofNode> {
-        self.proof_nodes.get(expression)
+        self.proof_nodes
+            .get(&(expression as *const Expression as usize))
     }
 
     fn get_rule_proof(&self, rule_path: &RulePath) -> Option<&crate::evaluation::proof::Proof> {

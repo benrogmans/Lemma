@@ -13,7 +13,6 @@ fn test_source() -> Source {
             line: 1,
             col: 15,
         },
-        "test_spec",
         Arc::from(source_text),
     )
 }
@@ -22,7 +21,7 @@ fn test_source() -> Source {
 fn test_error_creation_and_display() {
     let source = test_source();
 
-    let parse_error = Error::parsing("Invalid currency", Some(source.clone()), None::<String>);
+    let parse_error = Error::parsing("Invalid currency", source.clone(), None::<String>);
     assert_eq!(
         format!("{parse_error}"),
         "Parse error: Invalid currency at test.lemma:1:15"
@@ -37,15 +36,11 @@ fn test_error_creation_and_display() {
             line: 1,
             col: 6,
         },
-        "suggestion_spec",
         Arc::from(typo_source_text),
     );
 
-    let parse_error_with_suggestion = Error::parsing_with_suggestion(
-        "Typo in fact name",
-        Some(typo_source),
-        "Did you mean 'amount'?",
-    );
+    let parse_error_with_suggestion =
+        Error::parsing_with_suggestion("Typo in fact name", typo_source, "Did you mean 'amount'?");
     assert_eq!(
         format!("{parse_error_with_suggestion}"),
         "Parse error: Typo in fact name (suggestion: Did you mean 'amount'?) at suggestion.lemma:1:6"

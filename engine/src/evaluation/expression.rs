@@ -11,7 +11,7 @@ use crate::planning::semantics::{
     ValueKind,
 };
 use crate::planning::ExecutableRule;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Get a proof node for an expression that was already evaluated.
 /// Panics if the proof node is missing — this indicates a bug in the evaluator,
@@ -27,17 +27,19 @@ fn get_proof_node_required(
         .expect("BUG: expression missing source in evaluation");
     context.get_proof_node(expr).cloned().unwrap_or_else(|| {
         unreachable!(
-            "BUG: {} was evaluated but has no proof node ({}:{}:{} in {})",
-            operand_name, loc.attribute, loc.span.line, loc.span.col, loc.spec_name
+            "BUG: {} was evaluated but has no proof node ({}:{}:{})",
+            operand_name, loc.attribute, loc.span.line, loc.span.col
         )
     })
 }
 
+fn expr_ptr(expr: &Expression) -> usize {
+    expr as *const Expression as usize
+}
+
 /// Get the result of an operand expression that was already evaluated.
-/// Panics if the result is missing — this indicates a bug in dependency tracking,
-/// since we only evaluate an expression after all its dependencies are ready.
 fn get_operand_result(
-    results: &HashMap<Expression, OperationResult>,
+    results: &HashMap<usize, OperationResult>,
     expr: &Expression,
     operand_name: &str,
 ) -> OperationResult {
@@ -45,10 +47,10 @@ fn get_operand_result(
         .source_location
         .as_ref()
         .expect("BUG: expression missing source in evaluation");
-    results.get(expr).cloned().unwrap_or_else(|| {
+    results.get(&expr_ptr(expr)).cloned().unwrap_or_else(|| {
         unreachable!(
-            "BUG: {} operand was marked ready but result is missing ({}:{}:{} in {})",
-            operand_name, loc.attribute, loc.span.line, loc.span.col, loc.spec_name
+            "BUG: {} operand was marked ready but result is missing ({}:{}:{})",
+            operand_name, loc.attribute, loc.span.line, loc.span.col
         )
     })
 }
@@ -66,8 +68,8 @@ fn unwrap_value_after_veto_check<'a>(
             .as_ref()
             .expect("BUG: expression missing source in evaluation");
         unreachable!(
-            "BUG: {} passed Veto check but has no value ({}:{}:{} in {})",
-            operand_name, loc.attribute, loc.span.line, loc.span.col, loc.spec_name
+            "BUG: {} passed Veto check but has no value ({}:{}:{})",
+            operand_name, loc.attribute, loc.span.line, loc.span.col
         )
     })
 }
@@ -301,111 +303,76 @@ fn evaluate_rule_without_unless(
 /// Uses a work list approach: collect all expressions first, then evaluate in dependency order.
 /// After planning, expression evaluation is guaranteed to complete — this function never
 /// returns a Error. It produces an OperationResult (Value or Veto).
+/// Iterative post-order traversal: collects expression nodes children-before-parents.
+/// Uses pointer identity for dedup (no Hash/Eq on Expression needed).
+fn collect_postorder(root: &Expression) -> Vec<&Expression> {
+    enum Visit<'a> {
+        Enter(&'a Expression),
+        Exit(&'a Expression),
+    }
+
+    let mut stack: Vec<Visit<'_>> = vec![Visit::Enter(root)];
+    let mut seen: HashSet<usize> = HashSet::new();
+    let mut nodes: Vec<&Expression> = Vec::new();
+
+    while let Some(visit) = stack.pop() {
+        match visit {
+            Visit::Enter(e) => {
+                if !seen.insert(expr_ptr(e)) {
+                    continue;
+                }
+                stack.push(Visit::Exit(e));
+                match &e.kind {
+                    ExpressionKind::Arithmetic(left, _, right)
+                    | ExpressionKind::Comparison(left, _, right)
+                    | ExpressionKind::LogicalAnd(left, right) => {
+                        stack.push(Visit::Enter(right));
+                        stack.push(Visit::Enter(left));
+                    }
+                    ExpressionKind::LogicalNegation(operand, _)
+                    | ExpressionKind::UnitConversion(operand, _)
+                    | ExpressionKind::MathematicalComputation(_, operand)
+                    | ExpressionKind::DateCalendar(_, _, operand) => {
+                        stack.push(Visit::Enter(operand));
+                    }
+                    ExpressionKind::DateRelative(_, date_expr, tolerance_expr) => {
+                        if let Some(tol) = tolerance_expr {
+                            stack.push(Visit::Enter(tol));
+                        }
+                        stack.push(Visit::Enter(date_expr));
+                    }
+                    _ => {}
+                }
+            }
+            Visit::Exit(e) => {
+                nodes.push(e);
+            }
+        }
+    }
+
+    nodes
+}
+
 fn evaluate_expression(
     expr: &Expression,
     context: &mut crate::evaluation::EvaluationContext,
 ) -> OperationResult {
-    // First, collect all expressions in the tree
-    let mut all_exprs: HashMap<Expression, ()> = HashMap::new();
-    let mut work_list: Vec<&Expression> = vec![expr];
+    let nodes = collect_postorder(expr);
+    let mut results: HashMap<usize, OperationResult> = HashMap::with_capacity(nodes.len());
 
-    while let Some(e) = work_list.pop() {
-        if all_exprs.contains_key(e) {
-            continue;
-        }
-        all_exprs.insert(e.clone(), ());
-
-        // Add dependencies to work list
-        match &e.kind {
-            ExpressionKind::Arithmetic(left, _, right)
-            | ExpressionKind::Comparison(left, _, right)
-            | ExpressionKind::LogicalAnd(left, right) => {
-                work_list.push(left);
-                work_list.push(right);
-            }
-            ExpressionKind::LogicalNegation(operand, _)
-            | ExpressionKind::UnitConversion(operand, _)
-            | ExpressionKind::MathematicalComputation(_, operand)
-            | ExpressionKind::DateCalendar(_, _, operand) => {
-                work_list.push(operand);
-            }
-            ExpressionKind::DateRelative(_, date_expr, tolerance_expr) => {
-                work_list.push(date_expr);
-                if let Some(tol) = tolerance_expr {
-                    work_list.push(tol);
-                }
-            }
-            _ => {}
-        }
+    for node in &nodes {
+        let result = evaluate_single_expression(node, &results, context);
+        results.insert(expr_ptr(node), result);
     }
 
-    // Now evaluate expressions in dependency order
-    let mut results: HashMap<Expression, OperationResult> = HashMap::new();
-    let mut remaining: Vec<Expression> = all_exprs.keys().cloned().collect();
-
-    while !remaining.is_empty() {
-        let mut progress = false;
-        let mut to_remove = Vec::new();
-
-        for current in &remaining {
-            // Check if all dependencies are ready
-            let deps_ready = match &current.kind {
-                ExpressionKind::Arithmetic(left, _, right)
-                | ExpressionKind::Comparison(left, _, right)
-                | ExpressionKind::LogicalAnd(left, right) => {
-                    results.contains_key(left.as_ref()) && results.contains_key(right.as_ref())
-                }
-                ExpressionKind::LogicalNegation(operand, _)
-                | ExpressionKind::UnitConversion(operand, _)
-                | ExpressionKind::MathematicalComputation(_, operand)
-                | ExpressionKind::DateCalendar(_, _, operand) => {
-                    results.contains_key(operand.as_ref())
-                }
-                ExpressionKind::DateRelative(_, date_expr, tolerance_expr) => {
-                    results.contains_key(date_expr.as_ref())
-                        && tolerance_expr
-                            .as_ref()
-                            .is_none_or(|t| results.contains_key(t.as_ref()))
-                }
-                _ => true,
-            };
-
-            if deps_ready {
-                to_remove.push(current.clone());
-                progress = true;
-            }
-        }
-
-        if !progress {
-            let loc = expr
-                .source_location
-                .as_ref()
-                .expect("BUG: expression missing source in evaluation");
-            unreachable!(
-                "BUG: circular dependency or missing dependency in expression tree ({}:{}:{} in {})",
-                loc.attribute, loc.span.start, loc.span.end, loc.spec_name
-            );
-        }
-
-        // Evaluate expressions that are ready
-        for current in &to_remove {
-            let result = evaluate_single_expression(current, &results, context);
-            results.insert(current.clone(), result);
-        }
-
-        for key in &to_remove {
-            remaining.retain(|k| k != key);
-        }
-    }
-
-    let loc = expr
-        .source_location
-        .as_ref()
-        .expect("BUG: expression missing source in evaluation");
-    results.get(expr).cloned().unwrap_or_else(|| {
+    results.remove(&expr_ptr(expr)).unwrap_or_else(|| {
+        let loc = expr
+            .source_location
+            .as_ref()
+            .expect("BUG: expression missing source in evaluation");
         unreachable!(
-            "BUG: expression was processed but has no result ({}:{}:{} in {})",
-            loc.attribute, loc.span.start, loc.span.end, loc.spec_name
+            "BUG: expression was processed but has no result ({}:{}:{})",
+            loc.attribute, loc.span.start, loc.span.end
         )
     })
 }
@@ -415,7 +382,7 @@ fn evaluate_expression(
 /// (Value or Veto) without ever returning a Error.
 fn evaluate_single_expression(
     current: &Expression,
-    results: &HashMap<Expression, OperationResult>,
+    results: &HashMap<usize, OperationResult>,
     context: &mut crate::evaluation::EvaluationContext,
 ) -> OperationResult {
     match &current.kind {
@@ -474,8 +441,8 @@ fn evaluate_single_expression(
                 .expect("BUG: expression missing source in evaluation");
             let r = context.rule_results.get(rule_path).cloned().unwrap_or_else(|| {
                 unreachable!(
-                    "BUG: Rule '{}' not found in results during topological-order evaluation ({}:{}:{} in {})",
-                    rule_path.rule, loc.attribute, loc.span.line, loc.span.col, loc.spec_name
+                    "BUG: Rule '{}' not found in results during topological-order evaluation ({}:{}:{})",
+                    rule_path.rule, loc.attribute, loc.span.line, loc.span.col
                 )
             });
 

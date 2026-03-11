@@ -397,7 +397,7 @@ pub async fn resolve_registry_references(
                     };
                     round_errors.push(Error::registry(
                         registry_error.message,
-                        Some(reference.source.clone()),
+                        reference.source.clone(),
                         &reference.name,
                         registry_error.kind,
                         suggestion,
@@ -410,7 +410,7 @@ pub async fn resolve_registry_references(
 
             let new_specs =
                 match crate::parsing::parse(&bundle.lemma_source, &bundle.attribute, limits) {
-                    Ok(specs) => specs,
+                    Ok(result) => result.specs,
                     Err(e) => {
                         round_errors.push(e);
                         return Err(round_errors);
@@ -606,7 +606,9 @@ mod tests {
     async fn resolve_with_no_registry_references_returns_local_specs_unchanged() {
         let source = r#"spec example
 fact price: 100"#;
-        let local_specs = crate::parse(source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let local_specs = crate::parse(source, "local.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let mut store = Context::new();
         for spec in &local_specs {
             store.insert_spec(Arc::new(spec.clone())).unwrap();
@@ -634,8 +636,9 @@ fact price: 100"#;
         let local_source = r#"spec main_spec
 fact external: spec @org/project/helper
 rule value: external.quantity"#;
-        let local_specs =
-            crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let mut store = Context::new();
         for spec in local_specs {
             store.insert_spec(Arc::new(spec)).unwrap();
@@ -701,8 +704,9 @@ fact quantity: 42"#,
     async fn resolve_fetches_transitive_dependencies() {
         let local_source = r#"spec main_spec
 fact a: spec @org/project/spec_a"#;
-        let local_specs =
-            crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let mut store = Context::new();
         for spec in local_specs {
             store.insert_spec(Arc::new(spec)).unwrap();
@@ -742,8 +746,9 @@ fact value: 99"#,
     async fn resolve_handles_bundle_with_multiple_specs() {
         let local_source = r#"spec main_spec
 fact a: spec @org/project/spec_a"#;
-        let local_specs =
-            crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let mut store = Context::new();
         for spec in local_specs {
             store.insert_spec(Arc::new(spec)).unwrap();
@@ -781,8 +786,9 @@ fact value: 99"#,
     async fn resolve_returns_registry_error_when_registry_fails() {
         let local_source = r#"spec main_spec
 fact external: spec @org/project/missing"#;
-        let local_specs =
-            crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let mut store = Context::new();
         for spec in local_specs {
             store.insert_spec(Arc::new(spec)).unwrap();
@@ -839,8 +845,9 @@ fact external: spec @org/project/missing"#;
         let local_source = r#"spec main_spec
 fact helper: spec @org/example/helper
 type money from @lemma/std/finance"#;
-        let local_specs =
-            crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let mut store = Context::new();
         for spec in local_specs {
             store.insert_spec(Arc::new(spec)).unwrap();
@@ -894,8 +901,9 @@ fact a: spec @org/shared
 
 spec spec_two
 fact b: spec @org/shared"#;
-        let local_specs =
-            crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let mut store = Context::new();
         for spec in local_specs {
             store.insert_spec(Arc::new(spec)).unwrap();
@@ -930,8 +938,9 @@ fact value: 1"#,
         let local_source = r#"spec main_spec
 type money from @lemma/std/finance
 fact price: [money]"#;
-        let local_specs =
-            crate::parse(local_source, "local.lemma", &ResourceLimits::default()).unwrap();
+        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
         let mut store = Context::new();
         for spec in local_specs {
             store.insert_spec(Arc::new(spec)).unwrap();
