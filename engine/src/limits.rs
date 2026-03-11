@@ -6,6 +6,10 @@ pub const MAX_FACT_NAME_LENGTH: usize = 256;
 pub const MAX_RULE_NAME_LENGTH: usize = 256;
 pub const MAX_TYPE_NAME_LENGTH: usize = 256;
 
+/// Maximum significant digits in a number string. rust_decimal supports at most 28;
+/// more can panic or overflow in parse or arithmetic.
+pub const MAX_NUMBER_DIGITS: usize = 28;
+
 /// Validate that a name does not exceed the given character limit.
 /// `kind` is a human-readable noun like "spec", "fact", "rule", or "type".
 pub fn check_max_length(
