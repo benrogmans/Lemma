@@ -159,6 +159,11 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
 
+      - name: Check fuzz targets compile
+        run: |
+          cd engine
+          cargo +nightly fuzz build
+
       - name: Run fuzz targets (30s each)
         run: |
           cd engine/fuzz
