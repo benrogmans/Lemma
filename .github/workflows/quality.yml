@@ -59,6 +59,9 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
       - name: Run tests
         run: cargo nextest run --workspace --all-features --run-ignored all
 
@@ -146,28 +149,3 @@ jobs:
 
       - name: Run cargo-deny
         run: cargo deny check --config .cargo/deny.toml
-
-  fuzz:
-    name: Fuzz Testing (Quick)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
-
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
-
-      - name: Check fuzz targets compile
-        run: |
-          cd engine
-          cargo +nightly fuzz build
-
-      - name: Run fuzz targets (30s each)
-        run: |
-          cd engine/fuzz
-          for target in fuzz_parser fuzz_expressions fuzz_literals fuzz_deeply_nested fuzz_fact_bindings; do
-            echo "Running $target..."
-            cargo +nightly fuzz run $target -- -max_total_time=30 -timeout=5
-          done
