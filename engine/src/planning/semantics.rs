@@ -921,6 +921,13 @@ pub fn parse_number_unit(
                 Err(_) => {
                     if trimmed.split_whitespace().count() == 1 && !trimmed.is_empty() {
                         let clean = trimmed.replace(['_', ','], "");
+                        let digit_count = clean.chars().filter(|c| c.is_ascii_digit()).count();
+                        if digit_count > crate::limits::MAX_NUMBER_DIGITS {
+                            return Err(format!(
+                                "Number has too many digits (max {})",
+                                crate::limits::MAX_NUMBER_DIGITS
+                            ));
+                        }
                         let n = Decimal::from_str(&clean)
                             .map_err(|_| format!("Invalid ratio: '{}'", trimmed))?;
                         Ok(Value::Ratio(n, None))
@@ -950,6 +957,13 @@ pub fn parse_value_from_string(
         TypeSpecification::Text { .. } => Ok(Value::Text(value_str.to_string())),
         TypeSpecification::Number { .. } => {
             let clean = value_str.replace(['_', ','], "");
+            let digit_count = clean.chars().filter(|c| c.is_ascii_digit()).count();
+            if digit_count > crate::limits::MAX_NUMBER_DIGITS {
+                return Err(to_err(format!(
+                    "Number has too many digits (max {})",
+                    crate::limits::MAX_NUMBER_DIGITS
+                )));
+            }
             let n = Decimal::from_str(&clean).map_err(|_| to_err(format!("Invalid number: '{}'", value_str)))?;
             Ok(Value::Number(n))
         }

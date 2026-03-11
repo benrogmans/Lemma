@@ -11,6 +11,18 @@ rustup install nightly
 cargo install cargo-fuzz
 ```
 
+## Run like CI (before pushing)
+
+From repo root or from `engine/`:
+
+```bash
+cargo test --ignored run_fuzz_targets
+# or with nextest:
+cargo nextest run -p lemma-engine --ignored run_fuzz_targets
+```
+
+Runs an ignored test that builds and runs each fuzz target for 30s with a 5s timeout, matching the quality workflow.
+
 ## Running Fuzz Tests
 
 ### Quick Test (30 seconds)

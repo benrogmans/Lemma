@@ -147,3 +147,26 @@ fn fuzz_fact_bindings_api_empty_value() {
         let _ = engine.evaluate("fuzz_test", None, &now, vec![], facts);
     }
 }
+
+#[test]
+fn fuzz_fact_bindings_api_number_too_long_no_panic() {
+    let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
+    let mut engine = Engine::new();
+    let files = single_file("fuzz_binding", code);
+    engine.add_lemma_files(files).unwrap();
+    let mut facts = HashMap::new();
+    facts.insert("x".to_string(), "40000000000000000460903669760".to_string());
+    let now = DateTimeValue::now();
+    let result = engine.evaluate("fuzz_test", None, &now, vec![], facts);
+    assert!(
+        result.is_err(),
+        "expected validation error for 29-digit number, got {:?}",
+        result
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("too many digits") || err.to_string().contains("Invalid number"),
+        "expected 'too many digits' or parse error, got: {}",
+        err
+    );
+}

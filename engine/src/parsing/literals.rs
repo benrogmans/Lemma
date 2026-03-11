@@ -23,6 +23,17 @@ pub(crate) fn parse_duration_from_string(value_str: &str, source: &Source) -> Re
     }
     let unit_str = parts.pop().unwrap();
     let number_str = parts.join(" ").replace(['_', ','], "");
+    let digit_count = number_str.chars().filter(|c| c.is_ascii_digit()).count();
+    if digit_count > crate::limits::MAX_NUMBER_DIGITS {
+        return Err(Error::validation(
+            format!(
+                "Number has too many digits (max {})",
+                crate::limits::MAX_NUMBER_DIGITS
+            ),
+            Some(source.clone()),
+            None::<String>,
+        ));
+    }
     let n = Decimal::from_str(&number_str).map_err(|_| {
         Error::validation(
             format!("Invalid duration number: '{}'", number_str),
@@ -79,6 +90,13 @@ pub(crate) fn parse_number_unit_string(s: &str) -> Result<(Decimal, String), Str
         )
     })?;
     let clean = number_part.replace(['_', ','], "");
+    let digit_count = clean.chars().filter(|c| c.is_ascii_digit()).count();
+    if digit_count > crate::limits::MAX_NUMBER_DIGITS {
+        return Err(format!(
+            "Number has too many digits (max {})",
+            crate::limits::MAX_NUMBER_DIGITS
+        ));
+    }
     let n = Decimal::from_str(&clean).map_err(|_| format!("Invalid scale: '{}'", s))?;
     Ok((n, unit_part.to_string()))
 }
