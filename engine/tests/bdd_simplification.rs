@@ -1,4 +1,4 @@
-use lemma::{Engine, LiteralValue, Target};
+use lemma::{Engine, LiteralValue, ResourceLimits, Target};
 mod common;
 use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
@@ -20,7 +20,11 @@ fn bdd_unification_simplifies_to_single_atom() {
         unless (discount_code is "SAVE30" and not (member_level is "platinum")) then 1
     "#;
 
-    let mut engine = Engine::new();
+    let limits = ResourceLimits {
+        max_expression_depth: 6,
+        ..ResourceLimits::default()
+    };
+    let mut engine = Engine::with_limits(limits);
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
 
     let now = DateTimeValue::now();

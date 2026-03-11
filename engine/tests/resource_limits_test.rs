@@ -2,6 +2,7 @@ use lemma::{Engine, Error, ResourceLimits};
 mod common;
 use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use std::time::Instant;
 
 #[test]
 fn test_file_size_limit() {
@@ -35,6 +36,46 @@ fn test_file_size_just_under_limit() {
 
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
     assert!(result.is_ok(), "Small file should be accepted");
+}
+
+#[test]
+fn test_expression_depth_limit() {
+    let limits = ResourceLimits::default();
+    assert_eq!(limits.max_expression_depth, 5);
+
+    let mut engine = Engine::with_limits(limits);
+    let code_4 = r#"spec test
+fact x: 1
+rule r: (((1 + 1) + 1) + 1) + 1"#;
+    let result = add_lemma_code_blocking(&mut engine, code_4, "test.lemma");
+    assert!(
+        result.is_ok(),
+        "Depth 4 should be accepted: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_overall_execution_time_at_expression_depth_limit() {
+    let limits = ResourceLimits::default();
+    let code_4 = r#"spec test
+fact x: 1
+rule r: (((1 + 1) + 1) + 1) + 1"#;
+    let mut engine = Engine::with_limits(limits);
+    let start = Instant::now();
+    add_lemma_code_blocking(&mut engine, code_4, "test.lemma").expect("add_lemma_files");
+    let now = DateTimeValue::now();
+    let _ = engine
+        .evaluate(
+            "test",
+            None,
+            &now,
+            vec!["r".to_string()],
+            std::collections::HashMap::new(),
+        )
+        .expect("evaluate");
+    let elapsed = start.elapsed();
+    eprintln!("overall (parse + plan + evaluate, depth 4): {:?}", elapsed);
 }
 
 #[test]

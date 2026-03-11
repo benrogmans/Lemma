@@ -75,7 +75,7 @@ impl Default for DepthTracker {
     fn default() -> Self {
         Self {
             depth: 0,
-            max_depth: 100,
+            max_depth: 5,
         }
     }
 }

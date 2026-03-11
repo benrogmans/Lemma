@@ -164,5 +164,5 @@ jobs:
           cd engine/fuzz
           for target in fuzz_parser fuzz_expressions fuzz_literals fuzz_deeply_nested fuzz_fact_bindings; do
             echo "Running $target..."
-            cargo +nightly fuzz run $target -- -max_total_time=30
+            cargo +nightly fuzz run $target -- -max_total_time=30 -timeout=5
           done

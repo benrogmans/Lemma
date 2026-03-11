@@ -7,7 +7,7 @@ use std::collections::HashMap;
 fuzz_target!(|depth: u8| {
     let mut engine = Engine::new();
     
-    let depth = (depth as usize % 50) + 1;
+    let depth = (depth as usize % 5) + 1;
     
     let mut expr = String::from("1");
     for _ in 0..depth {

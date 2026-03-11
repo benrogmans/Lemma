@@ -37,7 +37,7 @@ pub struct ResourceLimits {
     pub max_file_size_bytes: usize,
 
     /// Maximum expression nesting depth
-    /// Real usage: ~3 levels, Limit: 100 (30x+)
+    /// Real usage: ~3 levels, Limit: 5. Deeper logic via rule composition.
     pub max_expression_depth: usize,
 
     /// Maximum size of a single fact value in bytes
@@ -50,7 +50,7 @@ impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
             max_file_size_bytes: 5 * 1024 * 1024, // 5 MB
-            max_expression_depth: 100,
+            max_expression_depth: 5,
             max_fact_value_bytes: 1024, // 1 KB
         }
     }
