@@ -52,3 +52,12 @@ predicates = "3.0"
 tempfile = "3.8"
 proptest = "1.4"
 reqwest = { version = "0.12", default-features = false, features = ["blocking"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "http_evaluate"
+harness = false
+
+[[bench]]
+name = "engine_profile"
+harness = false
