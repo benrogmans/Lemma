@@ -9,7 +9,7 @@ description = "OpenAPI 3.1 specification generator for Lemma specs."
 
 [dependencies]
 # Exact version: avoid resolving a newer lemma-engine patch that may be API-incompatible.
-lemma = { package = "lemma-engine", version = "=0.8.1", path = "../engine" }
+lemma = { package = "lemma-engine", version = "=0.8.2", path = "../engine" }
 serde.workspace = true
 serde_json.workspace = true
 

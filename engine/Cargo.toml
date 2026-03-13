@@ -11,6 +11,7 @@ documentation = "https://docs.rs/lemma-engine"
 readme = "README.md"
 keywords = ["logic", "rules", "declarative", "dsl", "rust"]
 categories = ["parser-implementations", "development-tools"]
+include = ["/src/**", "/tests/**", "/README.md", "/LICENSE"]
 
 [lib]
 name = "lemma"

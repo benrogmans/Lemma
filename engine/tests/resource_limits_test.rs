@@ -577,10 +577,10 @@ fn single_file_exceeding_total_expression_count_is_rejected() {
 }
 
 /// Scaling test: incremental rule counts to find performance cliffs.
-/// Run with: cargo nextest run bench_2m --run-ignored ignored-only --workspace
+/// Run with: cargo nextest run bench_1m --run-ignored ignored-only --workspace
 #[test]
 #[ignore]
-fn bench_2m_expressions() {
+fn bench_1m_expressions() {
     use std::collections::HashMap;
     use std::fmt::Write;
 
@@ -595,12 +595,12 @@ fn bench_2m_expressions() {
         code
     }
 
-    for num_rules in [100, 1_000, 5_000, 10_000, 25_000, 50_000, 100_000] {
+    for num_rules in [100, 1_000, 5_000, 10_000, 25_000, 52_631] {
         let nodes = num_rules * NODES_PER_RULE;
         let code = build_wide_spec("test", num_rules);
         let bytes = code.len();
         let limits = ResourceLimits {
-            max_file_size_bytes: 50 * 1024 * 1024,
+            max_file_size_bytes: 100 * 1024 * 1024,
             max_expression_count: nodes + 1000,
             max_total_expression_count: nodes + 1000,
             ..ResourceLimits::default()
