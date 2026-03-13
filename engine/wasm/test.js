@@ -58,6 +58,52 @@ export async function test() {
       process.exit(1);
     }
 
+    // Verify all imports in lemma.js resolve to files in pkg/
+    const lemmaJs = readFileSync(join(pkgPath, 'lemma.js'), 'utf-8');
+    const importRegex = /from\s+['"](\.[^'"]+)['"]/g;
+    let match;
+    while ((match = importRegex.exec(lemmaJs)) !== null) {
+      const importPath = join(pkgPath, match[1]);
+      if (!existsSync(importPath)) {
+        throw new Error(`lemma.js imports '${match[1]}' but file not found at ${importPath} -- add it to package.json "files"`);
+      }
+    }
+    console.log('✓ All JS imports resolve to existing files');
+
+    // Verify all imports would be included in the published npm package.
+    // Locally files exist because wasm-pack created them, but npm only
+    // ships what's listed in package.json "files". This catches the class
+    // of bug where tests pass locally but production fails with
+    // "Could not resolve ..." errors.
+    const pkgJson = JSON.parse(readFileSync(join(pkgPath, 'package.json'), 'utf-8'));
+    const publishedFiles = pkgJson.files || [];
+    importRegex.lastIndex = 0;
+    while ((match = importRegex.exec(lemmaJs)) !== null) {
+      const rel = match[1].replace(/^\.\//, '');
+      const covered = publishedFiles.some(f => rel === f || rel.startsWith(f + '/'));
+      if (!covered) {
+        throw new Error(
+          `lemma.js imports '${match[1]}' which exists on disk but is NOT listed in package.json "files" -- ` +
+          `npm publish will exclude it. Add "${rel.split('/')[0]}" to the files array in build.js`
+        );
+      }
+    }
+    console.log('✓ All JS imports covered by package.json "files"');
+
+    // Verify every entry in package.json "files" actually exists on disk.
+    // Catches phantom entries that npm would silently skip, hiding missing
+    // artifacts from consumers.
+    for (const entry of publishedFiles) {
+      const entryPath = join(pkgPath, entry);
+      if (!existsSync(entryPath)) {
+        throw new Error(
+          `package.json "files" lists "${entry}" but it does not exist in pkg/ -- ` +
+          `remove it from the files array in build.js or fix the build to produce it`
+        );
+      }
+    }
+    console.log('✓ All package.json "files" entries exist on disk');
+
     // Import the JS bindings
     const { WasmEngine, initSync } = await import('../pkg/lemma.js');
 
