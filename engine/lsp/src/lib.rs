@@ -2,6 +2,7 @@
 
 pub mod diagnostics;
 pub mod registry;
+pub mod semantic_tokens;
 pub mod server;
 pub mod spec_links;
 pub mod workspace;

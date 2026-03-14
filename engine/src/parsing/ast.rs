@@ -83,8 +83,10 @@ use std::sync::Arc;
 /// Ordered and compared by (name, effective_from) for use in BTreeSet; None < Some(_) for Option<DateTimeValue>.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LemmaSpec {
-    /// Base spec name.
+    /// Base spec name. Includes `@` for registry specs.
     pub name: String,
+    /// `true` when the spec was declared with the `@` qualifier (registry spec).
+    pub from_registry: bool,
     pub effective_from: Option<DateTimeValue>,
     pub attribute: Option<String>,
     pub start_line: usize,
@@ -466,7 +468,7 @@ pub enum MathematicalComputation {
 
 /// A reference to a spec, with optional hash pin and optional effective datetime.
 /// For registry references the `name` includes the leading `@` (e.g. `@org/repo/spec`);
-/// for local references it is a plain base name.  `is_registry` mirrors whether
+/// for local references it is a plain base name.  `from_registry` mirrors whether
 /// the source used the `@` qualifier; `hash_pin` pins to a specific temporal version
 /// by content hash; `effective` requests temporal resolution at that datetime.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -474,7 +476,7 @@ pub struct SpecRef {
     /// Spec name as written in source. Includes `@` for registry references.
     pub name: String,
     /// `true` when the source used the `@` qualifier (registry reference).
-    pub is_registry: bool,
+    pub from_registry: bool,
     /// Optional content hash pin to resolve to a specific spec version.
     pub hash_pin: Option<String>,
     /// Optional effective datetime for temporal resolution. When used with `hash_pin`, resolve by hash then verify that version was active at this datetime.
@@ -499,7 +501,7 @@ impl SpecRef {
     pub fn local(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            is_registry: false,
+            from_registry: false,
             hash_pin: None,
             effective: None,
         }
@@ -509,7 +511,7 @@ impl SpecRef {
     pub fn registry(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            is_registry: true,
+            from_registry: true,
             hash_pin: None,
             effective: None,
         }
@@ -950,8 +952,10 @@ impl LemmaFact {
 impl LemmaSpec {
     #[must_use]
     pub fn new(name: String) -> Self {
+        let from_registry = name.starts_with('@');
         Self {
             name,
+            from_registry,
             effective_from: None,
             attribute: None,
             start_line: 1,

@@ -628,7 +628,8 @@ async fn get_all_workspace_deps(
         match lemma::parse(&code, &source_id, &limits) {
             Ok(result) => {
                 for spec in result.specs {
-                    if let Err(e) = ctx.insert_spec(std::sync::Arc::new(spec)) {
+                    let from_registry = spec.from_registry;
+                    if let Err(e) = ctx.insert_spec(std::sync::Arc::new(spec), from_registry) {
                         eprintln!("warning: {}", e);
                     }
                 }

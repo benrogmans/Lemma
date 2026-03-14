@@ -3063,7 +3063,7 @@ mod tests {
     ) -> Result<Graph, Vec<Error>> {
         let mut ctx = Context::new();
         for spec in all_specs {
-            ctx.insert_spec(Arc::new(spec.clone()))
+            ctx.insert_spec(Arc::new(spec.clone()), spec.from_registry)
                 .expect("test specs must have valid timespans");
         }
         let main_spec_arc = ctx

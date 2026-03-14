@@ -13,6 +13,7 @@ use tower_lsp::{Client, LanguageServer};
 
 use crate::diagnostics;
 use crate::registry::Registry;
+use crate::semantic_tokens;
 use crate::spec_links;
 use crate::workspace::WorkspaceModel;
 
@@ -171,6 +172,19 @@ impl LanguageServer for LemmaLanguageServer {
                     },
                 }),
                 document_formatting_provider: Some(OneOf::Left(true)),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            legend: SemanticTokensLegend {
+                                token_types: semantic_tokens::TOKEN_TYPES.to_vec(),
+                                token_modifiers: vec![],
+                            },
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            range: None,
+                            ..SemanticTokensOptions::default()
+                        },
+                    ),
+                ),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -317,6 +331,29 @@ impl LanguageServer for LemmaLanguageServer {
                 } else {
                     Ok(Some(links))
                 }
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let uri = params.text_document.uri;
+
+        let text = {
+            let workspace = self.state.workspace.read().await;
+            workspace.get_file_text(&uri).map(|t| t.to_string())
+        };
+
+        match text {
+            Some(text) => {
+                let tokens = semantic_tokens::tokenize(&text);
+                Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+                    result_id: None,
+                    data: tokens,
+                })))
             }
             None => Ok(None),
         }

@@ -112,6 +112,11 @@ export function build() {
   // Parse metadata from Cargo.toml files
   const metadata = parseCargoMetadata();
 
+  // Copy JS helper modules from wasm/ into pkg/
+  const WASM_DIR = join(PROJECT_ROOT, 'wasm');
+  copyFileSync(join(WASM_DIR, 'lsp-client.js'), join(pkgDir, 'lsp-client.js'));
+  copyFileSync(join(WASM_DIR, 'monaco.js'), join(pkgDir, 'monaco.js'));
+
   // Create package.json (wasm-pack --out-name lemma produces lemma.js, lemma_bg.wasm)
   const packageJson = {
     name: "@benrogmans/lemma-engine",
@@ -125,8 +130,15 @@ export function build() {
       "lemma.js",
       "lemma.d.ts",
       "lemma_bg.wasm.d.ts",
+      "lsp-client.js",
+      "monaco.js",
       "snippets"
     ],
+    exports: {
+      ".": "./lemma.js",
+      "./lsp-client": "./lsp-client.js",
+      "./monaco": "./monaco.js"
+    },
     keywords: [...metadata.keywords, "wasm", "webassembly"],
     author: metadata.author,
     license: metadata.license,
@@ -145,7 +157,7 @@ export function build() {
   writeFileSync(outputPath, JSON.stringify(packageJson, null, 2) + '\n');
 
   // Copy README.md from wasm directory to pkg directory
-  const readmeSource = join(PROJECT_ROOT, 'wasm', 'README.md');
+  const readmeSource = join(WASM_DIR, 'README.md');
   const readmeDest = join(PROJECT_ROOT, 'pkg', 'README.md');
   const readmeContent = readFileSync(readmeSource, 'utf8');
   writeFileSync(readmeDest, readmeContent);
