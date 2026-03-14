@@ -25,7 +25,7 @@ default = []
 
 [dependencies]
 # Exact version: avoid resolving a newer lemma-engine patch that may be API-incompatible.
-lemma = { package = "lemma-engine", version = "=0.8.2", path = ".." }
+lemma = { package = "lemma-engine", version = "=0.8.3", path = ".." }
 async-trait = "0.1"
 serde_json.workspace = true
 

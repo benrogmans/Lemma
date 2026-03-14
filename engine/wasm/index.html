@@ -298,8 +298,8 @@
 
     <script type="module">
         import init, { WasmEngine, serve, ServerConfig } from '../pkg/lemma.js';
-        import { registerLemmaLanguage } from './monaco.js';
-        import { LspClient } from './lsp-client.js';
+        import { registerLemmaLanguage, registerLspProviders } from '../pkg/monaco.js';
+        import { LspClient } from '../pkg/lsp-client.js';
 
         // ---------------------------------------------------------------
         // State
@@ -307,7 +307,6 @@
 
         let engine = null;
         let monacoEditor = null;
-        let monacoInstance = null;
         let editorReady = false;
         let loadTimer = null;
         let lspClient = null;
@@ -1254,24 +1253,11 @@
             if (editorPollId) { clearInterval(editorPollId); editorPollId = null; }
         }
 
-        function formatSpec(e = null) {
-            if (e) {
-                e.preventDefault();
-            }
-            if (!engine || !monacoEditor) return;
-            const code = monacoEditor.getValue();
-            const raw = engine.formatSource(code, 'wasm.lemma');
-            try {
-                const result = JSON.parse(raw);
-                if (result.success && result.formatted !== undefined) {
-                    monacoEditor.setValue(result.formatted);
-                    scheduleLoad(true);
-                } else if (!result.success && result.error) {
-                    setStatus('err', 'Format failed', result.error);
-                }
-            } catch (_) {
-                setStatus('err', 'Format failed', raw || 'Unknown error');
-            }
+        async function formatSpec(e = null) {
+            if (e) e.preventDefault();
+            if (!monacoEditor) return;
+            await monacoEditor.getAction('editor.action.formatDocument').run();
+            scheduleLoad(true);
         }
 
         async function initEditor(monaco) {
@@ -1310,9 +1296,9 @@
                     automaticLayout: true,
                     minimap: { enabled: false },
                     scrollBeyondLastLine: false,
+                    'semanticHighlighting.enabled': true,
                 });
 
-                monacoInstance = monaco;
                 monacoEditor.onDidChangeModelContent(function () {
                     scheduleLoad(false);
                     if (lspClient) {
@@ -1327,9 +1313,7 @@
 
 
                 editorReady = true;
-                formatSpec();
 
-                // Start the LSP for real-time diagnostics.
                 try {
                     lspClient = new LspClient(monaco);
                     await lspClient.start(serve, ServerConfig);
@@ -1349,6 +1333,8 @@
                         }
                     });
 
+                    registerLspProviders(monaco, lspClient, DOC_URI);
+
                     lspVersion = 1;
                     lspClient.didOpen(DOC_URI, 'lemma', lspVersion, monacoEditor.getValue());
                 } catch (lspErr) {
@@ -1356,6 +1342,7 @@
                 }
 
                 setStatus('ok', 'Ready');
+                formatSpec();
                 scheduleLoad(true);
             } catch (err) {
                 showError('Editor failed', err);
