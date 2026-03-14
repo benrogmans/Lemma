@@ -1,5 +1,6 @@
 mod diagnostics;
 mod registry;
+mod semantic_tokens;
 mod server;
 mod spec_links;
 mod workspace;

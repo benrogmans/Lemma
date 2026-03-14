@@ -3,7 +3,7 @@
 //! Validates spec structure and type declarations
 //! to catch errors early with clear messages.
 
-use crate::parsing::ast::{DateTimeValue, LemmaSpec, TimeValue};
+use crate::parsing::ast::{DateTimeValue, FactValue, LemmaSpec, TimeValue, TypeDef};
 use crate::planning::semantics::{
     Expression, ExpressionKind, FactPath, LemmaType, RulePath, SemanticConversionTarget,
     TypeSpecification,
@@ -891,6 +891,41 @@ pub fn validate_spec_interfaces(
     } else {
         Err(errors)
     }
+}
+
+/// Validate that a registry spec (`from_registry == true`) does not contain
+/// bare (non-`@`) references. The registry is responsible for rewriting all
+/// spec references to use `@`-prefixed names before serving the bundle.
+///
+/// Returns a list of bare reference names found, empty if valid.
+pub fn collect_bare_registry_refs(spec: &LemmaSpec) -> Vec<String> {
+    if !spec.from_registry {
+        return Vec::new();
+    }
+    let mut bare: Vec<String> = Vec::new();
+    for fact in &spec.facts {
+        match &fact.value {
+            FactValue::SpecReference(r) if !r.from_registry => {
+                bare.push(r.name.clone());
+            }
+            FactValue::TypeDeclaration { from: Some(r), .. } if !r.from_registry => {
+                bare.push(r.name.clone());
+            }
+            _ => {}
+        }
+    }
+    for type_def in &spec.types {
+        match type_def {
+            TypeDef::Import { from, .. } if !from.from_registry => {
+                bare.push(from.name.clone());
+            }
+            TypeDef::Inline { from: Some(r), .. } if !r.from_registry => {
+                bare.push(r.name.clone());
+            }
+            _ => {}
+        }
+    }
+    bare
 }
 
 #[cfg(test)]

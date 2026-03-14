@@ -124,7 +124,7 @@ impl WorkspaceModel {
         let mut insert_errors: Vec<(String, Error)> = Vec::new();
         for spec in self.all_parsed_specs() {
             let attr = spec.attribute.clone().unwrap_or_else(|| spec.name.clone());
-            match ctx.insert_spec(Arc::new(spec)) {
+            match ctx.insert_spec(Arc::new(spec), false) {
                 Ok(()) => {}
                 Err(e) => insert_errors.push((attr, e)),
             }
