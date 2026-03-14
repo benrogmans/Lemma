@@ -22,7 +22,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.8.2"
+lemma-engine = "0.8.3"
 ```
 
 ### Minimal example
