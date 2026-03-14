@@ -368,7 +368,7 @@ fact external: spec @user/workspace/somespec"#;
         match &result[0].facts[0].value {
             crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
                 assert_eq!(spec_ref.name, "@user/workspace/somespec");
-                assert!(spec_ref.is_registry, "expected registry reference");
+                assert!(spec_ref.from_registry, "expected registry reference");
             }
             other => panic!("Expected SpecReference, got: {:?}", other),
         }
@@ -387,7 +387,7 @@ fact price: [money]"#;
         match &result[0].types[0] {
             crate::parsing::ast::TypeDef::Import { from, name, .. } => {
                 assert_eq!(from.name, "@lemma/std/finance");
-                assert!(from.is_registry, "expected registry reference");
+                assert!(from.from_registry, "expected registry reference");
                 assert_eq!(name, "money");
             }
             other => panic!("Expected Import type, got: {:?}", other),
@@ -420,7 +420,7 @@ fact a: spec @user/workspace/spec_a"#;
             crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
                 assert_eq!(spec_ref.name, "@owner/repo/somespec");
                 assert_eq!(spec_ref.hash_pin, None);
-                assert!(spec_ref.is_registry);
+                assert!(spec_ref.from_registry);
             }
             other => panic!("Expected SpecReference, got: {:?}", other),
         }
@@ -435,7 +435,7 @@ fact a: spec @user/workspace/spec_a"#;
         match &result[0].facts[0].value {
             crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
                 assert_eq!(spec_ref.name, "@owner/repo/somespec");
-                assert!(spec_ref.is_registry);
+                assert!(spec_ref.from_registry);
             }
             other => panic!("Expected SpecReference, got: {:?}", other),
         }
@@ -451,7 +451,7 @@ fact a: spec @user/workspace/spec_a"#;
             crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
                 assert_eq!(spec_ref.name, "myspec");
                 assert_eq!(spec_ref.hash_pin, None);
-                assert!(!spec_ref.is_registry);
+                assert!(!spec_ref.from_registry);
             }
             other => panic!("Expected SpecReference, got: {:?}", other),
         }
@@ -476,7 +476,7 @@ fact a: spec @user/workspace/spec_a"#;
         match &result[0].types[0] {
             crate::parsing::ast::TypeDef::Import { from, name, .. } => {
                 assert_eq!(from.name, "@lemma/std/finance");
-                assert!(from.is_registry);
+                assert!(from.from_registry);
                 assert_eq!(name, "money");
             }
             other => panic!("Expected Import type, got: {:?}", other),
@@ -542,7 +542,7 @@ fact a: spec @user/workspace/spec_a"#;
             other => panic!("expected SpecReference, got: {:?}", other),
         };
         assert_eq!(spec_ref.name, "@user/workspace/cfg");
-        assert!(spec_ref.is_registry);
+        assert!(spec_ref.from_registry);
         assert_eq!(spec_ref.hash_pin.as_deref(), Some("ab12cd34"));
     }
 
@@ -572,7 +572,7 @@ fact a: spec @user/workspace/spec_a"#;
             crate::parsing::ast::TypeDef::Import { from, name, .. } => {
                 assert_eq!(name, "money");
                 assert_eq!(from.name, "@lemma/std/finance");
-                assert!(from.is_registry);
+                assert!(from.from_registry);
                 assert_eq!(from.hash_pin.as_deref(), Some("ab12cd34"));
             }
             other => panic!("expected Import, got: {:?}", other),

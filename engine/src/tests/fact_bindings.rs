@@ -14,7 +14,7 @@ fact contract: spec employment_contract"#;
 
     if let FactValue::SpecReference(spec_ref) = &result[0].facts[1].value {
         assert_eq!(spec_ref.name, "employment_contract");
-        assert!(!spec_ref.is_registry);
+        assert!(!spec_ref.from_registry);
     } else {
         panic!("Expected SpecReference");
     }
@@ -41,7 +41,7 @@ fact contract.base.rate: 100"#;
     );
     if let FactValue::SpecReference(spec_ref) = &result[0].facts[0].value {
         assert_eq!(spec_ref.name, "employment_contract");
-        assert!(!spec_ref.is_registry);
+        assert!(!spec_ref.from_registry);
     } else {
         panic!("Expected SpecReference");
     }
@@ -98,7 +98,7 @@ fact contract.base.rate: 100"#;
     );
     if let FactValue::SpecReference(spec_ref) = &result[0].facts[4].value {
         assert_eq!(spec_ref.name, "base_contract");
-        assert!(!spec_ref.is_registry);
+        assert!(!spec_ref.from_registry);
     } else {
         panic!("Expected SpecReference");
     }

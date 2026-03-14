@@ -548,7 +548,7 @@ impl Parser {
         self.expect(&TokenKind::Spec)?;
 
         let (name, _name_span) = self.parse_spec_name()?;
-        let is_registry = name.starts_with('@');
+        let from_registry = name.starts_with('@');
 
         let mut hash_pin = None;
         if self.at(&TokenKind::Tilde)? {
@@ -568,7 +568,7 @@ impl Parser {
 
         Ok(FactValue::SpecReference(SpecRef {
             name,
-            is_registry,
+            from_registry,
             hash_pin,
             effective,
         }))
@@ -729,7 +729,7 @@ impl Parser {
         self.expect(&TokenKind::From)?;
 
         let (from_name, _from_span) = self.parse_spec_name()?;
-        let is_registry = from_name.starts_with('@');
+        let from_registry = from_name.starts_with('@');
 
         let mut hash_pin = None;
         // Check for hash after spec name (space separated, 8 alphanumeric chars)
@@ -744,7 +744,7 @@ impl Parser {
 
         let from = SpecRef {
             name: from_name,
-            is_registry,
+            from_registry,
             hash_pin,
             effective: None,
         };
@@ -790,7 +790,7 @@ impl Parser {
         let from_spec = if self.at(&TokenKind::From)? {
             self.next()?; // consume from
             let (from_name, _) = self.parse_spec_name()?;
-            let is_registry = from_name.starts_with('@');
+            let from_registry = from_name.starts_with('@');
             let mut hash_pin = None;
             // Check for hash
             if self.at(&TokenKind::Identifier)? || self.at(&TokenKind::NumberLit)? {
@@ -804,7 +804,7 @@ impl Parser {
             }
             Some(SpecRef {
                 name: from_name,
-                is_registry,
+                from_registry,
                 hash_pin,
                 effective: None,
             })

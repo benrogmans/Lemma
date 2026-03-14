@@ -261,7 +261,7 @@ mod tests {
             reference: Reference::local(fact_name.to_string()),
             value: FactValue::SpecReference(SpecRef {
                 name: dep_name.to_string(),
-                is_registry: false,
+                from_registry: false,
                 hash_pin: None,
                 effective: None,
             }),
@@ -273,7 +273,7 @@ mod tests {
     fn no_deps_produces_single_slice() {
         let mut ctx = Context::new();
         let spec = Arc::new(make_spec_with_range("a", Some(date(2025, 1, 1))));
-        ctx.insert_spec(Arc::clone(&spec)).unwrap();
+        ctx.insert_spec(Arc::clone(&spec), false).unwrap();
 
         let slices = compute_temporal_slices(&spec, &ctx);
         assert_eq!(slices.len(), 1);
@@ -287,10 +287,10 @@ mod tests {
         let mut main_spec = make_spec_with_range("main", Some(date(2025, 1, 1)));
         add_spec_ref_fact(&mut main_spec, "dep", "config");
         let main_arc = Arc::new(main_spec);
-        ctx.insert_spec(Arc::clone(&main_arc)).unwrap();
+        ctx.insert_spec(Arc::clone(&main_arc), false).unwrap();
 
         let config = Arc::new(make_spec("config"));
-        ctx.insert_spec(config).unwrap();
+        ctx.insert_spec(config, false).unwrap();
 
         let slices = compute_temporal_slices(&main_arc, &ctx);
         assert_eq!(slices.len(), 1);
@@ -301,15 +301,15 @@ mod tests {
         let mut ctx = Context::new();
 
         let config_v1 = Arc::new(make_spec("config"));
-        ctx.insert_spec(config_v1).unwrap();
+        ctx.insert_spec(config_v1, false).unwrap();
         let config_v2 = Arc::new(make_spec_with_range("config", Some(date(2025, 2, 1))));
-        ctx.insert_spec(config_v2).unwrap();
+        ctx.insert_spec(config_v2, false).unwrap();
 
         // main: [Jan 1, +inf) depends on config
         let mut main_spec = make_spec_with_range("main", Some(date(2025, 1, 1)));
         add_spec_ref_fact(&mut main_spec, "cfg", "config");
         let main_arc = Arc::new(main_spec);
-        ctx.insert_spec(Arc::clone(&main_arc)).unwrap();
+        ctx.insert_spec(Arc::clone(&main_arc), false).unwrap();
 
         let slices = compute_temporal_slices(&main_arc, &ctx);
         assert_eq!(slices.len(), 2);
@@ -324,9 +324,9 @@ mod tests {
         let mut ctx = Context::new();
 
         let config_v1 = Arc::new(make_spec("config"));
-        ctx.insert_spec(config_v1).unwrap();
+        ctx.insert_spec(config_v1, false).unwrap();
         let config_v2 = Arc::new(make_spec_with_range("config", Some(date(2025, 6, 1))));
-        ctx.insert_spec(config_v2).unwrap();
+        ctx.insert_spec(config_v2, false).unwrap();
 
         // main v1: [Jan 1, Mar 1) — successor main v2 defines the end
         let main_v1 = make_spec_with_range("main", Some(date(2025, 1, 1)));
@@ -334,8 +334,8 @@ mod tests {
         let mut main_v1 = main_v1;
         add_spec_ref_fact(&mut main_v1, "cfg", "config");
         let main_arc = Arc::new(main_v1);
-        ctx.insert_spec(Arc::clone(&main_arc)).unwrap();
-        ctx.insert_spec(Arc::new(main_v2)).unwrap();
+        ctx.insert_spec(Arc::clone(&main_arc), false).unwrap();
+        ctx.insert_spec(Arc::new(main_v2), false).unwrap();
 
         let slices = compute_temporal_slices(&main_arc, &ctx);
         assert_eq!(slices.len(), 1);
@@ -347,18 +347,18 @@ mod tests {
 
         let mut config = make_spec("config");
         add_spec_ref_fact(&mut config, "rates_ref", "rates");
-        ctx.insert_spec(Arc::new(config)).unwrap();
+        ctx.insert_spec(Arc::new(config), false).unwrap();
 
         let rates_v1 = Arc::new(make_spec("rates"));
-        ctx.insert_spec(rates_v1).unwrap();
+        ctx.insert_spec(rates_v1, false).unwrap();
         let rates_v2 = Arc::new(make_spec_with_range("rates", Some(date(2025, 2, 1))));
-        ctx.insert_spec(rates_v2).unwrap();
+        ctx.insert_spec(rates_v2, false).unwrap();
 
         // main: [Jan 1, +inf) depends on config
         let mut main_spec = make_spec_with_range("main", Some(date(2025, 1, 1)));
         add_spec_ref_fact(&mut main_spec, "cfg", "config");
         let main_arc = Arc::new(main_spec);
-        ctx.insert_spec(Arc::clone(&main_arc)).unwrap();
+        ctx.insert_spec(Arc::clone(&main_arc), false).unwrap();
 
         let slices = compute_temporal_slices(&main_arc, &ctx);
         assert_eq!(slices.len(), 2);
@@ -371,14 +371,14 @@ mod tests {
         let mut ctx = Context::new();
 
         let dep_v1 = Arc::new(make_spec("dep"));
-        ctx.insert_spec(dep_v1).unwrap();
+        ctx.insert_spec(dep_v1, false).unwrap();
         let dep_v2 = Arc::new(make_spec_with_range("dep", Some(date(2025, 6, 1))));
-        ctx.insert_spec(dep_v2).unwrap();
+        ctx.insert_spec(dep_v2, false).unwrap();
 
         let mut main_spec = make_spec("main");
         add_spec_ref_fact(&mut main_spec, "d", "dep");
         let main_arc = Arc::new(main_spec);
-        ctx.insert_spec(Arc::clone(&main_arc)).unwrap();
+        ctx.insert_spec(Arc::clone(&main_arc), false).unwrap();
 
         let slices = compute_temporal_slices(&main_arc, &ctx);
         assert_eq!(slices.len(), 2);
@@ -393,23 +393,23 @@ mod tests {
         let mut ctx = Context::new();
 
         let dep_v1 = Arc::new(make_spec("dep"));
-        ctx.insert_spec(dep_v1).unwrap();
+        ctx.insert_spec(dep_v1, false).unwrap();
         let dep_v2 = Arc::new(make_spec_with_range("dep", Some(date(2025, 6, 1))));
-        ctx.insert_spec(dep_v2).unwrap();
+        ctx.insert_spec(dep_v2, false).unwrap();
 
         let mut main_spec = make_spec("main");
         main_spec.facts.push(LemmaFact {
             reference: Reference::local("d".to_string()),
             value: FactValue::SpecReference(SpecRef {
                 name: "dep".to_string(),
-                is_registry: false,
+                from_registry: false,
                 hash_pin: Some("abcd1234".to_string()),
                 effective: None,
             }),
             source_location: dummy_source(),
         });
         let main_arc = Arc::new(main_spec);
-        ctx.insert_spec(Arc::clone(&main_arc)).unwrap();
+        ctx.insert_spec(Arc::clone(&main_arc), false).unwrap();
 
         let slices = compute_temporal_slices(&main_arc, &ctx);
         assert_eq!(slices.len(), 1);

@@ -418,7 +418,24 @@ pub async fn resolve_registry_references(
                 };
 
             for spec in new_specs {
-                if let Err(e) = ctx.insert_spec(Arc::new(spec)) {
+                let bare_refs = crate::planning::validation::collect_bare_registry_refs(&spec);
+                if !bare_refs.is_empty() {
+                    round_errors.push(Error::validation(
+                        format!(
+                            "Registry spec '{}' contains references without '@' prefix: {}. \
+                             The registry must rewrite all references to use '@'-prefixed names",
+                            spec.name,
+                            bare_refs.join(", ")
+                        ),
+                        None,
+                        Some(
+                            "The registry must prefix all spec references with '@' \
+                             before serving the bundle.",
+                        ),
+                    ));
+                    continue;
+                }
+                if let Err(e) = ctx.insert_spec(Arc::new(spec), true) {
                     round_errors.push(e);
                 }
             }
@@ -465,14 +482,13 @@ fn collect_unresolved_registry_references(
     for spec in ctx.iter() {
         let spec = spec.as_ref();
         if spec.attribute.is_none() {
-            let has_registry_refs = spec
-                .facts
-                .iter()
-                .any(|f| matches!(&f.value, FactValue::SpecReference(ref r) if r.is_registry))
-                || spec
+            let has_registry_refs =
+                spec.facts.iter().any(
+                    |f| matches!(&f.value, FactValue::SpecReference(ref r) if r.from_registry),
+                ) || spec
                     .types
                     .iter()
-                    .any(|t| matches!(t, TypeDef::Import { from, .. } if from.is_registry));
+                    .any(|t| matches!(t, TypeDef::Import { from, .. } if from.from_registry));
             if has_registry_refs {
                 panic!(
                     "BUG: spec '{}' must have source attribute when it has registry references",
@@ -484,7 +500,7 @@ fn collect_unresolved_registry_references(
 
         for fact in &spec.facts {
             if let FactValue::SpecReference(spec_ref) = &fact.value {
-                if !spec_ref.is_registry {
+                if !spec_ref.from_registry {
                     continue;
                 }
                 let already_satisfied = ctx
@@ -511,7 +527,7 @@ fn collect_unresolved_registry_references(
                 ..
             } = type_def
             {
-                if !from.is_registry {
+                if !from.from_registry {
                     continue;
                 }
                 let already_satisfied = ctx
@@ -611,7 +627,7 @@ fact price: 100"#;
             .specs;
         let mut store = Context::new();
         for spec in &local_specs {
-            store.insert_spec(Arc::new(spec.clone())).unwrap();
+            store.insert_spec(Arc::new(spec.clone()), false).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), source.to_string());
@@ -641,7 +657,7 @@ rule value: external.quantity"#;
             .specs;
         let mut store = Context::new();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec)).unwrap();
+            store.insert_spec(Arc::new(spec), false).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
@@ -709,7 +725,7 @@ fact a: spec @org/project/spec_a"#;
             .specs;
         let mut store = Context::new();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec)).unwrap();
+            store.insert_spec(Arc::new(spec), false).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
@@ -751,7 +767,7 @@ fact a: spec @org/project/spec_a"#;
             .specs;
         let mut store = Context::new();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec)).unwrap();
+            store.insert_spec(Arc::new(spec), false).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
@@ -791,7 +807,7 @@ fact external: spec @org/project/missing"#;
             .specs;
         let mut store = Context::new();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec)).unwrap();
+            store.insert_spec(Arc::new(spec), false).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
@@ -850,7 +866,7 @@ type money from @lemma/std/finance"#;
             .specs;
         let mut store = Context::new();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec)).unwrap();
+            store.insert_spec(Arc::new(spec), false).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
@@ -906,7 +922,7 @@ fact b: spec @org/shared"#;
             .specs;
         let mut store = Context::new();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec)).unwrap();
+            store.insert_spec(Arc::new(spec), false).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());
@@ -943,7 +959,7 @@ fact price: [money]"#;
             .specs;
         let mut store = Context::new();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec)).unwrap();
+            store.insert_spec(Arc::new(spec), false).unwrap();
         }
         let mut sources = HashMap::new();
         sources.insert("local.lemma".to_string(), local_source.to_string());

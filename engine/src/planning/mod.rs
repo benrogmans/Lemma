@@ -183,7 +183,7 @@ mod internal_tests {
     ) -> Result<ExecutionPlan, Vec<Error>> {
         let mut ctx = Context::new();
         for spec in all_specs {
-            if let Err(e) = ctx.insert_spec(Arc::new(spec.clone())) {
+            if let Err(e) = ctx.insert_spec(Arc::new(spec.clone()), spec.from_registry) {
                 return Err(vec![e]);
             }
         }

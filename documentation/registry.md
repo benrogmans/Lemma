@@ -35,7 +35,7 @@ The trait is **async** and requires `Send + Sync`. On WASM the future is `?Send`
 ### Types
 
 - **`RegistryBundle`** -- returned on success:
-  - `lemma_source: String` -- raw Lemma source (one or more `spec ...` blocks). Spec names should be fully qualified (e.g. `spec @lemma/std/finance`).
+  - `lemma_source: String` -- raw Lemma source (one or more `spec ...` blocks). All spec names and references **must** use `@`-prefixed names (see [Bundle requirements](#bundle-requirements)).
   - `attribute: String` -- source identifier for diagnostics (e.g. `"@lemma/std/finance"`).
 
 - **`RegistryError`** -- returned on failure:
@@ -69,6 +69,20 @@ resolve_registry_references(&mut context, &mut sources, &registry, &ResourceLimi
 let mut engine = Engine::new();
 engine.add_lemma_files(sources)?;
 ```
+
+---
+
+## Bundle requirements
+
+The engine enforces strict isolation between local specs and registry specs. A `RegistryBundle` must satisfy all of the following:
+
+1. **All spec declarations must use `@`-prefixed names.** A bundle must not contain bare-named specs like `spec billing` — only `spec @org/project/billing`.
+
+2. **All references must use `@`-prefixed names.** This includes `fact x: spec ...`, `type x from ...`, and inline type annotations with `from`. A registry spec must not reference a bare name like `spec local_rates`.
+
+3. **All dependencies must be inlined.** If `spec @org/billing` references `spec @org/rates`, the bundle must include both specs. The engine resolves transitive `@` references automatically, but the bundle should be self-contained when possible.
+
+The registry is responsible for rewriting names. Authors may write bare names on the registry platform — the registry adds the `@` prefix when serving the bundle. The engine rejects bundles that violate these rules.
 
 ---
 

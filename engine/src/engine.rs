@@ -153,8 +153,36 @@ impl Context {
         self.specs.iter().cloned()
     }
 
-    /// Insert a spec. Validates no duplicate (name, effective_from).
-    pub fn insert_spec(&mut self, spec: Arc<LemmaSpec>) -> Result<(), Error> {
+    /// Insert a spec. Set `from_registry` to `true` for pre-fetched registry
+    /// specs; `false` rejects `@`-prefixed spec definitions.
+    ///
+    /// When `from_registry` is true, only `@`-prefixed specs are accepted —
+    /// registry bundles must not introduce bare-named specs into the local namespace.
+    pub fn insert_spec(&mut self, spec: Arc<LemmaSpec>, from_registry: bool) -> Result<(), Error> {
+        if spec.from_registry && !from_registry {
+            return Err(Error::validation(
+                format!(
+                    "Spec '{}' uses '@' registry prefix, which is reserved for dependencies",
+                    spec.name
+                ),
+                None,
+                Some("Remove the '@' prefix, or load this file as a dependency."),
+            ));
+        }
+
+        if from_registry && !spec.from_registry {
+            return Err(Error::validation(
+                format!(
+                    "Registry bundle contains spec '{}' without '@' prefix; \
+                     all specs in a registry bundle must use '@'-prefixed names \
+                     to avoid conflicts with local specs",
+                    spec.name
+                ),
+                None,
+                Some("Prefix the spec name with '@' (e.g. spec @org/project/name)."),
+            ));
+        }
+
         let existing = self.specs_for_name(&spec.name);
 
         if existing
@@ -407,18 +435,32 @@ impl Engine {
     }
 
     /// Add Lemma source files, parse them, and build execution plans.
-    ///
-    /// External `@...` references must already be resolved: include dependency
-    /// `.lemma` files in the `files` map. The engine never
-    /// performs network calls. Use `resolve_registry_references` separately
-    /// (e.g. in `lemma fetch`) to download dependencies before calling this.
+    /// Add user-authored Lemma files. Registry specs (`@`-prefixed) are rejected;
+    /// use [`add_dependency_files`] for pre-fetched registry dependencies.
     ///
     /// - Validates and resolves types **once** across all specs
     /// - Collects **all** errors across all files (parse, planning) instead of aborting on the first
     ///
     /// `files` maps source identifiers (e.g. file paths) to source code.
-    /// For a single file, pass a one-entry `HashMap`.
     pub fn add_lemma_files(&mut self, files: HashMap<String, String>) -> Result<(), Vec<Error>> {
+        self.add_files_inner(files, false)
+    }
+
+    /// Add pre-fetched registry dependency files. These are allowed to declare
+    /// `@`-prefixed spec names. Call this before [`add_lemma_files`] so that
+    /// user specs can reference the imported types and facts.
+    pub fn add_dependency_files(
+        &mut self,
+        files: HashMap<String, String>,
+    ) -> Result<(), Vec<Error>> {
+        self.add_files_inner(files, true)
+    }
+
+    fn add_files_inner(
+        &mut self,
+        files: HashMap<String, String>,
+        allow_registry_specs: bool,
+    ) -> Result<(), Vec<Error>> {
         let mut errors: Vec<Error> = Vec::new();
 
         for (source_id, code) in &files {
@@ -441,7 +483,38 @@ impl Engine {
                         let attribute = spec.attribute.clone().unwrap_or_else(|| spec.name.clone());
                         let start_line = spec.start_line;
 
-                        match self.specs.insert_spec(Arc::new(spec)) {
+                        if allow_registry_specs {
+                            let bare_refs =
+                                crate::planning::validation::collect_bare_registry_refs(&spec);
+                            if !bare_refs.is_empty() {
+                                let source = crate::Source::new(
+                                    &attribute,
+                                    crate::parsing::ast::Span {
+                                        start: 0,
+                                        end: 0,
+                                        line: start_line,
+                                        col: 0,
+                                    },
+                                    Arc::clone(&source_text),
+                                );
+                                errors.push(Error::validation(
+                                    format!(
+                                        "Registry spec '{}' contains references without '@' prefix: {}. \
+                                         The registry must rewrite all references to use '@'-prefixed names",
+                                        spec.name,
+                                        bare_refs.join(", ")
+                                    ),
+                                    Some(source),
+                                    Some(
+                                        "The registry must prefix all spec references with '@' \
+                                         before serving the bundle.",
+                                    ),
+                                ));
+                                continue;
+                            }
+                        }
+
+                        match self.specs.insert_spec(Arc::new(spec), allow_registry_specs) {
                             Ok(()) => {
                                 self.sources.insert(attribute, code.clone());
                             }
@@ -732,13 +805,29 @@ mod tests {
         spec
     }
 
+    /// list_specs (and Context::iter) return specs in (name, effective_from) ascending order.
+    /// So same-name temporal versions appear in temporal order; definition order in the file
+    /// is irrelevant once inserted into the BTreeSet.
+    #[test]
+    fn list_specs_order_is_name_then_effective_from_ascending() {
+        let mut ctx = Context::new();
+        let s_2026 = Arc::new(make_spec_with_range("mortgage", Some(date(2026, 1, 1))));
+        let s_2025 = Arc::new(make_spec_with_range("mortgage", Some(date(2025, 1, 1))));
+        ctx.insert_spec(Arc::clone(&s_2026), false).unwrap();
+        ctx.insert_spec(Arc::clone(&s_2025), false).unwrap();
+        let listed: Vec<_> = ctx.iter().collect();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].effective_from(), Some(&date(2025, 1, 1)));
+        assert_eq!(listed[1].effective_from(), Some(&date(2026, 1, 1)));
+    }
+
     // ─── Context::effective_range tests ──────────────────────────────
 
     #[test]
     fn effective_range_unbounded_single_version() {
         let mut ctx = Context::new();
         let spec = Arc::new(make_spec("a"));
-        ctx.insert_spec(Arc::clone(&spec)).unwrap();
+        ctx.insert_spec(Arc::clone(&spec), false).unwrap();
 
         let (from, to) = ctx.effective_range(&spec);
         assert_eq!(from, None);
@@ -750,8 +839,8 @@ mod tests {
         let mut ctx = Context::new();
         let v1 = Arc::new(make_spec_with_range("a", Some(date(2025, 1, 1))));
         let v2 = Arc::new(make_spec_with_range("a", Some(date(2025, 6, 1))));
-        ctx.insert_spec(Arc::clone(&v1)).unwrap();
-        ctx.insert_spec(Arc::clone(&v2)).unwrap();
+        ctx.insert_spec(Arc::clone(&v1), false).unwrap();
+        ctx.insert_spec(Arc::clone(&v2), false).unwrap();
 
         let (from, to) = ctx.effective_range(&v1);
         assert_eq!(from, Some(date(2025, 1, 1)));
@@ -767,8 +856,8 @@ mod tests {
         let mut ctx = Context::new();
         let v1 = Arc::new(make_spec("a"));
         let v2 = Arc::new(make_spec_with_range("a", Some(date(2025, 3, 1))));
-        ctx.insert_spec(Arc::clone(&v1)).unwrap();
-        ctx.insert_spec(Arc::clone(&v2)).unwrap();
+        ctx.insert_spec(Arc::clone(&v1), false).unwrap();
+        ctx.insert_spec(Arc::clone(&v2), false).unwrap();
 
         let (from, to) = ctx.effective_range(&v1);
         assert_eq!(from, None);
@@ -780,7 +869,7 @@ mod tests {
     #[test]
     fn version_boundaries_single_unversioned() {
         let mut ctx = Context::new();
-        ctx.insert_spec(Arc::new(make_spec("a"))).unwrap();
+        ctx.insert_spec(Arc::new(make_spec("a")), false).unwrap();
 
         assert!(ctx.version_boundaries("a").is_empty());
     }
@@ -788,11 +877,17 @@ mod tests {
     #[test]
     fn version_boundaries_multiple_versions() {
         let mut ctx = Context::new();
-        ctx.insert_spec(Arc::new(make_spec("a"))).unwrap();
-        ctx.insert_spec(Arc::new(make_spec_with_range("a", Some(date(2025, 3, 1)))))
-            .unwrap();
-        ctx.insert_spec(Arc::new(make_spec_with_range("a", Some(date(2025, 6, 1)))))
-            .unwrap();
+        ctx.insert_spec(Arc::new(make_spec("a")), false).unwrap();
+        ctx.insert_spec(
+            Arc::new(make_spec_with_range("a", Some(date(2025, 3, 1)))),
+            false,
+        )
+        .unwrap();
+        ctx.insert_spec(
+            Arc::new(make_spec_with_range("a", Some(date(2025, 6, 1)))),
+            false,
+        )
+        .unwrap();
 
         let boundaries = ctx.version_boundaries("a");
         assert_eq!(boundaries, vec![date(2025, 3, 1), date(2025, 6, 1)]);
@@ -817,7 +912,7 @@ mod tests {
     #[test]
     fn dep_coverage_single_unbounded_version_covers_everything() {
         let mut ctx = Context::new();
-        ctx.insert_spec(Arc::new(make_spec("dep"))).unwrap();
+        ctx.insert_spec(Arc::new(make_spec("dep")), false).unwrap();
 
         let gaps = ctx.dep_coverage_gaps("dep", None, None);
         assert!(gaps.is_empty());
@@ -829,10 +924,10 @@ mod tests {
     #[test]
     fn dep_coverage_single_version_with_from_leaves_leading_gap() {
         let mut ctx = Context::new();
-        ctx.insert_spec(Arc::new(make_spec_with_range(
-            "dep",
-            Some(date(2025, 3, 1)),
-        )))
+        ctx.insert_spec(
+            Arc::new(make_spec_with_range("dep", Some(date(2025, 3, 1)))),
+            false,
+        )
         .unwrap();
 
         let gaps = ctx.dep_coverage_gaps("dep", None, None);
@@ -842,15 +937,15 @@ mod tests {
     #[test]
     fn dep_coverage_continuous_versions_no_gaps() {
         let mut ctx = Context::new();
-        ctx.insert_spec(Arc::new(make_spec_with_range(
-            "dep",
-            Some(date(2025, 1, 1)),
-        )))
+        ctx.insert_spec(
+            Arc::new(make_spec_with_range("dep", Some(date(2025, 1, 1)))),
+            false,
+        )
         .unwrap();
-        ctx.insert_spec(Arc::new(make_spec_with_range(
-            "dep",
-            Some(date(2025, 6, 1)),
-        )))
+        ctx.insert_spec(
+            Arc::new(make_spec_with_range("dep", Some(date(2025, 6, 1)))),
+            false,
+        )
         .unwrap();
 
         let gaps = ctx.dep_coverage_gaps("dep", Some(&date(2025, 1, 1)), Some(&date(2025, 12, 1)));
@@ -860,10 +955,10 @@ mod tests {
     #[test]
     fn dep_coverage_dep_starts_after_required_start() {
         let mut ctx = Context::new();
-        ctx.insert_spec(Arc::new(make_spec_with_range(
-            "dep",
-            Some(date(2025, 6, 1)),
-        )))
+        ctx.insert_spec(
+            Arc::new(make_spec_with_range("dep", Some(date(2025, 6, 1)))),
+            false,
+        )
         .unwrap();
 
         let gaps = ctx.dep_coverage_gaps("dep", Some(&date(2025, 1, 1)), Some(&date(2025, 12, 1)));
@@ -873,10 +968,10 @@ mod tests {
     #[test]
     fn dep_coverage_unbounded_required_range() {
         let mut ctx = Context::new();
-        ctx.insert_spec(Arc::new(make_spec_with_range(
-            "dep",
-            Some(date(2025, 6, 1)),
-        )))
+        ctx.insert_spec(
+            Arc::new(make_spec_with_range("dep", Some(date(2025, 6, 1)))),
+            false,
+        )
         .unwrap();
 
         let gaps = ctx.dep_coverage_gaps("dep", None, None);
@@ -1224,6 +1319,16 @@ mod tests {
     #[test]
     fn pre_resolved_deps_in_file_map_evaluates_external_spec() {
         let mut engine = Engine::new();
+
+        let mut deps = HashMap::new();
+        deps.insert(
+            "deps/org_project_helper.lemma".to_string(),
+            "spec @org/project/helper\nfact quantity: 42".to_string(),
+        );
+        engine
+            .add_dependency_files(deps)
+            .expect("should load dependency files");
+
         let mut files = HashMap::new();
         files.insert(
             "main.lemma".to_string(),
@@ -1232,13 +1337,9 @@ fact external: spec @org/project/helper
 rule value: external.quantity"#
                 .to_string(),
         );
-        files.insert(
-            "deps/org_project_helper.lemma".to_string(),
-            "spec @org/project/helper\nfact quantity: 42".to_string(),
-        );
         engine
             .add_lemma_files(files)
-            .expect("should succeed with pre-resolved deps in file map");
+            .expect("should succeed with pre-resolved deps");
 
         let now = DateTimeValue::now();
         let response = engine
@@ -1299,6 +1400,21 @@ rule value: external.quantity"#,
     #[test]
     fn pre_resolved_deps_with_spec_and_type_refs() {
         let mut engine = Engine::new();
+
+        let mut deps = HashMap::new();
+        deps.insert(
+            "deps/helper.lemma".to_string(),
+            "spec @org/example/helper\nfact value: 42".to_string(),
+        );
+        deps.insert(
+            "deps/finance.lemma".to_string(),
+            "spec @lemma/std/finance\ntype money: scale\n -> unit eur 1.00\n -> decimals 2"
+                .to_string(),
+        );
+        engine
+            .add_dependency_files(deps)
+            .expect("should load dependency files");
+
         let mut files = HashMap::new();
         files.insert(
             "main.lemma".to_string(),
@@ -1309,15 +1425,6 @@ fact helper: spec @org/example/helper
 rule helper_value: helper.value
 rule line_total: unit_price * 2
 rule formatted: helper_value + 0"#
-                .to_string(),
-        );
-        files.insert(
-            "deps/helper.lemma".to_string(),
-            "spec @org/example/helper\nfact value: 42".to_string(),
-        );
-        files.insert(
-            "deps/finance.lemma".to_string(),
-            "spec @lemma/std/finance\ntype money: scale\n -> unit eur 1.00\n -> decimals 2"
                 .to_string(),
         );
         engine
@@ -1331,6 +1438,125 @@ rule formatted: helper_value + 0"#
 
         assert!(response.results.contains_key("helper_value"));
         assert!(response.results.contains_key("formatted"));
+    }
+
+    #[test]
+    fn add_lemma_files_rejects_registry_spec_definitions() {
+        let mut engine = Engine::new();
+        let mut files = HashMap::new();
+        files.insert(
+            "bad.lemma".to_string(),
+            "spec @org/example/helper\nfact x: 1".to_string(),
+        );
+        let result = engine.add_lemma_files(files);
+        assert!(
+            result.is_err(),
+            "should reject @-prefixed spec in add_lemma_files"
+        );
+        let errors = result.unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message().contains("registry prefix")),
+            "error should mention registry prefix, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn add_dependency_files_accepts_registry_spec_definitions() {
+        let mut engine = Engine::new();
+        let mut files = HashMap::new();
+        files.insert(
+            "deps/helper.lemma".to_string(),
+            "spec @org/my/helper\nfact x: 1".to_string(),
+        );
+        engine
+            .add_dependency_files(files)
+            .expect("add_dependency_files should accept @-prefixed specs");
+    }
+
+    #[test]
+    fn add_dependency_files_rejects_bare_named_spec_in_registry_bundle() {
+        let mut engine = Engine::new();
+        let mut files = HashMap::new();
+        files.insert(
+            "deps/bundle.lemma".to_string(),
+            "spec local_looking_name\nfact x: 1".to_string(),
+        );
+        let result = engine.add_dependency_files(files);
+        assert!(
+            result.is_err(),
+            "should reject non-@-prefixed spec in registry bundle"
+        );
+        let errors = result.unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message().contains("without '@' prefix")),
+            "error should mention missing @ prefix, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn add_dependency_files_rejects_spec_with_bare_spec_reference() {
+        let mut engine = Engine::new();
+        let mut files = HashMap::new();
+        files.insert(
+            "deps/billing.lemma".to_string(),
+            "spec @org/billing\nfact rates: spec local_rates".to_string(),
+        );
+        let result = engine.add_dependency_files(files);
+        assert!(
+            result.is_err(),
+            "should reject registry spec referencing non-@ spec"
+        );
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.message().contains("local_rates")),
+            "error should mention bare ref name, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn add_dependency_files_rejects_spec_with_bare_type_import() {
+        let mut engine = Engine::new();
+        let mut files = HashMap::new();
+        files.insert(
+            "deps/billing.lemma".to_string(),
+            "spec @org/billing\ntype money from local_finance".to_string(),
+        );
+        let result = engine.add_dependency_files(files);
+        assert!(
+            result.is_err(),
+            "should reject registry spec importing type from non-@ spec"
+        );
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.message().contains("local_finance")),
+            "error should mention bare ref name, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn add_dependency_files_accepts_fully_qualified_references() {
+        let mut engine = Engine::new();
+        let mut files = HashMap::new();
+        files.insert(
+            "deps/bundle.lemma".to_string(),
+            r#"spec @org/billing
+fact rates: spec @org/rates
+
+spec @org/rates
+fact rate: 10"#
+                .to_string(),
+        );
+        engine
+            .add_dependency_files(files)
+            .expect("fully @-prefixed bundle should be accepted");
     }
 
     #[test]

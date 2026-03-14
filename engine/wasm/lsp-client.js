@@ -145,6 +145,27 @@ export class LspClient {
     }
 
     /**
+     * Request textDocument/formatting from the server.
+     * Returns an array of TextEdit.
+     */
+    async formatting(uri, tabSize, insertSpaces) {
+        return this.sendRequest('textDocument/formatting', {
+            textDocument: { uri: uri },
+            options: { tabSize: tabSize, insertSpaces: insertSpaces },
+        });
+    }
+
+    /**
+     * Request textDocument/semanticTokens/full from the server.
+     * Returns { data: number[] } or null.
+     */
+    async semanticTokensFull(uri) {
+        return this.sendRequest('textDocument/semanticTokens/full', {
+            textDocument: { uri: uri },
+        });
+    }
+
+    /**
      * Register a callback for textDocument/publishDiagnostics notifications.
      * @param {Function} callback  Receives (uri, diagnostics)
      */
