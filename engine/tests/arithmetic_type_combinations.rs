@@ -21,7 +21,7 @@ fn eval_rule(
     add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate(spec_name, None, &now, vec![], facts)
+        .run(spec_name, Some(&now), facts)
         .expect("Should evaluate");
     let result = response
         .results

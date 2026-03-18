@@ -103,6 +103,9 @@ impl Evaluator {
 
         let mut response = Response {
             spec_name: plan.spec_name.clone(),
+            spec_hash: None,
+            spec_effective_from: None,
+            spec_effective_to: None,
             facts: Vec::new(),
             results: IndexMap::new(),
         };

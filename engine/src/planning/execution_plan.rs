@@ -94,7 +94,6 @@ pub struct Branch {
 /// Internal implementation detail - only called by plan()
 pub(crate) fn build_execution_plan(
     graph: &Graph,
-    main_spec_name: &str,
     valid_from: Option<DateTimeValue>,
     valid_to: Option<DateTimeValue>,
 ) -> ExecutionPlan {
@@ -130,11 +129,16 @@ pub(crate) fn build_execution_plan(
     populate_needs_facts(&mut executable_rules, graph);
 
     ExecutionPlan {
-        spec_name: main_spec_name.to_string(),
+        spec_name: graph.main_spec().name.clone(),
         facts,
         rules: executable_rules,
         sources: graph.sources().clone(),
-        meta: graph.meta().clone(),
+        meta: graph
+            .main_spec()
+            .meta_fields
+            .iter()
+            .map(|f| (f.key.clone(), f.value.clone()))
+            .collect(),
         valid_from,
         valid_to,
     }
@@ -412,6 +416,7 @@ impl ExecutionPlan {
                         rule_name, self.spec_name
                     ),
                     None::<String>,
+                    None,
                 )
             })?;
             needed_facts.extend(rule.needs_facts.iter().cloned());
@@ -487,6 +492,7 @@ impl ExecutionPlan {
                         available.join(", ")
                     ),
                     None::<String>,
+                    None,
                 )
             })?;
             let fact_path = fact_path.clone();
@@ -504,6 +510,7 @@ impl ExecutionPlan {
                         name
                     ),
                     None::<String>,
+                    None,
                 )
             })?;
 
@@ -549,6 +556,8 @@ impl ExecutionPlan {
                         limits.max_fact_value_bytes
                     ),
                     Some(fact_source.clone()),
+                    None,
+                    None,
                 ));
             }
 
@@ -704,9 +713,7 @@ mod tests {
         code: &str,
         source: &str,
     ) -> Result<(), Vec<crate::Error>> {
-        let files: std::collections::HashMap<String, String> =
-            std::iter::once((source.to_string(), code.to_string())).collect();
-        engine.add_lemma_files(files)
+        engine.load(code, crate::LoadSource::Labeled(source))
     }
 
     #[test]
@@ -723,10 +730,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine
-            .get_execution_plan("test", None, &now)
-            .unwrap()
-            .clone();
+        let plan = engine.plan("test", Some(&now)).unwrap().clone();
         let fact_path = FactPath::new(vec![], "age".to_string());
 
         let mut values = HashMap::new();
@@ -756,10 +760,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine
-            .get_execution_plan("test", None, &now)
-            .unwrap()
-            .clone();
+        let plan = engine.plan("test", Some(&now)).unwrap().clone();
 
         let mut values = HashMap::new();
         values.insert("age".to_string(), "thirty".to_string());
@@ -781,10 +782,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine
-            .get_execution_plan("test", None, &now)
-            .unwrap()
-            .clone();
+        let plan = engine.plan("test", Some(&now)).unwrap().clone();
 
         let mut values = HashMap::new();
         values.insert("unknown".to_string(), "30".to_string());
@@ -809,10 +807,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine
-            .get_execution_plan("test", None, &now)
-            .unwrap()
-            .clone();
+        let plan = engine.plan("test", Some(&now)).unwrap().clone();
 
         let mut values = HashMap::new();
         values.insert("rules.base_price".to_string(), "100".to_string());

@@ -42,18 +42,16 @@ fn test_wasm_build_and_test() {
 fn test_wasm_scripts_exist() {
     // This test always runs and just checks that the WASM scripts exist
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let build_script = std::path::Path::new(manifest_dir).join("wasm/build.js");
-    let test_script = std::path::Path::new(manifest_dir).join("wasm/test.js");
-
-    assert!(
-        build_script.exists(),
-        "WASM build script not found at: {}",
-        build_script.display()
-    );
-
-    assert!(
-        test_script.exists(),
-        "WASM test script not found at: {}",
-        test_script.display()
-    );
+    let wasm_dir = std::path::Path::new(manifest_dir).join("wasm");
+    for name in [
+        "build.js",
+        "test.js",
+        "lemma-entry.js",
+        "lsp-entry.js",
+        "lemma.d.ts",
+        "lsp.d.ts",
+    ] {
+        let p = wasm_dir.join(name);
+        assert!(p.exists(), "WASM file missing: {}", p.display());
+    }
 }

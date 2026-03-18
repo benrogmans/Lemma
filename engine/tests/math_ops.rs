@@ -9,9 +9,10 @@ fn run(code: &str, rule: &str) -> Result<String, Vec<lemma::Error>> {
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma")?;
     let now = DateTimeValue::now();
-    let resp = engine
-        .evaluate("test", None, &now, vec![rule.to_string()], HashMap::new())
+    let mut resp = engine
+        .run("test", Some(&now), HashMap::new())
         .map_err(|e| vec![e])?;
+    resp.filter_rules(&[rule.to_string()]);
     let v = resp
         .results
         .values()
@@ -165,15 +166,7 @@ fn test_sqrt_negative_and_log_domain_errors() {
     .unwrap();
     let now = DateTimeValue::now();
 
-    let res1 = engine
-        .evaluate(
-            "test",
-            None,
-            &now,
-            vec!["bad_sqrt".to_string()],
-            HashMap::new(),
-        )
-        .unwrap();
+    let res1 = engine.run("test", Some(&now), HashMap::new()).unwrap();
     let rule = res1
         .results
         .values()
@@ -185,15 +178,7 @@ fn test_sqrt_negative_and_log_domain_errors() {
         rule.result
     );
 
-    let res2 = engine
-        .evaluate(
-            "test",
-            None,
-            &now,
-            vec!["bad_log0".to_string()],
-            HashMap::new(),
-        )
-        .unwrap();
+    let res2 = engine.run("test", Some(&now), HashMap::new()).unwrap();
     let rule = res2
         .results
         .values()
@@ -205,15 +190,7 @@ fn test_sqrt_negative_and_log_domain_errors() {
         rule.result
     );
 
-    let res3 = engine
-        .evaluate(
-            "test",
-            None,
-            &now,
-            vec!["bad_log_neg".to_string()],
-            HashMap::new(),
-        )
-        .unwrap();
+    let res3 = engine.run("test", Some(&now), HashMap::new()).unwrap();
     let rule = res3
         .results
         .values()
@@ -241,15 +218,7 @@ fn test_inverse_trig_domain_error() {
     .unwrap();
     let now = DateTimeValue::now();
 
-    let response = engine
-        .evaluate(
-            "test",
-            None,
-            &now,
-            vec!["bad_asin".to_string()],
-            HashMap::new(),
-        )
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
 
     let rule = response
         .results

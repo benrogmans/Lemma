@@ -25,9 +25,7 @@ rule total: base_data.price * base_data.quantity
     add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("derived", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("derived", Some(&now), HashMap::new()).unwrap();
     let total = response
         .results
         .values()
@@ -58,9 +56,7 @@ rule derived_value: base_data.doubled + 10
     add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("derived", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("derived", Some(&now), HashMap::new()).unwrap();
     let derived_value = response
         .results
         .values()
@@ -92,9 +88,7 @@ rule manager_bonus: employee.annual_salary * 0.15
     add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("manager", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("manager", Some(&now), HashMap::new()).unwrap();
     let bonus = response
         .results
         .values()
@@ -128,9 +122,7 @@ rule derived_total: config.total
     add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("derived", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("derived", Some(&now), HashMap::new()).unwrap();
     let total = response
         .results
         .values()
@@ -170,9 +162,7 @@ rule total_days: settings.standard_processing_days + order_info.processing_days
     add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("derived", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("derived", Some(&now), HashMap::new()).unwrap();
     let total = response
         .results
         .values()
@@ -205,9 +195,7 @@ rule status: "invalid"
     add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("derived", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("derived", Some(&now), HashMap::new()).unwrap();
     let status = response
         .results
         .values()
@@ -238,9 +226,7 @@ rule combined: base_data.input + base_data.calculated
     add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("derived", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("derived", Some(&now), HashMap::new()).unwrap();
     let combined = response
         .results
         .values()
@@ -274,9 +260,7 @@ rule sum: data.x + data.y + data.z
     add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("derived", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("derived", Some(&now), HashMap::new()).unwrap();
     let sum = response
         .results
         .values()
@@ -311,9 +295,7 @@ rule total: config.price * config.quantity
     add_lemma_code_blocking(&mut engine, derived_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("derived", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("derived", Some(&now), HashMap::new()).unwrap();
     let total = response
         .results
         .values()
@@ -356,9 +338,7 @@ rule total2: base2.base.total
     add_lemma_code_blocking(&mut engine, example3_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("example3", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("example3", Some(&now), HashMap::new()).unwrap();
 
     let total1 = response
         .results
@@ -395,9 +375,7 @@ rule total: p.base_price
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("order", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("order", Some(&now), HashMap::new()).unwrap();
     let total = response
         .results
         .values()
@@ -437,7 +415,7 @@ rule employee_summary: employee.monthly_salary
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("specific_employee", None, &now, vec![], HashMap::new())
+        .run("specific_employee", Some(&now), HashMap::new())
         .unwrap();
 
     let mut result_names: Vec<&str> = response.results.keys().map(|k| k.as_str()).collect();
@@ -478,9 +456,7 @@ rule total: p.base_price
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("order", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("order", Some(&now), HashMap::new()).unwrap();
     let total = response
         .results
         .values()

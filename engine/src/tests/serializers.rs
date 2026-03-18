@@ -53,6 +53,9 @@ fn test_response_serialization() {
     );
     let response = Response {
         spec_name: "test_spec".to_string(),
+        spec_hash: None,
+        spec_effective_from: None,
+        spec_effective_to: None,
         facts: vec![],
         results,
     };
@@ -97,6 +100,9 @@ fn test_response_filter_rules() {
     );
     let mut response = Response {
         spec_name: "test_spec".to_string(),
+        spec_hash: None,
+        spec_effective_from: None,
+        spec_effective_to: None,
         facts: vec![],
         results,
     };

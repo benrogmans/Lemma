@@ -43,7 +43,7 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("employment_terms", None, &now, vec![], HashMap::new())
+        .run("employment_terms", Some(&now), HashMap::new())
         .unwrap();
 
     let total_comp = response
@@ -110,7 +110,7 @@ rule effective_rate: (tax_amount / income) * 100%
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("tax_calculation", None, &now, vec![], HashMap::new())
+        .run("tax_calculation", Some(&now), HashMap::new())
         .unwrap();
 
     let taxable = response
@@ -177,9 +177,7 @@ rule status: "LOW"
     facts.insert("multiplier".to_string(), "2".to_string());
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("dynamic_config", None, &now, vec![], facts)
-        .unwrap();
+    let response = engine.run("dynamic_config", Some(&now), facts).unwrap();
 
     let calculated = response
         .results
@@ -199,9 +197,7 @@ rule status: "LOW"
     facts2.insert("threshold".to_string(), "150".to_string());
     facts2.insert("multiplier".to_string(), "2".to_string());
 
-    let response2 = engine
-        .evaluate("dynamic_config", None, &now, vec![], facts2)
-        .unwrap();
+    let response2 = engine.run("dynamic_config", Some(&now), facts2).unwrap();
 
     let status2 = response2
         .results
@@ -244,7 +240,7 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("project_timeline", None, &now, vec![], HashMap::new())
+        .run("project_timeline", Some(&now), HashMap::new())
         .unwrap();
 
     let phase1_complete = response
@@ -286,9 +282,7 @@ rule end_date: start + timespan
 
     add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
 
     let end_date = response
         .results
@@ -322,9 +316,7 @@ rule start_date: end - timespan
 
     add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
 
     let start_date = response
         .results
@@ -358,9 +350,7 @@ rule timespan: end - start
 
     add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
 
     let duration = response
         .results
@@ -395,9 +385,7 @@ rule date1_after_date2: date1 > date2
 
     add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
 
     let before = response
         .results
@@ -538,9 +526,7 @@ rule is_valid: value >= config.min_value and value <= config.max_value
     add_lemma_code_blocking(&mut engine, child_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("child", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("child", Some(&now), HashMap::new()).unwrap();
 
     let is_valid = response
         .results
@@ -575,9 +561,7 @@ rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.ma
     add_lemma_code_blocking(&mut engine, child_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("child", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("child", Some(&now), HashMap::new()).unwrap();
 
     let is_valid = response
         .results
@@ -611,9 +595,7 @@ rule probation_end: base_contract.project_start + base_contract.probation_period
     add_lemma_code_blocking(&mut engine, child_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("child", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("child", Some(&now), HashMap::new()).unwrap();
 
     let probation_end = response
         .results

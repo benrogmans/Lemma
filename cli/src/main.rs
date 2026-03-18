@@ -312,11 +312,14 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
             std::process::exit(1);
         }
 
-        let (parsed_spec, parsed_rules) = opts.spec_name.map_or((None, None), |name| {
-            let (spec, _hash) = parse_spec_and_hash(name);
-            let rules = opts.rules.map(parse_rule_names);
-            (Some(spec), rules)
-        });
+        let (parsed_spec, parsed_rules) = match opts.spec_name {
+            Some(spec_id) => {
+                let (name, _) =
+                    lemma::parse_spec_id(spec_id).map_err(|e| anyhow::anyhow!("{}", e))?;
+                (Some(name), opts.rules.map(parse_rule_names))
+            }
+            None => (None, None),
+        };
 
         let cli_facts: std::collections::HashMap<String, String> = parse_fact_strings(opts.facts);
 
@@ -331,11 +334,11 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
         let mut all_facts = cli_facts;
         all_facts.extend(interactive_facts);
         (s, r.unwrap_or_default(), all_facts, interactive_target)
-    } else if let Some(name) = opts.spec_name {
-        let (spec, _) = parse_spec_and_hash(name);
+    } else if let Some(spec_id) = opts.spec_name {
+        lemma::parse_spec_id(spec_id).map_err(|e| anyhow::anyhow!("{}", e))?;
         let rules = opts.rules.map(parse_rule_names).unwrap_or_default();
         let fact_values = parse_fact_strings(opts.facts);
-        (spec, rules, fact_values, None)
+        (spec_id.clone(), rules, fact_values, None)
     } else {
         unreachable!()
     };
@@ -345,10 +348,12 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
         return Err(anyhow::anyhow!("Inversion not implemented"));
     }
 
-    let hash_from_spec = opts.spec_name.and_then(|n| parse_spec_and_hash(n).1);
-    let hash_pin = hash_from_spec.as_deref();
-    let response = engine.evaluate(&spec, hash_pin, &now, rules, final_facts)?;
-    let hash = engine.hash_pin(&spec, &now).map(|h| h.to_string());
+    let (name, _) = lemma::parse_spec_id(&spec).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let mut response = engine.run(&spec, Some(&now), final_facts)?;
+    if !rules.is_empty() {
+        response.filter_rules(&rules);
+    }
+    let hash = engine.hash_pin(&name, &now).map(|h| h.to_string());
     let formatter = Formatter;
 
     match opts.output {
@@ -412,7 +417,7 @@ fn parse_fact_strings(facts: &[String]) -> HashMap<String, String> {
 
 fn show_command(
     workdir: &Path,
-    spec_name: &str,
+    spec_id: &str,
     effective_raw: Option<&String>,
     hash_only: bool,
 ) -> Result<()> {
@@ -420,23 +425,21 @@ fn show_command(
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
-    if let Some(plan) = engine.get_execution_plan(spec_name, None, &now) {
-        let hash = engine.hash_pin(spec_name, &now);
-        if hash_only {
-            if let Some(h) = hash {
-                println!("{}", h);
-            } else {
-                std::process::exit(1);
-            }
+    let (name, _) = lemma::parse_spec_id(spec_id).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let plan = engine
+        .plan(spec_id, Some(&now))
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let hash = engine.hash_pin(&name, &now);
+    if hash_only {
+        if let Some(h) = hash {
+            println!("{}", h);
         } else {
-            let formatter = Formatter;
-            print!("{}", formatter.format_spec_inspection(plan, hash));
+            std::process::exit(1);
         }
     } else {
-        eprintln!("Error: Spec '{}' not found", spec_name);
-        std::process::exit(1);
+        let formatter = Formatter;
+        print!("{}", formatter.format_spec_inspection(plan, hash));
     }
-
     Ok(())
 }
 
@@ -460,9 +463,8 @@ fn list_command(root: &PathBuf, effective_raw: Option<&String>) -> Result<()> {
                 .effective_from()
                 .cloned()
                 .unwrap_or_else(|| now.clone());
-            engine.get_execution_plan(&spec.name, None, &effective)
+            engine.show(&spec.name, Some(&effective)).ok()
         })
-        .map(|plan| plan.schema())
         .collect();
 
     let formatter = Formatter;
@@ -490,28 +492,16 @@ fn server_command(workdir: &Path, host: &str, port: u16, watch: bool, proofs: bo
 }
 
 fn mcp_command(workdir: &Path, admin: bool) -> Result<()> {
-    #[cfg(feature = "mcp")]
-    {
-        let mut engine = Engine::new();
-        load_workspace(&mut engine, workdir)?;
+    let mut engine = Engine::new();
+    load_workspace(&mut engine, workdir)?;
 
-        let config = mcp::McpConfig { admin };
+    let config = mcp::McpConfig { admin };
 
-        println!(
-            "Starting MCP server with {} spec(s) loaded",
-            engine.list_specs().len()
-        );
-        mcp::server::start_server(engine, config)?;
-    }
-
-    #[cfg(not(feature = "mcp"))]
-    {
-        let _ = admin;
-        eprintln!("Error: MCP feature not enabled");
-        eprintln!("Recompile with: cargo build --features mcp");
-        std::process::exit(1);
-    }
-
+    println!(
+        "Starting MCP server with {} spec(s) loaded",
+        engine.list_specs().len()
+    );
+    mcp::server::start_server(engine, config)?;
     Ok(())
 }
 
@@ -540,7 +530,7 @@ async fn get_single_spec(
     }
 
     let bundle = registry
-        .fetch_specs(raw)
+        .get_specs(raw)
         .await
         .map_err(|e| anyhow::anyhow!("Registry error for {}: {}", raw, e.message))?;
 
@@ -803,39 +793,20 @@ fn make_fetch_registry() -> Box<dyn lemma::Registry> {
 /// Walks the workspace recursively for user-authored specs and cached registry
 /// dependencies (stored in `.deps/` inside the workspace by `lemma get`).
 fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> {
-    let mut files = std::collections::HashMap::new();
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for entry in WalkDir::new(workdir) {
         let entry = entry?;
         if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
-            let path = entry.path();
-            let source_id = path.to_string_lossy().to_string();
-            let code = fs::read_to_string(path)?;
-            files.insert(source_id, code);
+            paths.push(entry.path().to_path_buf());
         }
     }
-
-    if let Err(errs) = engine.add_lemma_files(files) {
+    if let Err(errs) = engine.load_from_paths(&paths) {
         for e in &errs {
             eprintln!("{}", error_formatter::format_error(e));
         }
         anyhow::bail!("Workspace load failed ({} error(s))", errs.len());
     }
     Ok(())
-}
-
-/// Parse "spec~hash" format into spec name and optional hash pin (like HTTP ?hash=).
-/// Hash must be 8 hex chars (case-insensitive).
-fn parse_spec_and_hash(input: &str) -> (String, Option<String>) {
-    if let Some(tilde_pos) = input.rfind('~') {
-        let hash_part = input[tilde_pos + 1..].trim();
-        if hash_part.len() == 8 && hash_part.chars().all(|c| c.is_ascii_hexdigit()) {
-            return (
-                input[..tilde_pos].trim().to_string(),
-                Some(hash_part.to_lowercase()),
-            );
-        }
-    }
-    (input.to_string(), None)
 }
 
 fn parse_rule_names(rules_str: &str) -> Vec<String> {

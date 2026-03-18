@@ -14,11 +14,15 @@ pub fn from_json(json: &[u8]) -> Result<HashMap<String, String>, Error> {
     let map: HashMap<String, Value> = serde_json::from_slice(json)
         .map_err(|e| Error::validation(format!("JSON parse error: {}", e), None, None::<String>))?;
 
-    Ok(map
-        .into_iter()
+    Ok(fact_values_from_map(map))
+}
+
+/// Same string coercion as [`from_json`], for maps already parsed as JSON values (e.g. WASM).
+pub fn fact_values_from_map(map: HashMap<String, Value>) -> HashMap<String, String> {
+    map.into_iter()
         .filter(|(_, v)| !v.is_null())
         .map(|(k, v)| (k, json_value_to_string(&v)))
-        .collect())
+        .collect()
 }
 
 fn json_value_to_string(value: &Value) -> String {

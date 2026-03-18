@@ -94,7 +94,7 @@ pub fn generate_openapi(engine: &Engine, proofs_enabled: bool) -> Value {
 /// Generate a complete OpenAPI 3.1 specification for a specific point in time.
 ///
 /// The specification includes:
-/// - Spec endpoints (`/{spec_name}`) with `?hash=` and `?rules=` query parameters
+/// - Spec endpoints (`/{spec_name}`) with `?rules=` query parameter; path is spec id (name or name~hash)
 /// - GET operations (schema) and POST operations (evaluate) with `Accept-Datetime` header
 /// - Response schemas with evaluation envelope (`spec`, `effective`, `hash`, `result`)
 /// - Meta routes (`/`, `/health`, `/openapi.json`, `/docs`)
@@ -113,7 +113,7 @@ pub fn generate_openapi_effective(
     let unique_spec_names: Vec<String> = active_specs.iter().map(|s| s.name.clone()).collect();
 
     for spec_name in &unique_spec_names {
-        if let Some(plan) = engine.get_execution_plan(spec_name, None, effective) {
+        if let Ok(plan) = engine.plan(spec_name, Some(effective)) {
             let schema = plan.schema();
             let facts = collect_input_facts_from_schema(&schema);
             let rule_names: Vec<String> = schema.rules.keys().cloned().collect();
@@ -236,11 +236,10 @@ fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeV
         .iter()
         .map(|name| {
             let (facts_count, rules_count) = engine
-                .get_execution_plan(name, None, effective)
-                .map(|p| {
-                    let schema = p.schema();
-                    let facts_count = schema.facts.keys().filter(|n| !n.contains('.')).count();
-                    let rules_count = schema.rules.len();
+                .show(name, Some(effective))
+                .map(|s| {
+                    let facts_count = s.facts.keys().filter(|n| !n.contains('.')).count();
+                    let rules_count = s.rules.len();
                     (facts_count, rules_count)
                 })
                 .unwrap_or((0, 0));
@@ -254,7 +253,7 @@ fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeV
 
     json!({
         "get": {
-            "operationId": "listSpecs",
+            "operationId": "list",
             "summary": "List all available specs",
             "tags": ["Specs"],
             "responses": {
@@ -371,7 +370,7 @@ fn not_found_response_schema() -> Value {
 
 fn hash_conflict_response_schema() -> Value {
     json!({
-        "description": "Hash mismatch: the ?hash= value doesn't match the resolved spec's composite content hash",
+        "description": "Path pin (spec~hash) does not match the resolved spec's content hash",
         "content": {
             "application/json": {
                 "schema": {
@@ -405,20 +404,9 @@ fn accept_datetime_header_parameter() -> Value {
         "name": "Accept-Datetime",
         "in": "header",
         "required": false,
-        "description": "RFC 7089 (Memento): resolve the spec version active at this datetime. Omit for current. Use ?hash= to pin to a specific content version.",
+        "description": "RFC 7089 (Memento): resolve the spec version active at this datetime. Omit for current. Path may be spec id (name or name~hash) to pin to a content version.",
         "schema": { "type": "string", "format": "date-time" },
         "example": "Sat, 01 Jan 2025 00:00:00 GMT"
-    })
-}
-
-fn hash_query_parameter() -> Value {
-    json!({
-        "name": "hash",
-        "in": "query",
-        "required": false,
-        "description": "Pin to a specific content hash. If the resolved spec's composite hash doesn't match, the server returns 409 Conflict.",
-        "schema": { "type": "string" },
-        "example": "a1b2c3d4"
     })
 }
 
@@ -454,7 +442,7 @@ fn build_spec_path_item(
         "example": rules_example
     });
 
-    let mut get_parameters: Vec<Value> = vec![rules_param.clone(), hash_query_parameter()];
+    let mut get_parameters: Vec<Value> = vec![rules_param.clone()];
     get_parameters.push(accept_datetime_header_parameter());
     if proofs_enabled {
         get_parameters.push(x_proofs_header_parameter());
@@ -465,7 +453,7 @@ fn build_spec_path_item(
     let get_operation_id = format!("get_{}", spec_name);
     let post_operation_id = format!("post_{}", spec_name);
 
-    let mut post_parameters: Vec<Value> = vec![rules_param, hash_query_parameter()];
+    let mut post_parameters: Vec<Value> = vec![rules_param];
     post_parameters.push(accept_datetime_header_parameter());
     if proofs_enabled {
         post_parameters.push(x_proofs_header_parameter());
@@ -728,26 +716,23 @@ fn type_base_name(lemma_type: &LemmaType) -> String {
 mod tests {
     use super::*;
     use lemma::parsing::ast::DateTimeValue;
+    use lemma::LoadSource;
 
     fn create_engine_with_code(code: &str) -> Engine {
         let mut engine = Engine::new();
-        let files: std::collections::HashMap<String, String> =
-            std::iter::once(("test.lemma".to_string(), code.to_string())).collect();
         engine
-            .add_lemma_files(files)
+            .load(code, LoadSource::Labeled("test.lemma"))
             .expect("failed to parse lemma code");
         engine
     }
 
     fn create_engine_with_files(files: Vec<(&str, &str)>) -> Engine {
         let mut engine = Engine::new();
-        let file_map: std::collections::HashMap<String, String> = files
-            .into_iter()
-            .map(|(name, code)| (name.to_string(), code.to_string()))
-            .collect();
-        engine
-            .add_lemma_files(file_map)
-            .expect("failed to parse lemma code");
+        for (name, code) in files {
+            engine
+                .load(code, LoadSource::Labeled(name))
+                .expect("failed to parse lemma code");
+        }
         engine
     }
 

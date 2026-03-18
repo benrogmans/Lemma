@@ -12,7 +12,7 @@ exclude = ["engine/fuzz"]
 [workspace.package]
 version = "0.8.3"
 edition = "2021"
-authors = ["benrogmans <ben@amrai.nl>"]
+authors = ["Ben Rogmans <ben@amrai.nl>"]
 description = "A language that means business."
 license = "Apache-2.0"
 repository = "https://github.com/benrogmans/lemma"

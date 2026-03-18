@@ -29,6 +29,7 @@ pub fn validate_type_specifications(
     specs: &TypeSpecification,
     type_name: &str,
     source: &Source,
+    spec_context: Option<Arc<LemmaSpec>>,
 ) -> Vec<Error> {
     let mut errors = Vec::new();
 
@@ -45,13 +46,15 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -59,13 +62,15 @@ pub fn validate_type_specifications(
             // Validate decimals range (0-28 is rust_decimal limit)
             if let Some(d) = decimals {
                 if *d > 28 {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -73,13 +78,15 @@ pub fn validate_type_specifications(
             // Validate precision is positive if set
             if let Some(prec) = precision {
                 if *prec <= Decimal::ZERO {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -88,7 +95,7 @@ pub fn validate_type_specifications(
             if let Some((def_value, def_unit)) = default {
                 // Validate that the default unit exists
                 if !units.iter().any(|u| u.name == *def_unit) {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' default unit '{}' is not a valid unit. Valid units: {}",
                             type_name,
@@ -101,29 +108,35 @@ pub fn validate_type_specifications(
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
                 if let Some(min) = minimum {
                     if *def_value < *min {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default value {} {} is less than minimum {}",
                                 type_name, def_value, def_unit, min
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
                 if let Some(max) = maximum {
                     if *def_value > *max {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default value {} {} is greater than maximum {}",
                                 type_name, def_value, def_unit, max
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
@@ -131,13 +144,15 @@ pub fn validate_type_specifications(
 
             // Scale types must have at least one unit (required for parsing and conversion)
             if units.is_empty() {
-                errors.push(Error::validation(
+                errors.push(Error::validation_with_context(
                     format!(
                         "Type '{}' is a scale type but has no units. Scale types must define at least one unit (e.g. -> unit eur 1).",
                         type_name
                     ),
                     Some(source.clone()),
                     None::<String>,
+                    spec_context.clone(),
+                    None,
                 ));
             }
 
@@ -147,13 +162,15 @@ pub fn validate_type_specifications(
                 for unit in units.iter() {
                     // Validate unit name is not empty
                     if unit.name.trim().is_empty() {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
 
@@ -163,10 +180,12 @@ pub fn validate_type_specifications(
                         .iter()
                         .any(|seen| seen.to_lowercase() == lower_name)
                     {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     } else {
                         seen_names.push(unit.name.clone());
@@ -174,10 +193,12 @@ pub fn validate_type_specifications(
 
                     // Validate unit values are positive (conversion factors relative to type base of 1)
                     if unit.value <= Decimal::ZERO {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
@@ -194,13 +215,15 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -208,13 +231,15 @@ pub fn validate_type_specifications(
             // Validate decimals range (0-28 is rust_decimal limit)
             if let Some(d) = decimals {
                 if *d > 28 {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -222,13 +247,15 @@ pub fn validate_type_specifications(
             // Validate precision is positive if set
             if let Some(prec) = precision {
                 if *prec <= Decimal::ZERO {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' has invalid precision: {}. Must be positive",
                             type_name, prec
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -237,25 +264,29 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if *def < *min {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
                 if let Some(max) = maximum {
                     if *def > *max {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
@@ -274,13 +305,15 @@ pub fn validate_type_specifications(
             // Validate decimals range (0-28 is rust_decimal limit)
             if let Some(d) = decimals {
                 if *d > 28 {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -288,13 +321,15 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' has invalid range: minimum {} is greater than maximum {}",
                             type_name, min, max
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -303,25 +338,29 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if *def < *min {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default value {} is less than minimum {}",
                                 type_name, def, min
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
                 if let Some(max) = maximum {
                     if *def > *max {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default value {} is greater than maximum {}",
                                 type_name, def, max
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
@@ -335,13 +374,15 @@ pub fn validate_type_specifications(
                 for unit in units.iter() {
                     // Validate unit name is not empty
                     if unit.name.trim().is_empty() {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' has a unit with empty name. Unit names cannot be empty.",
                                 type_name
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
 
@@ -351,10 +392,12 @@ pub fn validate_type_specifications(
                         .iter()
                         .any(|seen| seen.to_lowercase() == lower_name)
                     {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     } else {
                         seen_names.push(unit.name.clone());
@@ -362,10 +405,12 @@ pub fn validate_type_specifications(
 
                     // Validate unit values are positive (conversion factors relative to type base of 1)
                     if unit.value <= Decimal::ZERO {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
@@ -383,10 +428,12 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if min > max {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!("Type '{}' has invalid range: minimum length {} is greater than maximum length {}", type_name, min, max),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -395,19 +442,23 @@ pub fn validate_type_specifications(
             if let Some(len) = length {
                 if let Some(min) = minimum {
                     if *len < *min {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!("Type '{}' has inconsistent length constraint: length {} is less than minimum {}", type_name, len, min),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
                 if let Some(max) = maximum {
                     if *len > *max {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!("Type '{}' has inconsistent length constraint: length {} is greater than maximum {}", type_name, len, max),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
@@ -419,45 +470,53 @@ pub fn validate_type_specifications(
 
                 if let Some(min) = minimum {
                     if def_len < *min {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default value length {} is less than minimum {}",
                                 type_name, def_len, min
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
                 if let Some(max) = maximum {
                     if def_len > *max {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default value length {} is greater than maximum {}",
                                 type_name, def_len, max
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
                 if let Some(len) = length {
                     if def_len != *len {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!("Type '{}' default value length {} does not match required length {}", type_name, def_len, len),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
                 if !options.is_empty() && !options.contains(def) {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' default value '{}' is not in allowed options: {:?}",
                             type_name, def, options
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -472,13 +531,15 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if compare_date_values(min, max) == Ordering::Greater {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' has invalid date range: minimum {} is after maximum {}",
                             type_name, min, max
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -487,25 +548,29 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if compare_date_values(def, min) == Ordering::Less {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default date {} is before minimum {}",
                                 type_name, def, min
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
                 if let Some(max) = maximum {
                     if compare_date_values(def, max) == Ordering::Greater {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default date {} is after maximum {}",
                                 type_name, def, max
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
@@ -521,13 +586,15 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 if compare_time_values(min, max) == Ordering::Greater {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!(
                             "Type '{}' has invalid time range: minimum {} is after maximum {}",
                             type_name, min, max
                         ),
                         Some(source.clone()),
                         None::<String>,
+                        spec_context.clone(),
+                        None,
                     ));
                 }
             }
@@ -536,25 +603,29 @@ pub fn validate_type_specifications(
             if let Some(def) = default {
                 if let Some(min) = minimum {
                     if compare_time_values(def, min) == Ordering::Less {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default time {} is before minimum {}",
                                 type_name, def, min
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
                 if let Some(max) = maximum {
                     if compare_time_values(def, max) == Ordering::Greater {
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!(
                                 "Type '{}' default time {} is after maximum {}",
                                 type_name, def, max
                             ),
                             Some(source.clone()),
                             None::<String>,
+                            spec_context.clone(),
+                            None,
                         ));
                     }
                 }
@@ -601,14 +672,13 @@ fn compare_time_values(left: &TimeValue, right: &TimeValue) -> Ordering {
 // Spec interface validation (required rule names + rule result types)
 // -----------------------------------------------------------------------------
 
-/// Rule data needed to validate spec interfaces (avoids validation depending on graph).
+/// Rule data needed to validate spec interfaces (inference snapshot before apply).
 pub struct RuleEntryForBindingCheck {
     pub rule_type: LemmaType,
     pub depends_on_rules: std::collections::BTreeSet<RulePath>,
     pub branches: Vec<(Option<Expression>, Expression)>,
 }
 
-/// Expected type constraint at a rule reference use site (from parent expression).
 #[derive(Clone, Copy, Debug)]
 enum ExpectedRuleTypeConstraint {
     Numeric,
@@ -621,8 +691,6 @@ enum ExpectedRuleTypeConstraint {
     Any,
 }
 
-/// Map a rule's result type to the strictest ExpectedRuleTypeConstraint it satisfies,
-/// for spec interface type checking.
 fn lemma_type_to_expected_constraint(lemma_type: &LemmaType) -> ExpectedRuleTypeConstraint {
     if lemma_type.is_boolean() {
         return ExpectedRuleTypeConstraint::Boolean;
@@ -789,23 +857,25 @@ fn expected_constraint_name(c: ExpectedRuleTypeConstraint) -> &'static str {
 fn spec_interface_error(
     source: &Source,
     message: impl Into<String>,
+    spec_context: Option<Arc<LemmaSpec>>,
     related_spec: Option<Arc<LemmaSpec>>,
 ) -> Error {
     Error::validation_with_context(
         message.into(),
         Some(source.clone()),
         None::<String>,
+        spec_context,
         related_spec,
     )
 }
 
 /// Validate that every spec-ref fact path's referenced spec has the required rules
 /// and that each such rule's result type satisfies what the referencing rules expect.
-/// Type errors are reported at the binding fact's source when a binding changed the spec ref.
 pub fn validate_spec_interfaces(
     referenced_rules: &HashMap<Vec<String>, HashSet<String>>,
     spec_ref_facts: &[(FactPath, Arc<LemmaSpec>, Source)],
     rule_entries: &IndexMap<RulePath, RuleEntryForBindingCheck>,
+    main_spec: &Arc<LemmaSpec>,
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
 
@@ -829,6 +899,7 @@ pub fn validate_spec_interfaces(
                         "Spec '{}' referenced by '{}' is missing required rule '{}'",
                         spec.name, fact_path, required_rule
                     ),
+                    Some(Arc::clone(main_spec)),
                     Some(Arc::clone(spec_arc)),
                 ));
                 continue;
@@ -877,6 +948,7 @@ pub fn validate_spec_interfaces(
                                     ref_rule_type.name(),
                                     expected_constraint_name(constraint),
                                 ),
+                                Some(Arc::clone(main_spec)),
                                 Some(Arc::clone(spec_arc)),
                             ));
                         }
@@ -934,6 +1006,7 @@ mod tests {
     use crate::parsing::ast::CommandArg;
     use crate::planning::semantics::TypeSpecification;
     use rust_decimal::Decimal;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     fn test_source() -> Source {
@@ -960,7 +1033,7 @@ mod tests {
             .unwrap();
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -978,7 +1051,7 @@ mod tests {
             .unwrap();
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert!(errors.is_empty());
     }
 
@@ -994,7 +1067,7 @@ mod tests {
         };
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1013,7 +1086,7 @@ mod tests {
         };
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1032,7 +1105,7 @@ mod tests {
         };
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert!(errors.is_empty());
     }
 
@@ -1047,7 +1120,7 @@ mod tests {
             .unwrap();
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1065,7 +1138,7 @@ mod tests {
             .unwrap();
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1084,7 +1157,7 @@ mod tests {
         };
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1103,7 +1176,7 @@ mod tests {
         };
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert!(errors.is_empty());
     }
 
@@ -1119,7 +1192,7 @@ mod tests {
         };
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -1137,7 +1210,7 @@ mod tests {
             .unwrap();
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].to_string().contains("minimum")
@@ -1156,7 +1229,7 @@ mod tests {
             .unwrap();
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert!(errors.is_empty());
     }
 
@@ -1171,7 +1244,7 @@ mod tests {
             .unwrap();
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, "test", &src);
+        let errors = validate_type_specifications(&specs, "test", &src, None);
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].to_string().contains("minimum")
@@ -1232,7 +1305,7 @@ mod tests {
             .expect("Should have invalid_money type");
         let src = test_source();
         let errors =
-            validate_type_specifications(&lemma_type.specifications, "invalid_money", &src);
+            validate_type_specifications(&lemma_type.specifications, "invalid_money", &src, None);
         assert!(!errors.is_empty());
         assert!(errors.iter().any(|e| e
             .to_string()

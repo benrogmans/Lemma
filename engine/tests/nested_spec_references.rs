@@ -29,9 +29,7 @@ rule line_total: pricing.final_price * quantity
     add_lemma_code_blocking(&mut engine, line_item_spec, "line_item.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("line_item", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("line_item", Some(&now), HashMap::new()).unwrap();
     let line_total = response
         .results
         .values()
@@ -78,9 +76,7 @@ rule top_calc: middle_ref.middle_calc
     add_lemma_code_blocking(&mut engine, top_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("top", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("top", Some(&now), HashMap::new()).unwrap();
 
     let top_calc = response
         .results
@@ -137,9 +133,7 @@ rule order_total: line.line_total
     add_lemma_code_blocking(&mut engine, order_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("order", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("order", Some(&now), HashMap::new()).unwrap();
 
     let order_total = response
         .results
@@ -183,9 +177,7 @@ rule final_value: settings.config.value * 2
     add_lemma_code_blocking(&mut engine, top_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("top", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("top", Some(&now), HashMap::new()).unwrap();
     let final_value = response
         .results
         .values()
@@ -235,9 +227,7 @@ rule order_total: line.line_total
     add_lemma_code_blocking(&mut engine, order_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("order", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("order", Some(&now), HashMap::new()).unwrap();
 
     let order_total = response
         .results
@@ -290,7 +280,7 @@ rule difference: total2 - total1
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("comparison", None, &now, vec![], HashMap::new())
+        .run("comparison", Some(&now), HashMap::new())
         .unwrap();
 
     let total1 = response
@@ -366,9 +356,7 @@ rule product: c1.value * c2.value
     add_lemma_code_blocking(&mut engine, combined_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("combined", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("combined", Some(&now), HashMap::new()).unwrap();
 
     let sum = response
         .results
@@ -429,9 +417,7 @@ rule final_result: middle_config.x_squared_plus_ten * 2
     add_lemma_code_blocking(&mut engine, top_spec, "top.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("top", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("top", Some(&now), HashMap::new()).unwrap();
 
     let final_result = response
         .results
@@ -480,9 +466,7 @@ rule price_difference: retail_final - wholesale_final
     add_lemma_code_blocking(&mut engine, scenario_spec, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("scenarios", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("scenarios", Some(&now), HashMap::new()).unwrap();
 
     let retail_final = response
         .results

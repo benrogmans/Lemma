@@ -1,12 +1,13 @@
 use crate::parsing::ast::DateTimeValue;
-use crate::{Engine, Error};
-use serde_json::json;
+use crate::serialization::fact_values_from_map;
+use crate::{Engine, Error, LoadSource};
+use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
+#[wasm_bindgen(js_name = Engine)]
 pub struct WasmEngine {
     engine: Rc<RefCell<Engine>>,
 }
@@ -21,97 +22,86 @@ impl WasmEngine {
         }
     }
 
-    #[wasm_bindgen(js_name = addLemmaFile)]
-    pub fn add_lemma_file(&self, code: &str, source: &str) -> js_sys::Promise {
+    /// Load Lemma source. Resolves with `undefined` on success; rejects with an array of error strings.
+    #[wasm_bindgen(js_name = load)]
+    pub fn load_wasm(&self, code: &str, attribute: &str) -> js_sys::Promise {
         let code = code.to_string();
-        let source = source.to_string();
+        let label = if attribute.trim().is_empty() {
+            None
+        } else {
+            Some(attribute.to_string())
+        };
         let engine = self.engine.clone();
         wasm_bindgen_futures::future_to_promise(async move {
-            let files: HashMap<String, String> = std::iter::once((source, code)).collect();
-            let result = engine.borrow_mut().add_lemma_files(files);
+            let source = match &label {
+                None => LoadSource::Inline,
+                Some(s) => LoadSource::Labeled(s.as_str()),
+            };
+            let result = engine.borrow_mut().load(&code, source);
             match result {
-                Ok(()) => Ok(JsValue::from_str(&to_json_response(json!({
-                    "success": true,
-                    "message": "Spec added successfully"
-                })))),
+                Ok(()) => Ok(JsValue::UNDEFINED),
                 Err(errs) => {
                     let messages: Vec<String> = errs.iter().map(format_error).collect();
-                    Ok(JsValue::from_str(&to_json_errors(&messages)))
+                    Err(to_js(&messages).expect("BUG: serialize error messages"))
                 }
             }
         })
     }
 
-    /// Evaluate at current time.
-    #[wasm_bindgen(js_name = evaluate)]
-    pub fn evaluate(
+    /// Evaluate spec. Returns [`crate::evaluation::Response`] as a JS object. Throws on planning/runtime error.
+    #[wasm_bindgen(js_name = run)]
+    pub fn run(
         &self,
-        spec_name: &str,
-        hash: &str,
-        rule_names_json: &str,
-        fact_values_json: &str,
-    ) -> String {
-        self.evaluate_inner(
-            spec_name,
-            &DateTimeValue::now(),
-            hash,
-            rule_names_json,
-            fact_values_json,
-        )
+        spec: &str,
+        rule_names: JsValue,
+        fact_values: JsValue,
+        effective: Option<String>,
+    ) -> Result<JsValue, JsValue> {
+        let effective_dt = effective
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|s| DateTimeValue::parse(s))
+            .unwrap_or_else(DateTimeValue::now);
+
+        let rule_names = parse_rule_names(&rule_names).map_err(js_err)?;
+        let facts = parse_fact_values(&fact_values).map_err(js_err)?;
+
+        let mut response = self
+            .engine
+            .borrow()
+            .run(spec, Some(&effective_dt), facts)
+            .map_err(|e| js_err(format_error(&e)))?;
+
+        if !rule_names.is_empty() {
+            response.filter_rules(&rule_names);
+        }
+
+        serialize_engine_json(&response)
     }
 
-    /// Evaluate at a specific datetime.
-    #[wasm_bindgen(js_name = evaluateEffective)]
-    pub fn evaluate_effective(
-        &self,
-        spec_name: &str,
-        effective: &str,
-        hash: &str,
-        rule_names_json: &str,
-        fact_values_json: &str,
-    ) -> String {
-        let effective_dt = match DateTimeValue::parse(effective) {
-            Some(dt) => dt,
-            None => return to_json_error_string(&format!("Invalid effective: '{}'", effective)),
-        };
-        self.evaluate_inner(
-            spec_name,
-            &effective_dt,
-            hash,
-            rule_names_json,
-            fact_values_json,
-        )
+    /// Spec names from the engine (same order as [`Engine::list_specs`]).
+    #[wasm_bindgen(js_name = list)]
+    pub fn list(&self) -> Result<JsValue, JsValue> {
+        let specs = self.engine.borrow().list_specs();
+        to_js(&specs).map_err(|e| js_err(e.to_string()))
     }
 
-    #[wasm_bindgen(js_name = listSpecs)]
-    pub fn list_specs(&self) -> String {
+    /// Planning schema for the spec ([`crate::planning::execution_plan::SpecSchema`]). Throws on error.
+    #[wasm_bindgen(js_name = show)]
+    pub fn show(&self, spec: &str, effective: Option<String>) -> Result<JsValue, JsValue> {
+        let effective_dt = effective
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|s| DateTimeValue::parse(s))
+            .unwrap_or_else(DateTimeValue::now);
+
         let engine = self.engine.borrow();
-        let specs = engine.list_specs();
-        to_json_response(json!({
-            "success": true,
-            "specs": specs
-        }))
-    }
+        let plan = engine
+            .plan(spec, Some(&effective_dt))
+            .map_err(|e| js_err(format_error(&e)))?;
+        let schema = plan.schema();
 
-    /// Schema at current time.
-    #[wasm_bindgen(js_name = getSchema)]
-    pub fn get_schema(&self, spec_name: &str, rule_names_json: &str) -> String {
-        self.get_schema_inner(spec_name, &DateTimeValue::now(), rule_names_json)
-    }
-
-    /// Schema at a specific datetime.
-    #[wasm_bindgen(js_name = getSchemaEffective)]
-    pub fn get_schema_effective(
-        &self,
-        spec_name: &str,
-        effective: &str,
-        rule_names_json: &str,
-    ) -> String {
-        let effective_dt = match DateTimeValue::parse(effective) {
-            Some(dt) => dt,
-            None => return to_json_error_string(&format!("Invalid effective: '{}'", effective)),
-        };
-        self.get_schema_inner(spec_name, &effective_dt, rule_names_json)
+        serialize_engine_json(&schema)
     }
 
     #[wasm_bindgen(js_name = invert)]
@@ -121,139 +111,79 @@ impl WasmEngine {
         _rule_name: &str,
         _target_json: &str,
         _provided_values_json: &str,
-    ) -> String {
-        to_json_error_string("Inversion not implemented")
+    ) -> Result<JsValue, JsValue> {
+        Err(js_err("Inversion not implemented"))
     }
 
-    #[wasm_bindgen(js_name = formatSource)]
-    pub fn format_source(&self, code: &str, source_attribute: &str) -> String {
-        match crate::format_source(code, source_attribute) {
-            Ok(formatted) => to_json_response(json!({
-                "success": true,
-                "formatted": formatted
-            })),
-            Err(e) => to_json_error(&e),
-        }
-    }
-}
-
-impl WasmEngine {
-    fn evaluate_inner(
-        &self,
-        spec_name: &str,
-        effective: &DateTimeValue,
-        hash: &str,
-        rule_names_json: &str,
-        fact_values_json: &str,
-    ) -> String {
-        let hash_pin = if hash.trim().is_empty() {
-            None
-        } else {
-            Some(hash.trim())
-        };
-
-        let rule_names: Vec<String> = match parse_rule_names(rule_names_json) {
-            Ok(v) => v,
-            Err(msg) => return to_json_error_string(&msg),
-        };
-
-        let json_bytes = if fact_values_json.trim().is_empty() || fact_values_json.trim() == "{}" {
-            b"{}"
-        } else {
-            fact_values_json.as_bytes()
-        };
-
-        match self
-            .engine
-            .borrow()
-            .evaluate_json(spec_name, hash_pin, effective, rule_names, json_bytes)
+    /// Returns formatted source string on success; throws with error message on failure.
+    #[wasm_bindgen(js_name = format)]
+    pub fn format_wasm(&self, code: &str, attribute: Option<String>) -> Result<JsValue, JsValue> {
+        let attr = match attribute
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
         {
-            Ok(response) => {
-                let response_json = match serde_json::to_value(&response) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return to_json_error_string(&format!(
-                            "BUG: failed to serialize response: {}",
-                            e
-                        ))
-                    }
-                };
-                to_json_response(json!({
-                    "success": true,
-                    "response": response_json
-                }))
-            }
-            Err(e) => to_json_error(&e),
+            Some(s) => s,
+            None => LoadSource::INLINE_KEY,
+        };
+        match crate::format_source(code, attr) {
+            Ok(formatted) => Ok(JsValue::from_str(&formatted)),
+            Err(e) => Err(js_err(format_error(&e))),
         }
     }
-
-    fn get_schema_inner(
-        &self,
-        spec_name: &str,
-        effective: &DateTimeValue,
-        rule_names_json: &str,
-    ) -> String {
-        let engine = self.engine.borrow();
-        let plan = match engine.get_execution_plan(spec_name, None, effective) {
-            Some(p) => p,
-            None => return to_json_error_string(&format!("Spec '{}' not found", spec_name)),
-        };
-
-        let rule_names: Vec<String> = match parse_rule_names(rule_names_json) {
-            Ok(v) => v,
-            Err(msg) => return to_json_error_string(&msg),
-        };
-
-        let schema = if rule_names.is_empty() {
-            plan.schema()
-        } else {
-            match plan.schema_for_rules(&rule_names) {
-                Ok(s) => s,
-                Err(e) => return to_json_error_string(&e.to_string()),
-            }
-        };
-
-        to_json_response(json!({
-            "success": true,
-            "schema": match serde_json::to_value(&schema) {
-                Ok(v) => v,
-                Err(e) => return to_json_error_string(&format!("BUG: failed to serialize schema: {}", e)),
-            }
-        }))
-    }
 }
 
-fn to_json_response(data: serde_json::Value) -> String {
-    serde_json::to_string(&data).expect(
-        "BUG: serde_json::to_string failed on a serde_json::Value — this should never happen",
-    )
+fn to_js<T: Serialize>(v: &T) -> Result<JsValue, serde_wasm_bindgen::Error> {
+    serde_wasm_bindgen::to_value(v)
 }
 
-fn to_json_error(error: &Error) -> String {
-    to_json_error_string(&format_error(error))
+/// Same JSON as CLI/HTTP. `serde_wasm_bindgen::to_value(serde_json::Value)` drops
+/// `IndexMap` entries (e.g. `Response.results` → `{}`); `JSON.parse` matches browser semantics.
+fn serialize_engine_json<T: Serialize>(v: &T) -> Result<JsValue, JsValue> {
+    let s = serde_json::to_string(v)
+        .map_err(|e| js_err(format!("BUG: serde_json::to_string failed: {}", e)))?;
+    js_sys::JSON::parse(&s).map_err(|e| {
+        js_err(format!(
+            "BUG: JSON.parse failed: {}",
+            e.as_string().unwrap_or_default()
+        ))
+    })
 }
 
-fn to_json_errors(messages: &[String]) -> String {
-    to_json_response(json!({
-        "success": false,
-        "errors": messages
-    }))
+fn js_err(msg: impl Into<String>) -> JsValue {
+    JsValue::from_str(&msg.into())
 }
 
-fn to_json_error_string(error_msg: &str) -> String {
-    to_json_response(json!({
-        "success": false,
-        "error": error_msg
-    }))
-}
-
-fn parse_rule_names(rule_names_json: &str) -> Result<Vec<String>, String> {
-    let trimmed = rule_names_json.trim();
-    if trimmed.is_empty() {
+fn parse_rule_names(v: &JsValue) -> Result<Vec<String>, String> {
+    if v.is_undefined() || v.is_null() {
         return Ok(Vec::new());
     }
-    serde_json::from_str::<Vec<String>>(trimmed)
-        .map_err(|e| format!("Invalid rule_names JSON (expected array of strings): {}", e))
+    if js_sys::Array::is_array(v) {
+        return serde_wasm_bindgen::from_value(v.clone())
+            .map_err(|e| format!("rule_names must be an array of strings: {}", e));
+    }
+    if let Some(s) = v.as_string() {
+        let trimmed = s.trim();
+        if trimmed.is_empty() || trimmed == "[]" {
+            return Ok(Vec::new());
+        }
+        return serde_json::from_str::<Vec<String>>(trimmed).map_err(|e| {
+            format!(
+                "rule_names must be an array of strings (or JSON array string): {}",
+                e
+            )
+        });
+    }
+    Err("rule_names must be an array of strings".into())
+}
+
+fn parse_fact_values(v: &JsValue) -> Result<HashMap<String, String>, String> {
+    if v.is_undefined() || v.is_null() {
+        return Ok(HashMap::new());
+    }
+    let map: HashMap<String, serde_json::Value> = serde_wasm_bindgen::from_value(v.clone())
+        .map_err(|e| format!("fact_values must be a plain object: {}", e))?;
+    Ok(fact_values_from_map(map))
 }
 
 fn format_error(error: &Error) -> String {

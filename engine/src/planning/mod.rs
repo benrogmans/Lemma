@@ -111,7 +111,6 @@ pub fn plan(context: &Context, sources: HashMap<String, String>) -> PlanningResu
                     }
                     let execution_plan = execution_plan::build_execution_plan(
                         &graph,
-                        spec_arc.name.as_str(),
                         slice.from.clone(),
                         slice.to.clone(),
                     );

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-LemmaBase.com is the default Registry for the Lemma engine. Its **Registry API** serves Lemma source text for `@...` identifiers so that clients (CLI, LSP, WASM, etc.) can resolve `spec @...` and `type ... from @...` references during `add_lemma_files`.
+LemmaBase.com is the default Registry for the Lemma engine. Its **Registry API** serves Lemma source text for `@...` identifiers so that clients (CLI, LSP, WASM, etc.) can resolve `spec @...` and `type ... from @...` references before loading specs into the engine (`load` / `load_from_paths` after `resolve_registry_references`).
 
 This document specifies the API that LemmaBase.com must expose for Registry resolution. It does not cover the separate **evaluation API** (e.g. `GET /pricing?quantity=10`) described in [server.md](server.md); that can be implemented and versioned independently.
 

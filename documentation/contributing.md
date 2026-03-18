@@ -77,9 +77,9 @@ cargo +nightly fuzz list
 cargo +nightly fuzz run fuzz_parser -- -max_total_time=60
 ```
 
-### WASM build and test
+### WASM build and test (from `engine/`)
 ```bash
-node wasm/build.js
+node wasm/build.js   # wasm-pack → lemma.bindings.js; copies lemma-entry.js, lsp-entry.js
 node wasm/test.js
 ```
 

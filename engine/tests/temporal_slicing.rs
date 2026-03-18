@@ -27,7 +27,7 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
 
 fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .evaluate(spec_name, None, effective, vec![], HashMap::new())
+        .run(spec_name, Some(effective), HashMap::new())
         .unwrap()
 }
 
@@ -41,9 +41,7 @@ fn eval_with(
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    engine
-        .evaluate(spec_name, None, effective, vec![], map)
-        .unwrap()
+    engine.run(spec_name, Some(effective), map).unwrap()
 }
 
 fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {

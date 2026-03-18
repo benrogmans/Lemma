@@ -87,7 +87,7 @@ impl std::error::Error for RegistryError {}
 /// Implementations must be `Send + Sync` so they can be shared across threads.
 /// Resolution is async so that WASM can use `fetch()` and native can use async HTTP.
 ///
-/// `fetch_specs` / `fetch_types` return a bundle containing ALL temporal versions
+/// `get_specs` / `get_types` return a bundle containing ALL temporal versions
 /// for the requested identifier. The engine handles temporal resolution
 /// locally using `effective_from` on the parsed specs.
 ///
@@ -99,13 +99,13 @@ pub trait Registry: Send + Sync {
     ///
     /// `name` is the base name (e.g. `"user/workspace/somespec"`).
     /// Returns a bundle whose `lemma_source` contains all temporal versions of the spec.
-    async fn fetch_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
+    async fn get_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
 
     /// Fetch all temporal versions for a `type ... from @...` reference.
     ///
     /// `name` is the base name (e.g. `"lemma/std/finance"`).
     /// Returns a bundle whose `lemma_source` contains all temporal versions of the type source.
-    async fn fetch_types(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
+    async fn get_types(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
 
     /// Map a Registry identifier to a human-facing address for navigation.
     ///
@@ -318,11 +318,11 @@ impl Default for LemmaBase {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl Registry for LemmaBase {
-    async fn fetch_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+    async fn get_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
         self.fetch_source(name).await
     }
 
-    async fn fetch_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+    async fn get_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
         self.fetch_source(name).await
     }
 
@@ -373,8 +373,8 @@ pub async fn resolve_registry_references(
             already_requested.insert(dedup);
 
             let bundle_result = match reference.kind {
-                RegistryReferenceKind::Spec => registry.fetch_specs(&reference.name).await,
-                RegistryReferenceKind::TypeImport => registry.fetch_types(&reference.name).await,
+                RegistryReferenceKind::Spec => registry.get_specs(&reference.name).await,
+                RegistryReferenceKind::TypeImport => registry.get_types(&reference.name).await,
             };
 
             let bundle = match bundle_result {
@@ -395,12 +395,17 @@ pub async fn resolve_registry_references(
                         ),
                         RegistryErrorKind::Other => None,
                     };
+                    let spec_context = ctx.iter().find(|s| {
+                        s.attribute.as_deref() == Some(reference.source.attribute.as_str())
+                    });
                     round_errors.push(Error::registry(
                         registry_error.message,
                         reference.source.clone(),
                         &reference.name,
                         registry_error.kind,
                         suggestion,
+                        spec_context,
+                        None,
                     ));
                     continue;
                 }
@@ -420,7 +425,7 @@ pub async fn resolve_registry_references(
             for spec in new_specs {
                 let bare_refs = crate::planning::validation::collect_bare_registry_refs(&spec);
                 if !bare_refs.is_empty() {
-                    round_errors.push(Error::validation(
+                    round_errors.push(Error::validation_with_context(
                         format!(
                             "Registry spec '{}' contains references without '@' prefix: {}. \
                              The registry must rewrite all references to use '@'-prefixed names",
@@ -432,6 +437,8 @@ pub async fn resolve_registry_references(
                             "The registry must prefix all spec references with '@' \
                              before serving the bundle.",
                         ),
+                        Some(std::sync::Arc::new(spec.clone())),
+                        None,
                     ));
                     continue;
                 }
@@ -586,7 +593,7 @@ mod tests {
     #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
     #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
     impl Registry for TestRegistry {
-        async fn fetch_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+        async fn get_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             self.bundles
                 .get(name)
                 .cloned()
@@ -596,7 +603,7 @@ mod tests {
                 })
         }
 
-        async fn fetch_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+        async fn get_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             self.bundles
                 .get(name)
                 .cloned()
@@ -685,7 +692,7 @@ fact quantity: 42"#,
     }
 
     #[tokio::test]
-    async fn fetch_specs_returns_all_zones_and_url_for_id_supports_effective() {
+    async fn get_specs_returns_all_zones_and_url_for_id_supports_effective() {
         let effective = DateTimeValue {
             year: 2026,
             month: 1,
@@ -702,7 +709,7 @@ fact quantity: 42"#,
             "spec org/spec 2025-01-01\nfact x: 1\n\nspec org/spec 2026-01-15\nfact x: 2",
         );
 
-        let bundle = registry.fetch_specs("org/spec").await.unwrap();
+        let bundle = registry.get_specs("org/spec").await.unwrap();
         assert!(bundle.lemma_source.contains("fact x: 1"));
         assert!(bundle.lemma_source.contains("fact x: 2"));
 
@@ -1365,24 +1372,24 @@ type money: scale
         // -------------------------------------------------------------------
 
         #[tokio::test]
-        async fn fetch_specs_delegates_to_fetch_source() {
+        async fn get_specs_delegates_to_fetch_source() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
                 "spec org/resolved\nfact a: 1",
             )));
 
-            let bundle = registry.fetch_specs("@org/resolved").await.unwrap();
+            let bundle = registry.get_specs("@org/resolved").await.unwrap();
 
             assert_eq!(bundle.lemma_source, "spec org/resolved\nfact a: 1");
             assert_eq!(bundle.attribute, "@org/resolved");
         }
 
         #[tokio::test]
-        async fn fetch_types_delegates_to_fetch_source() {
+        async fn get_types_delegates_to_fetch_source() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
                 "spec lemma/std/finance\ntype money: scale\n -> unit eur 1.00",
             )));
 
-            let bundle = registry.fetch_types("@lemma/std/finance").await.unwrap();
+            let bundle = registry.get_types("@lemma/std/finance").await.unwrap();
 
             assert_eq!(bundle.attribute, "@lemma/std/finance");
             assert!(
@@ -1393,22 +1400,22 @@ type money: scale
         }
 
         #[tokio::test]
-        async fn fetch_specs_propagates_http_error() {
+        async fn get_specs_propagates_http_error() {
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
 
-            let err = registry.fetch_specs("@org/missing").await.unwrap_err();
+            let err = registry.get_specs("@org/missing").await.unwrap_err();
 
             assert!(err.message.contains("HTTP 404"));
         }
 
         #[tokio::test]
-        async fn fetch_types_propagates_network_error() {
+        async fn get_types_propagates_network_error() {
             let registry = LemmaBase::with_fetcher(Box::new(
                 MockHttpFetcher::always_failing_with_network_error("timeout"),
             ));
 
-            let err = registry.fetch_types("@lemma/std/types").await.unwrap_err();
+            let err = registry.get_types("@lemma/std/types").await.unwrap_err();
 
             assert!(err.message.contains("timeout"));
         }

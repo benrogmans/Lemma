@@ -8,18 +8,17 @@ fn load_engine() -> Engine {
         .expect("cli crate must have parent dir")
         .join("documentation/examples");
 
-    let mut files = HashMap::new();
+    let mut paths = Vec::new();
     for entry in std::fs::read_dir(&examples_dir).expect("read examples dir") {
         let entry = entry.expect("dir entry");
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("lemma") {
-            let code = std::fs::read_to_string(&path).expect("read .lemma file");
-            files.insert(path.to_string_lossy().to_string(), code);
+            paths.push(path);
         }
     }
 
     let mut engine = Engine::new();
-    engine.add_lemma_files(files).expect("specs must load");
+    engine.load_from_paths(&paths).expect("specs must load");
     engine
 }
 
@@ -47,18 +46,14 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
     // full engine.evaluate (clone plan + parse facts + evaluate + build response)
     group.bench_function("engine_evaluate", |b| {
         b.iter(|| {
-            let resp = engine
-                .evaluate(spec, None, &now, vec![], facts.clone())
-                .expect("evaluate");
+            let resp = engine.run(spec, Some(&now), facts.clone()).expect("run");
             std::hint::black_box(resp);
         });
     });
 
     // plan clone + with_fact_values (fact parsing only, no eval)
     group.bench_function("fact_parsing", |b| {
-        let base_plan = engine
-            .get_execution_plan(spec, None, &now)
-            .expect("plan exists");
+        let base_plan = engine.plan(spec, Some(&now)).expect("plan exists");
         b.iter(|| {
             let plan = base_plan
                 .clone()
@@ -70,9 +65,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 
     // just the plan clone (no fact parsing, no eval)
     group.bench_function("plan_clone", |b| {
-        let base_plan = engine
-            .get_execution_plan(spec, None, &now)
-            .expect("plan exists");
+        let base_plan = engine.plan(spec, Some(&now)).expect("plan exists");
         b.iter(|| {
             let plan = base_plan.clone();
             std::hint::black_box(plan);
@@ -82,24 +75,15 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
     // evaluate single rule only (to measure per-rule cost)
     group.bench_function("single_rule", |b| {
         b.iter(|| {
-            let resp = engine
-                .evaluate(
-                    spec,
-                    None,
-                    &now,
-                    vec!["periods_per_year".to_string()],
-                    facts.clone(),
-                )
-                .expect("evaluate");
+            let mut resp = engine.run(spec, Some(&now), facts.clone()).expect("run");
+            resp.filter_rules(&[String::from("periods_per_year")]);
             std::hint::black_box(resp);
         });
     });
 
     // response→JSON for what the HTTP server actually sends (the envelope)
     group.bench_function("json_envelope", |b| {
-        let response = engine
-            .evaluate(spec, None, &now, vec![], facts.clone())
-            .expect("evaluate");
+        let response = engine.run(spec, Some(&now), facts.clone()).expect("run");
         b.iter(|| {
             let envelope = build_envelope(&response, spec, &now);
             let json = serde_json::to_vec(&envelope).expect("serialize");
@@ -109,9 +93,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 
     // raw Response serde (much larger than envelope — includes proofs, types, etc.)
     group.bench_function("json_raw_response", |b| {
-        let response = engine
-            .evaluate(spec, None, &now, vec![], facts.clone())
-            .expect("evaluate");
+        let response = engine.run(spec, Some(&now), facts.clone()).expect("run");
         b.iter(|| {
             let json = serde_json::to_vec(&response).expect("serialize");
             std::hint::black_box(json);
