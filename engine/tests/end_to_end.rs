@@ -22,9 +22,7 @@ rule discount: 0
     let now = DateTimeValue::now();
 
     // Query the discount rule
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     let discount_result = response
         .results
         .values()
@@ -61,9 +59,7 @@ rule can_drive: age >= 18 and has_license
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     let result = response
         .results
         .values()
@@ -99,9 +95,7 @@ rule result: base * multiplier
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     let result = response
         .results
         .values()
@@ -139,9 +133,7 @@ rule final_price: 100 - discount
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     let result = response
         .results
         .values()

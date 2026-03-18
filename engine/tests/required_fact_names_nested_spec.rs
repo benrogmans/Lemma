@@ -32,7 +32,7 @@ rule total: calc.total
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.get_execution_plan("cashier", None, &now).unwrap();
+    let plan = engine.plan("cashier", Some(&now)).unwrap();
 
     // Schema for all rules: cashier.total depends on pricing.total (via calc.total),
     // so cashier's schema must include nested facts like calc.price.
@@ -64,7 +64,7 @@ fn schema_errors_on_unknown_rule() {
     add_lemma_code_blocking(&mut engine, "spec test\nfact x: 1\nrule y: x", "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.get_execution_plan("test", None, &now).unwrap();
+    let plan = engine.plan("test", Some(&now)).unwrap();
     let result = plan.schema_for_rules(&["nonexistent".to_string()]);
     assert!(result.is_err(), "Expected error for unknown rule");
     assert!(

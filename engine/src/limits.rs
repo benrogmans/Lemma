@@ -25,6 +25,8 @@ pub fn check_max_length(
             format!("{} characters", name.len()),
             format!("Shorten the {kind} name to at most {limit} characters"),
             source,
+            None,
+            None,
         ));
     }
     Ok(())
@@ -57,6 +59,12 @@ pub struct ResourceLimits {
     /// Real usage: ~100 bytes, Limit: 1KB (10x)
     /// Enables server pre-allocation for zero-allocation evaluation
     pub max_fact_value_bytes: usize,
+
+    /// Maximum total bytes to read in a single load_from_paths call (and/or in-memory size of loaded specs)
+    pub max_loaded_bytes: usize,
+
+    /// Maximum number of .lemma files to load in a single load_from_paths call
+    pub max_files: usize,
 }
 
 impl Default for ResourceLimits {
@@ -66,7 +74,9 @@ impl Default for ResourceLimits {
             max_expression_depth: 7,
             max_expression_count: 4096,
             max_total_expression_count: 3_141_592,
-            max_fact_value_bytes: 1024, // 1 KB
+            max_fact_value_bytes: 1024,         // 1 KB
+            max_loaded_bytes: 50 * 1024 * 1024, // 50 MB
+            max_files: 4096,
         }
     }
 }

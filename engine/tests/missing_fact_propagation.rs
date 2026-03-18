@@ -34,13 +34,7 @@ rule total: rules.final_total
     let now = DateTimeValue::now();
     // Evaluate with missing quantity fact
     let response = engine
-        .evaluate(
-            "examples/rules_and_unless",
-            None,
-            &now,
-            vec![],
-            HashMap::new(),
-        )
+        .run("examples/rules_and_unless", Some(&now), HashMap::new())
         .unwrap();
 
     let total_rule = response
@@ -100,7 +94,7 @@ rule total: rules.final_total
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("examples/rules_and_unless", None, &now, vec![], facts)
+        .run("examples/rules_and_unless", Some(&now), facts)
         .unwrap();
 
     let total_rule = response
@@ -147,9 +141,7 @@ rule total: price * quantity - discount
 
     let now = DateTimeValue::now();
     // Evaluate with no facts provided
-    let response = engine
-        .evaluate("test_spec", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test_spec", Some(&now), HashMap::new()).unwrap();
 
     let total_rule = response
         .results
@@ -206,9 +198,7 @@ rule message: "Order processed"
     facts.insert("price".to_string(), "10".to_string());
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test_spec", None, &now, vec![], facts)
-        .unwrap();
+    let response = engine.run("test_spec", Some(&now), facts).unwrap();
 
     // subtotal should fail due to missing quantity
     let subtotal_rule = response
@@ -273,7 +263,7 @@ rule total: rules.total
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("examples/rules_and_unless", None, &now, vec![], facts)
+        .run("examples/rules_and_unless", Some(&now), facts)
         .unwrap();
 
     let total_rule = response

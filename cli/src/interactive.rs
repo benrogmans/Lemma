@@ -72,7 +72,8 @@ fn select_spec(engine: &Engine, now: &DateTimeValue) -> Result<String> {
         .iter()
         .map(|spec| {
             let (facts_count, rules_count) = engine
-                .get_execution_plan(&spec.name, None, now)
+                .plan(&spec.name, Some(now))
+                .ok()
                 .map(|p| (p.facts.len(), p.rules.len()))
                 .unwrap_or((0, 0));
             format!(
@@ -101,7 +102,8 @@ fn select_rules(
     now: &DateTimeValue,
 ) -> Result<Option<Vec<String>>> {
     let plan = engine
-        .get_execution_plan(spec_name, None, now)
+        .plan(spec_name, Some(now))
+        .map_err(|e| anyhow::anyhow!("{}", e))
         .context(format!("Spec '{}' not found", spec_name))?;
     let rule_names: Vec<String> = plan.schema().rules.keys().cloned().collect();
 
@@ -193,7 +195,8 @@ fn prompt_facts(
     now: &DateTimeValue,
 ) -> Result<HashMap<String, String>> {
     let plan = engine
-        .get_execution_plan(spec_name, None, now)
+        .plan(spec_name, Some(now))
+        .map_err(|e| anyhow::anyhow!("{}", e))
         .context(format!("Spec '{}' not found", spec_name))?;
 
     let selected_rules: Vec<String> = rule_names.clone().unwrap_or_default();
@@ -236,7 +239,7 @@ fn prompt_facts(
             trial_facts.extend(facts.clone());
             trial_facts.insert(fact_name.clone(), input_value.clone());
 
-            match engine.evaluate(spec_name, None, now, selected_rules.clone(), trial_facts) {
+            match engine.run(spec_name, Some(now), trial_facts) {
                 Ok(_) => {
                     facts.insert(fact_name.clone(), input_value);
                     break;

@@ -173,7 +173,7 @@ mod imp {
                                 "properties": {
                                     "spec": {
                                         "type": "string",
-                                        "description": "Name of the spec (from 'spec <name>' declaration)"
+                                        "description": "Spec id: name or name~hash (8 hex) to pin content, e.g. pricing or pricing~a1b2c3d4"
                             },
                             "rule": {
                                 "type": "string",
@@ -214,7 +214,7 @@ mod imp {
                                 "properties": {
                                     "spec": {
                                         "type": "string",
-                                        "description": "Name of the spec (from 'spec <name>' declaration)"
+                                        "description": "Spec id: name or name~hash (8 hex), e.g. pricing or pricing~a1b2c3d4"
                                     },
                                     "rule": {
                                         "type": "string",
@@ -334,19 +334,19 @@ mod imp {
                 .map(|d| d.name.clone())
                 .collect();
 
-            let files: std::collections::HashMap<String, String> =
-                std::iter::once((source_id.clone(), code.to_string())).collect();
-            self.engine.add_lemma_files(files).map_err(|errs| {
-                for e in &errs {
-                    error!("{}", e);
-                }
-                let msg = errs
-                    .iter()
-                    .map(|e| e.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                McpError::internal_error(format!("Failed to parse spec: {}", msg))
-            })?;
+            self.engine
+                .load(code, lemma::LoadSource::Labeled(&source_id))
+                .map_err(|errs| {
+                    for e in &errs {
+                        error!("{}", e);
+                    }
+                    let msg = errs
+                        .iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    McpError::internal_error(format!("Failed to parse spec: {}", msg))
+                })?;
 
             let new_spec_names: Vec<String> = self
                 .engine
@@ -360,7 +360,7 @@ mod imp {
 
             let now = DateTimeValue::now();
             for spec_name in &new_spec_names {
-                if let Some(plan) = self.engine.get_execution_plan(spec_name, None, &now) {
+                if let Ok(plan) = self.engine.plan(spec_name, Some(&now)) {
                     output.push_str(&plan.schema().to_string());
                     output.push('\n');
                 }
@@ -411,15 +411,18 @@ mod imp {
             &mut self,
             args: &serde_json::Value,
         ) -> Result<serde_json::Value, McpError> {
-            let spec_name = args["spec"]
+            let spec_id = args["spec"]
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
 
-            if spec_name.trim().is_empty() {
+            if spec_id.trim().is_empty() {
                 return Err(McpError::invalid_params(
-                    "Spec name cannot be empty".to_string(),
+                    "Spec id cannot be empty".to_string(),
                 ));
             }
+
+            let (base_name, _) = lemma::parse_spec_id(spec_id.trim())
+                .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
                 Some(rule) if !rule.trim().is_empty() => vec![rule.trim().to_string()],
@@ -440,19 +443,24 @@ mod imp {
                 .collect();
 
             let now = resolve_effective(args)?;
-            let hash_pin = args.get("hash_pin").and_then(|v| v.as_str());
-            let response = self
+            let mut response = self
                 .engine
-                .evaluate(spec_name, hash_pin, &now, rule_names, fact_values)
+                .run(spec_id.trim(), Some(&now), fact_values)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
                 })?;
+            if !rule_names.is_empty() {
+                response.filter_rules(&rule_names);
+            }
 
-            let hash = self.engine.hash_pin(spec_name, &now).map(|h| h.to_string());
+            let hash = self
+                .engine
+                .hash_pin(&base_name, &now)
+                .map(|h| h.to_string());
 
             let mut output = String::new();
-            output.push_str(&format!("spec: {}\n", spec_name));
+            output.push_str(&format!("spec: {}\n", spec_id.trim()));
             output.push_str(&format!("effective: {}\n", now));
             if let Some(ref h) = hash {
                 output.push_str(&format!("hash: {}\n", h));
@@ -487,7 +495,7 @@ mod imp {
 
             info!(
                 "Evaluated spec '{}' with {} results",
-                spec_name,
+                spec_id.trim(),
                 response.results.len()
             );
 
@@ -512,8 +520,7 @@ mod imp {
             } else {
                 let schemas: Vec<lemma::SpecSchema> = specs_list
                     .iter()
-                    .filter_map(|s| self.engine.get_execution_plan(&s.name, None, &now))
-                    .map(|plan| plan.schema())
+                    .filter_map(|s| self.engine.show(&s.name, Some(&now)).ok())
                     .collect();
 
                 schemas
@@ -534,26 +541,26 @@ mod imp {
         }
 
         fn tool_get_schema(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
-            let spec_name = args["spec"]
+            let spec_id = args["spec"]
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
 
-            if spec_name.trim().is_empty() {
+            if spec_id.trim().is_empty() {
                 return Err(McpError::invalid_params(
-                    "Spec name cannot be empty".to_string(),
+                    "Spec id cannot be empty".to_string(),
                 ));
             }
 
+            lemma::parse_spec_id(spec_id.trim())
+                .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
+
             let now = resolve_effective(args)?;
-            let plan = self
-                .engine
-                .get_execution_plan(spec_name, None, &now)
-                .ok_or_else(|| {
-                    McpError::invalid_params(format!(
-                        "Spec '{}' not found. Use list_specs to see available specs.",
-                        spec_name
-                    ))
-                })?;
+            let plan = self.engine.plan(spec_id.trim(), Some(&now)).map_err(|_| {
+                McpError::invalid_params(format!(
+                    "Spec '{}' not found. Use list_specs to see available specs.",
+                    spec_id.trim()
+                ))
+            })?;
 
             let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
                 Some(rule) if !rule.trim().is_empty() => vec![rule.trim().to_string()],
@@ -570,9 +577,9 @@ mod imp {
             };
 
             let scope = if rule_names.is_empty() {
-                format!("{} (all rules)", spec_name)
+                format!("{} (all rules)", spec_id.trim())
             } else {
-                format!("{}.{}", spec_name, rule_names[0])
+                format!("{}.{}", spec_id.trim(), rule_names[0])
             };
 
             let output = format!("Schema for {}:\n\n{}", scope, schema);

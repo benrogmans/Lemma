@@ -309,11 +309,13 @@ Find what input values produce a desired output. Available in the Rust engine li
 
 ```rust
 use lemma::{Engine, Target, LiteralValue};
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
+use rust_decimal::Decimal;
 
 let mut engine = Engine::new();
 
-engine.add_lemma_files(HashMap::from([("pricing.lemma".into(), r#"
+engine.load(r#"
     spec pricing
     fact quantity: [number]
     fact is_vip: false
@@ -322,14 +324,15 @@ engine.add_lemma_files(HashMap::from([("pricing.lemma".into(), r#"
       unless quantity >= 10 then 10%
       unless quantity >= 50 then 20%
       unless is_vip then 25%
-"#.into())])?;
+"#, Some("pricing.lemma"))?;
 
-use rust_decimal::Decimal;
+let now = DateTimeValue::now();
 let response = engine.invert(
     "pricing",
+    &now,
     "discount",
     Target::value(LiteralValue::Ratio(Decimal::from(25), Some("percent".to_string()))),
-    HashMap::new()
+    HashMap::new(),
 )?;
 ```
 

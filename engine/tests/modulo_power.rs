@@ -22,9 +22,7 @@ rule remainder: a % b
     .unwrap();
     let now = DateTimeValue::now();
 
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     let result = response.results.get("remainder").unwrap();
 
     match &result.result {
@@ -55,9 +53,7 @@ rule result: base ^ exponent
     .unwrap();
     let now = DateTimeValue::now();
 
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     let result = response.results.get("result").unwrap();
 
     match &result.result {
@@ -88,9 +84,7 @@ rule is_odd: (value % 2) == 1
     .unwrap();
     let now = DateTimeValue::now();
 
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
 
     let is_even = response.results.get("is_even").unwrap();
     assert_eq!(
@@ -120,9 +114,7 @@ rule square_root: base ^ 0.5
     .unwrap();
     let now = DateTimeValue::now();
 
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     let result = response.results.get("square_root").unwrap();
 
     match &result.result {
@@ -153,9 +145,7 @@ rule calculation: (x % y) + (2 ^ 3)
     .unwrap();
     let now = DateTimeValue::now();
 
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     let result = response.results.get("calculation").unwrap();
 
     match &result.result {

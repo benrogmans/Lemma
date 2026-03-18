@@ -10,10 +10,10 @@ pub struct ErrorDetails {
     pub message: String,
     pub source: Option<Source>,
     pub suggestion: Option<String>,
-    /// When the cause involves a referenced spec, that temporal version. Displayed as "See spec 'X' (active from Y)."
-    pub related_spec: Option<Arc<LemmaSpec>>,
     /// Spec we were planning when this error occurred. Used for display grouping ("In spec 'X':").
     pub spec_context: Option<Arc<LemmaSpec>>,
+    /// When the cause involves a referenced spec, that temporal version. Displayed as "See spec 'X' (active from Y)."
+    pub related_spec: Option<Arc<LemmaSpec>>,
 }
 
 /// Error types for the Lemma system with source location tracking
@@ -61,12 +61,23 @@ impl Error {
         source: Source,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
+        Self::parsing_with_context(message, source, suggestion, None, None)
+    }
+
+    /// Parse error with optional spec context (for display).
+    pub fn parsing_with_context(
+        message: impl Into<String>,
+        source: Source,
+        suggestion: Option<impl Into<String>>,
+        spec_context: Option<Arc<LemmaSpec>>,
+        related_spec: Option<Arc<LemmaSpec>>,
+    ) -> Self {
         Self::Parsing(Box::new(ErrorDetails {
             message: message.into(),
             source: Some(source),
             suggestion: suggestion.map(Into::into),
-            related_spec: None,
-            spec_context: None,
+            spec_context,
+            related_spec,
         }))
     }
 
@@ -76,7 +87,7 @@ impl Error {
         source: Source,
         suggestion: impl Into<String>,
     ) -> Self {
-        Self::parsing(message, source, Some(suggestion))
+        Self::parsing_with_context(message, source, Some(suggestion), None, None)
     }
 
     /// Create an inversion error with source information.
@@ -85,12 +96,23 @@ impl Error {
         source: Option<Source>,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
+        Self::inversion_with_context(message, source, suggestion, None, None)
+    }
+
+    /// Inversion error with optional spec context (for display).
+    pub fn inversion_with_context(
+        message: impl Into<String>,
+        source: Option<Source>,
+        suggestion: Option<impl Into<String>>,
+        spec_context: Option<Arc<LemmaSpec>>,
+        related_spec: Option<Arc<LemmaSpec>>,
+    ) -> Self {
         Self::Inversion(Box::new(ErrorDetails {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
-            related_spec: None,
-            spec_context: None,
+            spec_context,
+            related_spec,
         }))
     }
 
@@ -99,8 +121,16 @@ impl Error {
         message: impl Into<String>,
         source: Option<Source>,
         suggestion: impl Into<String>,
+        spec_context: Option<Arc<LemmaSpec>>,
+        related_spec: Option<Arc<LemmaSpec>>,
     ) -> Self {
-        Self::inversion(message, source, Some(suggestion))
+        Self::inversion_with_context(
+            message,
+            source,
+            Some(suggestion),
+            spec_context,
+            related_spec,
+        )
     }
 
     /// Create a validation error with source information (semantic/planning, including circular dependency).
@@ -109,34 +139,51 @@ impl Error {
         source: Option<Source>,
         suggestion: Option<impl Into<String>>,
     ) -> Self {
+        Self::validation_with_context(message, source, suggestion, None, None)
+    }
+
+    /// Validation error with optional spec context and related spec (for display).
+    pub fn validation_with_context(
+        message: impl Into<String>,
+        source: Option<Source>,
+        suggestion: Option<impl Into<String>>,
+        spec_context: Option<Arc<LemmaSpec>>,
+        related_spec: Option<Arc<LemmaSpec>>,
+    ) -> Self {
         Self::Validation(Box::new(ErrorDetails {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
-            related_spec: None,
-            spec_context: None,
+            spec_context,
+            related_spec,
         }))
     }
 
     /// Create a request error (invalid API request, e.g. spec not found).
     /// Request errors never have source locations — they are API-level.
-    pub fn request(message: impl Into<String>, suggestion: Option<impl Into<String>>) -> Self {
+    pub fn request(
+        message: impl Into<String>,
+        suggestion: Option<impl Into<String>>,
+        spec_context: Option<Arc<LemmaSpec>>,
+    ) -> Self {
         Self::Request(Box::new(ErrorDetails {
             message: message.into(),
             source: None,
             suggestion: suggestion.map(Into::into),
+            spec_context,
             related_spec: None,
-            spec_context: None,
         }))
     }
 
-    /// Create a resource-limit-exceeded error with optional source location.
+    /// Create a resource-limit-exceeded error with optional source location and spec context.
     pub fn resource_limit_exceeded(
         limit_name: impl Into<String>,
         limit_value: impl Into<String>,
         actual_value: impl Into<String>,
         suggestion: impl Into<String>,
         source: Option<Source>,
+        spec_context: Option<Arc<LemmaSpec>>,
+        related_spec: Option<Arc<LemmaSpec>>,
     ) -> Self {
         let limit_name = limit_name.into();
         let limit_value = limit_value.into();
@@ -147,30 +194,13 @@ impl Error {
                 message,
                 source,
                 suggestion: Some(suggestion.into()),
-                related_spec: None,
-                spec_context: None,
+                spec_context,
+                related_spec,
             }),
             limit_name,
             limit_value,
             actual_value,
         }
-    }
-
-    /// Create a validation error with optional related spec (for spec-interface errors).
-    /// When related_spec is set, Display shows "See spec 'X' (active from Y)."
-    pub fn validation_with_context(
-        message: impl Into<String>,
-        source: Option<Source>,
-        suggestion: Option<impl Into<String>>,
-        related_spec: Option<Arc<LemmaSpec>>,
-    ) -> Self {
-        Self::Validation(Box::new(ErrorDetails {
-            message: message.into(),
-            source,
-            suggestion: suggestion.map(Into::into),
-            related_spec,
-            spec_context: None,
-        }))
     }
 
     /// Create a registry error. Source is required: registry errors point to `@ref` in source.
@@ -180,14 +210,16 @@ impl Error {
         identifier: impl Into<String>,
         kind: RegistryErrorKind,
         suggestion: Option<impl Into<String>>,
+        spec_context: Option<Arc<LemmaSpec>>,
+        related_spec: Option<Arc<LemmaSpec>>,
     ) -> Self {
         Self::Registry {
             details: Box::new(ErrorDetails {
                 message: message.into(),
                 source: Some(source),
                 suggestion: suggestion.map(Into::into),
-                related_spec: None,
-                spec_context: None,
+                spec_context,
+                related_spec,
             }),
             identifier: identifier.into(),
             kind,

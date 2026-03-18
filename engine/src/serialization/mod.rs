@@ -31,9 +31,9 @@
 
 mod json;
 
-pub use json::from_json;
 pub use json::literal_value_to_json;
 pub use json::{
     deserialize_fact_path_set, deserialize_resolved_fact_value_map, serialize_fact_path_set,
     serialize_resolved_fact_value_map,
 };
+pub use json::{fact_values_from_map, from_json};

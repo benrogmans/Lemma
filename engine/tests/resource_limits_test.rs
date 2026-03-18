@@ -252,7 +252,7 @@ fn bench_deep_nesting_performance() {
 
         let eval_start = Instant::now();
         let resp = engine
-            .evaluate("test", None, &now, vec!["r".to_string()], HashMap::new())
+            .run("test", Some(&now), HashMap::new())
             .unwrap_or_else(|e| panic!("depth {} failed to evaluate: {}", depth, e));
         let eval = eval_start.elapsed();
 
@@ -271,16 +271,10 @@ fact x: 1
 rule r: (((1 + 1) + 1) + 1) + 1"#;
     let mut engine = Engine::with_limits(limits);
     let start = Instant::now();
-    add_lemma_code_blocking(&mut engine, code_4, "test.lemma").expect("add_lemma_files");
+    add_lemma_code_blocking(&mut engine, code_4, "test.lemma").expect("load");
     let now = DateTimeValue::now();
     let _ = engine
-        .evaluate(
-            "test",
-            None,
-            &now,
-            vec!["r".to_string()],
-            std::collections::HashMap::new(),
-        )
+        .run("test", Some(&now), std::collections::HashMap::new())
         .expect("evaluate");
     let elapsed = start.elapsed();
     eprintln!("overall (parse + plan + evaluate, depth 4): {:?}", elapsed);
@@ -306,7 +300,7 @@ fn test_fact_value_size_limit() {
     facts.insert("name".to_string(), large_string);
 
     let now = DateTimeValue::now();
-    let result = engine.evaluate("test", None, &now, vec![], facts);
+    let result = engine.run("test", Some(&now), facts);
 
     match result {
         Err(Error::ResourceLimitExceeded { ref limit_name, .. }) => {
@@ -606,20 +600,16 @@ fn bench_1m_expressions() {
             ..ResourceLimits::default()
         };
         let mut engine = Engine::with_limits(limits);
-        let files: HashMap<String, String> =
-            std::iter::once(("test.lemma".to_string(), code)).collect();
 
         let start = Instant::now();
         engine
-            .add_lemma_files(files)
+            .load(&code, lemma::LoadSource::Labeled("test.lemma"))
             .unwrap_or_else(|errs| panic!("{num_rules} rules failed: {:?}", errs));
         let elapsed = start.elapsed();
 
         let now = DateTimeValue::now();
         let eval_start = Instant::now();
-        let resp = engine
-            .evaluate("test", None, &now, vec!["r_0".to_string()], HashMap::new())
-            .unwrap();
+        let resp = engine.run("test", Some(&now), HashMap::new()).unwrap();
         let eval_time = eval_start.elapsed();
 
         eprintln!(

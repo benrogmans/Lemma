@@ -32,11 +32,12 @@ type FactBindings = HashMap<Vec<String>, (ParsedFactValue, Source)>;
 
 #[derive(Debug)]
 pub(crate) struct Graph {
+    /// Root spec being planned (for error spec_context).
+    main_spec: Arc<LemmaSpec>,
     facts: IndexMap<FactPath, FactData>,
     rules: BTreeMap<RulePath, RuleNode>,
     sources: HashMap<String, String>,
     execution_order: Vec<RulePath>,
-    pub(crate) meta: HashMap<String, MetaValue>,
 }
 
 impl Graph {
@@ -60,8 +61,8 @@ impl Graph {
         &self.execution_order
     }
 
-    pub(crate) fn meta(&self) -> &HashMap<String, MetaValue> {
-        &self.meta
+    pub(crate) fn main_spec(&self) -> &Arc<LemmaSpec> {
+        &self.main_spec
     }
 
     /// Build the fact map: one entry per fact (Value or SpecRef), with defaults and coercion applied.
@@ -273,7 +274,15 @@ impl Graph {
             let message = format!("Circular dependency (rules: {})", rules_involved);
             let errors: Vec<Error> = cycle
                 .into_iter()
-                .map(|source| Error::validation(message.clone(), Some(source), None::<String>))
+                .map(|source| {
+                    Error::validation_with_context(
+                        message.clone(),
+                        Some(source),
+                        None::<String>,
+                        Some(Arc::clone(&self.main_spec)),
+                        None,
+                    )
+                })
                 .collect();
             return Err(errors);
         }
@@ -308,9 +317,9 @@ struct GraphBuilder<'a> {
     context: &'a Context,
     local_types: ResolvedTypesMap,
     errors: Vec<Error>,
-    meta: HashMap<String, MetaValue>,
     resolve_at: Option<DateTimeValue>,
     spec_hashes: &'a SpecContentHashes,
+    main_spec: Arc<LemmaSpec>,
 }
 
 /// Map from spec pointer identity to computed content hash.
@@ -338,7 +347,7 @@ impl Graph {
     ) -> Result<(Graph, ResolvedTypesMap), Vec<Error>> {
         let mut local_type_resolver = type_resolver.clone();
 
-        let (facts, rules, builder_sources, graph_errors, meta, local_types) = {
+        let (facts, rules, builder_sources, graph_errors, local_types) = {
             let mut builder = GraphBuilder {
                 facts: IndexMap::new(),
                 rules: BTreeMap::new(),
@@ -346,9 +355,9 @@ impl Graph {
                 context,
                 local_types: resolved_types.clone(),
                 errors: Vec::new(),
-                meta: HashMap::new(),
                 resolve_at,
                 spec_hashes,
+                main_spec: Arc::clone(main_spec),
             };
 
             builder.build_spec(
@@ -363,7 +372,6 @@ impl Graph {
                 builder.rules,
                 builder.sources,
                 builder.errors,
-                builder.meta,
                 builder.local_types,
             )
         };
@@ -373,7 +381,7 @@ impl Graph {
             rules,
             sources: builder_sources,
             execution_order: Vec::new(),
-            meta,
+            main_spec: Arc::clone(main_spec),
         };
 
         let validation_errors = match graph.validate(&local_types) {
@@ -453,9 +461,12 @@ impl Graph {
                 )
             })
             .collect();
-        if let Err(interface_errors) =
-            validate_spec_interfaces(&referenced_rules, &spec_ref_facts, &rule_entries)
-        {
+        if let Err(interface_errors) = validate_spec_interfaces(
+            &referenced_rules,
+            &spec_ref_facts,
+            &rule_entries,
+            &self.main_spec,
+        ) {
             errors.extend(interface_errors);
         }
 
@@ -472,7 +483,13 @@ impl Graph {
 
 impl<'a> GraphBuilder<'a> {
     fn engine_error(&self, message: impl Into<String>, source: &Source) -> Error {
-        Error::validation(message.into(), Some(source.clone()), None::<String>)
+        Error::validation_with_context(
+            message.into(),
+            Some(source.clone()),
+            None::<String>,
+            Some(Arc::clone(&self.main_spec)),
+            None,
+        )
     }
 
     fn spec_source(&self, spec: &LemmaSpec) -> Option<Source> {
@@ -491,6 +508,7 @@ impl<'a> GraphBuilder<'a> {
     }
 
     fn process_meta_fields(&mut self, spec: &LemmaSpec) {
+        let mut seen = HashSet::new();
         for field in &spec.meta_fields {
             // Validate built-in keys
             if field.key == "title" && !matches!(field.value, MetaValue::Literal(Value::Text(_))) {
@@ -500,13 +518,11 @@ impl<'a> GraphBuilder<'a> {
                 ));
             }
 
-            if self.meta.contains_key(&field.key) {
+            if !seen.insert(field.key.clone()) {
                 self.errors.push(self.engine_error(
                     format!("Duplicate meta key '{}'", field.key),
                     &field.source_location,
                 ));
-            } else {
-                self.meta.insert(field.key.clone(), field.value.clone());
             }
         }
     }
@@ -637,7 +653,12 @@ impl<'a> GraphBuilder<'a> {
                     )),
                 }
             }
-            errors.extend(validate_type_specifications(&specs, base, decl_source));
+            errors.extend(validate_type_specifications(
+                &specs,
+                base,
+                decl_source,
+                Some(Arc::clone(context_spec)),
+            ));
         }
 
         if !errors.is_empty() {
@@ -1255,6 +1276,7 @@ impl<'a> GraphBuilder<'a> {
                             &lemma_type.specifications,
                             &type_name,
                             source,
+                            Some(Arc::clone(spec_arc)),
                         );
                         self.errors.append(&mut spec_errors);
                     }
@@ -1676,10 +1698,12 @@ impl<'a> GraphBuilder<'a> {
                                 format!("{} Valid units: {}", msg, valid.join(", "))
                             })
                             .unwrap_or(msg);
-                        self.errors.push(Error::validation(
+                        self.errors.push(Error::validation_with_context(
                             full_msg,
                             expr.source_location.clone(),
                             None::<String>,
+                            Some(Arc::clone(&self.main_spec)),
+                            None,
                         ));
                         return None;
                     }
@@ -2065,20 +2089,26 @@ fn infer_fact_type(fact_path: &FactPath, graph: &Graph) -> LemmaType {
 // Phase 2: Pure type checking (validation only, no mutation, returns Result)
 // =============================================================================
 
-/// Construct a Error::planning with source context.
-fn engine_error_at(source: &Source, message: impl Into<String>) -> Error {
-    Error::validation(message.into(), Some(source.clone()), None::<String>)
+fn engine_error_at_graph(graph: &Graph, source: &Source, message: impl Into<String>) -> Error {
+    Error::validation_with_context(
+        message.into(),
+        Some(source.clone()),
+        None::<String>,
+        Some(Arc::clone(&graph.main_spec)),
+        None,
+    )
 }
 
-/// Check that both operands of a logical operation (and/or) are boolean.
 fn check_logical_operands(
+    graph: &Graph,
     left_type: &LemmaType,
     right_type: &LemmaType,
     source: &Source,
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
     if !left_type.is_boolean() {
-        errors.push(engine_error_at(
+        errors.push(engine_error_at_graph(
+            graph,
             source,
             format!(
                 "Logical operation requires boolean operands, got {:?} for left operand",
@@ -2087,7 +2117,8 @@ fn check_logical_operands(
         ));
     }
     if !right_type.is_boolean() {
-        errors.push(engine_error_at(
+        errors.push(engine_error_at_graph(
+            graph,
             source,
             format!(
                 "Logical operation requires boolean operands, got {:?} for right operand",
@@ -2102,10 +2133,14 @@ fn check_logical_operands(
     }
 }
 
-/// Check that the operand of a logical negation is boolean.
-fn check_logical_operand(operand_type: &LemmaType, source: &Source) -> Result<(), Vec<Error>> {
+fn check_logical_operand(
+    graph: &Graph,
+    operand_type: &LemmaType,
+    source: &Source,
+) -> Result<(), Vec<Error>> {
     if !operand_type.is_boolean() {
-        Err(vec![engine_error_at(
+        Err(vec![engine_error_at_graph(
+            graph,
             source,
             format!(
                 "Logical negation requires boolean operand, got {:?}",
@@ -2117,8 +2152,8 @@ fn check_logical_operand(operand_type: &LemmaType, source: &Source) -> Result<()
     }
 }
 
-/// Check that a comparison operation has compatible operand types.
 fn check_comparison_types(
+    graph: &Graph,
     left_type: &LemmaType,
     op: &ComparisonComputation,
     right_type: &LemmaType,
@@ -2134,7 +2169,8 @@ fn check_comparison_types(
 
     if left_type.is_boolean() && right_type.is_boolean() {
         if !is_equality_only {
-            return Err(vec![engine_error_at(
+            return Err(vec![engine_error_at_graph(
+                graph,
                 source,
                 format!("Can only use == and != with booleans (got {})", op),
             )]);
@@ -2144,7 +2180,8 @@ fn check_comparison_types(
 
     if left_type.is_text() && right_type.is_text() {
         if !is_equality_only {
-            return Err(vec![engine_error_at(
+            return Err(vec![engine_error_at_graph(
+                graph,
                 source,
                 format!("Can only use == and != with text (got {})", op),
             )]);
@@ -2170,7 +2207,8 @@ fn check_comparison_types(
 
     if left_type.is_scale() && right_type.is_scale() {
         if !left_type.same_scale_family(right_type) {
-            return Err(vec![engine_error_at(
+            return Err(vec![engine_error_at_graph(
+                graph,
                 source,
                 format!(
                     "Cannot compare different scale types: {} and {}",
@@ -2192,15 +2230,15 @@ fn check_comparison_types(
         return Ok(());
     }
 
-    Err(vec![engine_error_at(
+    Err(vec![engine_error_at_graph(
+        graph,
         source,
         format!("Cannot compare {:?} with {:?}", left_type, right_type),
     )])
 }
 
-/// Check that an arithmetic operation has compatible operand types and operator constraints.
-/// This function folds in the operator constraint checking (previously `validate_arithmetic_operator_constraints`).
 fn check_arithmetic_types(
+    graph: &Graph,
     left_type: &LemmaType,
     right_type: &LemmaType,
     operator: &ArithmeticComputation,
@@ -2216,7 +2254,8 @@ fn check_arithmetic_types(
             ArithmeticComputation::Add | ArithmeticComputation::Subtract
         ) && (both_temporal || one_is_duration);
         if !valid {
-            return Err(vec![engine_error_at(
+            return Err(vec![engine_error_at_graph(
+                graph,
                 source,
                 format!(
                     "Cannot apply '{}' to {} and {}.",
@@ -2231,7 +2270,8 @@ fn check_arithmetic_types(
 
     // Different scale families: reject all operators
     if left_type.is_scale() && right_type.is_scale() && !left_type.same_scale_family(right_type) {
-        return Err(vec![engine_error_at(
+        return Err(vec![engine_error_at_graph(
+            graph,
             source,
             format!(
                 "Cannot {} different scale types: {} and {}. Operations between different scale types produce ambiguous result units.",
@@ -2260,7 +2300,8 @@ fn check_arithmetic_types(
         || right_type.is_ratio();
 
     if !left_valid || !right_valid {
-        return Err(vec![engine_error_at(
+        return Err(vec![engine_error_at_graph(
+            graph,
             source,
             format!(
                 "Cannot apply '{}' to {} and {}.",
@@ -2315,7 +2356,8 @@ fn check_arithmetic_types(
     };
 
     if !allowed {
-        return Err(vec![engine_error_at(
+        return Err(vec![engine_error_at_graph(
+            graph,
             source,
             format!(
                 "Cannot apply '{}' to {} and {}.",
@@ -2329,8 +2371,8 @@ fn check_arithmetic_types(
     Ok(())
 }
 
-/// Check that a unit conversion has a compatible source type.
 fn check_unit_conversion_types(
+    graph: &Graph,
     source_type: &LemmaType,
     target: &SemanticConversionTarget,
     resolved_types: &ResolvedTypesMap,
@@ -2363,7 +2405,8 @@ fn check_unit_conversion_types(
 
             match unit_check {
                 Some((true, _)) => Ok(()),
-                Some((false, valid)) => Err(vec![engine_error_at(
+                Some((false, valid)) => Err(vec![engine_error_at_graph(
+                    graph,
                     source,
                     format!(
                         "Unknown unit '{}' for type {}. Valid units: {}",
@@ -2377,7 +2420,8 @@ fn check_unit_conversion_types(
                         .and_then(|dt| dt.unit_index.get(unit_name))
                         .is_none()
                     {
-                        Err(vec![engine_error_at(
+                        Err(vec![engine_error_at_graph(
+                            graph,
                             source,
                             format!("Unknown unit '{}' in spec '{}'.", unit_name, spec_name),
                         )])
@@ -2385,7 +2429,8 @@ fn check_unit_conversion_types(
                         Ok(())
                     }
                 }
-                None => Err(vec![engine_error_at(
+                None => Err(vec![engine_error_at_graph(
+                    graph,
                     source,
                     format!(
                         "Cannot convert {} to unit '{}'.",
@@ -2397,7 +2442,8 @@ fn check_unit_conversion_types(
         }
         SemanticConversionTarget::Duration(_) => {
             if !source_type.is_duration() && !source_type.is_numeric() {
-                Err(vec![engine_error_at(
+                Err(vec![engine_error_at_graph(
+                    graph,
                     source,
                     format!("Cannot convert {} to duration.", source_type.name()),
                 )])
@@ -2408,10 +2454,14 @@ fn check_unit_conversion_types(
     }
 }
 
-/// Check that the operand of a mathematical function (sqrt, sin, etc.) is a number.
-fn check_mathematical_operand(operand_type: &LemmaType, source: &Source) -> Result<(), Vec<Error>> {
+fn check_mathematical_operand(
+    graph: &Graph,
+    operand_type: &LemmaType,
+    source: &Source,
+) -> Result<(), Vec<Error>> {
     if !operand_type.is_number() {
-        Err(vec![engine_error_at(
+        Err(vec![engine_error_at_graph(
+            graph,
             source,
             format!(
                 "Mathematical function requires number operand, got {:?}",
@@ -2430,7 +2480,8 @@ fn check_all_rule_references_exist(graph: &Graph) -> Result<(), Vec<Error>> {
     for (rule_path, rule_node) in graph.rules() {
         for dependency in &rule_node.depends_on_rules {
             if !existing_rules.contains(dependency) {
-                errors.push(engine_error_at(
+                errors.push(engine_error_at_graph(
+                    graph,
                     &rule_node.source,
                     format!(
                         "Rule '{}' references non-existent rule '{}'",
@@ -2459,7 +2510,8 @@ fn check_fact_and_rule_name_collisions(graph: &Graph) -> Result<(), Vec<Error>> 
                     rule_path.rule
                 )
             });
-            errors.push(engine_error_at(
+            errors.push(engine_error_at_graph(
+                graph,
                 &rule_node.source,
                 format!(
                     "Name collision: '{}' is defined as both a fact and a rule",
@@ -2484,7 +2536,8 @@ fn check_fact_reference(
     let entry = match graph.facts().get(fact_path) {
         Some(e) => e,
         None => {
-            return Err(vec![engine_error_at(
+            return Err(vec![engine_error_at_graph(
+                graph,
                 fact_source,
                 format!("Unknown fact reference '{}'", fact_path),
             )]);
@@ -2492,7 +2545,8 @@ fn check_fact_reference(
     };
     match entry {
         FactData::Value { .. } | FactData::TypeDeclaration { .. } => Ok(()),
-        FactData::SpecRef { .. } => Err(vec![engine_error_at(
+        FactData::SpecRef { .. } => Err(vec![engine_error_at_graph(
+            graph,
             entry.source(),
             format!(
                 "Cannot compute type for spec reference fact '{}'",
@@ -2555,7 +2609,7 @@ fn check_expression(
                 .as_ref()
                 .expect("BUG: expression missing source in check_expression");
             collect(
-                check_logical_operands(&left_type, &right_type, expr_source),
+                check_logical_operands(graph, &left_type, &right_type, expr_source),
                 &mut errors,
             );
         }
@@ -2573,7 +2627,7 @@ fn check_expression(
                 .as_ref()
                 .expect("BUG: expression missing source in check_expression");
             collect(
-                check_logical_operand(&operand_type, expr_source),
+                check_logical_operand(graph, &operand_type, expr_source),
                 &mut errors,
             );
         }
@@ -2597,7 +2651,7 @@ fn check_expression(
                 .as_ref()
                 .expect("BUG: expression missing source in check_expression");
             collect(
-                check_comparison_types(&left_type, op, &right_type, expr_source),
+                check_comparison_types(graph, &left_type, op, &right_type, expr_source),
                 &mut errors,
             );
         }
@@ -2621,7 +2675,7 @@ fn check_expression(
                 .as_ref()
                 .expect("BUG: expression missing source in check_expression");
             collect(
-                check_arithmetic_types(&left_type, &right_type, operator, expr_source),
+                check_arithmetic_types(graph, &left_type, &right_type, operator, expr_source),
                 &mut errors,
             );
         }
@@ -2651,6 +2705,7 @@ fn check_expression(
                 .expect("BUG: expression missing source in check_expression");
             collect(
                 check_unit_conversion_types(
+                    graph,
                     &source_type,
                     target,
                     resolved_types,
@@ -2668,7 +2723,8 @@ fn check_expression(
                             .and_then(|dt| dt.unit_index.get(unit_name))
                             .is_none()
                         {
-                            errors.push(engine_error_at(
+                            errors.push(engine_error_at_graph(
+                                graph,
                                 expr_source,
                                 format!(
                                     "Cannot resolve unit '{}' for spec '{}' (types may not have been resolved)",
@@ -2696,7 +2752,7 @@ fn check_expression(
                 .as_ref()
                 .expect("BUG: expression missing source in check_expression");
             collect(
-                check_mathematical_operand(&operand_type, expr_source),
+                check_mathematical_operand(graph, &operand_type, expr_source),
                 &mut errors,
             );
         }
@@ -2718,7 +2774,8 @@ fn check_expression(
                     .source_location
                     .as_ref()
                     .expect("BUG: expression missing source in check_expression");
-                errors.push(engine_error_at(
+                errors.push(engine_error_at_graph(
+                    graph,
                     expr_source,
                     format!(
                         "Date sugar 'in past/future' requires a date expression, got type '{}'",
@@ -2740,7 +2797,8 @@ fn check_expression(
                         .source_location
                         .as_ref()
                         .expect("BUG: expression missing source in check_expression");
-                    errors.push(engine_error_at(
+                    errors.push(engine_error_at_graph(
+                        graph,
                         expr_source,
                         format!(
                             "Tolerance in date sugar must be a duration, got type '{}'",
@@ -2764,7 +2822,8 @@ fn check_expression(
                     .source_location
                     .as_ref()
                     .expect("BUG: expression missing source in check_expression");
-                errors.push(engine_error_at(
+                errors.push(engine_error_at_graph(
+                    graph,
                     expr_source,
                     format!(
                         "Calendar sugar requires a date expression, got type '{}'",
@@ -2861,7 +2920,8 @@ fn check_rule_types(
                         .source_location
                         .as_ref()
                         .expect("BUG: condition expression missing source in check_rule_types");
-                    errors.push(engine_error_at(
+                    errors.push(engine_error_at_graph(
+                        graph,
                         condition_source,
                         format!(
                             "Unless clause condition in rule '{}' must be boolean, got {:?}",
@@ -2910,7 +2970,7 @@ fn check_rule_types(
                             ));
                         }
 
-                        errors.push(Error::validation(
+                        errors.push(Error::validation_with_context(
                             format!("Type mismatch in rule '{}' in spec '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same primitive type.",
                             rule_path.rule,
                             spec_name,
@@ -2920,6 +2980,8 @@ fn check_rule_types(
                             result_type.name()),
                             Some(rule_source.clone()),
                             None::<String>,
+                            Some(Arc::clone(&graph.main_spec)),
+                            None,
                         ));
                     }
                 }

@@ -115,6 +115,7 @@ impl TypeResolver {
                             &lemma_type.specifications,
                             type_name,
                             &source,
+                            Some(Arc::clone(spec_arc)),
                         );
                         errors.append(&mut spec_errors);
                     }
@@ -145,10 +146,12 @@ impl TypeResolver {
             TypeDef::Regular { name, .. } | TypeDef::Import { name, .. } => {
                 let spec_types = self.named_types.entry(Arc::clone(spec)).or_default();
                 if spec_types.contains_key(name) {
-                    return Err(Error::validation(
+                    return Err(Error::validation_with_context(
                         format!("Type '{}' is already defined in spec '{}'", name, spec_name),
                         Some(def_loc.clone()),
                         None::<String>,
+                        Some(Arc::clone(spec)),
+                        None,
                     ));
                 }
                 spec_types.insert(name.clone(), def);
@@ -159,13 +162,15 @@ impl TypeResolver {
                     .entry(Arc::clone(spec))
                     .or_default();
                 if spec_inline_types.contains_key(fact_ref) {
-                    return Err(Error::validation(
+                    return Err(Error::validation_with_context(
                         format!(
                             "Inline type definition for fact '{}' is already defined in spec '{}'",
                             fact_ref.name, spec_name
                         ),
                         Some(def_loc.clone()),
                         None::<String>,
+                        Some(Arc::clone(spec)),
+                        None,
                     ));
                 }
                 spec_inline_types.insert(fact_ref.clone(), def);
@@ -223,12 +228,14 @@ impl TypeResolver {
                 };
                 let e: Result<(), Error> = if resolved_type.is_scale() {
                     Self::add_scale_units_to_index(
+                        spec,
                         &mut existing.unit_index,
                         resolved_type,
                         type_def,
                     )
                 } else if resolved_type.is_ratio() {
                     Self::add_ratio_units_to_index(
+                        spec,
                         &mut existing.unit_index,
                         resolved_type,
                         type_def,
@@ -311,9 +318,9 @@ impl TypeResolver {
                 .and_then(|defs| defs.get(type_name.as_str()))
                 .expect("BUG: named type was resolved but not in registry");
             let e: Result<(), Error> = if resolved_type.is_scale() {
-                Self::add_scale_units_to_index(&mut unit_index, resolved_type, type_def)
+                Self::add_scale_units_to_index(spec, &mut unit_index, resolved_type, type_def)
             } else if resolved_type.is_ratio() {
-                Self::add_ratio_units_to_index(&mut unit_index, resolved_type, type_def)
+                Self::add_ratio_units_to_index(spec, &mut unit_index, resolved_type, type_def)
             } else {
                 Ok(())
             };
@@ -329,9 +336,9 @@ impl TypeResolver {
                 .and_then(|defs| defs.get(fact_ref))
                 .expect("BUG: inline type was resolved but not in registry");
             let e: Result<(), Error> = if resolved_type.is_scale() {
-                Self::add_scale_units_to_index(&mut unit_index, resolved_type, type_def)
+                Self::add_scale_units_to_index(spec, &mut unit_index, resolved_type, type_def)
             } else if resolved_type.is_ratio() {
-                Self::add_ratio_units_to_index(&mut unit_index, resolved_type, type_def)
+                Self::add_ratio_units_to_index(spec, &mut unit_index, resolved_type, type_def)
             } else {
                 Ok(())
             };
@@ -370,10 +377,12 @@ impl TypeResolver {
                         spec.name, name
                     )
                 });
-            return Err(vec![Error::validation(
+            return Err(vec![Error::validation_with_context(
                 format!("Circular dependency detected in type resolution: {}", key),
                 Some(source_location),
                 None::<String>,
+                Some(Arc::clone(spec)),
+                None,
             )]);
         }
         visited.insert(key.clone());
@@ -426,10 +435,12 @@ impl TypeResolver {
                 // (inline type definitions might have forward references, but named types should be resolvable)
                 visited.remove(&key);
                 let source = type_def.source_location().clone();
-                return Err(vec![Error::validation(
+                return Err(vec![Error::validation_with_context(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                     Some(source.clone()),
                     None::<String>,
+                    Some(Arc::clone(spec)),
+                    None,
                 )]);
             }
             Err(es) => {
@@ -439,7 +450,12 @@ impl TypeResolver {
         };
 
         let final_specs = if let Some(constraints) = &constraints {
-            match self.apply_constraints(parent_specs, constraints, type_def.source_location()) {
+            match self.apply_constraints(
+                spec,
+                parent_specs,
+                constraints,
+                type_def.source_location(),
+            ) {
                 Ok(specs) => specs,
                 Err(errors) => {
                     visited.remove(&key);
@@ -520,10 +536,12 @@ impl TypeResolver {
                             r.name
                         )
                     });
-                    Err(vec![Error::validation(
+                    Err(vec![Error::validation_with_context(
                         format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                         Some(source.clone()),
                         suggestion,
+                        Some(Arc::clone(spec)),
+                        None,
                     )])
                 } else {
                     Ok(None)
@@ -553,6 +571,7 @@ impl TypeResolver {
     /// Each TypeSpecification variant handles its own commands; we just apply them in order.
     fn apply_constraints(
         &self,
+        spec: &Arc<LemmaSpec>,
         mut specs: TypeSpecification,
         constraints: &[(String, Vec<CommandArg>)],
         source: &crate::Source,
@@ -563,10 +582,12 @@ impl TypeResolver {
             match specs.apply_constraint(command, args) {
                 Ok(updated_specs) => specs = updated_specs,
                 Err(e) => {
-                    errors.push(Error::validation(
+                    errors.push(Error::validation_with_context(
                         format!("Failed to apply constraint '{}': {}", command, e),
                         Some(source.clone()),
                         None::<String>,
+                        Some(Arc::clone(spec)),
+                        None,
                     ));
                     specs = specs_clone;
                 }
@@ -599,17 +620,19 @@ impl TypeResolver {
         let parent_specs = match self.resolve_parent(spec, parent, from, visited, &def_loc) {
             Ok(Some(specs)) => specs,
             Ok(None) => {
-                return Err(vec![Error::validation(
+                return Err(vec![Error::validation_with_context(
                     format!("Unknown type: '{}'. Type must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
                     Some(def_loc.clone()),
                     None::<String>,
+                    Some(Arc::clone(spec)),
+                    None,
                 )]);
             }
             Err(es) => return Err(es),
         };
 
         let final_specs = if let Some(constraints) = constraints {
-            self.apply_constraints(parent_specs, constraints, &def_loc)?
+            self.apply_constraints(spec, parent_specs, constraints, &def_loc)?
         } else {
             parent_specs
         };
@@ -642,6 +665,7 @@ impl TypeResolver {
     }
 
     fn add_scale_units_to_index(
+        spec: &Arc<LemmaSpec>,
         unit_index: &mut HashMap<String, (LemmaType, Option<TypeDef>)>,
         resolved_type: &LemmaType,
         defined_by: &TypeDef,
@@ -652,7 +676,7 @@ impl TypeResolver {
                 let same_type = existing_def.as_ref() == Some(defined_by);
 
                 if same_type {
-                    return Err(Error::validation(
+                    return Err(Error::validation_with_context(
                         format!(
                             "Unit '{}' is defined more than once in type '{}'",
                             unit,
@@ -660,6 +684,8 @@ impl TypeResolver {
                         ),
                         Some(defined_by.source_location().clone()),
                         None::<String>,
+                        Some(Arc::clone(spec)),
+                        None,
                     ));
                 }
 
@@ -691,7 +717,7 @@ impl TypeResolver {
                     continue;
                 }
 
-                return Err(Error::validation(
+                return Err(Error::validation_with_context(
                     format!(
                         "Ambiguous unit '{}'. Defined in multiple types: '{}' and '{}'",
                         unit,
@@ -700,6 +726,8 @@ impl TypeResolver {
                     ),
                     Some(defined_by.source_location().clone()),
                     None::<String>,
+                    Some(Arc::clone(spec)),
+                    None,
                 ));
             }
             unit_index.insert(unit, (resolved_type.clone(), Some(defined_by.clone())));
@@ -708,6 +736,7 @@ impl TypeResolver {
     }
 
     fn add_ratio_units_to_index(
+        spec: &Arc<LemmaSpec>,
         unit_index: &mut HashMap<String, (LemmaType, Option<TypeDef>)>,
         resolved_type: &LemmaType,
         defined_by: &TypeDef,
@@ -722,7 +751,7 @@ impl TypeResolver {
                     .as_ref()
                     .map(|d| d.name().to_owned())
                     .unwrap_or_else(|| existing_type.name());
-                return Err(Error::validation(
+                return Err(Error::validation_with_context(
                     format!(
                         "Ambiguous unit '{}'. Defined in multiple types: '{}' and '{}'",
                         unit,
@@ -731,6 +760,8 @@ impl TypeResolver {
                     ),
                     Some(defined_by.source_location().clone()),
                     None::<String>,
+                    Some(Arc::clone(spec)),
+                    None,
                 ));
             }
             unit_index.insert(unit, (resolved_type.clone(), Some(defined_by.clone())));

@@ -3,12 +3,19 @@
 //! nightly-only fuzz job ever runs.
 
 use lemma::parsing::ast::DateTimeValue;
-use lemma::Engine;
+use lemma::{Engine, LoadSource};
 use std::collections::HashMap;
 
 fn engine_with_files(files: HashMap<String, String>) -> Engine {
     let mut engine = Engine::new();
-    let _ = engine.add_lemma_files(files);
+    for (attr, code) in files {
+        let src = if attr.trim().is_empty() {
+            LoadSource::Inline
+        } else {
+            LoadSource::Labeled(attr.as_str())
+        };
+        let _ = engine.load(&code, src);
+    }
     engine
 }
 
@@ -113,12 +120,14 @@ fn fuzz_deeply_nested_completes_fast() {
 fn fuzz_fact_bindings_api_valid_number() {
     let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
-    let files = single_file("fuzz_binding", code);
-    if engine.add_lemma_files(files).is_ok() {
+    if engine
+        .load(code, LoadSource::Labeled("fuzz_binding"))
+        .is_ok()
+    {
         let mut facts = HashMap::new();
         facts.insert("x".to_string(), "42".to_string());
         let now = DateTimeValue::now();
-        let _ = engine.evaluate("fuzz_test", None, &now, vec![], facts);
+        let _ = engine.run("fuzz_test", Some(&now), facts);
     }
 }
 
@@ -126,12 +135,14 @@ fn fuzz_fact_bindings_api_valid_number() {
 fn fuzz_fact_bindings_api_garbage_value() {
     let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
-    let files = single_file("fuzz_binding", code);
-    if engine.add_lemma_files(files).is_ok() {
+    if engine
+        .load(code, LoadSource::Labeled("fuzz_binding"))
+        .is_ok()
+    {
         let mut facts = HashMap::new();
         facts.insert("x".to_string(), "not_a_number".to_string());
         let now = DateTimeValue::now();
-        let _ = engine.evaluate("fuzz_test", None, &now, vec![], facts);
+        let _ = engine.run("fuzz_test", Some(&now), facts);
     }
 }
 
@@ -139,12 +150,14 @@ fn fuzz_fact_bindings_api_garbage_value() {
 fn fuzz_fact_bindings_api_empty_value() {
     let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
-    let files = single_file("fuzz_binding", code);
-    if engine.add_lemma_files(files).is_ok() {
+    if engine
+        .load(code, LoadSource::Labeled("fuzz_binding"))
+        .is_ok()
+    {
         let mut facts = HashMap::new();
         facts.insert("x".to_string(), String::new());
         let now = DateTimeValue::now();
-        let _ = engine.evaluate("fuzz_test", None, &now, vec![], facts);
+        let _ = engine.run("fuzz_test", Some(&now), facts);
     }
 }
 
@@ -152,12 +165,13 @@ fn fuzz_fact_bindings_api_empty_value() {
 fn fuzz_fact_bindings_api_number_too_long_no_panic() {
     let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
-    let files = single_file("fuzz_binding", code);
-    engine.add_lemma_files(files).unwrap();
+    engine
+        .load(code, LoadSource::Labeled("fuzz_binding"))
+        .unwrap();
     let mut facts = HashMap::new();
     facts.insert("x".to_string(), "40000000000000000460903669760".to_string());
     let now = DateTimeValue::now();
-    let result = engine.evaluate("fuzz_test", None, &now, vec![], facts);
+    let result = engine.run("fuzz_test", Some(&now), facts);
     assert!(
         result.is_err(),
         "expected validation error for 29-digit number, got {:?}",

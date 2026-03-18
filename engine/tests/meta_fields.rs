@@ -29,7 +29,7 @@ fact x: 1
         timezone: None,
     };
     let plan = engine
-        .get_execution_plan("meta_test", None, &effective)
+        .plan("meta_test", Some(&effective))
         .expect("Plan not found");
 
     // Check meta fields

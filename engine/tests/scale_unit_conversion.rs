@@ -26,11 +26,9 @@ rule check: accept
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate(
+        .run(
             "pricing",
-            None,
-            &now,
-            vec![],
+            Some(&now),
             HashMap::from([("price".to_string(), "100 eur".to_string())]),
         )
         .unwrap();
@@ -66,11 +64,9 @@ rule check: accept
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate(
+        .run(
             "pricing",
-            None,
-            &now,
-            vec![],
+            Some(&now),
             HashMap::from([("price".to_string(), "84 eur".to_string())]),
         )
         .unwrap();
@@ -106,11 +102,9 @@ rule check: accept
 
     let now = DateTimeValue::now();
     let err = engine
-        .evaluate(
+        .run(
             "pricing",
-            None,
-            &now,
-            vec![],
+            Some(&now),
             HashMap::from([("price".to_string(), "100".to_string())]),
         )
         .unwrap_err();
@@ -140,11 +134,9 @@ rule check: accept
 
     let now = DateTimeValue::now();
     let err = engine
-        .evaluate(
+        .run(
             "pricing",
-            None,
-            &now,
-            vec![],
+            Some(&now),
             HashMap::from([("price".to_string(), "100 btc".to_string())]),
         )
         .unwrap_err();
@@ -168,9 +160,7 @@ rule price_usd: 100 eur in usd
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("pricing", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("pricing", Some(&now), HashMap::new()).unwrap();
     let rule_result = response
         .results
         .values()
@@ -212,9 +202,7 @@ rule taxable: gross - pension
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("t", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("t", Some(&now), HashMap::new()).unwrap();
 
     let rule_result = response
         .results
@@ -279,9 +267,7 @@ rule base_shipping: 5.99
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("shipping", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("shipping", Some(&now), HashMap::new()).unwrap();
 
     let rule_result = response
         .results
@@ -320,9 +306,7 @@ rule total: base_fee + surcharge
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("shipping", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("shipping", Some(&now), HashMap::new()).unwrap();
 
     let rule_result = response
         .results

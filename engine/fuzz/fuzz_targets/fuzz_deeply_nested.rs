@@ -2,7 +2,6 @@
 
 use libfuzzer_sys::fuzz_target;
 use lemma::Engine;
-use std::collections::HashMap;
 
 fuzz_target!(|data: &[u8]| {
     if data.len() < 2 {
@@ -27,7 +26,5 @@ fuzz_target!(|data: &[u8]| {
     );
 
     let mut engine = Engine::new();
-    let files: HashMap<String, String> =
-        std::iter::once(("fuzz_nested".to_string(), code)).collect();
-    let _ = engine.add_lemma_files(files);
+    let _ = engine.load(&code, lemma::LoadSource::Labeled("fuzz_nested"));
 });

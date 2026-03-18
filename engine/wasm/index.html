@@ -100,7 +100,7 @@
             text-overflow: ellipsis;
         }
 
-        /* --- Document cards --- */
+        /* --- Spec cards --- */
 
         .spec-card {
             background: white;
@@ -297,7 +297,8 @@
     </div>
 
     <script type="module">
-        import init, { WasmEngine, serve, ServerConfig } from '../pkg/lemma.js';
+        import { init, Engine } from '../pkg/lemma.js';
+        import { serve, ServerConfig } from '../pkg/lsp.js';
         import { registerLemmaLanguage, registerLspProviders } from '../pkg/monaco.js';
         import { LspClient } from '../pkg/lsp-client.js';
 
@@ -535,10 +536,10 @@
             }
             let currentValue = state.factValues[specName][name];
             if (currentValue === undefined && fact.defaultValue) {
-                const fromDoc = storedFromLiteralValue(fact.defaultValue, kind);
-                if (fromDoc !== undefined) {
-                    state.factValues[specName][name] = fromDoc;
-                    currentValue = fromDoc;
+                const fromSpec = storedFromLiteralValue(fact.defaultValue, kind);
+                if (fromSpec !== undefined) {
+                    state.factValues[specName][name] = fromSpec;
+                    currentValue = fromSpec;
                     persistFactValues(specName);
                 }
             }
@@ -879,12 +880,12 @@
             const actions = document.createElement('div');
             actions.className = 'spec-actions';
 
-            const evaluateButton = document.createElement('button');
-            evaluateButton.textContent = 'Evaluate';
-            evaluateButton.addEventListener('click', function () {
-                evaluateDoc(key);
+            const runButton = document.createElement('button');
+            runButton.textContent = 'Run';
+            runButton.addEventListener('click', function () {
+                runSpec(key);
             });
-            actions.appendChild(evaluateButton);
+            actions.appendChild(runButton);
 
             const clearButton = document.createElement('button');
             clearButton.className = 'secondary';
@@ -1018,19 +1019,13 @@
             if (!engine) return null;
             var name = specName(key);
             var effectiveStr = specEffective(key);
-            let response;
             try {
-                var raw = engine.getSchemaEffective(name, effectiveStr || '1', '[]');
-                response = JSON.parse(raw);
-            } catch (parseError) {
-                console.error('fetchSchema exception for', key, parseError);
+                var schema = engine.show(name, effectiveStr);
+                return normalizeSchema(schema);
+            } catch (e) {
+                console.error('fetchSchema exception for', key, e);
                 return null;
             }
-            if (!response || !response.success || !response.schema) {
-                console.error('fetchSchema failed for', key, response);
-                return null;
-            }
-            return normalizeSchema(response.schema);
         }
 
         function normalizeSchema(schema) {
@@ -1054,41 +1049,34 @@
 
             const code = monacoEditor.getValue();
 
-            engine = new WasmEngine();
+            engine = new Engine();
 
-            let addResult;
             try {
-                const raw = await engine.addLemmaFile(code, 'wasm.lemma');
-                addResult = JSON.parse(raw);
-            } catch (parseError) {
-                setStatus('err', 'Exception while loading', parseError.message || String(parseError));
-                return;
-            }
-
-            if (!addResult || !addResult.success) {
-                // Clear specs on compile error; LSP handles status bar diagnostics.
+                await engine.load(code, 'wasm.lemma');
+            } catch (errs) {
+                var loadMsg = Array.isArray(errs) ? errs.join('\n') : String(errs);
+                setStatus('err', 'Load failed', loadMsg);
                 state.specs = [];
                 patchSpecCards();
                 return;
             }
 
-            // Fetch new spec list
-            let listResult;
+            let specEntries;
             try {
-                listResult = JSON.parse(engine.listSpecs());
-            } catch (parseError) {
-                setStatus('err', 'Exception listing specs', parseError.message || String(parseError));
-                return;
-            }
-
-            if (!listResult || !listResult.success) {
-                console.error('listSpecs failed:', listResult);
+                specEntries = engine.list();
+            } catch (e) {
+                setStatus('err', 'Exception listing specs', e.message || String(e));
                 state.specs = [];
                 patchSpecCards();
                 return;
             }
 
-            const specEntries = Array.isArray(listResult.specs) ? listResult.specs : [];
+            if (!Array.isArray(specEntries)) {
+                console.error('list failed:', specEntries);
+                state.specs = [];
+                patchSpecCards();
+                return;
+            }
             const newKeys = specEntries.map(specKey);
             const oldKeys = state.specs.map(specKey);
 
@@ -1105,15 +1093,10 @@
             for (const entry of specEntries) {
                 const key = specKey(entry);
                 try {
-                    const effective = entry.effective_from ? datetimeValueToString(entry.effective_from) : '1';
-                    const raw = engine.getSchemaEffective(entry.name, effective, '[]');
-                    const schemaResult = JSON.parse(raw);
-                    if (schemaResult && schemaResult.success && schemaResult.schema) {
-                        state.schemas[key] = normalizeSchema(schemaResult.schema);
-                    } else {
-                        console.error('getSchema returned error for', key, schemaResult);
-                    }
-                } catch (e) { console.error('getSchema failed for', key, e); }
+                    const effective = entry.effective_from ? datetimeValueToString(entry.effective_from) : null;
+                    const schemaObj = engine.show(entry.name, effective);
+                    state.schemas[key] = normalizeSchema(schemaObj);
+                } catch (e) { console.error('show failed for', key, e); }
             }
 
             patchSpecCards();
@@ -1136,7 +1119,7 @@
         // Evaluate and clear
         // ---------------------------------------------------------------
 
-        async function evaluateDoc(key) {
+        async function runSpec(key) {
             if (loadTimer !== null) {
                 clearTimeout(loadTimer);
                 loadTimer = null;
@@ -1147,19 +1130,16 @@
 
             const name = specName(key);
             const effective = specEffective(key) || '1';
-            const factsJson = JSON.stringify(serializeFactValues(key));
+            const factsObj = serializeFactValues(key);
 
-            let evalResult;
             try {
-                const raw = engine.evaluateEffective(name, effective, '', '[]', factsJson);
-                evalResult = JSON.parse(raw);
-            } catch (parseError) {
-                state.evalResults[key] = { success: false, error: parseError.message || String(parseError) };
+                const response = engine.run(name, [], factsObj, effective);
+                state.evalResults[key] = { success: true, response: response };
+            } catch (e) {
+                state.evalResults[key] = { success: false, error: e.message || String(e) };
                 renderResultsForSpec(key);
                 return;
             }
-
-            state.evalResults[key] = evalResult;
             renderResultsForSpec(key);
         }
 
@@ -1237,7 +1217,7 @@
             try {
                 setStatus('warn', 'Initializing WASM…');
                 await init();
-                engine = new WasmEngine();
+                engine = new Engine();
                 setStatus('warn', 'Loading Monaco…');
             } catch (error) {
                 showError('WASM failed', error);

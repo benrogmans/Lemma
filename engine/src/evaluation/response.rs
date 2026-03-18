@@ -1,4 +1,5 @@
 use crate::evaluation::operations::{OperationRecord, OperationResult};
+use crate::parsing::ast::DateTimeValue;
 use crate::planning::semantics::{Expression, Fact, LemmaType, RulePath, Source};
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -27,6 +28,9 @@ pub struct Facts {
 #[derive(Debug, Clone, Serialize)]
 pub struct Response {
     pub spec_name: String,
+    pub spec_hash: Option<String>,
+    pub spec_effective_from: Option<DateTimeValue>,
+    pub spec_effective_to: Option<DateTimeValue>,
     pub facts: Vec<Facts>,
     pub results: IndexMap<String, RuleResult>,
 }
@@ -111,6 +115,9 @@ mod tests {
         );
         let response = Response {
             spec_name: "test_spec".to_string(),
+            spec_hash: None,
+            spec_effective_from: None,
+            spec_effective_to: None,
             facts: vec![],
             results,
         };
@@ -148,6 +155,9 @@ mod tests {
         );
         let mut response = Response {
             spec_name: "test_spec".to_string(),
+            spec_hash: None,
+            spec_effective_from: None,
+            spec_effective_to: None,
             facts: vec![],
             results,
         };

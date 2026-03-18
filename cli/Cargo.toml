@@ -42,9 +42,8 @@ notify-debouncer-mini = "0.5"
 workspace = true
 
 [features]
-default = ["mcp", "registry"]
+default = ["registry"]
 registry = ["lemma/registry"]
-mcp = []
 
 [dev-dependencies]
 assert_cmd = "2.0"

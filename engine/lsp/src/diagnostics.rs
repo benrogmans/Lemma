@@ -211,8 +211,10 @@ mod tests {
 
     #[test]
     fn errors_to_diagnostics_with_multiple_errors() {
-        let error1 = Error::resource_limit_exceeded("limit_a", "100", "200", "fix a", None);
-        let error2 = Error::resource_limit_exceeded("limit_b", "50", "75", "fix b", None);
+        let error1 =
+            Error::resource_limit_exceeded("limit_a", "100", "200", "fix a", None, None, None);
+        let error2 =
+            Error::resource_limit_exceeded("limit_b", "50", "75", "fix b", None, None, None);
         let diagnostics =
             errors_to_diagnostics(&[error1, error2], "spec test\nfact x: 10", "test.lemma");
         assert_eq!(diagnostics.len(), 2);

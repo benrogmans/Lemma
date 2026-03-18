@@ -1,8 +1,15 @@
 use crate::evaluation::Evaluator;
 use crate::parsing::ast::{DateTimeValue, LemmaSpec};
+use crate::planning::SpecSchema;
+use crate::spec_id;
 use crate::{parse, Error, ResourceLimits, Response};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
 
 // ─── Temporal bound for Option<DateTimeValue> comparisons ────────────
 
@@ -160,18 +167,20 @@ impl Context {
     /// registry bundles must not introduce bare-named specs into the local namespace.
     pub fn insert_spec(&mut self, spec: Arc<LemmaSpec>, from_registry: bool) -> Result<(), Error> {
         if spec.from_registry && !from_registry {
-            return Err(Error::validation(
+            return Err(Error::validation_with_context(
                 format!(
                     "Spec '{}' uses '@' registry prefix, which is reserved for dependencies",
                     spec.name
                 ),
                 None,
                 Some("Remove the '@' prefix, or load this file as a dependency."),
+                Some(Arc::clone(&spec)),
+                None,
             ));
         }
 
         if from_registry && !spec.from_registry {
-            return Err(Error::validation(
+            return Err(Error::validation_with_context(
                 format!(
                     "Registry bundle contains spec '{}' without '@' prefix; \
                      all specs in a registry bundle must use '@'-prefixed names \
@@ -180,6 +189,8 @@ impl Context {
                 ),
                 None,
                 Some("Prefix the spec name with '@' (e.g. spec @org/project/name)."),
+                Some(Arc::clone(&spec)),
+                None,
             ));
         }
 
@@ -189,13 +200,15 @@ impl Context {
             .iter()
             .any(|o| o.effective_from() == spec.effective_from())
         {
-            return Err(Error::validation(
+            return Err(Error::validation_with_context(
                 format!(
                     "Duplicate spec '{}' (same name and effective_from already in context)",
                     spec.name
                 ),
                 None,
                 None::<String>,
+                Some(Arc::clone(&spec)),
+                None,
             ));
         }
 
@@ -339,13 +352,43 @@ fn find_slice_plan<'a>(
 
 // ─── Engine ──────────────────────────────────────────────────────────
 
+/// How a single buffer is identified in parse/plan diagnostics and the engine source map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadSource<'a> {
+    /// Path, URI, test name, or any non-empty stable id.
+    Labeled(&'a str),
+    /// No stable path (pasted string, REPL). Stored under [`LoadSource::INLINE_KEY`].
+    Inline,
+}
+
+impl LoadSource<'_> {
+    /// Source map key and span attribute for [`LoadSource::Inline`].
+    pub const INLINE_KEY: &'static str = "inline source (no path)";
+
+    fn storage_key(self) -> Result<String, Vec<Error>> {
+        match self {
+            LoadSource::Labeled(s) => {
+                if s.trim().is_empty() {
+                    return Err(vec![Error::request(
+                        "load source label must be non-empty, or use LoadSource::Inline",
+                        None::<String>,
+                        None,
+                    )]);
+                }
+                Ok(s.to_string())
+            }
+            LoadSource::Inline => Ok(Self::INLINE_KEY.to_string()),
+        }
+    }
+}
+
 /// Engine for evaluating Lemma rules.
 ///
 /// Pure Rust implementation that evaluates Lemma specs directly from the AST.
 /// Uses pre-built execution plans that are self-contained and ready for evaluation.
 ///
 /// The engine never performs network calls. External `@...` references must be
-/// pre-resolved before calling `add_lemma_files` — either by including dep files
+/// pre-resolved before loading — either by including dep files
 /// in the file map or by calling `resolve_registry_references` separately
 /// (e.g. in a `lemma fetch` command).
 pub struct Engine {
@@ -434,20 +477,173 @@ impl Engine {
         matched
     }
 
-    /// Add Lemma source files, parse them, and build execution plans.
-    /// Add user-authored Lemma files. Registry specs (`@`-prefixed) are rejected;
-    /// use [`add_dependency_files`] for pre-fetched registry dependencies.
-    ///
-    /// - Validates and resolves types **once** across all specs
-    /// - Collects **all** errors across all files (parse, planning) instead of aborting on the first
-    ///
-    /// `files` maps source identifiers (e.g. file paths) to source code.
-    pub fn add_lemma_files(&mut self, files: HashMap<String, String>) -> Result<(), Vec<Error>> {
+    /// Load a single spec from source code.
+    pub fn load(&mut self, code: &str, source: LoadSource<'_>) -> Result<(), Vec<Error>> {
+        let mut files = HashMap::new();
+        files.insert(source.storage_key()?, code.to_string());
+        self.add_files_inner(files, false)
+    }
+
+    /// Load .lemma files from paths (files and/or directories). Directories are expanded one level only (direct child .lemma files). Enforces `max_files`, `max_loaded_bytes`, `max_file_size_bytes`. Not available on wasm32 (no filesystem).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn load_from_paths<P: AsRef<Path>>(&mut self, paths: &[P]) -> Result<(), Vec<Error>> {
+        use std::fs;
+        use std::io::Read;
+
+        let mut to_load: Vec<(String, String)> = Vec::new();
+        let mut total_bytes: usize = 0;
+        let mut seen = HashSet::<String>::new();
+
+        for path in paths {
+            let path = path.as_ref();
+            if path.is_file() {
+                if path.extension().map(|e| e == "lemma").unwrap_or(false) {
+                    let key = path.display().to_string();
+                    if seen.contains(&key) {
+                        continue;
+                    }
+                    seen.insert(key.clone());
+                    if to_load.len() >= self.limits.max_files {
+                        return Err(vec![Error::resource_limit_exceeded(
+                            "max_files",
+                            self.limits.max_files.to_string(),
+                            (to_load.len() + 1).to_string(),
+                            "Reduce the number of paths or files",
+                            None::<crate::Source>,
+                            None,
+                            None,
+                        )]);
+                    }
+                    let meta = match fs::metadata(path) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            return Err(vec![Error::request(
+                                format!("Cannot read path '{}': {}", path.display(), e),
+                                None::<String>,
+                                None,
+                            )]);
+                        }
+                    };
+                    if meta.len() as usize > self.limits.max_file_size_bytes {
+                        return Err(vec![Error::resource_limit_exceeded(
+                            "max_file_size_bytes",
+                            self.limits.max_file_size_bytes.to_string(),
+                            meta.len().to_string(),
+                            "Use a smaller file or increase limit",
+                            None::<crate::Source>,
+                            None,
+                            None,
+                        )]);
+                    }
+                    total_bytes += meta.len() as usize;
+                    if total_bytes > self.limits.max_loaded_bytes {
+                        return Err(vec![Error::resource_limit_exceeded(
+                            "max_loaded_bytes",
+                            self.limits.max_loaded_bytes.to_string(),
+                            total_bytes.to_string(),
+                            "Load fewer or smaller files",
+                            None::<crate::Source>,
+                            None,
+                            None,
+                        )]);
+                    }
+                    let mut f = match fs::File::open(path) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            return Err(vec![Error::request(
+                                format!("Cannot open '{}': {}", path.display(), e),
+                                None::<String>,
+                                None,
+                            )]);
+                        }
+                    };
+                    let mut s = String::new();
+                    if f.read_to_string(&mut s).is_err() {
+                        return Err(vec![Error::request(
+                            format!("Cannot read '{}'", path.display()),
+                            None::<String>,
+                            None,
+                        )]);
+                    }
+                    to_load.push((key, s));
+                }
+            } else if path.is_dir() {
+                let read_dir = match fs::read_dir(path) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        return Err(vec![Error::request(
+                            format!("Cannot read directory '{}': {}", path.display(), e),
+                            None::<String>,
+                            None,
+                        )]);
+                    }
+                };
+                for entry in read_dir.filter_map(Result::ok) {
+                    let p = entry.path();
+                    if p.is_file() && p.extension().map(|e| e == "lemma").unwrap_or(false) {
+                        let key = p.display().to_string();
+                        if seen.contains(&key) {
+                            continue;
+                        }
+                        seen.insert(key.clone());
+                        if to_load.len() >= self.limits.max_files {
+                            return Err(vec![Error::resource_limit_exceeded(
+                                "max_files",
+                                self.limits.max_files.to_string(),
+                                (to_load.len() + 1).to_string(),
+                                "Reduce the number of paths or files",
+                                None::<crate::Source>,
+                                None,
+                                None,
+                            )]);
+                        }
+                        let meta = match fs::metadata(&p) {
+                            Ok(m) => m,
+                            Err(_) => continue,
+                        };
+                        if meta.len() as usize > self.limits.max_file_size_bytes {
+                            return Err(vec![Error::resource_limit_exceeded(
+                                "max_file_size_bytes",
+                                self.limits.max_file_size_bytes.to_string(),
+                                meta.len().to_string(),
+                                "Use a smaller file or increase limit",
+                                None::<crate::Source>,
+                                None,
+                                None,
+                            )]);
+                        }
+                        total_bytes += meta.len() as usize;
+                        if total_bytes > self.limits.max_loaded_bytes {
+                            return Err(vec![Error::resource_limit_exceeded(
+                                "max_loaded_bytes",
+                                self.limits.max_loaded_bytes.to_string(),
+                                total_bytes.to_string(),
+                                "Load fewer or smaller files",
+                                None::<crate::Source>,
+                                None,
+                                None,
+                            )]);
+                        }
+                        let mut f = match fs::File::open(&p) {
+                            Ok(f) => f,
+                            Err(_) => continue,
+                        };
+                        let mut s = String::new();
+                        if f.read_to_string(&mut s).is_err() {
+                            continue;
+                        }
+                        to_load.push((key, s));
+                    }
+                }
+            }
+        }
+
+        let files: HashMap<String, String> = to_load.into_iter().collect();
         self.add_files_inner(files, false)
     }
 
     /// Add pre-fetched registry dependency files. These are allowed to declare
-    /// `@`-prefixed spec names. Call this before [`add_lemma_files`] so that
+    /// `@`-prefixed spec names. Call this before [`load`] / [`load_from_paths`] so that
     /// user specs can reference the imported types and facts.
     pub fn add_dependency_files(
         &mut self,
@@ -474,6 +670,8 @@ impl Engine {
                             self.total_expression_count.to_string(),
                             "Split logic across fewer files or reduce expression complexity",
                             None::<crate::Source>,
+                            None,
+                            None,
                         ));
                         return Err(errors);
                     }
@@ -622,35 +820,67 @@ impl Engine {
                 version_list.join("\n")
             )
         };
-        Error::request(msg, None::<String>)
+        Error::request(msg, None::<String>, None)
     }
 
-    /// Get the execution plan for a spec.
-    ///
-    /// When `hash_pin` is `Some`, resolves the spec by content hash for that name,
-    /// then returns the slice plan that covers `effective`. When `hash_pin` is `None`,
-    /// resolves the temporal version active at `effective` then finds the covering slice plan.
-    /// Returns `None` when the spec does not exist or has no matching plan.
-    pub fn get_execution_plan(
+    /// Resolve spec identifier (name or name~hash) and return the spec schema. Uses `effective` or now when None.
+    pub fn show(&self, spec: &str, effective: Option<&DateTimeValue>) -> Result<SpecSchema, Error> {
+        let plan = self.plan(spec, effective)?;
+        Ok(plan.schema())
+    }
+
+    /// Resolve spec identifier and return the execution plan. Uses `effective` or now when None.
+    pub fn plan(
         &self,
-        spec_name: &str,
-        hash_pin: Option<&str>,
-        effective: &DateTimeValue,
-    ) -> Option<&crate::planning::ExecutionPlan> {
-        let arc = if let Some(pin) = hash_pin {
-            self.get_spec_by_hash_pin(spec_name, pin)?
+        spec: &str,
+        effective: Option<&DateTimeValue>,
+    ) -> Result<&crate::planning::ExecutionPlan, Error> {
+        let (name, hash) = spec_id::parse_spec_id(spec)?;
+        let eff_val = effective.cloned().unwrap_or_else(DateTimeValue::now);
+        let arc = hash
+            .as_ref()
+            .and_then(|pin| self.get_spec_by_hash_pin(&name, pin))
+            .or_else(|| self.get_spec(&name, &eff_val))
+            .ok_or_else(|| self.spec_not_found_error(&name, &eff_val))?;
+        let slice_plans = self
+            .execution_plans
+            .get(&arc)
+            .ok_or_else(|| self.spec_not_found_error(&name, &eff_val))?;
+        let plan = find_slice_plan(slice_plans, &eff_val);
+        if let Some(p) = plan {
+            Ok(p)
         } else {
-            self.get_spec(spec_name, effective)?
-        };
-        let slice_plans = self.execution_plans.get(&arc)?;
-        let plan = find_slice_plan(slice_plans, effective);
-        if plan.is_none() && !slice_plans.is_empty() {
-            unreachable!(
-                "BUG: spec '{}' has {} slice plans but none covers effective={} — slice partition is broken",
-                spec_name, slice_plans.len(), effective
-            );
+            if !slice_plans.is_empty() {
+                unreachable!(
+                    "BUG: spec '{}' has {} slice plans but none covers effective={} — slice partition is broken",
+                    name, slice_plans.len(), eff_val
+                );
+            }
+            Err(self.spec_not_found_error(&name, &eff_val))
         }
-        plan
+    }
+
+    /// Run a plan from [`plan`]: apply fact values and evaluate all rules.
+    pub fn run_plan(
+        &self,
+        plan: &crate::planning::ExecutionPlan,
+        effective: &DateTimeValue,
+        fact_values: HashMap<String, String>,
+    ) -> Result<Response, Error> {
+        let plan = plan.clone().with_fact_values(fact_values, &self.limits)?;
+        self.evaluate_plan(plan, effective)
+    }
+
+    /// Run a spec: resolve by spec id, then [`run_plan`]. Returns all rules; filter via [`Response::filter_rules`] if needed.
+    pub fn run(
+        &self,
+        spec: &str,
+        effective: Option<&DateTimeValue>,
+        fact_values: HashMap<String, String>,
+    ) -> Result<Response, Error> {
+        let eff_val = effective.cloned().unwrap_or_else(DateTimeValue::now);
+        let plan = self.plan(spec, effective)?;
+        self.run_plan(plan, &eff_val, fact_values)
     }
 
     pub fn get_spec_rules(
@@ -664,68 +894,17 @@ impl Engine {
         Ok(arc.rules.clone())
     }
 
-    /// Evaluate rules in a spec with JSON values for facts.
-    ///
-    /// This is a convenience method that accepts JSON directly and converts it
-    /// to typed values using the spec's fact type declarations.
-    ///
-    /// If `rule_names` is empty, evaluates all rules.
-    /// Otherwise, only returns results for the specified rules (dependencies still computed).
-    ///
-    /// Values are provided as JSON bytes (e.g., `b"{\"quantity\": 5, \"is_member\": true}"`).
-    /// They are automatically parsed to the expected type based on the spec schema.
-    ///
-    /// When `hash_pin` is `Some`, the spec is resolved by that content hash; otherwise
-    /// by temporal resolution at `effective`. Evaluation uses the resolved plan.
-    pub fn evaluate_json(
+    /// Run with fact values from JSON body. Same spec id rules as [`run`].
+    pub fn run_json(
         &self,
-        spec_name: &str,
-        hash_pin: Option<&str>,
-        effective: &DateTimeValue,
-        rule_names: Vec<String>,
+        spec: &str,
+        effective: Option<&DateTimeValue>,
         json: &[u8],
     ) -> Result<Response, Error> {
-        let base_plan = self
-            .get_execution_plan(spec_name, hash_pin, effective)
-            .ok_or_else(|| self.spec_not_found_error(spec_name, effective))?;
-
+        let eff_val = effective.cloned().unwrap_or_else(DateTimeValue::now);
+        let plan = self.plan(spec, effective)?;
         let values = crate::serialization::from_json(json)?;
-        let plan = base_plan.clone().with_fact_values(values, &self.limits)?;
-
-        self.evaluate_plan(plan, rule_names, effective)
-    }
-
-    /// Evaluate rules in a spec with string values for facts.
-    ///
-    /// This is the user-friendly API that accepts raw string values and parses them
-    /// to the appropriate types based on the spec's fact type declarations.
-    /// Use this for CLI, HTTP APIs, and other user-facing interfaces.
-    ///
-    /// If `rule_names` is empty, evaluates all rules.
-    /// Otherwise, only returns results for the specified rules (dependencies still computed).
-    ///
-    /// Fact values are provided as name -> value string pairs (e.g., "type" -> "latte").
-    /// They are automatically parsed to the expected type based on the spec schema.
-    ///
-    /// When `hash_pin` is `Some`, the spec is resolved by that content hash; otherwise
-    /// by temporal resolution at `effective`. Evaluation uses the resolved plan.
-    pub fn evaluate(
-        &self,
-        spec_name: &str,
-        hash_pin: Option<&str>,
-        effective: &DateTimeValue,
-        rule_names: Vec<String>,
-        fact_values: HashMap<String, String>,
-    ) -> Result<Response, Error> {
-        let base_plan = self
-            .get_execution_plan(spec_name, hash_pin, effective)
-            .ok_or_else(|| self.spec_not_found_error(spec_name, effective))?;
-
-        let plan = base_plan
-            .clone()
-            .with_fact_values(fact_values, &self.limits)?;
-
-        self.evaluate_plan(plan, rule_names, effective)
+        self.run_plan(plan, &eff_val, values)
     }
 
     /// Invert a rule to find input domains that produce a desired outcome.
@@ -740,9 +919,7 @@ impl Engine {
         target: crate::inversion::Target,
         values: HashMap<String, String>,
     ) -> Result<crate::InversionResponse, Error> {
-        let base_plan = self
-            .get_execution_plan(spec_name, None, effective)
-            .ok_or_else(|| self.spec_not_found_error(spec_name, effective))?;
+        let base_plan = self.plan(spec_name, Some(effective))?;
 
         let plan = base_plan.clone().with_fact_values(values, &self.limits)?;
         let provided_facts: std::collections::HashSet<_> = plan
@@ -758,7 +935,6 @@ impl Engine {
     fn evaluate_plan(
         &self,
         plan: crate::planning::ExecutionPlan,
-        rule_names: Vec<String>,
         effective: &DateTimeValue,
     ) -> Result<Response, Error> {
         let now_semantic = crate::planning::semantics::date_time_to_semantic(effective);
@@ -766,13 +942,7 @@ impl Engine {
             value: crate::planning::semantics::ValueKind::Date(now_semantic),
             lemma_type: crate::planning::semantics::primitive_date().clone(),
         };
-        let mut response = self.evaluator.evaluate(&plan, now_literal);
-
-        if !rule_names.is_empty() {
-            response.filter_rules(&rule_names);
-        }
-
-        Ok(response)
+        Ok(self.evaluator.evaluate(&plan, now_literal))
     }
 }
 
@@ -983,9 +1153,7 @@ mod tests {
         code: &str,
         source: &str,
     ) -> Result<(), Vec<Error>> {
-        let files: HashMap<String, String> =
-            std::iter::once((source.to_string(), code.to_string())).collect();
-        engine.add_lemma_files(files)
+        engine.load(code, LoadSource::Labeled(source))
     }
 
     #[test]
@@ -1005,9 +1173,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let response = engine
-            .evaluate("test", None, &now, vec![], HashMap::new())
-            .unwrap();
+        let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
         assert_eq!(response.results.len(), 2);
 
         let sum_result = response
@@ -1050,9 +1216,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let response = engine
-            .evaluate("test", None, &now, vec![], HashMap::new())
-            .unwrap();
+        let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
         assert_eq!(response.results.len(), 1);
         assert_eq!(
             response.results.values().next().unwrap().result,
@@ -1077,9 +1241,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let response = engine
-            .evaluate("test", None, &now, vec![], HashMap::new())
-            .unwrap();
+        let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
         assert_eq!(
             response.results.values().next().unwrap().result,
             crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::from_bool(true)))
@@ -1102,9 +1264,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let response = engine
-            .evaluate("test", None, &now, vec![], HashMap::new())
-            .unwrap();
+        let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
         assert_eq!(
             response.results.values().next().unwrap().result,
             crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
@@ -1117,7 +1277,7 @@ mod tests {
     fn test_spec_not_found() {
         let engine = Engine::new();
         let now = DateTimeValue::now();
-        let result = engine.evaluate("nonexistent", None, &now, vec![], HashMap::new());
+        let result = engine.run("nonexistent", Some(&now), HashMap::new());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -1148,9 +1308,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let response1 = engine
-            .evaluate("spec1", None, &now, vec![], HashMap::new())
-            .unwrap();
+        let response1 = engine.run("spec1", Some(&now), HashMap::new()).unwrap();
         assert_eq!(
             response1.results[0].result,
             crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
@@ -1158,9 +1316,7 @@ mod tests {
             )))
         );
 
-        let response2 = engine
-            .evaluate("spec2", None, &now, vec![], HashMap::new())
-            .unwrap();
+        let response2 = engine.run("spec2", Some(&now), HashMap::new()).unwrap();
         assert_eq!(
             response2.results[0].result,
             crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
@@ -1185,7 +1341,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let result = engine.evaluate("test", None, &now, vec![], HashMap::new());
+        let result = engine.run("test", Some(&now), HashMap::new());
         // Division by zero returns a Veto (not an error)
         assert!(result.is_ok(), "Evaluation should succeed");
         let response = result.unwrap();
@@ -1230,9 +1386,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let response = engine
-            .evaluate("test", None, &now, vec![], HashMap::new())
-            .unwrap();
+        let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
         assert_eq!(response.results.len(), 3);
 
         // Verify source positions increase (z < y < x)
@@ -1284,19 +1438,12 @@ mod tests {
         )
         .unwrap();
 
-        // Request only 'total', but it depends on 'subtotal' and 'tax'
+        // User filters to 'total' after run (deps were still computed)
         let now = DateTimeValue::now();
-        let response = engine
-            .evaluate(
-                "test",
-                None,
-                &now,
-                vec!["total".to_string()],
-                HashMap::new(),
-            )
-            .unwrap();
+        let rules = vec!["total".to_string()];
+        let mut response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+        response.filter_rules(&rules);
 
-        // Only 'total' should be in results
         assert_eq!(response.results.len(), 1);
         assert_eq!(response.results.keys().next().unwrap(), "total");
 
@@ -1329,21 +1476,18 @@ mod tests {
             .add_dependency_files(deps)
             .expect("should load dependency files");
 
-        let mut files = HashMap::new();
-        files.insert(
-            "main.lemma".to_string(),
-            r#"spec main_spec
-fact external: spec @org/project/helper
-rule value: external.quantity"#
-                .to_string(),
-        );
         engine
-            .add_lemma_files(files)
+            .load(
+                r#"spec main_spec
+fact external: spec @org/project/helper
+rule value: external.quantity"#,
+                LoadSource::Labeled("main.lemma"),
+            )
             .expect("should succeed with pre-resolved deps");
 
         let now = DateTimeValue::now();
         let response = engine
-            .evaluate("main_spec", None, &now, vec![], HashMap::new())
+            .run("main_spec", Some(&now), HashMap::new())
             .expect("evaluate should succeed");
 
         let value_result = response
@@ -1359,7 +1503,7 @@ rule value: external.quantity"#
     }
 
     #[test]
-    fn add_lemma_files_no_external_refs_works() {
+    fn load_no_external_refs_works() {
         let mut engine = Engine::new();
 
         add_lemma_code_blocking(
@@ -1373,7 +1517,7 @@ rule doubled: price * 2"#,
 
         let now = DateTimeValue::now();
         let response = engine
-            .evaluate("local_only", None, &now, vec![], HashMap::new())
+            .run("local_only", Some(&now), HashMap::new())
             .expect("evaluate should succeed");
 
         assert!(response.results.contains_key("doubled"));
@@ -1415,25 +1559,22 @@ rule value: external.quantity"#,
             .add_dependency_files(deps)
             .expect("should load dependency files");
 
-        let mut files = HashMap::new();
-        files.insert(
-            "main.lemma".to_string(),
-            r#"spec registry_demo
+        engine
+            .load(
+                r#"spec registry_demo
 type money from @lemma/std/finance
 fact unit_price: 5 eur
 fact helper: spec @org/example/helper
 rule helper_value: helper.value
 rule line_total: unit_price * 2
-rule formatted: helper_value + 0"#
-                .to_string(),
-        );
-        engine
-            .add_lemma_files(files)
+rule formatted: helper_value + 0"#,
+                LoadSource::Labeled("main.lemma"),
+            )
             .expect("should succeed with pre-resolved spec and type deps");
 
         let now = DateTimeValue::now();
         let response = engine
-            .evaluate("registry_demo", None, &now, vec![], HashMap::new())
+            .run("registry_demo", Some(&now), HashMap::new())
             .expect("evaluate should succeed");
 
         assert!(response.results.contains_key("helper_value"));
@@ -1441,18 +1582,30 @@ rule formatted: helper_value + 0"#
     }
 
     #[test]
-    fn add_lemma_files_rejects_registry_spec_definitions() {
+    fn load_empty_labeled_source_is_error() {
         let mut engine = Engine::new();
-        let mut files = HashMap::new();
-        files.insert(
-            "bad.lemma".to_string(),
-            "spec @org/example/helper\nfact x: 1".to_string(),
+        let err = engine
+            .load("spec x\nfact a: 1", LoadSource::Labeled("  "))
+            .unwrap_err();
+        assert!(err.iter().any(|e| e.message().contains("non-empty")));
+    }
+
+    #[test]
+    fn load_inline_source_succeeds() {
+        let mut engine = Engine::new();
+        engine
+            .load("spec x\nfact a: 1", LoadSource::Inline)
+            .expect("inline load");
+    }
+
+    #[test]
+    fn load_rejects_registry_spec_definitions() {
+        let mut engine = Engine::new();
+        let result = engine.load(
+            "spec @org/example/helper\nfact x: 1",
+            LoadSource::Labeled("bad.lemma"),
         );
-        let result = engine.add_lemma_files(files);
-        assert!(
-            result.is_err(),
-            "should reject @-prefixed spec in add_lemma_files"
-        );
+        assert!(result.is_err(), "should reject @-prefixed spec in load");
         let errors = result.unwrap_err();
         assert!(
             errors
@@ -1560,7 +1713,7 @@ fact rate: 10"#
     }
 
     #[test]
-    fn add_lemma_files_returns_all_errors_not_just_first() {
+    fn load_returns_all_errors_not_just_first() {
         let mut engine = Engine::new();
 
         let result = add_lemma_code_blocking(

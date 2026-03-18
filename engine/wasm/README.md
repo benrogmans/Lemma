@@ -1,299 +1,61 @@
 # @benrogmans/lemma-engine
 
-Lemma is a declarative programming language for expressing business rules. This WebAssembly build for JavaScript and TypeScript provides an embeddable runtime, so that Lemma code can be evaluated anywhere.
+Embeddable Lemma engine (WebAssembly).
 
-**New to Lemma?** Check out the [language introduction](https://github.com/benrogmans/lemma#quick-start) and [examples](https://github.com/benrogmans/lemma/tree/main/documentation/examples).
+npm `description` / `keywords` / `homepage`: edit **`NPM_BRANDING`** in `wasm/build.js` (not Cargo).
 
-## Installation
+## Install
 
 ```bash
 npm install @benrogmans/lemma-engine
 ```
 
-## JavaScript API Reference
+## Browser / bundler
 
-### Initialization
-
-#### Browser
 ```javascript
-import init, { WasmEngine } from '@benrogmans/lemma-engine';
+import { init, Engine } from '@benrogmans/lemma-engine';
 
-// Async initialization (recommended for browsers)
 await init();
-const engine = new WasmEngine();
+const engine = new Engine();
 ```
 
-#### Node.js
+`lemma_bg.wasm` loads from the package URL. Serve over **http(s)** (not `file://`).
+
+## Node
+
 ```javascript
 import { readFileSync } from 'fs';
-import { WasmEngine, initSync } from '@benrogmans/lemma-engine';
+import { initSync, Engine } from '@benrogmans/lemma-engine';
 
-// Synchronous initialization for Node.js
-const wasmBytes = readFileSync('node_modules/@benrogmans/lemma-engine/lemma_bg.wasm');
-initSync(wasmBytes);
-const engine = new WasmEngine();
+initSync({ module: readFileSync('node_modules/@benrogmans/lemma-engine/lemma_bg.wasm') });
+const engine = new Engine();
 ```
 
-#### Bundlers (Webpack, Vite, etc.)
-```javascript
-import init, { WasmEngine } from '@benrogmans/lemma-engine';
-import wasmUrl from '@benrogmans/lemma-engine/lemma_bg.wasm?url';
-
-// Initialize with URL
-await init(wasmUrl);
-const engine = new WasmEngine();
-```
-
-### Core Methods
-
-#### `addLemmaFile(code: string, filename: string): string`
-
-Adds a Lemma spec to the engine.
+## LSP (browser streams)
 
 ```javascript
-const result = engine.addLemmaFile(`
-  spec employee_contract
+import { init, Engine } from '@benrogmans/lemma-engine';
+import { serve, ServerConfig } from '@benrogmans/lemma-engine/lsp';
 
-  fact salary: 5000 eur
-  fact start_date: 2024-01-15
-  fact vacation_days: 25
-
-  rule annual_salary: salary * 12
-  rule daily_rate: salary / 21
-`, 'employee.lemma');
-
-const response = JSON.parse(result);
-if (response.success) {
-  console.log('Spec loaded:', response.data);
-} else {
-  console.error('Error:', response.error);
-}
+await init();
+await serve(new ServerConfig(intoServer, fromServer));
 ```
 
-#### `evaluate(docName: string, facts: string): string`
+## API (`Engine`)
 
-Evaluates a spec with optional runtime facts.
+| Method | |
+|--------|--|
+| `load(code, attribute)` | Promise; reject → `string[]` |
+| `list()` | Spec entries |
+| `show(spec, effective?)` | `SpecSchema` |
+| `run(spec, rules, facts, effective?)` | `Response` |
+| `format(code, attribute?)` | string or throw |
+| `invert(...)` | throws (N/A) |
 
-```javascript
-// Evaluate with default facts
-const result1 = engine.evaluate('employee_contract', '{}');
+## Build (maintainers)
 
-// Evaluate with runtime fact values (as JSON object)
-const result2 = engine.evaluate('employee_contract', JSON.stringify({
-  salary: 6000,
-  vacation_days: 30
-}));
-
-const response = JSON.parse(result2);
-if (response.success) {
-  console.log('Spec:', response.data.spec);
-  console.log('Rules:', response.data.rules);
-  // Access specific rule results directly:
-  // response.data.rules.annual_salary.value
-}
-```
-
-#### `listSpecs(): string`
-
-Lists all loaded specs in the engine.
-
-```javascript
-const result = engine.listSpecs();
-const response = JSON.parse(result);
-
-if (response.success) {
-  console.log('Loaded specs:', response.data);
-  // response.data is an array of spec names
-}
-```
-
-### Response Format
-
-All methods return a JSON string with this structure:
-
-```typescript
-interface WasmResponse {
-  success: boolean;
-  data?: any;        // Success data (varies by method)
-  error?: string;    // Error message if success is false
-  warnings?: string[]; // Optional warnings
-}
-```
-
-### Complete Example
-
-```javascript
-import init, { WasmEngine } from '@benrogmans/lemma-engine';
-
-async function calculatePricing() {
-  // Initialize WASM
-  await init();
-  const engine = new WasmEngine();
-
-  // Define pricing rules
-  const pricingDoc = `
-    spec product_pricing
-
-    fact base_price: 100 usd
-    fact quantity: 1
-    fact is_member: false
-    fact promo_code: ""
-
-    rule bulk_discount: 0%
-      unless quantity >= 10 then 5%
-      unless quantity >= 50 then 10%
-      unless quantity >= 100 then 15%
-
-    rule member_discount: 0%
-      unless is_member then 10%
-
-    rule promo_discount: 0%
-      unless promo_code == "SAVE10" then 10%
-      unless promo_code == "SAVE20" then 20%
-
-    rule best_discount: bulk_discount
-      unless member_discount >= bulk_discount  then member_discount
-      unless promo_discount >= bulk_discount   then promo_discount
-      unless member_discount >= promo_discount then member_discount
-      unless promo_discount >= member_discount then promo_discount
-
-    rule final_price: base_price * quantity * (1 - best_discount)
-  `;
-
-  // Load the spec
-  const loadResult = JSON.parse(
-    engine.addLemmaFile(pricingDoc, 'pricing.lemma')
-  );
-
-  if (!loadResult.success) {
-    throw new Error(loadResult.error);
-  }
-
-    // Calculate for different scenarios
-    const scenarios = [
-      { quantity: 25, is_member: false, promo_code: "" },
-      { quantity: 10, is_member: true, promo_code: "" },
-      { quantity: 5, is_member: false, promo_code: "SAVE20" }
-    ];
-
-    for (const scenario of scenarios) {
-      const result = JSON.parse(
-        engine.evaluate('product_pricing', JSON.stringify(scenario))
-      );
-
-    if (result.success) {
-      console.log(`Scenario:`, scenario);
-      // Access rule results directly by name
-      const finalPrice = result.data.rules.final_price.value;
-      const bestDiscount = result.data.rules.best_discount.value;
-      console.log(`Final price:`, finalPrice);
-      console.log(`Discount applied:`, bestDiscount);
-      console.log('---');
-    }
-  }
-}
-
-calculatePricing().catch(console.error);
-```
-
-### TypeScript Support
-
-The package includes TypeScript definitions. For better type safety:
-
-```typescript
-import init, { WasmEngine } from '@benrogmans/lemma-engine';
-
-interface PricingFacts {
-  quantity: number;
-  is_member: boolean;
-  promo_code: string;
-}
-
-interface PricingResults {
-  base_price: string;
-  final_price: string;
-  best_discount: string;
-  // ... other fields
-}
-
-interface EvaluationResponse {
-  success: boolean;
-  data?: {
-    spec: string;
-    rules: {
-      [ruleName: string]: {
-        value: any;  // The computed value (e.g., {Number: "100"})
-        veto?: string;  // Present if rule was vetoed
-        missing_facts?: string[];  // Present if rule couldn't be evaluated
-        operations?: Array<{  // Operation records (always present if rule was evaluated)
-          type: string;  // "fact_used", "operation_executed", "final_result", etc.
-          // Additional fields depend on type
-        }>;
-      };
-    };
-  };
-  error?: string;
-  warnings?: string[];  // Spec-level warnings
-}
-
-async function typedExample() {
-  await init();
-  const engine = new WasmEngine();
-
-  // ... load spec
-
-  const facts = {
-    quantity: 10,
-    is_member: true,
-    promo_code: "SAVE10"
-  };
-
-  const result: EvaluationResponse = JSON.parse(
-    engine.evaluate('product_pricing', JSON.stringify(facts))
-  );
-
-  if (result.success && result.data) {
-    const price = result.data.rules.final_price?.value;
-  }
-}
-```
-
-### Error Handling
-
-```javascript
-try {
-  const result = JSON.parse(
-    engine.addLemmaFile('invalid syntax', 'bad.lemma')
-  );
-
-  if (!result.success) {
-    console.error('Lemma error:', result.error);
-    // Handle parse/semantic errors
-  }
-} catch (e) {
-  // Handle JSON parse errors or WASM exceptions
-  console.error('System error:', e);
-}
-```
-
-### Performance Tips
-
-1. **Initialize once**: The WASM module should be initialized once per application
-2. **Reuse engines**: Create one `WasmEngine` and load multiple specs
-3. **Batch operations**: Load all specs before evaluating
-4. **Cache results**: Evaluation results can be cached if facts don't change
-
-### Compatibility
-
-Works in modern browsers with WebAssembly support and Node.js with ES module support.
+`node wasm/build.js`: wasm-pack → `lemma.bindings.js` + `lemma_bg.wasm` → copy checked-in `lemma-entry.js` / `lsp-entry.js` / `*.d.ts` into `pkg/`. Do not edit generated bindings by hand.
 
 ## License
 
 Apache-2.0
-
-## Links
-
-- [GitHub Repository](https://github.com/benrogmans/lemma)
-- [Lemma Language Guide](https://github.com/benrogmans/lemma/tree/main/documentation)
-- [Examples](https://github.com/benrogmans/lemma/tree/main/documentation/examples)
-- [Report Issues](https://github.com/benrogmans/lemma/issues)
