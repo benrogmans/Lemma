@@ -21,14 +21,9 @@ fn test_money_plus_number_preserves_money() {
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
-    let result = engine.evaluate(
-        "test",
-        None,
-        &now,
-        vec!["total".to_string()],
-        HashMap::new(),
-    );
-    assert!(result.is_ok(), "Evaluation should succeed");
+    let mut response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    response.filter_rules(&[String::from("total")]);
+    assert_eq!(response.results.len(), 1);
 }
 
 #[test]
@@ -46,14 +41,9 @@ fn test_number_plus_money_preserves_money() {
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
-    let result = engine.evaluate(
-        "test",
-        None,
-        &now,
-        vec!["total".to_string()],
-        HashMap::new(),
-    );
-    assert!(result.is_ok(), "Evaluation should succeed");
+    let mut response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    response.filter_rules(&[String::from("total")]);
+    assert_eq!(response.results.len(), 1);
 }
 
 #[test]
@@ -71,14 +61,9 @@ fn test_money_plus_money_preserves_money() {
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
-    let result = engine.evaluate(
-        "test",
-        None,
-        &now,
-        vec!["total".to_string()],
-        HashMap::new(),
-    );
-    assert!(result.is_ok(), "Evaluation should succeed");
+    let mut response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    response.filter_rules(&[String::from("total")]);
+    assert_eq!(response.results.len(), 1);
 }
 
 #[test]
@@ -99,18 +84,9 @@ fn test_different_custom_types_same_base() {
     let now = DateTimeValue::now();
 
     // This should succeed - both extend number (dimensionless), so they're compatible
-    // Result type should be money (left operand)
-    let result = engine.evaluate(
-        "test",
-        None,
-        &now,
-        vec!["total".to_string()],
-        HashMap::new(),
-    );
-    assert!(
-        result.is_ok(),
-        "Evaluation should succeed for compatible types (both Number, no units)"
-    );
+    let mut response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    response.filter_rules(&[String::from("total")]);
+    assert_eq!(response.results.len(), 1);
 }
 
 #[test]

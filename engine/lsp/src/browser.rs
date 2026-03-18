@@ -13,7 +13,7 @@ use wasm_bindgen_futures::stream::JsStream;
 use crate::registry;
 use crate::server;
 
-/// Re-export the engine's WASM API so one pkg contains both LSP and WasmEngine.
+/// Re-export engine WASM bindings (`Engine` in JS).
 pub use lemma::wasm::WasmEngine;
 
 #[wasm_bindgen]

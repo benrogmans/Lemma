@@ -29,19 +29,21 @@ lemma-engine = "0.8.3"
 
 ```rust
 use lemma::Engine;
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 let mut engine = Engine::new();
 
-engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
+engine.load(r#"
     spec compensation
     fact base_salary: 60000
     fact bonus_rate: 10%
     rule bonus: base_salary * bonus_rate
     rule total: base_salary + bonus
-"#.into())]))?;
+"#, Some("example.lemma"))?;
 
-let response = engine.evaluate("compensation", vec![], HashMap::new())?;
+let now = DateTimeValue::now();
+let response = engine.run("compensation", Some(&now), HashMap::new())?;
 
 for result in response.results {
     if let Some(value) = result.result {
@@ -54,11 +56,12 @@ for result in response.results {
 
 ```rust
 use lemma::Engine;
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 let mut engine = Engine::new();
 
-engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
+engine.load(r#"
     spec shipping
 
     fact weight: 5 kilogram
@@ -71,13 +74,14 @@ engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
     rule valid: weight <= 30 kilogram
       unless veto "Package too heavy for shipping"
 
-"#.into())]))?;
+"#, Some("example.lemma"))?;
 
 let mut values = HashMap::new();
 values.insert("weight".to_string(), "12 kilogram".to_string());
 values.insert("destination".to_string(), "international".to_string());
 
-let response = engine.evaluate("shipping", vec![], values)?;
+let now = DateTimeValue::now();
+let response = engine.run("shipping", Some(&now), values)?;
 ```
 
 ### Inverse reasoning
@@ -88,12 +92,13 @@ Inversion allows you to find what input values produce a desired output. This is
 
 ```rust
 use lemma::{Engine, Target, LiteralValue};
+use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 use rust_decimal::Decimal;
 
 let mut engine = Engine::new();
 
-engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
+engine.load(r#"
     spec pricing
     fact quantity: [number]
     fact is_vip: false
@@ -102,15 +107,15 @@ engine.add_lemma_files(HashMap::from([("example.lemma".into(), r#"
       unless quantity >= 10 then 10%
       unless quantity >= 50 then 20%
       unless is_vip then 25%
-"#.into())]))?;
+"#, Some("example.lemma"))?;
 
-// Find what quantity gives a 30% discount
-use rust_decimal::Decimal;
+let now = DateTimeValue::now();
 let response = engine.invert(
     "pricing",
+    &now,
     "discount",
     Target::value(LiteralValue::Percentage(Decimal::from(30))),
-    HashMap::new()
+    HashMap::new(),
 )?;
 
 // Response contains solutions showing: is_vip must be true
@@ -126,26 +131,13 @@ Accepts string values that are automatically parsed based on spec types:
 let mut values = HashMap::new();
 values.insert("is_vip".to_string(), "true".to_string());
 
+let now = DateTimeValue::now();
 let response = engine.invert(
     "pricing",
+    &now,
     "discount",
     Target::value(LiteralValue::Percentage(Decimal::from(25))),
-    values
-)?;
-```
-
-**2. `invert_json()` - JSON input (convenience)**
-
-Accepts JSON bytes directly:
-
-```rust
-let json = br#"{"is_vip": true}"#;
-
-let response = engine.invert_json(
-    "pricing",
-    "discount",
-    Target::value(LiteralValue::Percentage(Decimal::from(25))),
-    json
+    values,
 )?;
 ```
 
@@ -236,6 +228,14 @@ lemma server --port 8080
 ```bash
 npm install @benrogmans/lemma-engine
 ```
+
+```javascript
+import { init, Engine } from '@benrogmans/lemma-engine';
+await init();
+new Engine();
+```
+
+Build: `node wasm/build.js` (from `engine/`). See [wasm/README.md](wasm/README.md).
 
 ## Documentation
 

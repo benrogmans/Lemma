@@ -148,10 +148,12 @@ pub fn validate_temporal_coverage(context: &Context) -> Vec<Error> {
             for (gap_start, gap_end) in &gaps {
                 let (message, suggestion) =
                     format_coverage_gap(&spec_arc.name, dep_name, gap_start, gap_end, &eff_from);
-                errors.push(Error::validation(
+                errors.push(Error::validation_with_context(
                     message,
                     Some(ref_source.clone()),
                     Some(suggestion),
+                    Some(Arc::clone(&spec_arc)),
+                    None,
                 ));
             }
         }

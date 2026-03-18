@@ -20,7 +20,7 @@ rule doubled: base_value * 2
     add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_proof", None, &now, vec![], HashMap::new())
+        .run("test_proof", Some(&now), HashMap::new())
         .unwrap();
 
     let doubled_result = response
@@ -72,7 +72,7 @@ rule quadruple: doubled * 2
     add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_proof_ref", None, &now, vec![], HashMap::new())
+        .run("test_proof_ref", Some(&now), HashMap::new())
         .unwrap();
 
     let quadruple_result = response
@@ -143,7 +143,7 @@ rule discount_percentage: 0%
     add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("test_unless", None, &now, vec![], HashMap::new())
+        .run("test_unless", Some(&now), HashMap::new())
         .unwrap();
 
     let discount_result = response
@@ -210,9 +210,7 @@ rule age_validation: accept
 
     add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test_veto", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test_veto", Some(&now), HashMap::new()).unwrap();
 
     let validation_result = response
         .results
@@ -259,9 +257,7 @@ rule result: base_ref.doubled + 50
     add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("main", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("main", Some(&now), HashMap::new()).unwrap();
 
     let result = response
         .results
@@ -335,9 +331,7 @@ rule use_cross_spec: base_ref.doubled + 1
     add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("main", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("main", Some(&now), HashMap::new()).unwrap();
 
     let main_rule = response
         .results
@@ -403,9 +397,7 @@ rule use_doubled: base_ref.doubled + 10
     add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("main", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("main", Some(&now), HashMap::new()).unwrap();
 
     let main_rule = response
         .results
@@ -513,9 +505,7 @@ rule out: true
 
     add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
 
     let result = response
         .results

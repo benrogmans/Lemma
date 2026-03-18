@@ -6,9 +6,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 fn add_lemma_code(engine: &mut Engine, code: &str, source: &str) -> Result<(), Vec<Error>> {
-    let files: HashMap<String, String> =
-        std::iter::once((source.to_string(), code.to_string())).collect();
-    engine.add_lemma_files(files)
+    engine.load(code, crate::LoadSource::Labeled(source))
 }
 
 #[test]
@@ -28,9 +26,7 @@ fn test_evaluate_spec_all_rules() {
     .unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     assert_eq!(response.results.len(), 2);
 
     let sum_result = response
@@ -73,9 +69,7 @@ fn test_evaluate_empty_facts() {
     .unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     assert_eq!(response.results.len(), 1);
     assert_eq!(
         response.results.values().next().unwrap().result,
@@ -100,9 +94,7 @@ fn test_evaluate_boolean_rule() {
     .unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     assert_eq!(
         response.results.values().next().unwrap().result,
         crate::OperationResult::Value(Box::new(crate::LiteralValue::from_bool(true)))
@@ -125,9 +117,7 @@ fn test_evaluate_with_unless_clause() {
     .unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     assert_eq!(
         response.results.values().next().unwrap().result,
         crate::OperationResult::Value(Box::new(crate::LiteralValue::number(
@@ -140,7 +130,7 @@ fn test_evaluate_with_unless_clause() {
 fn test_spec_not_found() {
     let engine = Engine::new();
     let now = DateTimeValue::now();
-    let result = engine.evaluate("nonexistent", None, &now, vec![], HashMap::new());
+    let result = engine.run("nonexistent", Some(&now), HashMap::new());
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert_eq!(
@@ -175,9 +165,7 @@ fn test_multiple_specs() {
     .unwrap();
 
     let now = DateTimeValue::now();
-    let response1 = engine
-        .evaluate("spec1", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response1 = engine.run("spec1", Some(&now), HashMap::new()).unwrap();
     assert_eq!(
         response1.results.values().next().unwrap().result,
         crate::OperationResult::Value(Box::new(crate::LiteralValue::number(
@@ -185,9 +173,7 @@ fn test_multiple_specs() {
         )))
     );
 
-    let response2 = engine
-        .evaluate("spec2", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response2 = engine.run("spec2", Some(&now), HashMap::new()).unwrap();
     assert_eq!(
         response2.results.values().next().unwrap().result,
         crate::OperationResult::Value(Box::new(crate::LiteralValue::number(
@@ -212,7 +198,7 @@ fn test_runtime_error_mapping() {
     .unwrap();
 
     let now = DateTimeValue::now();
-    let result = engine.evaluate("test", None, &now, vec![], HashMap::new());
+    let result = engine.run("test", Some(&now), HashMap::new());
     // Division by zero returns a Veto (not an error)
     assert!(result.is_ok(), "Evaluation should succeed");
     let response = result.unwrap();
@@ -257,9 +243,7 @@ fn test_rules_sorted_by_source_order() {
     .unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate("test", None, &now, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
     assert_eq!(response.results.len(), 3);
 
     assert!(response.results.contains_key("z"));
@@ -363,19 +347,11 @@ fn test_rule_filtering_evaluates_dependencies() {
     )
     .unwrap();
 
-    // Request only 'total', but it depends on 'subtotal' and 'tax'
+    // User filters to 'total' after run (deps were still computed)
     let now = DateTimeValue::now();
-    let response = engine
-        .evaluate(
-            "test",
-            None,
-            &now,
-            vec!["total".to_string()],
-            HashMap::new(),
-        )
-        .unwrap();
+    let mut response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    response.filter_rules(&[String::from("total")]);
 
-    // Only 'total' should be in results
     assert_eq!(response.results.len(), 1);
     assert_eq!(response.results.keys().next().unwrap(), "total");
 

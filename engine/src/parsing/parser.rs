@@ -37,6 +37,8 @@ pub fn parse(
             ),
             "Reduce file size or split into multiple specs",
             None,
+            None,
+            None,
         ));
     }
 
@@ -1302,6 +1304,8 @@ impl Parser {
                 self.expression_count.to_string(),
                 "Split logic into multiple rules to reduce expression count",
                 Some(source),
+                None,
+                None,
             ));
         }
         Ok(Expression::new(kind, source))
@@ -1317,6 +1321,8 @@ impl Parser {
                 actual.to_string(),
                 "Simplify nested expressions or break into separate rules",
                 Some(self.make_source(span)),
+                None,
+                None,
             ));
         }
         Ok(())

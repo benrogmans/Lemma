@@ -15,13 +15,14 @@ fact x: [number]
 rule doubled: x * 2
 "#;
 
-        let files: HashMap<String, String> =
-            std::iter::once(("fuzz_binding".to_string(), code.to_string())).collect();
-        if engine.add_lemma_files(files).is_ok() {
+        if engine
+            .load(code, lemma::LoadSource::Labeled("fuzz_binding"))
+            .is_ok()
+        {
             let mut facts = HashMap::new();
             facts.insert("x".to_string(), s.to_string());
             let now = DateTimeValue::now();
-            let _ = engine.evaluate("fuzz_test", None, &now, vec![], facts);
+            let _ = engine.run("fuzz_test", Some(&now), facts);
         }
     }
 });

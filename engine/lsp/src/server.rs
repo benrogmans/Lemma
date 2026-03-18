@@ -135,10 +135,12 @@ impl LemmaLanguageServer {
                 };
 
                 let mut engine = lemma::Engine::new();
-                let errors = match engine.add_lemma_files(files) {
-                    Ok(()) => Vec::new(),
-                    Err(errs) => errs,
-                };
+                let mut errors = Vec::new();
+                for (attr, code) in &files {
+                    if let Err(errs) = engine.load(code, lemma::LoadSource::Labeled(attr)) {
+                        errors.extend(errs);
+                    }
+                }
 
                 for (attr, (url, text)) in &attr_map {
                     let lsp_diagnostics = diagnostics::errors_to_diagnostics(&errors, text, attr);

@@ -47,9 +47,7 @@ fn eval_bool_with_facts(
     eff: &DateTimeValue,
     facts: HashMap<String, String>,
 ) -> bool {
-    let response = engine
-        .evaluate(spec_name, None, eff, vec![], facts)
-        .unwrap();
+    let response = engine.run(spec_name, Some(eff), facts).unwrap();
     let rr = response
         .results
         .values()
@@ -67,9 +65,7 @@ fn eval_value(
     rule: &str,
     eff: &DateTimeValue,
 ) -> lemma::LiteralValue {
-    let response = engine
-        .evaluate(spec_name, None, eff, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run(spec_name, Some(eff), HashMap::new()).unwrap();
     response
         .results
         .values()
@@ -82,9 +78,7 @@ fn eval_value(
 }
 
 fn eval_is_veto(engine: &Engine, spec_name: &str, rule: &str, eff: &DateTimeValue) -> bool {
-    let response = engine
-        .evaluate(spec_name, None, eff, vec![], HashMap::new())
-        .unwrap();
+    let response = engine.run(spec_name, Some(eff), HashMap::new()).unwrap();
     let rr = response
         .results
         .values()

@@ -1,16 +1,18 @@
 #!/usr/bin/env node
-
 /**
- * Test script for Lemma WASM package
+ * Node: initSync + Engine. Browser: init + Engine.
  */
 
 import { readFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join, dirname, resolve } from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '..');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
 
 function opIsVeto(op) {
   return op && Object.prototype.hasOwnProperty.call(op, 'veto');
@@ -44,377 +46,241 @@ function literalScaleValue(lit) {
   return { amount, unit };
 }
 
-/**
- * Test WASM package
- */
+function formatReject(e) {
+  if (Array.isArray(e)) return e.join('\n');
+  return String(e);
+}
+
+function runEx(engine, spec, rules, facts, effective) {
+  try {
+    return engine.run(spec, rules, facts, effective ?? null);
+  } catch (e) {
+    throw new Error(formatReject(e));
+  }
+}
+
+function assertResponseShape(resp, specName) {
+  assert(resp && typeof resp === 'object', 'run() must return object');
+  assert(resp.spec_name === specName, `spec_name want ${specName}, got ${resp.spec_name}`);
+  assert(
+    resp.results && typeof resp.results === 'object' && !Array.isArray(resp.results),
+    'results must be plain object'
+  );
+  assert(Array.isArray(resp.facts), 'facts must be array');
+}
+
+async function case_(name, fn) {
+  const t0 = performance.now();
+  try {
+    await fn();
+    console.log(`  ok  ${name} (${(performance.now() - t0).toFixed(1)}ms)`);
+  } catch (e) {
+    console.error(`  FAIL ${name}:`, e.message || e);
+    throw e;
+  }
+}
+
+function specNames(listed) {
+  return listed.map((e) => (typeof e === 'string' ? e : e && e.name)).filter(Boolean);
+}
+
 export async function test() {
-  console.log('Testing Lemma WASM...');
+  console.log('Lemma WASM package tests\n');
+
+  const pkgPath = join(PROJECT_ROOT, 'pkg');
+  if (!existsSync(join(pkgPath, 'lemma.js'))) {
+    console.error('pkg/ missing. Run: cd engine && node wasm/build.js');
+    process.exit(1);
+  }
+
+  const importRegex = /from\s+['"](\.[^'"]+)['"]/g;
+  const pkgJson = JSON.parse(readFileSync(join(pkgPath, 'package.json'), 'utf-8'));
+  const publishedFiles = pkgJson.files || [];
+  for (const entry of ['lemma.js', 'lsp.js']) {
+    const src = readFileSync(join(pkgPath, entry), 'utf-8');
+    let match;
+    importRegex.lastIndex = 0;
+    while ((match = importRegex.exec(src)) !== null) {
+      const target = join(pkgPath, match[1]);
+      if (!existsSync(target)) {
+        throw new Error(`${entry} imports '${match[1]}' but file missing`);
+      }
+      const rel = match[1].replace(/^\.\//, '');
+      if (!publishedFiles.some((f) => rel === f || rel.startsWith(f + '/'))) {
+        throw new Error(`${entry}: '${match[1]}' not in package.json files`);
+      }
+    }
+  }
+  for (const entry of publishedFiles) {
+    if (!existsSync(join(pkgPath, entry))) {
+      throw new Error(`package.json lists "${entry}" but missing in pkg/`);
+    }
+  }
+  console.log('  ok  package graph (imports + npm files)\n');
+
+  const { initSync, Engine } = await import('../pkg/lemma.js');
+  initSync({ module: readFileSync(join(pkgPath, 'lemma_bg.wasm')) });
+  console.log('  ok  initSync + Engine\n');
+
+  const engine = new Engine();
+  let passed = 0;
+
+  const run = async (title, fn) => {
+    await case_(title, fn);
+    passed++;
+  };
 
   try {
-    // Check if pkg directory exists
-    const pkgPath = join(PROJECT_ROOT, 'pkg');
-    if (!existsSync(join(pkgPath, 'lemma.js'))) {
-      console.log('WASM not built. Run: node wasm/build.js');
-      process.exit(1);
-    }
-
-    // Verify all imports in lemma.js resolve to files in pkg/
-    const lemmaJs = readFileSync(join(pkgPath, 'lemma.js'), 'utf-8');
-    const importRegex = /from\s+['"](\.[^'"]+)['"]/g;
-    let match;
-    while ((match = importRegex.exec(lemmaJs)) !== null) {
-      const importPath = join(pkgPath, match[1]);
-      if (!existsSync(importPath)) {
-        throw new Error(`lemma.js imports '${match[1]}' but file not found at ${importPath} -- add it to package.json "files"`);
-      }
-    }
-    console.log('✓ All JS imports resolve to existing files');
-
-    // Verify all imports would be included in the published npm package.
-    // Locally files exist because wasm-pack created them, but npm only
-    // ships what's listed in package.json "files". This catches the class
-    // of bug where tests pass locally but production fails with
-    // "Could not resolve ..." errors.
-    const pkgJson = JSON.parse(readFileSync(join(pkgPath, 'package.json'), 'utf-8'));
-    const publishedFiles = pkgJson.files || [];
-    importRegex.lastIndex = 0;
-    while ((match = importRegex.exec(lemmaJs)) !== null) {
-      const rel = match[1].replace(/^\.\//, '');
-      const covered = publishedFiles.some(f => rel === f || rel.startsWith(f + '/'));
-      if (!covered) {
-        throw new Error(
-          `lemma.js imports '${match[1]}' which exists on disk but is NOT listed in package.json "files" -- ` +
-          `npm publish will exclude it. Add "${rel.split('/')[0]}" to the files array in build.js`
-        );
-      }
-    }
-    console.log('✓ All JS imports covered by package.json "files"');
-
-    // Verify every entry in package.json "files" actually exists on disk.
-    // Catches phantom entries that npm would silently skip, hiding missing
-    // artifacts from consumers.
-    for (const entry of publishedFiles) {
-      const entryPath = join(pkgPath, entry);
-      if (!existsSync(entryPath)) {
-        throw new Error(
-          `package.json "files" lists "${entry}" but it does not exist in pkg/ -- ` +
-          `remove it from the files array in build.js or fix the build to produce it`
-        );
-      }
-    }
-    console.log('✓ All package.json "files" entries exist on disk');
-
-    // Import the JS bindings
-    const { WasmEngine, initSync } = await import('../pkg/lemma.js');
-
-    // Load the WASM module
-    const wasmPath = join(pkgPath, 'lemma_bg.wasm');
-    const wasmBytes = readFileSync(wasmPath);
-
-    // Initialize WASM synchronously
-    initSync({ module: wasmBytes });
-    console.log('✓ WASM initialized successfully');
-
-    // Test 1: Engine creation
-    const engine = new WasmEngine();
-    console.log('✓ Engine created successfully');
-
-    // Test 2: Add simple spec
-    const addResult = await engine.addLemmaFile(`
-      spec test
+    await run('load + run shape + double rule', async () => {
+      await engine.load(
+        `spec test
       fact x: 10
-      rule double: x * 2
-    `, 'test.lemma');
+      rule double: x * 2`,
+        'test.lemma'
+      );
+      const r = runEx(engine, 'test', [], {}, null);
+      assertResponseShape(r, 'test');
+      assert(Object.keys(r.results).includes('double'), `keys: ${Object.keys(r.results)}`);
+      assert(opIsValue(r.results.double.result), 'double Value');
+      assert(literalNumberValue(r.results.double.result.value) === 20, 'double=20');
+    });
 
-    const addParsed = JSON.parse(addResult);
-    if (!addParsed.success) {
-      throw new Error('Failed to add spec: ' + JSON.stringify(addParsed));
-    }
-    console.log('✓ Spec added successfully');
+    await run('list includes test spec', async () => {
+      const listed = engine.list();
+      assert(Array.isArray(listed) && listed.length >= 1, `list: ${JSON.stringify(listed)}`);
+      assert(specNames(listed).includes('test'), `names: ${specNames(listed)}`);
+    });
 
-    // Test 3: Evaluate spec
-    const evalResult = engine.evaluate('test', '', '[]', '{}');
-    const evalParsed = JSON.parse(evalResult);
-    if (!evalParsed.success) {
-      throw new Error('Failed to evaluate spec: ' + JSON.stringify(evalParsed));
-    }
-    console.log('✓ Spec evaluated successfully');
+    await run('show → spec/facts/rules', async () => {
+      const schema = engine.show('test', null);
+      assert(schema.spec === 'test');
+      assert(schema.facts && typeof schema.facts === 'object');
+      assert(schema.rules && typeof schema.rules === 'object');
+      assert(Object.keys(schema.facts).includes('x'));
+      assert(Object.keys(schema.rules).includes('double'));
+    });
 
-    // Test 4: List specs
-    const listResult = engine.listSpecs();
-    const listParsed = JSON.parse(listResult);
-    if (!listParsed.success || listParsed.specs.length === 0) {
-      throw new Error('Failed to list specs: ' + JSON.stringify(listParsed));
-    }
-    console.log('✓ Specs listed successfully');
+    await run('run rule filter', async () => {
+      const r = runEx(engine, 'test', ['double'], {}, null);
+      assert(Object.keys(r.results).length === 1 && r.results.double, 'filtered');
+    });
 
-    // Test 5: Complex spec
-    const complexResult = await engine.addLemmaFile(`
-      spec pricing
-      fact quantity: 25
-      fact is_vip: false
+    await run('format()', async () => {
+      const out = engine.format('spec fmt\nfact a: 1\nrule r: a', null);
+      assert(typeof out === 'string' && out.includes('spec fmt'));
+    });
 
-      rule discount: 0%
-        unless quantity >= 10 then 10%
-        unless quantity >= 50 then 20%
-        unless is_vip then 25%
-
-      rule price: 200 - discount
-    `, 'pricing.lemma');
-
-    const complexParsed = JSON.parse(complexResult);
-    if (!complexParsed.success) {
-      throw new Error('Failed to add complex spec: ' + JSON.stringify(complexParsed));
-    }
-    console.log('✓ Complex spec added successfully');
-
-    // Test 6: Evaluation with facts (as JSON object)
-    const factsResult = engine.evaluate('pricing', '', '[]', JSON.stringify({
-      quantity: 100,
-      is_vip: true
-    }));
-    const factsParsed = JSON.parse(factsResult);
-    if (!factsParsed.success) {
-      throw new Error('Failed to evaluate with facts: ' + JSON.stringify(factsParsed));
-    }
-    console.log('✓ Evaluation with facts successful');
-
-    // Test 7: Various fact value types
-    const typesResult = await engine.addLemmaFile(`
-      spec type_test
+    await run('fact overrides', async () => {
+      await engine.load(
+        `spec type_test
       fact number_fact: 42
       fact bool_fact: false
       fact string_fact: "hello"
       fact unit_fact: 100
       fact date_fact: 2024-01-15
+      rule double_number: number_fact * 2`,
+        'type_test.lemma'
+      );
+      const r = runEx(
+        engine,
+        'type_test',
+        [],
+        {
+          number_fact: 50,
+          bool_fact: true,
+          string_fact: 'world',
+          unit_fact: '200',
+          date_fact: '2024-12-25',
+        },
+        null
+      );
+      assert(literalNumberValue(r.results.double_number.result.value) === 100);
+    });
 
-      rule double_number: number_fact * 2
-    `, 'type_test.lemma');
+    await run('load parse errors', async () => {
+      let threw = false;
+      try {
+        await engine.load('spec invalid\nfact x :', 'bad.lemma');
+      } catch (e) {
+        threw = true;
+        const msgs = Array.isArray(e) ? e : [String(e)];
+        assert(msgs.some((m) => m && m.includes('Parse')));
+      }
+      assert(threw);
+    });
 
-    const typesParsed = JSON.parse(typesResult);
-    if (!typesParsed.success) {
-      throw new Error('Failed to add type test spec: ' + JSON.stringify(typesParsed));
-    }
+    await run('run missing spec', async () => {
+      let threw = false;
+      try {
+        runEx(engine, '__nope__', [], {}, null);
+      } catch {
+        threw = true;
+      }
+      assert(threw);
+    });
 
-    // Test with various types in the object
-    const typedFactsResult = engine.evaluate('type_test', '', '[]', JSON.stringify({
-      number_fact: 50,
-      bool_fact: true,
-      string_fact: "world",
-      unit_fact: "200",
-      date_fact: "2024-12-25"
-    }));
+    await run('fact_values not object', async () => {
+      let threw = false;
+      try {
+        engine.run('test', [], 'not-an-object', null);
+      } catch {
+        threw = true;
+      }
+      assert(threw);
+    });
 
-    const typedFactsParsed = JSON.parse(typedFactsResult);
-    if (!typedFactsParsed.success) {
-      throw new Error('Failed to evaluate with typed facts: ' + JSON.stringify(typedFactsParsed));
-    }
-
-    // Verify the overrides worked by checking the rule result
-    const doubleRule = typedFactsParsed.response?.results?.double_number;
-    if (!doubleRule) {
-      throw new Error('double_number rule not found in results');
-    }
-    if (!doubleRule.result || !opIsValue(doubleRule.result)) {
-      throw new Error(`Expected double_number to be a value result, got ${JSON.stringify(doubleRule.result)}`);
-    }
-    const lit = doubleRule.result.value;
-    const type = literalPrimitiveType(lit);
-    if (type !== 'number') {
-      throw new Error(`Expected type to be number, got ${type}`);
-    }
-    const num = literalNumberValue(lit);
-    if (num !== 100) {
-      throw new Error(`Expected double_number to be 100 (50*2), got ${num}`);
-    }
-    console.log('✓ Type handling in facts object successful');
-
-    // Test 8: Error handling - parse error
-    const parseErrorResult = await engine.addLemmaFile('spec invalid\nfact x :', 'invalid.lemma');
-    const parseErrorParsed = JSON.parse(parseErrorResult);
-    if (parseErrorParsed.success) {
-      throw new Error('Expected parse error but got success');
-    }
-    const parseErrors = parseErrorParsed.errors || [parseErrorParsed.error];
-    if (!parseErrors.some(e => e && e.includes('Parse Error'))) {
-      throw new Error('Expected parse error message, got: ' + JSON.stringify(parseErrors));
-    }
-    console.log('✓ Parse error handling successful');
-
-    // Test 9: Error handling - evaluate non-existent spec
-    const nonExistentResult = engine.evaluate('nonexistent', '', '[]', '{}');
-    const nonExistentParsed = JSON.parse(nonExistentResult);
-    if (nonExistentParsed.success) {
-      throw new Error('Expected error for non-existent spec but got success');
-    }
-    console.log('✓ Non-existent spec error handling successful');
-
-    // Test 10: Error handling - invalid JSON in facts
-    const invalidJsonResult = engine.evaluate('test', '', '[]', 'not json');
-    const invalidJsonParsed = JSON.parse(invalidJsonResult);
-    if (invalidJsonParsed.success) {
-      throw new Error('Expected error for invalid JSON but got success');
-    }
-    console.log('✓ Invalid JSON error handling successful');
-
-    // Test 11: Veto scenario
-    const vetoResult = await engine.addLemmaFile(`
-      spec veto_test
+    await run('veto sqrt(-1)', async () => {
+      await engine.load(
+        `spec veto_test
       fact x: 10
-      rule bad_sqrt: sqrt(-1)
-    `, 'veto_test.lemma');
-    const vetoAddParsed = JSON.parse(vetoResult);
-    if (!vetoAddParsed.success) {
-      throw new Error('Failed to add veto test spec: ' + JSON.stringify(vetoAddParsed));
-    }
-    const vetoEvalResult = engine.evaluate('veto_test', '', '[]', '{}');
-    const vetoEvalParsed = JSON.parse(vetoEvalResult);
-    if (!vetoEvalParsed.success) {
-      throw new Error('Failed to evaluate veto test: ' + JSON.stringify(vetoEvalParsed));
-    }
-    const badSqrtRule = vetoEvalParsed.response?.results?.bad_sqrt;
-    if (!badSqrtRule) {
-      throw new Error('bad_sqrt rule not found in results');
-    }
-    if (!badSqrtRule.result || !opIsVeto(badSqrtRule.result)) {
-      throw new Error('Expected veto result, got: ' + JSON.stringify(badSqrtRule.result));
-    }
-    console.log('✓ Veto handling successful');
+      rule bad_sqrt: sqrt(-1)`,
+        'veto.lemma'
+      );
+      const r = runEx(engine, 'veto_test', [], {}, null);
+      assert(opIsVeto(r.results.bad_sqrt.result));
+    });
 
-    // Test 12: Missing facts
-    const missingFactsResult = await engine.addLemmaFile(`
-      spec missing_test
+    await run('missing fact veto', async () => {
+      await engine.load(
+        `spec missing_test
       fact x: [number]
       fact y: [number]
-      rule sum: x + y
-    `, 'missing_test.lemma');
-    const missingAddParsed = JSON.parse(missingFactsResult);
-    if (!missingAddParsed.success) {
-      throw new Error('Failed to add missing facts test spec: ' + JSON.stringify(missingAddParsed));
-    }
-    const missingEvalResult = engine.evaluate('missing_test', '', '[]', JSON.stringify({ x: 10 }));
-    const missingEvalParsed = JSON.parse(missingEvalResult);
-    if (!missingEvalParsed.success) {
-      throw new Error('Failed to evaluate missing facts test: ' + JSON.stringify(missingEvalParsed));
-    }
-    const sumRule = missingEvalParsed.response?.results?.sum;
-    if (!sumRule) {
-      throw new Error('sum rule not found in results');
-    }
-    // If fact 'y' is missing, the rule should be vetoed with a message
-    if (!sumRule.result || !opIsVeto(sumRule.result)) {
-      throw new Error('Expected veto result due to missing fact, got: ' + JSON.stringify(sumRule.result));
-    }
-    const vetoMsg = sumRule.result.veto;
-    if (typeof vetoMsg !== 'string' || !vetoMsg.includes('y')) {
-      throw new Error('Expected veto message to mention missing fact "y", got: ' + JSON.stringify(vetoMsg));
-    }
-    console.log('✓ Missing facts handling successful');
+      rule sum: x + y`,
+        'miss.lemma'
+      );
+      const r = runEx(engine, 'missing_test', [], { x: 10 }, null);
+      assert(opIsVeto(r.results.sum.result));
+      assert(String(r.results.sum.result.veto).includes('y'));
+    });
 
-    // Test 13: Operations array
-    const opsResult = engine.evaluate('test', '', '[]', '{}');
-    const opsParsed = JSON.parse(opsResult);
-    if (!opsParsed.success) {
-      throw new Error('Failed to evaluate for operations test: ' + JSON.stringify(opsParsed));
-    }
-    const doubleRuleOps = opsParsed.response?.results?.double;
-    if (!doubleRuleOps) {
-      throw new Error('double rule not found in results');
-    }
-    // Operations are now skipped in serialization, so we can't test them
-    // Just verify the rule exists and has a result
-    if (!doubleRuleOps.result) {
-      throw new Error('Expected result, got: ' + JSON.stringify(doubleRuleOps));
-    }
-    console.log('✓ Operations array present');
-
-    // Test 14: Units and percentages
-    const unitsResult = await engine.addLemmaFile(`
-      spec units_test
-      fact price: 100
-      fact discount: 10%
-      rule final_price: price * (1 - discount)
-    `, 'units_test.lemma');
-    const unitsAddParsed = JSON.parse(unitsResult);
-    if (!unitsAddParsed.success) {
-      throw new Error('Failed to add units test spec: ' + JSON.stringify(unitsAddParsed));
-    }
-    const unitsEvalResult = engine.evaluate('units_test', '', '[]', '{}');
-    const unitsEvalParsed = JSON.parse(unitsEvalResult);
-    if (!unitsEvalParsed.success) {
-      throw new Error('Failed to evaluate units test: ' + JSON.stringify(unitsEvalParsed));
-    }
-    const finalPriceRule = unitsEvalParsed.response?.results?.final_price;
-    if (!finalPriceRule || !finalPriceRule.result) {
-      throw new Error('final_price rule or result not found');
-    }
-    console.log('✓ Units and percentages handling successful');
-
-    // Test 15: Scale unit conversion via `in`
-    const scaleConvDoc = await engine.addLemmaFile(`
-      spec scale_conv
+    await run('scale eur→usd', async () => {
+      await engine.load(
+        `spec scale_conv
       type money: scale
         -> unit eur 1
         -> unit usd 1.19
+      rule price_usd: 100 eur in usd`,
+        'sc.lemma'
+      );
+      const r = runEx(engine, 'scale_conv', [], {}, null);
+      const sc = literalScaleValue(r.results.price_usd.result.value);
+      assert(sc && sc.unit === 'usd' && sc.amount === 119);
+    });
 
-      rule price_usd: 100 eur in usd
-    `, 'scale_conv.lemma');
-    const scaleConvParsed = JSON.parse(scaleConvDoc);
-    if (!scaleConvParsed.success) {
-      throw new Error('Failed to add scale conversion spec: ' + JSON.stringify(scaleConvParsed));
-    }
-    const scaleConvEval = JSON.parse(engine.evaluate('scale_conv', '', '[]', '{}'));
-    if (!scaleConvEval.success) {
-      throw new Error('Failed to evaluate scale conversion spec: ' + JSON.stringify(scaleConvEval));
-    }
-    const priceUsdRule = scaleConvEval.response?.results?.price_usd;
-    if (!priceUsdRule || !priceUsdRule.result || !opIsValue(priceUsdRule.result)) {
-      throw new Error('Expected price_usd to be a value result, got: ' + JSON.stringify(priceUsdRule));
-    }
-    const scaleLit = priceUsdRule.result.value;
-    const scaleParsed = literalScaleValue(scaleLit);
-    if (!scaleParsed) {
-      throw new Error('Expected scale literal, got: ' + JSON.stringify(scaleLit));
-    }
-    if (scaleParsed.unit !== 'usd') {
-      throw new Error(`Expected unit usd, got ${scaleParsed.unit}`);
-    }
-    if (scaleParsed.amount !== 119) {
-      throw new Error(`Expected amount 119, got ${scaleParsed.amount}`);
-    }
-    console.log('✓ Scale unit conversion via `in` works');
+    await run('multiple specs', async () => {
+      await engine.load('spec spec1\nfact x: 1', 's1.lemma');
+      await engine.load('spec spec2\nfact y: 2', 's2.lemma');
+      assert(specNames(engine.list()).length >= 2);
+    });
 
-    // Test 16: Empty facts object vs empty string
-    const emptyFacts1 = engine.evaluate('test', '', '[]', '{}');
-    const emptyFacts2 = engine.evaluate('test', '', '[]', '');
-    const emptyParsed1 = JSON.parse(emptyFacts1);
-    const emptyParsed2 = JSON.parse(emptyFacts2);
-    if (!emptyParsed1.success || !emptyParsed2.success) {
-      throw new Error('Empty facts should work: ' + JSON.stringify({ emptyParsed1, emptyParsed2 }));
-    }
-    console.log('✓ Empty facts handling successful');
-
-    // Test 17: Multiple specs
-    const spec1Result = await engine.addLemmaFile('spec spec1\nfact x: 1', 'spec1.lemma');
-    const spec2Result = await engine.addLemmaFile('spec spec2\nfact y: 2', 'spec2.lemma');
-    if (!JSON.parse(spec1Result).success || !JSON.parse(spec2Result).success) {
-      throw new Error('Failed to add multiple specs');
-    }
-    const listAfterMultiple = JSON.parse(engine.listSpecs());
-    if (!listAfterMultiple.success || listAfterMultiple.specs.length < 2) {
-      throw new Error('Expected multiple specs, got: ' + JSON.stringify(listAfterMultiple));
-    }
-    console.log('✓ Multiple specs handling successful');
-
-    console.log('\n✅ All WASM tests passed!');
-
-  } catch (error) {
-    console.error('\n❌ WASM test failed:', error.message);
+    console.log(`\nAll ${passed} cases passed.`);
+  } catch {
+    console.error('\nRebuild: cd engine && node wasm/build.js');
     process.exit(1);
   }
 }
 
-// CLI interface
-if (import.meta.url === `file://${process.argv[1]}`) {
-  await test();
-}
+const isMain =
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+if (isMain) await test();

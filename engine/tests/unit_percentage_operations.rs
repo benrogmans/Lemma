@@ -31,7 +31,7 @@ fn test_unit_subtract_percentage() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("pricing", None, &now, vec![], HashMap::new())
+        .run("pricing", Some(&now), HashMap::new())
         .map_err(|e| vec![e])?;
 
     // Check discount rule result
@@ -94,7 +94,7 @@ fn test_unit_add_percentage() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("tax_calculation", None, &now, vec![], HashMap::new())
+        .run("tax_calculation", Some(&now), HashMap::new())
         .map_err(|e| vec![e])?;
 
     let result = response
@@ -148,7 +148,7 @@ fn test_various_unit_percentage_operations() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("unit_percentage_ops", None, &now, vec![], HashMap::new())
+        .run("unit_percentage_ops", Some(&now), HashMap::new())
         .map_err(|e| vec![e])?;
 
     // Check increased (50 + 20% = 60)
@@ -247,7 +247,7 @@ fn test_complex_discount_scenario() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("complex_pricing", None, &now, vec![], HashMap::new())
+        .run("complex_pricing", Some(&now), HashMap::new())
         .map_err(|e| vec![e])?;
 
     // Check after_bulk (1000 - 15% = 850)
@@ -331,7 +331,7 @@ fn test_percentage_arithmetic() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("percentage_ops", None, &now, vec![], HashMap::new())
+        .run("percentage_ops", Some(&now), HashMap::new())
         .map_err(|e| vec![e])?;
 
     // Check combined_discount (5% + 10% = 15%)
@@ -472,7 +472,7 @@ fn test_averaging_percentages() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .evaluate("avg_percentages", None, &now, vec![], HashMap::new())
+        .run("avg_percentages", Some(&now), HashMap::new())
         .map_err(|e| vec![e])?;
 
     // Check sum (10% + 20% + 15% = 45%)

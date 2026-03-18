@@ -3,7 +3,8 @@ name = "lsp"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "Language Server Protocol implementation for Lemma"
+description = "Language Server Protocol server for Lemma specifications"
+keywords = ["lemma", "lsp", "language-server"]
 license.workspace = true
 repository.workspace = true
 

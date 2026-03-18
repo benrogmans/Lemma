@@ -13,15 +13,16 @@ fn format_details(error_type: &str, details: &ErrorDetails, label_message: &str)
 
     let mut output = Vec::new();
 
-    let spec_name = details
-        .spec_context
-        .as_ref()
-        .map(|s| s.name.as_str())
-        .unwrap_or("?");
-    let header = format!(
-        "{}: {} (in spec '{}', file {}:{})",
-        error_type, details.message, spec_name, src.attribute, src.span.line
-    );
+    let header = match details.spec_context.as_ref() {
+        Some(spec) => format!(
+            "{}: {} (in spec '{}', file {}:{})",
+            error_type, details.message, spec.name, src.attribute, src.span.line
+        ),
+        None => format!(
+            "{}: {} ({}:{})",
+            error_type, details.message, src.attribute, src.span.line
+        ),
+    };
 
     let mut report = Report::build(ReportKind::Error, &src.attribute, src.span.start)
         .with_message(header)

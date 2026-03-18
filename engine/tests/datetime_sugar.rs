@@ -46,9 +46,7 @@ fn eval_rule_bool(
     effective: &DateTimeValue,
     facts: HashMap<String, String>,
 ) -> bool {
-    let response = engine
-        .evaluate(spec_name, None, effective, vec![], facts)
-        .unwrap();
+    let response = engine.run(spec_name, Some(effective), facts).unwrap();
     let rule_result = response
         .results
         .values()
@@ -67,9 +65,7 @@ fn eval_rule_date(
     effective: &DateTimeValue,
     facts: HashMap<String, String>,
 ) -> lemma::LiteralValue {
-    let response = engine
-        .evaluate(spec_name, None, effective, vec![], facts)
-        .unwrap();
+    let response = engine.run(spec_name, Some(effective), facts).unwrap();
     response
         .results
         .values()

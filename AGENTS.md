@@ -92,8 +92,8 @@ High-level flow:
 
 6. **Engine** (`engine/src/engine.rs`)  
    - **Engine** holds specs, sources, and **execution plans**.  
-   - `add_lemma_files` → parse, resolve registry references, then `plan(...)` all specs at once; on success, stores execution plans.  
-   - `evaluate` runs the plan; no spec parsing during evaluate.
+   - `load` / `load_from_paths` → parse; after registry resolution, `plan(...)` all specs; on success, stores execution plans.  
+   - `run` / `run_plan` evaluate; no spec parsing during run.
 
 7. **Errors** (`engine/src/error.rs`)  
    - **Error**: Parsing, Validation (semantic/planning, including circular dependency), Inversion, Registry, ResourceLimitExceeded, Request (invalid API request, e.g. spec not found).  

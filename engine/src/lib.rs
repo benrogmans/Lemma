@@ -8,25 +8,22 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use lemma::Engine;
+//! use lemma::{Engine, LoadSource};
 //! use std::collections::HashMap;
 //!
 //! let mut engine = Engine::new();
 //!
 //! // Load Lemma code
-//! let mut files = HashMap::new();
-//! files.insert("example.lemma".to_string(), r#"
+//! engine.load(r#"
 //!     spec example
 //!     fact price: 100
 //!     fact quantity: 5
 //!     rule total: price * quantity
-//! "#.to_string());
-//!
-//! engine.add_lemma_files(files).expect("failed to add files");
+//! "#, LoadSource::Labeled("example.lemma")).expect("failed to load");
 //!
 //! // Evaluate the spec (all rules, no fact values)
 //! let now = lemma::DateTimeValue::now();
-//! let response = engine.evaluate("example", None, &now, vec![], HashMap::new()).unwrap();
+//! let response = engine.run("example", Some(&now), HashMap::new()).unwrap();
 //! ```
 //!
 //! ## Core Concepts
@@ -61,11 +58,12 @@ pub mod parsing;
 pub mod planning;
 pub mod registry;
 pub mod serialization;
+pub mod spec_id;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-pub use engine::{Context, Engine};
+pub use engine::{Context, Engine, LoadSource};
 pub use error::Error;
 pub use evaluation::operations::{
     ComputationKind, OperationKind, OperationRecord, OperationResult,
@@ -92,3 +90,4 @@ pub use registry::LemmaBase;
 pub use registry::{
     resolve_registry_references, Registry, RegistryBundle, RegistryError, RegistryErrorKind,
 };
+pub use spec_id::parse_spec_id;

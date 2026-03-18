@@ -142,6 +142,7 @@ pub fn invert(
         Error::request(
             format!("Rule not found: {}.{}", plan.spec_name, rule_name),
             None::<String>,
+            None,
         )
     })?;
 
@@ -426,9 +427,7 @@ mod tests {
         code: &str,
         source: &str,
     ) -> Result<(), Vec<crate::Error>> {
-        let files: std::collections::HashMap<String, String> =
-            std::iter::once((source.to_string(), code.to_string())).collect();
-        engine.add_lemma_files(files)
+        engine.load(code, crate::LoadSource::Labeled(source))
     }
 
     #[test]

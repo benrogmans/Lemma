@@ -8,13 +8,13 @@ You can compile Lemma without a registry for complete isolation, or implement yo
 
 ## The engine never fetches
 
-The `Engine` does not hold a registry and never performs network calls. External `@...` references must be resolved before calling `add_lemma_files`:
+The `Engine` does not hold a registry and never performs network calls. External `@...` references must be resolved before loading into the engine:
 
-- **CLI:** `lemma get` resolves `@` references and caches them in `.deps/` inside the workspace directory. All other commands (`run`, `server`, `hash`, `show`, `list`, `mcp`) load cached deps as regular `.lemma` files. Since there is no lock file, `.deps/` should be checked into version control.
-- **Crate users:** Call `resolve_registry_references` to resolve deps, then include the resulting source in the file map passed to `add_lemma_files`.
-- **WASM:** Resolve deps via `resolve_registry_references` with the browser `fetch()` fetcher, then pass everything to `add_lemma_files`.
+- **CLI:** `lemma get` resolves `@` references and caches them in `.deps/` inside the workspace directory. All other commands (`run`, `server`, `hash`, `show`, `list`, `mcp`) load cached deps via `load_from_paths` or `load` in a loop. Since there is no lock file, `.deps/` should be checked into version control.
+- **Crate users:** Call `resolve_registry_references` to resolve deps, then pass the resulting source to `engine.load(code, attribute?)` (e.g. in a loop) or use `load_from_paths`.
+- **WASM:** Resolve deps via `resolve_registry_references` with the browser `fetch()` fetcher, then pass each bundle to `engine.load()` in a loop.
 
-If `@...` references are not resolved before `add_lemma_files`, planning will report them as missing specs.
+If `@...` references are not resolved before loading, planning will report them as missing specs.
 
 ---
 
@@ -26,8 +26,8 @@ Implement `lemma::Registry`. All methods receive the identifier **without** the 
 
 | Method | Purpose |
 |--------|---------|
-| `fetch_specs(&self, name) -> Result<RegistryBundle, RegistryError>` | Fetch all temporal versions for a `spec @...` reference. |
-| `fetch_types(&self, name) -> Result<RegistryBundle, RegistryError>` | Fetch all temporal versions for a `type ... from @...` reference. |
+| `get_specs(&self, name) -> Result<RegistryBundle, RegistryError>` | Download all temporal versions for a `spec @...` reference. |
+| `get_types(&self, name) -> Result<RegistryBundle, RegistryError>` | Download all temporal versions for a `type ... from @...` reference. |
 | `url_for_id(&self, name, effective) -> Option<String>` | Optional: return a URL for editor navigation. |
 
 The trait is **async** and requires `Send + Sync`. On WASM the future is `?Send`.
@@ -67,7 +67,9 @@ resolve_registry_references(&mut context, &mut sources, &registry, &ResourceLimi
     .await?;
 
 let mut engine = Engine::new();
-engine.add_lemma_files(sources)?;
+for (path, code) in sources {
+    engine.load(&code, Some(&path))?;
+}
 ```
 
 ---
@@ -97,5 +99,5 @@ When the `registry` feature is enabled, **LemmaBase** is available. It resolves 
 | Goal | What to do |
 |------|------------|
 | Implement a registry | Implement the `Registry` trait. |
-| Resolve dependencies | Call `resolve_registry_references`, then pass resolved sources to `engine.add_lemma_files`. |
-| Use no registry | Pass all files (including deps) directly to `add_lemma_files`. Unresolved `@...` refs fail during planning. |
+| Resolve dependencies | Call `resolve_registry_references`, then pass resolved sources to `engine.load()` (in a loop) or `load_from_paths`. |
+| Use no registry | Pass all files to `engine.load()` (in a loop) or `load_from_paths`. Unresolved `@...` refs fail during planning. |

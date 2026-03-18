@@ -256,13 +256,17 @@ lemma mcp --admin     # enable spec creation
 
 ### WebAssembly
 
-Evaluate specs in the browser or at the edge:
-
 ```bash
 npm install @benrogmans/lemma-engine
 ```
 
-See [WASM documentation](documentation/wasm.md).
+```javascript
+import { init, Engine } from '@benrogmans/lemma-engine';
+await init();
+const engine = new Engine();
+```
+
+[documentation/wasm.md](documentation/wasm.md)
 
 ### Docker
 
