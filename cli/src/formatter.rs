@@ -37,7 +37,11 @@ impl Formatter {
         }
 
         if response.results.len() == 1 {
-            let result = response.results.values().next().unwrap();
+            let result = response
+                .results
+                .values()
+                .next()
+                .expect("BUG: len==1 but no values");
             return format!("{}\n", self.format_result_inline(&result.result));
         }
 
@@ -72,7 +76,7 @@ impl Formatter {
         output
     }
 
-    pub fn format_spec_inspection(&self, plan: &ExecutionPlan, hash: Option<&str>) -> String {
+    pub fn format_spec_inspection(&self, plan: &ExecutionPlan, hash: &str) -> String {
         let local_fact_paths: Vec<&FactPath> = plan
             .facts
             .keys()
@@ -114,9 +118,7 @@ impl Formatter {
             }
         }
 
-        if let Some(h) = hash {
-            content_lines.push(format!("hash: {}", h));
-        }
+        content_lines.push(format!("hash: {}", hash));
 
         table.add_row(vec![
             Cell::new(content_lines.join("\n")).set_alignment(CellAlignment::Left)

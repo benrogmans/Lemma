@@ -60,7 +60,7 @@ impl WasmEngine {
         let effective_dt = effective
             .as_ref()
             .filter(|s| !s.trim().is_empty())
-            .and_then(|s| DateTimeValue::parse(s))
+            .and_then(|s| s.parse::<DateTimeValue>().ok())
             .unwrap_or_else(DateTimeValue::now);
 
         let rule_names = parse_rule_names(&rule_names).map_err(js_err)?;
@@ -87,17 +87,17 @@ impl WasmEngine {
     }
 
     /// Planning schema for the spec ([`crate::planning::execution_plan::SpecSchema`]). Throws on error.
-    #[wasm_bindgen(js_name = show)]
-    pub fn show(&self, spec: &str, effective: Option<String>) -> Result<JsValue, JsValue> {
+    #[wasm_bindgen(js_name = schema)]
+    pub fn schema(&self, spec: &str, effective: Option<String>) -> Result<JsValue, JsValue> {
         let effective_dt = effective
             .as_ref()
             .filter(|s| !s.trim().is_empty())
-            .and_then(|s| DateTimeValue::parse(s))
+            .and_then(|s| s.parse::<DateTimeValue>().ok())
             .unwrap_or_else(DateTimeValue::now);
 
         let engine = self.engine.borrow();
         let plan = engine
-            .plan(spec, Some(&effective_dt))
+            .get_plan(spec, Some(&effective_dt))
             .map_err(|e| js_err(format_error(&e)))?;
         let schema = plan.schema();
 
@@ -143,10 +143,10 @@ fn serialize_engine_json<T: Serialize>(v: &T) -> Result<JsValue, JsValue> {
     let s = serde_json::to_string(v)
         .map_err(|e| js_err(format!("BUG: serde_json::to_string failed: {}", e)))?;
     js_sys::JSON::parse(&s).map_err(|e| {
-        js_err(format!(
-            "BUG: JSON.parse failed: {}",
-            e.as_string().unwrap_or_default()
-        ))
+        let detail = e
+            .as_string()
+            .unwrap_or_else(|| format!("(non-string error from JSON.parse)"));
+        js_err(format!("BUG: JSON.parse failed: {}", detail))
     })
 }
 
@@ -215,6 +215,6 @@ fn format_error(error: &Error) -> String {
             }
             msg
         }
-        Error::Request(details) => format!("Request Error: {}", details.message),
+        Error::Request { details, .. } => format!("Request Error: {}", details.message),
     }
 }

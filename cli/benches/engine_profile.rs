@@ -18,7 +18,9 @@ fn load_engine() -> Engine {
     }
 
     let mut engine = Engine::new();
-    engine.load_from_paths(&paths).expect("specs must load");
+    engine
+        .load_from_paths(&paths, false)
+        .expect("specs must load");
     engine
 }
 
@@ -53,7 +55,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 
     // plan clone + with_fact_values (fact parsing only, no eval)
     group.bench_function("fact_parsing", |b| {
-        let base_plan = engine.plan(spec, Some(&now)).expect("plan exists");
+        let base_plan = engine.get_plan(spec, Some(&now)).expect("plan exists");
         b.iter(|| {
             let plan = base_plan
                 .clone()
@@ -65,7 +67,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 
     // just the plan clone (no fact parsing, no eval)
     group.bench_function("plan_clone", |b| {
-        let base_plan = engine.plan(spec, Some(&now)).expect("plan exists");
+        let base_plan = engine.get_plan(spec, Some(&now)).expect("plan exists");
         b.iter(|| {
             let plan = base_plan.clone();
             std::hint::black_box(plan);

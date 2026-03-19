@@ -30,13 +30,12 @@ pub struct RuleResultJson {
     pub proof: Option<serde_json::Value>,
 }
 
-/// Evaluation response envelope with spec identity, effective datetime, and content hash.
+/// Evaluation response envelope with spec identity, effective datetime, and plan hash.
 #[derive(Debug, Serialize)]
 pub struct EvaluationEnvelope {
     pub spec: String,
     pub effective: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hash: Option<String>,
+    pub hash: String,
     pub result: IndexMap<String, RuleResultJson>,
 }
 
@@ -46,13 +45,13 @@ pub fn convert_response_with_hash(
     include_proofs: bool,
     spec_name: &str,
     effective: &lemma::DateTimeValue,
-    hash: Option<&str>,
+    hash: &str,
 ) -> EvaluationEnvelope {
     let result = convert_response(response, include_proofs);
     EvaluationEnvelope {
         spec: spec_name.to_string(),
         effective: effective.to_string(),
-        hash: hash.map(|h| h.to_string()),
+        hash: hash.to_string(),
         result,
     }
 }

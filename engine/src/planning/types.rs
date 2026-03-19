@@ -1,21 +1,28 @@
-//! Type registry for managing custom type definitions and resolution
+//! Per-slice type resolution for Lemma specs
 //!
-//! This module provides the `TypeResolver` (formerly TypeRegistry) which handles:
+//! This module provides `PerSliceTypeResolver` which handles:
 //! - Registering user-defined types for each spec
-//! - Resolving type hierarchies and inheritance chains
-//! - Detecting and preventing circular dependencies
+//! - Resolving type hierarchies and inheritance chains per temporal slice
+//! - Detecting and preventing circular type dependencies
 //! - Applying constraints to create final type specifications
+//!
+//! Cross-spec type imports are resolved via `Context.get_spec(name, resolve_at)`,
+//! ensuring each temporal slice sees the correct dependency version.
 
+use crate::engine::Context;
 use crate::error::Error;
-use crate::parsing::ast::{self as ast, CommandArg, LemmaSpec, Reference, TypeDef};
-use crate::planning::semantics::{self, LemmaType, TypeExtends, TypeSpecification};
+use crate::parsing::ast::FactValue as ParsedFactValue;
+use crate::parsing::ast::{self as ast, CommandArg, DateTimeValue, LemmaSpec, Reference, TypeDef};
+use crate::planning::semantics::{
+    self, LemmaType, TypeDefiningSpec, TypeExtends, TypeSpecification,
+};
 use crate::planning::validation::validate_type_specifications;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Fully resolved types for a single spec
-/// After resolution, all imports are inlined - specs are independent
+/// Fully resolved types for a single spec.
+/// After resolution, all imports are inlined — specs are independent.
 #[derive(Debug, Clone)]
 pub struct ResolvedSpecTypes {
     /// Named types: type_name -> fully resolved type
@@ -25,36 +32,72 @@ pub struct ResolvedSpecTypes {
     pub inline_type_definitions: HashMap<Reference, LemmaType>,
 
     /// Unit index: unit_name -> (resolved type, defining AST node if user-defined)
-    /// Built during resolution - if unit appears in multiple types, resolution fails.
+    /// Built during resolution — if unit appears in multiple types, resolution fails.
     /// TypeDef is kept for conflict detection (identity, extends-check, source location).
     /// Primitives (percent, permille) have no TypeDef.
     pub unit_index: HashMap<String, (LemmaType, Option<TypeDef>)>,
 }
 
-/// Registry for managing and resolving custom types
-///
-/// Types are organized per spec (keyed by Arc<LemmaSpec>) and support inheritance through parent references.
-/// The registry handles cycle detection and accumulates constraints through the inheritance chain.
-/// name_to_arc maps base spec name to the earliest Arc for that name (by effective_from) for cross-spec resolution.
-#[derive(Debug, Clone)]
-pub struct TypeResolver {
-    named_types: HashMap<Arc<LemmaSpec>, HashMap<String, TypeDef>>,
-    inline_type_definitions: HashMap<Arc<LemmaSpec>, HashMap<Reference, TypeDef>>,
-    /// Earliest spec Arc per base name, for cross-spec type resolution.
-    name_to_arc: HashMap<String, Arc<LemmaSpec>>,
+/// Resolve a primitive type name to its TypeSpecification.
+pub(crate) fn resolve_primitive_type(name: &str) -> Option<TypeSpecification> {
+    match name {
+        "boolean" => Some(TypeSpecification::boolean()),
+        "scale" => Some(TypeSpecification::scale()),
+        "number" => Some(TypeSpecification::number()),
+        "ratio" => Some(TypeSpecification::ratio()),
+        "text" => Some(TypeSpecification::text()),
+        "date" => Some(TypeSpecification::date()),
+        "time" => Some(TypeSpecification::time()),
+        "duration" => Some(TypeSpecification::duration()),
+        "percent" => Some(TypeSpecification::ratio()),
+        _ => None,
+    }
 }
 
-impl TypeResolver {
-    pub fn new() -> Self {
-        TypeResolver {
+/// Per-slice type resolver. Constructed for each `Graph::build` call.
+///
+/// Cross-spec type imports are resolved via `Context.get_spec(name, resolve_at)` so
+/// each temporal slice sees the dependency version active at that point.
+/// Named types are keyed by `Arc<LemmaSpec>` and support inheritance through parent references.
+/// The resolver handles cycle detection and accumulates constraints through the inheritance chain.
+#[derive(Debug, Clone)]
+pub(crate) struct PerSliceTypeResolver<'a> {
+    named_types: HashMap<Arc<LemmaSpec>, HashMap<String, TypeDef>>,
+    inline_type_definitions: HashMap<Arc<LemmaSpec>, HashMap<Reference, TypeDef>>,
+    context: &'a Context,
+    resolve_at: Option<DateTimeValue>,
+    plan_hashes: &'a super::PlanHashRegistry,
+    /// All spec arcs that have been registered, in registration order.
+    /// Includes specs without types (they still need a unit_index with primitive ratio units).
+    all_registered_specs: Vec<Arc<LemmaSpec>>,
+}
+
+impl<'a> PerSliceTypeResolver<'a> {
+    pub fn new(
+        context: &'a Context,
+        resolve_at: Option<DateTimeValue>,
+        plan_hashes: &'a super::PlanHashRegistry,
+    ) -> Self {
+        PerSliceTypeResolver {
             named_types: HashMap::new(),
             inline_type_definitions: HashMap::new(),
-            name_to_arc: HashMap::new(),
+            context,
+            resolve_at,
+            plan_hashes,
+            all_registered_specs: Vec::new(),
         }
     }
 
     /// Register all named types from a spec (skips inline types).
     pub fn register_all(&mut self, spec: &Arc<LemmaSpec>) -> Vec<Error> {
+        if !self
+            .all_registered_specs
+            .iter()
+            .any(|s| Arc::ptr_eq(s, spec))
+        {
+            self.all_registered_specs.push(Arc::clone(spec));
+        }
+
         let mut errors = Vec::new();
         for type_def in &spec.types {
             let type_name = match type_def {
@@ -81,64 +124,15 @@ impl TypeResolver {
         errors
     }
 
-    /// Resolve all named types for every spec and validate their specifications.
-    /// Produces an entry for every spec (even those without named types) because
-    /// every spec needs a unit_index containing at least the primitive ratio units.
-    pub fn resolve(
-        &self,
-        all_specs: impl IntoIterator<Item = Arc<LemmaSpec>>,
-    ) -> (HashMap<Arc<LemmaSpec>, ResolvedSpecTypes>, Vec<Error>) {
-        let mut result = HashMap::new();
-        let mut errors = Vec::new();
-
-        for spec_arc in all_specs {
-            let spec_arc = &spec_arc;
-            match self.resolve_named_types(spec_arc) {
-                Ok(resolved_types) => {
-                    for (type_name, lemma_type) in &resolved_types.named_types {
-                        let source = spec_arc
-                            .types
-                            .iter()
-                            .find(|td| match td {
-                                ast::TypeDef::Regular { name, .. }
-                                | ast::TypeDef::Import { name, .. } => name == type_name,
-                                ast::TypeDef::Inline { .. } => false,
-                            })
-                            .map(|td| td.source_location().clone())
-                            .unwrap_or_else(|| {
-                                unreachable!(
-                                    "BUG: resolved named type '{}' has no corresponding TypeDef in spec '{}'",
-                                    type_name, spec_arc.name
-                                )
-                            });
-                        let mut spec_errors = validate_type_specifications(
-                            &lemma_type.specifications,
-                            type_name,
-                            &source,
-                            Some(Arc::clone(spec_arc)),
-                        );
-                        errors.append(&mut spec_errors);
-                    }
-                    result.insert(Arc::clone(spec_arc), resolved_types);
-                }
-                Err(es) => errors.extend(es),
-            }
-        }
-
-        (result, errors)
-    }
-
-    /// Register a user-defined type for a given spec (keyed by Arc<LemmaSpec>).
-    /// Updates name_to_arc to keep the earliest spec per base name for cross-spec resolution.
+    /// Register a user-defined type for a given spec.
     pub fn register_type(&mut self, spec: &Arc<LemmaSpec>, def: TypeDef) -> Result<(), Error> {
-        self.name_to_arc
-            .entry(spec.name.clone())
-            .and_modify(|existing| {
-                if spec.effective_from() < existing.effective_from() {
-                    *existing = Arc::clone(spec);
-                }
-            })
-            .or_insert_with(|| Arc::clone(spec));
+        if !self
+            .all_registered_specs
+            .iter()
+            .any(|s| Arc::ptr_eq(s, spec))
+        {
+            self.all_registered_specs.push(Arc::clone(spec));
+        }
 
         let def_loc = def.source_location().clone();
         let spec_name = &spec.name;
@@ -179,9 +173,137 @@ impl TypeResolver {
         Ok(())
     }
 
-    /// Resolve all types for a certain spec (keyed by Arc<LemmaSpec>).
-    pub fn resolve_types(&self, spec: &Arc<LemmaSpec>) -> Result<ResolvedSpecTypes, Vec<Error>> {
-        self.resolve_types_internal(spec, true)
+    /// Register types from all specs transitively reachable from `spec` via type imports,
+    /// fact spec references, and fact type declarations with `from`.
+    pub fn register_dependency_types(&mut self, spec: &Arc<LemmaSpec>) -> Vec<Error> {
+        let mut errors = Vec::new();
+        let mut visited_spec_names: HashSet<String> = HashSet::new();
+        visited_spec_names.insert(spec.name.clone());
+        self.register_dependency_types_recursive(spec, &mut visited_spec_names, &mut errors);
+        errors
+    }
+
+    fn register_dependency_types_recursive(
+        &mut self,
+        spec: &Arc<LemmaSpec>,
+        visited: &mut HashSet<String>,
+        errors: &mut Vec<Error>,
+    ) {
+        for type_def in &spec.types {
+            if let TypeDef::Import { from, .. } = type_def {
+                self.try_register_dep_spec(&from.name, from.effective.as_ref(), visited, errors);
+            }
+        }
+
+        for fact in &spec.facts {
+            match &fact.value {
+                ParsedFactValue::SpecReference(spec_ref) => {
+                    self.try_register_dep_spec(
+                        &spec_ref.name,
+                        spec_ref.effective.as_ref(),
+                        visited,
+                        errors,
+                    );
+                }
+                ParsedFactValue::TypeDeclaration {
+                    from: Some(from_ref),
+                    ..
+                } => {
+                    self.try_register_dep_spec(
+                        &from_ref.name,
+                        from_ref.effective.as_ref(),
+                        visited,
+                        errors,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn try_register_dep_spec(
+        &mut self,
+        name: &str,
+        explicit_effective: Option<&DateTimeValue>,
+        visited: &mut HashSet<String>,
+        errors: &mut Vec<Error>,
+    ) {
+        if visited.contains(name) {
+            return;
+        }
+        visited.insert(name.to_string());
+
+        let at = explicit_effective.or(self.resolve_at.as_ref());
+        let dep_spec = match at {
+            Some(dt) => self.context.get_spec(name, dt),
+            None => self.context.specs_for_name(name).into_iter().next(),
+        };
+
+        if let Some(dep_spec) = dep_spec {
+            errors.extend(self.register_all(&dep_spec));
+            self.register_dependency_types_recursive(&dep_spec, visited, errors);
+        }
+    }
+
+    /// Resolve named types for all registered specs and validate their specifications.
+    /// Returns resolved types per spec and any validation errors.
+    pub fn resolve_all_registered_specs(
+        &self,
+    ) -> (HashMap<Arc<LemmaSpec>, ResolvedSpecTypes>, Vec<Error>) {
+        let mut result = HashMap::new();
+        let mut errors = Vec::new();
+
+        for spec_arc in &self.all_registered_specs {
+            match self.resolve_and_validate_named_types(spec_arc) {
+                Ok(resolved_types) => {
+                    result.insert(Arc::clone(spec_arc), resolved_types);
+                }
+                Err(es) => errors.extend(es),
+            }
+        }
+
+        (result, errors)
+    }
+
+    /// Resolve named types for a single spec and validate their specifications.
+    pub fn resolve_and_validate_named_types(
+        &self,
+        spec: &Arc<LemmaSpec>,
+    ) -> Result<ResolvedSpecTypes, Vec<Error>> {
+        let resolved_types = self.resolve_named_types(spec)?;
+        let mut errors = Vec::new();
+
+        for (type_name, lemma_type) in &resolved_types.named_types {
+            let source = spec
+                .types
+                .iter()
+                .find(|td| match td {
+                    ast::TypeDef::Regular { name, .. } | ast::TypeDef::Import { name, .. } => {
+                        name == type_name
+                    }
+                    ast::TypeDef::Inline { .. } => false,
+                })
+                .map(|td| td.source_location().clone())
+                .unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: resolved named type '{}' has no corresponding TypeDef in spec '{}'",
+                        type_name, spec.name
+                    )
+                });
+            let mut spec_errors = validate_type_specifications(
+                &lemma_type.specifications,
+                type_name,
+                &source,
+                Some(Arc::clone(spec)),
+            );
+            errors.append(&mut spec_errors);
+        }
+
+        if errors.is_empty() {
+            Ok(resolved_types)
+        } else {
+            Err(errors)
+        }
     }
 
     /// Resolve only named types (for validation before inline type definitions are registered).
@@ -255,6 +377,10 @@ impl TypeResolver {
 
         Ok(existing)
     }
+
+    // =========================================================================
+    // Private resolution methods
+    // =========================================================================
 
     fn resolve_types_internal(
         &self,
@@ -395,7 +521,6 @@ impl TypeResolver {
             }
         };
 
-        // Resolve the parent type (standard or custom)
         let (parent, from, constraints, type_name) = match &type_def {
             TypeDef::Regular {
                 name,
@@ -416,7 +541,6 @@ impl TypeResolver {
                 name.clone(),
             ),
             TypeDef::Inline { .. } => {
-                // Inline types are resolved separately
                 visited.remove(&key);
                 return Ok(None);
             }
@@ -431,8 +555,6 @@ impl TypeResolver {
         ) {
             Ok(Some(specs)) => specs,
             Ok(None) => {
-                // Parent type not found - this is an error for named types
-                // (inline type definitions might have forward references, but named types should be resolvable)
                 visited.remove(&key);
                 let source = type_def.source_location().clone();
                 return Err(vec![Error::validation_with_context(
@@ -450,7 +572,7 @@ impl TypeResolver {
         };
 
         let final_specs = if let Some(constraints) = &constraints {
-            match self.apply_constraints(
+            match Self::apply_constraints(
                 spec,
                 parent_specs,
                 constraints,
@@ -468,15 +590,14 @@ impl TypeResolver {
 
         visited.remove(&key);
 
-        let extends = if self.resolve_primitive_type(&parent).is_some() {
+        let extends = if resolve_primitive_type(&parent).is_some() {
             TypeExtends::Primitive
         } else {
-            let parent_spec_name = from
-                .as_ref()
-                .map(|r| r.name.as_str())
-                .unwrap_or(spec.name.as_str());
-            let parent_arc = self.name_to_arc.get(parent_spec_name);
-            let family = match parent_arc {
+            let parent_arc = match self.get_spec_arc_for_parent(spec, &from) {
+                Ok(arc) => arc,
+                Err(e) => return Err(vec![e]),
+            };
+            let family = match &parent_arc {
                 Some(arc) => match self.resolve_type_internal(arc, &parent, visited) {
                     Ok(Some(parent_type)) => parent_type
                         .scale_family_name()
@@ -487,9 +608,22 @@ impl TypeResolver {
                 },
                 None => parent.clone(),
             };
+            let defining_spec = if from.is_some() {
+                match &parent_arc {
+                    Some(arc) => TypeDefiningSpec::Import {
+                        spec: Arc::clone(arc),
+                    },
+                    None => unreachable!(
+                        "BUG: from.is_some() but get_spec_arc_for_parent returned Ok(None)"
+                    ),
+                }
+            } else {
+                TypeDefiningSpec::Local
+            };
             TypeExtends::Custom {
                 parent: parent.clone(),
                 family,
+                defining_spec,
             }
         };
 
@@ -508,16 +642,15 @@ impl TypeResolver {
         visited: &mut HashSet<String>,
         source: &crate::Source,
     ) -> Result<Option<TypeSpecification>, Vec<Error>> {
-        if let Some(specs) = self.resolve_primitive_type(parent) {
+        if let Some(specs) = resolve_primitive_type(parent) {
             return Ok(Some(specs));
         }
 
-        let parent_spec_name = from
-            .as_ref()
-            .map(|r| r.name.as_str())
-            .unwrap_or(spec.name.as_str());
-        let parent_arc = self.name_to_arc.get(parent_spec_name);
-        let result = match parent_arc {
+        let parent_arc = match self.get_spec_arc_for_parent(spec, from) {
+            Ok(arc) => arc,
+            Err(e) => return Err(vec![e]),
+        };
+        let result = match &parent_arc {
             Some(arc) => self.resolve_type_internal(arc, parent, visited),
             None => Ok(None),
         };
@@ -525,6 +658,7 @@ impl TypeResolver {
             Ok(Some(t)) => Ok(Some(t.specifications)),
             Ok(None) => {
                 let type_exists = parent_arc
+                    .as_ref()
                     .and_then(|arc| self.named_types.get(arc))
                     .map(|spec_types| spec_types.contains_key(parent))
                     .unwrap_or(false);
@@ -551,26 +685,55 @@ impl TypeResolver {
         }
     }
 
-    /// Resolve a primitive type by name
-    pub fn resolve_primitive_type(&self, name: &str) -> Option<TypeSpecification> {
-        match name {
-            "boolean" => Some(TypeSpecification::boolean()),
-            "scale" => Some(TypeSpecification::scale()),
-            "number" => Some(TypeSpecification::number()),
-            "ratio" => Some(TypeSpecification::ratio()),
-            "text" => Some(TypeSpecification::text()),
-            "date" => Some(TypeSpecification::date()),
-            "time" => Some(TypeSpecification::time()),
-            "duration" => Some(TypeSpecification::duration()),
-            "percent" => Some(TypeSpecification::ratio()),
-            _ => None,
+    /// Get the spec arc for resolving a parent type reference.
+    /// For same-spec extension (from is None): returns the spec itself.
+    /// For cross-spec import (from is Some): resolves via Context at resolve_at.
+    fn get_spec_arc_for_parent(
+        &self,
+        spec: &Arc<LemmaSpec>,
+        from: &Option<crate::parsing::ast::SpecRef>,
+    ) -> Result<Option<Arc<LemmaSpec>>, Error> {
+        match from {
+            Some(from_ref) => self.resolve_spec_for_import(from_ref).map(Some),
+            None => Ok(Some(Arc::clone(spec))),
         }
     }
 
-    /// Apply command-argument constraints to a TypeSpecification.
-    /// Each TypeSpecification variant handles its own commands; we just apply them in order.
-    fn apply_constraints(
+    /// Resolve a SpecRef to the spec version active at this slice.
+    /// Verifies `hash_pin` against the plan-hash registry when present.
+    fn resolve_spec_for_import(
         &self,
+        from: &crate::parsing::ast::SpecRef,
+    ) -> Result<Arc<LemmaSpec>, Error> {
+        if let Some(pin) = &from.hash_pin {
+            return match self.plan_hashes.get_by_pin(&from.name, pin) {
+                Some(arc) => Ok(Arc::clone(arc)),
+                None => Err(Error::validation(
+                    format!(
+                        "No spec '{}' found with plan hash '{}' for type import",
+                        from.name, pin
+                    ),
+                    None,
+                    None::<String>,
+                )),
+            };
+        }
+
+        let at = from.effective.as_ref().or(self.resolve_at.as_ref());
+        let resolved = match at {
+            Some(dt) => self.context.get_spec(&from.name, dt),
+            None => self.context.specs_for_name(&from.name).into_iter().next(),
+        };
+        resolved.ok_or_else(|| {
+            Error::validation(
+                format!("Spec '{}' not found for type import", from.name),
+                None,
+                None::<String>,
+            )
+        })
+    }
+
+    fn apply_constraints(
         spec: &Arc<LemmaSpec>,
         mut specs: TypeSpecification,
         constraints: &[(String, Vec<CommandArg>)],
@@ -632,19 +795,19 @@ impl TypeResolver {
         };
 
         let final_specs = if let Some(constraints) = constraints {
-            self.apply_constraints(spec, parent_specs, constraints, &def_loc)?
+            Self::apply_constraints(spec, parent_specs, constraints, &def_loc)?
         } else {
             parent_specs
         };
 
-        let extends = if self.resolve_primitive_type(parent).is_some() {
+        let extends = if resolve_primitive_type(parent).is_some() {
             TypeExtends::Primitive
         } else {
-            let parent_spec_name = from
-                .as_ref()
-                .map(|r| r.name.as_str())
-                .unwrap_or(spec.name.as_str());
-            let family = match self.name_to_arc.get(parent_spec_name) {
+            let parent_arc = match self.get_spec_arc_for_parent(spec, from) {
+                Ok(arc) => arc,
+                Err(e) => return Err(vec![e]),
+            };
+            let family = match &parent_arc {
                 Some(arc) => match self.resolve_type_internal(arc, parent, visited) {
                     Ok(Some(parent_type)) => parent_type
                         .scale_family_name()
@@ -655,14 +818,31 @@ impl TypeResolver {
                 },
                 None => parent.to_string(),
             };
+            let defining_spec = if from.is_some() {
+                match &parent_arc {
+                    Some(arc) => TypeDefiningSpec::Import {
+                        spec: Arc::clone(arc),
+                    },
+                    None => unreachable!(
+                        "BUG: from.is_some() but get_spec_arc_for_parent returned Ok(None)"
+                    ),
+                }
+            } else {
+                TypeDefiningSpec::Local
+            };
             TypeExtends::Custom {
                 parent: parent.to_string(),
                 family,
+                defining_spec,
             }
         };
 
         Ok(Some(LemmaType::without_name(final_specs, extends)))
     }
+
+    // =========================================================================
+    // Static helpers (no &self)
+    // =========================================================================
 
     fn add_scale_units_to_index(
         spec: &Arc<LemmaSpec>,
@@ -782,56 +962,81 @@ impl TypeResolver {
     }
 }
 
-impl Default for TypeResolver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::Context;
     use crate::parse;
     use crate::parsing::ast::LemmaSpec;
     use crate::ResourceLimits;
     use rust_decimal::Decimal;
     use std::sync::Arc;
 
-    fn test_registry() -> TypeResolver {
-        TypeResolver::new()
+    fn test_context_and_spec() -> (Context, Arc<LemmaSpec>) {
+        let spec = LemmaSpec::new("test_spec".to_string());
+        let arc = Arc::new(spec);
+        let mut ctx = Context::new();
+        ctx.insert_spec(Arc::clone(&arc), false)
+            .expect("insert test spec");
+        (ctx, arc)
     }
 
-    fn test_spec_arc() -> Arc<LemmaSpec> {
-        Arc::new(LemmaSpec::new("test_spec".to_string()))
+    fn resolver_for_code(code: &str) -> (PerSliceTypeResolver<'static>, Vec<Arc<LemmaSpec>>) {
+        // Leak the context so we can return a resolver with 'static lifetime for tests.
+        // This is acceptable in test code only.
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        let ctx = Box::leak(Box::new(Context::new()));
+        let mut spec_arcs = Vec::new();
+        for spec in &specs {
+            let arc = Arc::new(spec.clone());
+            ctx.insert_spec(Arc::clone(&arc), spec.from_registry)
+                .expect("insert spec");
+            spec_arcs.push(arc);
+        }
+        let plan_hashes = Box::leak(Box::new(crate::planning::PlanHashRegistry::default()));
+        let mut resolver = PerSliceTypeResolver::new(ctx, None, plan_hashes);
+        for spec_arc in &spec_arcs {
+            resolver.register_all(spec_arc);
+        }
+        (resolver, spec_arcs)
+    }
+
+    fn resolver_single_spec(code: &str) -> (PerSliceTypeResolver<'static>, Arc<LemmaSpec>) {
+        let (resolver, spec_arcs) = resolver_for_code(code);
+        let spec_arc = spec_arcs.into_iter().next().expect("at least one spec");
+        (resolver, spec_arc)
     }
 
     #[test]
     fn test_registry_creation() {
-        let registry = test_registry();
-        let spec_arc = test_spec_arc();
-        let resolved = registry.resolve_types(&spec_arc).unwrap();
+        let (ctx, spec_arc) = test_context_and_spec();
+        let ph = crate::planning::PlanHashRegistry::default();
+        let resolver = PerSliceTypeResolver::new(&ctx, None, &ph);
+        let resolved = resolver.resolve_named_types(&spec_arc).unwrap();
         assert!(resolved.named_types.is_empty());
         assert!(resolved.inline_type_definitions.is_empty());
     }
 
     #[test]
     fn test_resolve_primitive_types() {
-        let registry = test_registry();
-
-        assert!(registry.resolve_primitive_type("boolean").is_some());
-        assert!(registry.resolve_primitive_type("scale").is_some());
-        assert!(registry.resolve_primitive_type("number").is_some());
-        assert!(registry.resolve_primitive_type("ratio").is_some());
-        assert!(registry.resolve_primitive_type("text").is_some());
-        assert!(registry.resolve_primitive_type("date").is_some());
-        assert!(registry.resolve_primitive_type("time").is_some());
-        assert!(registry.resolve_primitive_type("duration").is_some());
-        assert!(registry.resolve_primitive_type("unknown").is_none());
+        assert!(resolve_primitive_type("boolean").is_some());
+        assert!(resolve_primitive_type("scale").is_some());
+        assert!(resolve_primitive_type("number").is_some());
+        assert!(resolve_primitive_type("ratio").is_some());
+        assert!(resolve_primitive_type("text").is_some());
+        assert!(resolve_primitive_type("date").is_some());
+        assert!(resolve_primitive_type("time").is_some());
+        assert!(resolve_primitive_type("duration").is_some());
+        assert!(resolve_primitive_type("unknown").is_none());
     }
 
     #[test]
     fn test_register_named_type() {
-        let mut registry = test_registry();
+        let (ctx, spec_arc) = test_context_and_spec();
+        let ph = crate::planning::PlanHashRegistry::default();
+        let mut resolver = PerSliceTypeResolver::new(&ctx, None, &ph);
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
                 "<test>",
@@ -848,14 +1053,16 @@ mod tests {
             constraints: None,
         };
 
-        let result = registry.register_type(&test_spec_arc(), type_def);
+        let result = resolver.register_type(&spec_arc, type_def);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_register_inline_type_definition() {
         use crate::parsing::ast::Reference;
-        let mut registry = test_registry();
+        let (ctx, spec_arc) = test_context_and_spec();
+        let ph = crate::planning::PlanHashRegistry::default();
+        let mut resolver = PerSliceTypeResolver::new(&ctx, None, &ph);
         let fact_ref = Reference::local("age".to_string());
         let type_def = TypeDef::Inline {
             source_location: crate::Source::new(
@@ -883,16 +1090,17 @@ mod tests {
             from: None,
         };
 
-        let spec_arc = test_spec_arc();
-        let result = registry.register_type(&spec_arc, type_def);
+        let result = resolver.register_type(&spec_arc, type_def);
         assert!(result.is_ok());
-        let resolved = registry.resolve_types(&spec_arc).unwrap();
+        let resolved = resolver.resolve_types_internal(&spec_arc, true).unwrap();
         assert!(resolved.inline_type_definitions.contains_key(&fact_ref));
     }
 
     #[test]
     fn test_register_duplicate_type_fails() {
-        let mut registry = test_registry();
+        let (ctx, spec_arc) = test_context_and_spec();
+        let ph = crate::planning::PlanHashRegistry::default();
+        let mut resolver = PerSliceTypeResolver::new(&ctx, None, &ph);
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
                 "<test>",
@@ -909,15 +1117,16 @@ mod tests {
             constraints: None,
         };
 
-        let spec_arc = test_spec_arc();
-        registry.register_type(&spec_arc, type_def.clone()).unwrap();
-        let result = registry.register_type(&spec_arc, type_def);
+        resolver.register_type(&spec_arc, type_def.clone()).unwrap();
+        let result = resolver.register_type(&spec_arc, type_def);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_resolve_custom_type_from_primitive() {
-        let mut registry = test_registry();
+        let (ctx, spec_arc) = test_context_and_spec();
+        let ph = crate::planning::PlanHashRegistry::default();
+        let mut resolver = PerSliceTypeResolver::new(&ctx, None, &ph);
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
                 "<test>",
@@ -934,9 +1143,8 @@ mod tests {
             constraints: None,
         };
 
-        let spec_arc = test_spec_arc();
-        registry.register_type(&spec_arc, type_def).unwrap();
-        let resolved = registry.resolve_types(&spec_arc).unwrap();
+        resolver.register_type(&spec_arc, type_def).unwrap();
+        let resolved = resolver.resolve_types_internal(&spec_arc, true).unwrap();
 
         assert!(resolved.named_types.contains_key("money"));
         let money_type = resolved.named_types.get("money").unwrap();
@@ -945,24 +1153,14 @@ mod tests {
 
     #[test]
     fn test_type_definition_resolution() {
-        let code = r#"spec test
-type dice: number -> minimum 0 -> maximum 6"#;
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+type dice: number -> minimum 0 -> maximum 6"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        // Use TypeResolver to resolve the type
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
-            .unwrap();
-
-        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
+        let resolved_types = resolver.resolve_types_internal(&spec_arc, true).unwrap();
         let dice_type = resolved_types.named_types.get("dice").unwrap();
 
-        // Verify it's a Number type (dimensionless) with the correct constraints
         match &dice_type.specifications {
             TypeSpecification::Number {
                 minimum, maximum, ..
@@ -976,22 +1174,12 @@ type dice: number -> minimum 0 -> maximum 6"#;
 
     #[test]
     fn test_type_definition_with_multiple_commands() {
-        let code = r#"spec test
-type money: scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#;
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+type money: scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-        let type_def = &spec.types[0];
-
-        // Use TypeResolver to resolve the type
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), type_def.clone())
-            .unwrap();
-
-        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
+        let resolved_types = resolver.resolve_types_internal(&spec_arc, true).unwrap();
         let money_type = resolved_types.named_types.get("money").unwrap();
 
         match &money_type.specifications {
@@ -1009,24 +1197,14 @@ type money: scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#;
 
     #[test]
     fn test_number_type_with_decimals() {
-        let code = r#"spec test
-type price: number -> decimals 2 -> minimum 0"#;
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+type price: number -> decimals 2 -> minimum 0"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        // Use TypeResolver to resolve the type
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
-            .unwrap();
-
-        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
+        let resolved_types = resolver.resolve_types_internal(&spec_arc, true).unwrap();
         let price_type = resolved_types.named_types.get("price").unwrap();
 
-        // Verify it's a Number type with decimals set to 2
         match &price_type.specifications {
             TypeSpecification::Number {
                 decimals, minimum, ..
@@ -1040,20 +1218,12 @@ type price: number -> decimals 2 -> minimum 0"#;
 
     #[test]
     fn test_number_type_decimals_only() {
-        let code = r#"spec test
-type precise_number: number -> decimals 4"#;
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+type precise_number: number -> decimals 4"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
-            .unwrap();
-
-        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
+        let resolved_types = resolver.resolve_types_internal(&spec_arc, true).unwrap();
         let precise_type = resolved_types.named_types.get("precise_number").unwrap();
 
         match &precise_type.specifications {
@@ -1066,20 +1236,12 @@ type precise_number: number -> decimals 4"#;
 
     #[test]
     fn test_scale_type_decimals_only() {
-        let code = r#"spec test
-type weight: scale -> unit kg 1 -> decimals 3"#;
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+type weight: scale -> unit kg 1 -> decimals 3"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
-            .unwrap();
-
-        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
+        let resolved_types = resolver.resolve_types_internal(&spec_arc, true).unwrap();
         let weight_type = resolved_types.named_types.get("weight").unwrap();
 
         match &weight_type.specifications {
@@ -1092,20 +1254,12 @@ type weight: scale -> unit kg 1 -> decimals 3"#;
 
     #[test]
     fn test_ratio_type_accepts_optional_decimals_command() {
-        let code = r#"spec test
-type ratio_type: ratio -> decimals 2"#;
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+type ratio_type: ratio -> decimals 2"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
-            .unwrap();
-
-        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
+        let resolved_types = resolver.resolve_types_internal(&spec_arc, true).unwrap();
         let ratio_type = resolved_types.named_types.get("ratio_type").unwrap();
 
         match &ratio_type.specifications {
@@ -1122,20 +1276,12 @@ type ratio_type: ratio -> decimals 2"#;
 
     #[test]
     fn test_ratio_type_with_default_command() {
-        let code = r#"spec test
-type percentage: ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+type percentage: ratio -> minimum 0 -> maximum 1 -> default 0.5"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
-            .unwrap();
-
-        let resolved_types = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
+        let resolved_types = resolver.resolve_types_internal(&spec_arc, true).unwrap();
         let percentage_type = resolved_types.named_types.get("percentage").unwrap();
 
         match &percentage_type.specifications {
@@ -1167,23 +1313,13 @@ type percentage: ratio -> minimum 0 -> maximum 1 -> default 0.5"#;
 
     #[test]
     fn test_scale_extension_chain_same_family_units_allowed() {
-        let code = r#"spec test
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
 type money: scale -> unit eur 1
-type money2: money -> unit usd 1.24"#;
+type money2: money -> unit usd 1.24"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        for type_def in &spec.types {
-            registry
-                .register_type(&Arc::new(spec.clone()), type_def.clone())
-                .unwrap();
-        }
-
-        let result = registry.resolve_types(&Arc::new(spec.clone()));
+        let result = resolver.resolve_types_internal(&spec_arc, true);
         assert!(
             result.is_ok(),
             "Scale extension chain should resolve: {:?}",
@@ -1211,20 +1347,12 @@ type money2: money -> unit usd 1.24"#;
 
     #[test]
     fn test_invalid_parent_type_in_named_type_should_error() {
-        let code = r#"spec test
-type invalid: nonexistent_type -> minimum 0"#;
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+type invalid: nonexistent_type -> minimum 0"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
-            .unwrap();
-
-        let result = registry.resolve_types(&Arc::new(spec.clone()));
+        let result = resolver.resolve_types_internal(&spec_arc, true);
         assert!(result.is_err(), "Should reject invalid parent type");
 
         let errs = result.unwrap_err();
@@ -1239,21 +1367,12 @@ type invalid: nonexistent_type -> minimum 0"#;
 
     #[test]
     fn test_invalid_primitive_type_name_should_error() {
-        // "choice" is not a primitive type; this should fail resolution.
-        let code = r#"spec test
-type invalid: choice -> option "a""#;
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+type invalid: choice -> option "a""#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
-            .unwrap();
-
-        let result = registry.resolve_types(&Arc::new(spec.clone()));
+        let result = resolver.resolve_types_internal(&spec_arc, true);
         assert!(result.is_err(), "Should reject invalid type base 'choice'");
 
         let errs = result.unwrap_err();
@@ -1268,8 +1387,8 @@ type invalid: choice -> option "a""#;
 
     #[test]
     fn test_unit_constraint_validation_errors_are_reported() {
-        // Regression guard: overriding existing units should not silently succeed.
-        let code = r#"spec test
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
 type money: scale
   -> unit eur 1.00
   -> unit usd 1.19
@@ -1277,21 +1396,10 @@ type money: scale
 type money2: money
   -> unit eur 1.20
   -> unit usd 1.21
-  -> unit gbp 1.30"#;
+  -> unit gbp 1.30"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        for type_def in &spec.types {
-            registry
-                .register_type(&Arc::new(spec.clone()), type_def.clone())
-                .unwrap();
-        }
-
-        let result = registry.resolve_types(&Arc::new(spec.clone()));
+        let result = resolver.resolve_types_internal(&spec_arc, true);
         assert!(
             result.is_err(),
             "Expected unit constraint conflicts to error"
@@ -1313,8 +1421,8 @@ type money2: money
 
     #[test]
     fn test_spec_level_unit_ambiguity_errors_are_reported() {
-        // Regression guard: the same unit name must not be defined by multiple types in one spec.
-        let code = r#"spec test
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
 type money_a: scale
   -> unit eur 1.00
   -> unit usd 1.19
@@ -1327,21 +1435,10 @@ type length_a: scale
   -> unit meter 1.0
 
 type length_b: scale
-  -> unit meter 1.0"#;
+  -> unit meter 1.0"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        for type_def in &spec.types {
-            registry
-                .register_type(&Arc::new(spec.clone()), type_def.clone())
-                .unwrap();
-        }
-
-        let result = registry.resolve_types(&Arc::new(spec.clone()));
+        let result = resolver.resolve_types_internal(&spec_arc, true);
         assert!(
             result.is_err(),
             "Expected ambiguous unit definitions to error"
@@ -1363,21 +1460,13 @@ type length_b: scale
 
     #[test]
     fn test_number_type_cannot_have_units() {
-        let code = r#"spec test
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
 type price: number
-  -> unit eur 1.00"#;
+  -> unit eur 1.00"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
-            .unwrap();
-
-        let result = registry.resolve_types(&Arc::new(spec.clone()));
+        let result = resolver.resolve_types_internal(&spec_arc, true);
         assert!(result.is_err(), "Number types must reject unit commands");
 
         let errs = result.unwrap_err();
@@ -1392,22 +1481,14 @@ type price: number
 
     #[test]
     fn test_scale_type_can_have_units() {
-        let code = r#"spec test
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
 type money: scale
   -> unit eur 1.00
-  -> unit usd 1.19"#;
+  -> unit usd 1.19"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
-            .unwrap();
-
-        let resolved = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
+        let resolved = resolver.resolve_types_internal(&spec_arc, true).unwrap();
         let money_type = resolved.named_types.get("money").unwrap();
 
         match &money_type.specifications {
@@ -1422,27 +1503,17 @@ type money: scale
 
     #[test]
     fn test_extending_type_inherits_units() {
-        let code = r#"spec test
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
 type money: scale
   -> unit eur 1.00
   -> unit usd 1.19
 
 type my_money: money
-  -> unit gbp 1.30"#;
+  -> unit gbp 1.30"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        for type_def in &spec.types {
-            registry
-                .register_type(&Arc::new(spec.clone()), type_def.clone())
-                .unwrap();
-        }
-
-        let resolved = registry.resolve_types(&Arc::new(spec.clone())).unwrap();
+        let resolved = resolver.resolve_types_internal(&spec_arc, true).unwrap();
         let my_money_type = resolved.named_types.get("my_money").unwrap();
 
         match &my_money_type.specifications {
@@ -1458,22 +1529,14 @@ type my_money: money
 
     #[test]
     fn test_duplicate_unit_in_same_type_is_rejected() {
-        let code = r#"spec test
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
 type money: scale
   -> unit eur 1.00
-  -> unit eur 1.19"#;
+  -> unit eur 1.19"#,
+        );
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec = &specs[0];
-
-        let mut registry = test_registry();
-        registry
-            .register_type(&Arc::new(spec.clone()), spec.types[0].clone())
-            .unwrap();
-
-        let result = registry.resolve_types(&Arc::new(spec.clone()));
+        let result = resolver.resolve_types_internal(&spec_arc, true);
         assert!(
             result.is_err(),
             "Duplicate units within a type should error"
@@ -1501,14 +1564,7 @@ type geld: scale
   -> unit eur 1.00
   -> minimum 0 eur
 fact bruto_salaris: 0 eur"#;
-        let specs = parse(code, "nettoloon.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec_arc = Arc::new(specs[0].clone());
-        let mut registry = test_registry();
-        for td in &spec_arc.types {
-            registry.register_type(&spec_arc, td.clone()).unwrap();
-        }
+        let (mut resolver, spec_arc) = resolver_single_spec(code);
         let fact_ref = Reference::local("bruto_salaris".to_string());
         let inline_def = TypeDef::Inline {
             source_location: spec_arc.types[0].source_location().clone(),
@@ -1523,7 +1579,7 @@ fact bruto_salaris: 0 eur"#;
             fact_ref: fact_ref.clone(),
             from: None,
         };
-        registry.register_type(&spec_arc, inline_def).unwrap();
-        let _ = registry.resolve_types(&spec_arc);
+        resolver.register_type(&spec_arc, inline_def).unwrap();
+        let _ = resolver.resolve_types_internal(&spec_arc, true);
     }
 }

@@ -33,13 +33,13 @@ fn test_example_01_simple_facts() {
 }
 
 #[test]
-fn test_show_includes_hash() {
+fn test_schema_includes_hash() {
     let temp_dir = TempDir::new().unwrap();
     let example_file = examples_dir().join("01_simple_facts.lemma");
     fs::copy(&example_file, temp_dir.path().join("01_simple_facts.lemma")).unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("show")
+    cmd.arg("schema")
         .arg("simple_facts")
         .arg("--dir")
         .arg(temp_dir.path());
@@ -51,13 +51,13 @@ fn test_show_includes_hash() {
 }
 
 #[test]
-fn test_show_hash_only_outputs_hash() {
+fn test_schema_hash_only_outputs_hash() {
     let temp_dir = TempDir::new().unwrap();
     let example_file = examples_dir().join("01_simple_facts.lemma");
     fs::copy(&example_file, temp_dir.path().join("01_simple_facts.lemma")).unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("show")
+    cmd.arg("schema")
         .arg("simple_facts")
         .arg("--hash")
         .arg("--dir")

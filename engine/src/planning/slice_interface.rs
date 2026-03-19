@@ -22,7 +22,7 @@ pub struct SliceInterface {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FactKind {
-    Value(LemmaType),
+    Value(Box<LemmaType>),
     SpecRef { spec_name: String },
 }
 
@@ -48,9 +48,11 @@ impl SliceInterface {
                 continue;
             }
             let kind = match data {
-                FactData::Value { value, .. } => FactKind::Value(value.lemma_type.clone()),
+                FactData::Value { value, .. } => {
+                    FactKind::Value(Box::new(value.lemma_type.clone()))
+                }
                 FactData::TypeDeclaration { resolved_type, .. } => {
-                    FactKind::Value(resolved_type.clone())
+                    FactKind::Value(Box::new(resolved_type.clone()))
                 }
                 FactData::SpecRef { spec, .. } => FactKind::SpecRef {
                     spec_name: spec.name.clone(),
@@ -339,7 +341,10 @@ mod tests {
     #[test]
     fn identical_interfaces_are_equal() {
         let mut facts = BTreeMap::new();
-        facts.insert("x".to_string(), FactKind::Value(primitive_number().clone()));
+        facts.insert(
+            "x".to_string(),
+            FactKind::Value(Box::new(primitive_number().clone())),
+        );
 
         let mut rules = BTreeMap::new();
         rules.insert("z".to_string(), primitive_number().clone());
@@ -367,7 +372,10 @@ mod tests {
         };
 
         let mut facts_b = BTreeMap::new();
-        facts_b.insert("y".to_string(), FactKind::Value(primitive_number().clone()));
+        facts_b.insert(
+            "y".to_string(),
+            FactKind::Value(Box::new(primitive_number().clone())),
+        );
         let b = SliceInterface {
             facts: facts_b,
             rules: BTreeMap::new(),

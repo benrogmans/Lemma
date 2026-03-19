@@ -5,12 +5,12 @@ use crate::parsing::ast::{
 use crate::parsing::source::Source;
 use crate::planning::semantics::{
     conversion_target_to_semantic, primitive_boolean, primitive_date, primitive_duration,
-    primitive_number, primitive_ratio, primitive_scale, primitive_text, primitive_time,
-    value_to_semantic, ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind,
-    FactData, FactPath, LemmaType, LiteralValue, PathSegment, RulePath, SemanticConversionTarget,
+    primitive_number, primitive_ratio, primitive_text, primitive_time, value_to_semantic,
+    ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, FactData, FactPath,
+    LemmaType, LiteralValue, PathSegment, RulePath, SemanticConversionTarget, TypeDefiningSpec,
     TypeExtends, TypeSpecification, ValueKind,
 };
-use crate::planning::types::{ResolvedSpecTypes, TypeResolver};
+use crate::planning::types::{PerSliceTypeResolver, ResolvedSpecTypes};
 use crate::planning::validation::{
     validate_spec_interfaces, validate_type_specifications, RuleEntryForBindingCheck,
 };
@@ -71,7 +71,6 @@ impl Graph {
         let mut schema: HashMap<FactPath, LemmaType> = HashMap::new();
         let mut values: HashMap<FactPath, LiteralValue> = HashMap::new();
         let mut spec_arcs: HashMap<FactPath, Arc<LemmaSpec>> = HashMap::new();
-        let mut spec_ref_hashes: HashMap<FactPath, Option<String>> = HashMap::new();
 
         for (path, rfv) in self.facts.iter() {
             match rfv {
@@ -82,13 +81,8 @@ impl Graph {
                 FactData::TypeDeclaration { resolved_type, .. } => {
                     schema.insert(path.clone(), resolved_type.clone());
                 }
-                FactData::SpecRef {
-                    spec: spec_arc,
-                    expected_hash_pin,
-                    ..
-                } => {
+                FactData::SpecRef { spec: spec_arc, .. } => {
                     spec_arcs.insert(path.clone(), Arc::clone(spec_arc));
-                    spec_ref_hashes.insert(path.clone(), expected_hash_pin.clone());
                 }
             }
         }
@@ -118,13 +112,18 @@ impl Graph {
         for (path, rfv) in &self.facts {
             let source = rfv.source().clone();
             if let Some(spec_arc) = spec_arcs.remove(path) {
-                let expected_hash_pin = spec_ref_hashes.remove(path).flatten();
+                let resolved_plan_hash = match rfv {
+                    FactData::SpecRef {
+                        resolved_plan_hash, ..
+                    } => resolved_plan_hash.clone(),
+                    _ => None,
+                };
                 facts.insert(
                     path.clone(),
                     FactData::SpecRef {
                         spec: spec_arc,
                         source,
-                        expected_hash_pin,
+                        resolved_plan_hash,
                     },
                 );
             } else if let Some(value) = values.remove(path) {
@@ -187,20 +186,8 @@ impl Graph {
         }
     }
 
-    /// Resolve a primitive type by name (helper function)
     fn resolve_primitive_type(name: &str) -> Option<TypeSpecification> {
-        match name {
-            "boolean" => Some(TypeSpecification::boolean()),
-            "scale" => Some(TypeSpecification::scale()),
-            "number" => Some(TypeSpecification::number()),
-            "ratio" => Some(TypeSpecification::ratio()),
-            "text" => Some(TypeSpecification::text()),
-            "date" => Some(TypeSpecification::date()),
-            "time" => Some(TypeSpecification::time()),
-            "duration" => Some(TypeSpecification::duration()),
-            "percent" => Some(TypeSpecification::ratio()),
-            _ => None,
-        }
+        crate::planning::types::resolve_primitive_type(name)
     }
 
     fn topological_sort(&self) -> Result<Vec<RulePath>, Vec<Error>> {
@@ -318,16 +305,8 @@ struct GraphBuilder<'a> {
     local_types: ResolvedTypesMap,
     errors: Vec<Error>,
     resolve_at: Option<DateTimeValue>,
-    spec_hashes: &'a SpecContentHashes,
     main_spec: Arc<LemmaSpec>,
-}
-
-/// Map from spec pointer identity to computed content hash.
-pub(crate) type SpecContentHashes = HashMap<usize, String>;
-
-/// Get the pointer-identity key for a spec Arc.
-pub(crate) fn spec_hash_key(spec: &Arc<LemmaSpec>) -> usize {
-    Arc::as_ptr(spec) as usize
+    plan_hashes: &'a super::PlanHashRegistry,
 }
 
 impl Graph {
@@ -336,16 +315,24 @@ impl Graph {
     /// `resolve_at` is the start of the temporal slice (`None` = -∞). Implicit
     /// spec refs are resolved to the version active at this point; pinned refs
     /// use their own `effective`.
+    ///
+    /// Types are resolved per-slice: a `PerSliceTypeResolver` is built here using
+    /// `Context + resolve_at`.
     pub(crate) fn build(
         main_spec: &Arc<LemmaSpec>,
         context: &Context,
         sources: HashMap<String, String>,
-        type_resolver: &TypeResolver,
-        resolved_types: &ResolvedTypesMap,
         resolve_at: Option<DateTimeValue>,
-        spec_hashes: &SpecContentHashes,
+        plan_hashes: &super::PlanHashRegistry,
     ) -> Result<(Graph, ResolvedTypesMap), Vec<Error>> {
-        let mut local_type_resolver = type_resolver.clone();
+        let mut type_resolver = PerSliceTypeResolver::new(context, resolve_at.clone(), plan_hashes);
+
+        let mut type_errors: Vec<Error> = Vec::new();
+        type_errors.extend(type_resolver.register_all(main_spec));
+        type_errors.extend(type_resolver.register_dependency_types(main_spec));
+
+        let (resolved_types, resolve_errors) = type_resolver.resolve_all_registered_specs();
+        type_errors.extend(resolve_errors);
 
         let (facts, rules, builder_sources, graph_errors, local_types) = {
             let mut builder = GraphBuilder {
@@ -353,19 +340,14 @@ impl Graph {
                 rules: BTreeMap::new(),
                 sources,
                 context,
-                local_types: resolved_types.clone(),
+                local_types: resolved_types,
                 errors: Vec::new(),
                 resolve_at,
-                spec_hashes,
                 main_spec: Arc::clone(main_spec),
+                plan_hashes,
             };
 
-            builder.build_spec(
-                main_spec,
-                Vec::new(),
-                HashMap::new(),
-                &mut local_type_resolver,
-            )?;
+            builder.build_spec(main_spec, Vec::new(), HashMap::new(), &mut type_resolver)?;
 
             (
                 builder.facts,
@@ -389,7 +371,8 @@ impl Graph {
             Err(errors) => errors,
         };
 
-        let mut all_errors = graph_errors;
+        let mut all_errors = type_errors;
+        all_errors.extend(graph_errors);
         all_errors.extend(validation_errors);
 
         if all_errors.is_empty() {
@@ -527,17 +510,22 @@ impl<'a> GraphBuilder<'a> {
         }
     }
 
-    fn resolve_spec_ref(&self, spec_ref: &ast::SpecRef) -> Option<Arc<LemmaSpec>> {
-        if let Some(ref pin) = spec_ref.hash_pin {
-            let resolved = self.resolve_spec_by_hash(&spec_ref.name, pin)?;
-            if let Some(ref effective) = spec_ref.effective {
-                let active_at = self.context.get_spec(&spec_ref.name, effective);
-                if active_at.as_ref() != Some(&resolved) {
-                    return None;
-                }
+    fn resolve_spec_ref(
+        &mut self,
+        spec_ref: &ast::SpecRef,
+        error_source: &Source,
+    ) -> Option<Arc<LemmaSpec>> {
+        if let Some(pin) = &spec_ref.hash_pin {
+            if let Some(arc) = self.plan_hashes.get_by_pin(&spec_ref.name, pin) {
+                return Some(Arc::clone(arc));
             }
-            return Some(resolved);
+            self.errors.push(self.engine_error(
+                format!("No spec '{}' found with plan hash {}", spec_ref.name, pin),
+                error_source,
+            ));
+            return None;
         }
+
         let at = spec_ref.effective.as_ref().or(self.resolve_at.as_ref());
         match at {
             Some(dt) => self.context.get_spec(&spec_ref.name, dt),
@@ -549,29 +537,14 @@ impl<'a> GraphBuilder<'a> {
         }
     }
 
-    fn resolve_spec_by_hash(&self, name: &str, hash_pin: &str) -> Option<Arc<LemmaSpec>> {
-        let mut matched: Option<Arc<LemmaSpec>> = None;
-        for spec in self.context.iter() {
-            if spec.name != name {
-                continue;
-            }
-            let key = spec_hash_key(&spec);
-            if let Some(computed) = self.spec_hashes.get(&key) {
-                if super::content_hash::content_hash_matches(hash_pin, computed) {
-                    if matched.is_some() {
-                        // Hash collision across versions — cannot resolve unambiguously.
-                        // Return None to trigger a "not found" error downstream.
-                        return None;
-                    }
-                    matched = Some(spec);
-                }
-            }
-        }
-        matched
+    fn lookup_dependency_hash(&self, dep_spec: &Arc<LemmaSpec>) -> Option<String> {
+        self.plan_hashes
+            .get_by_slice(&dep_spec.name, &self.resolve_at)
+            .map(|s| s.to_string())
     }
 
     fn resolve_type_declaration(
-        &self,
+        &mut self,
         type_decl: &ParsedFactValue,
         decl_source: &Source,
         context_spec: &Arc<LemmaSpec>,
@@ -593,8 +566,11 @@ impl<'a> GraphBuilder<'a> {
             ]);
         }
 
-        let source_spec_owned: Option<Arc<LemmaSpec>> =
-            from.as_ref().and_then(|r| self.resolve_spec_ref(r));
+        let source_spec_owned: Option<Arc<LemmaSpec>> = from
+            .as_ref()
+            .and_then(|r| self.resolve_spec_ref(r, decl_source));
+        // Inline / same-spec `type` declarations use `context_spec`; `from` supplies a
+        // different spec only for type imports.
         let source_spec_arc: &Arc<LemmaSpec> = source_spec_owned.as_ref().unwrap_or(context_spec);
         if from.is_some() && source_spec_owned.is_none() {
             return Err(vec![self.engine_error(
@@ -633,9 +609,17 @@ impl<'a> GraphBuilder<'a> {
                 .scale_family_name()
                 .map(String::from)
                 .unwrap_or_else(|| base.clone());
+            let defining_spec = if from.is_some() {
+                TypeDefiningSpec::Import {
+                    spec: Arc::clone(source_spec_arc),
+                }
+            } else {
+                TypeDefiningSpec::Local
+            };
             let extends = TypeExtends::Custom {
                 parent: base.to_string(),
                 family,
+                defining_spec,
             };
             (base_type, extends)
         };
@@ -674,7 +658,7 @@ impl<'a> GraphBuilder<'a> {
     /// that each segment in the path is a spec reference. The binding key uses
     /// fact names only (no spec names) so that spec ref bindings don't cause mismatches.
     fn resolve_fact_binding(
-        &self,
+        &mut self,
         fact: &LemmaFact,
         current_segment_names: &[String],
         effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
@@ -717,7 +701,7 @@ impl<'a> GraphBuilder<'a> {
                 match seg_fact {
                     Some(f) => match &f.value {
                         ParsedFactValue::SpecReference(spec_ref) => {
-                            match self.resolve_spec_ref(spec_ref) {
+                            match self.resolve_spec_ref(spec_ref, fact_source) {
                                 Some(arc) => arc,
                                 None => {
                                     return Err(vec![self.engine_error(
@@ -773,7 +757,7 @@ impl<'a> GraphBuilder<'a> {
     /// and collect into a FactBindings map. Rejects TypeDeclaration binding values and
     /// duplicate bindings targeting the same path.
     fn build_fact_bindings(
-        &self,
+        &mut self,
         spec: &LemmaSpec,
         current_segment_names: &[String],
         effective_spec_refs: &HashMap<String, Arc<LemmaSpec>>,
@@ -955,12 +939,25 @@ impl<'a> GraphBuilder<'a> {
                 let inferred_type = match value {
                     Value::Text(_) => primitive_text().clone(),
                     Value::Number(_) => primitive_number().clone(),
-                    Value::Scale(_, unit) => self
-                        .local_types
-                        .get(current_spec_arc)
-                        .and_then(|dt| dt.unit_index.get(unit))
-                        .map(|(lt, _)| lt.clone())
-                        .unwrap_or_else(|| primitive_scale().clone()),
+                    Value::Scale(_, unit) => {
+                        match self
+                            .local_types
+                            .get(current_spec_arc)
+                            .and_then(|dt| dt.unit_index.get(unit))
+                        {
+                            Some((lt, _)) => lt.clone(),
+                            None => {
+                                self.errors.push(self.engine_error(
+                                    format!(
+                                        "Scale literal uses unknown unit '{}' for this spec",
+                                        unit
+                                    ),
+                                    &effective_source,
+                                ));
+                                return;
+                            }
+                        }
+                    }
                     Value::Boolean(_) => primitive_boolean().clone(),
                     Value::Date(_) => primitive_date().clone(),
                     Value::Time(_) => primitive_time().clone(),
@@ -1015,7 +1012,7 @@ impl<'a> GraphBuilder<'a> {
                     if let Some(arc) = effective_spec_refs.get(&fact.reference.name).cloned() {
                         arc
                     } else {
-                        match self.resolve_spec_ref(spec_ref) {
+                        match self.resolve_spec_ref(spec_ref, &effective_source) {
                             Some(arc) => arc,
                             None => {
                                 self.errors.push(self.engine_error(
@@ -1027,12 +1024,28 @@ impl<'a> GraphBuilder<'a> {
                         }
                     };
 
+                let resolved_hash = self.lookup_dependency_hash(&effective_spec_arc);
+                if let Some(pin) = &spec_ref.hash_pin {
+                    if let Some(ref actual) = resolved_hash {
+                        if !pin.trim().eq_ignore_ascii_case(actual.trim()) {
+                            self.errors.push(self.engine_error(
+                                format!(
+                                    "Spec '{}' plan hash mismatch: expected {}, got {}",
+                                    spec_ref.name, pin, actual
+                                ),
+                                &effective_source,
+                            ));
+                            return;
+                        }
+                    }
+                }
+
                 self.facts.insert(
                     fact_path,
                     FactData::SpecRef {
                         spec: Arc::clone(&effective_spec_arc),
                         source: effective_source,
-                        expected_hash_pin: spec_ref.hash_pin.clone(),
+                        resolved_plan_hash: resolved_hash,
                     },
                 );
             }
@@ -1068,9 +1081,9 @@ impl<'a> GraphBuilder<'a> {
                     effective_spec_refs
                         .get(segment)
                         .cloned()
-                        .or_else(|| self.resolve_spec_ref(original_spec_ref))
+                        .or_else(|| self.resolve_spec_ref(original_spec_ref, reference_source))
                 } else {
-                    self.resolve_spec_ref(original_spec_ref)
+                    self.resolve_spec_ref(original_spec_ref, reference_source)
                 };
 
                 let arc = match resolved {
@@ -1116,7 +1129,7 @@ impl<'a> GraphBuilder<'a> {
         spec_arc: &Arc<LemmaSpec>,
         current_segments: Vec<PathSegment>,
         fact_bindings: FactBindings,
-        type_resolver: &mut TypeResolver,
+        type_resolver: &mut PerSliceTypeResolver<'a>,
     ) -> Result<(), Vec<Error>> {
         let spec = spec_arc.as_ref();
         if let Err(e) = crate::limits::check_max_length(
@@ -1173,7 +1186,7 @@ impl<'a> GraphBuilder<'a> {
                     if spec_ref.name == spec.name {
                         continue;
                     }
-                    if let Some(arc) = self.resolve_spec_ref(spec_ref) {
+                    if let Some(arc) = self.resolve_spec_ref(spec_ref, &fact.source_location) {
                         effective_spec_refs.insert(fact.reference.name.clone(), arc);
                     }
                 }
@@ -1193,7 +1206,9 @@ impl<'a> GraphBuilder<'a> {
                         if bound_spec_ref.name == spec.name {
                             continue;
                         }
-                        if let Some(arc) = self.resolve_spec_ref(bound_spec_ref) {
+                        if let Some(arc) =
+                            self.resolve_spec_ref(bound_spec_ref, &fact.source_location)
+                        {
                             effective_spec_refs.insert(fact.reference.name.clone(), arc);
                         }
                     }
@@ -1692,6 +1707,8 @@ impl<'a> GraphBuilder<'a> {
                 let semantic_target = match conversion_target_to_semantic(target, unit_index) {
                     Ok(t) => t,
                     Err(msg) => {
+                        // When there is no unit index (e.g. primitive context), surface the
+                        // conversion error without a "valid units" list.
                         let full_msg = unit_index
                             .map(|idx| {
                                 let valid: Vec<&str> = idx.keys().map(String::as_str).collect();
@@ -1769,12 +1786,25 @@ impl<'a> GraphBuilder<'a> {
                 let lemma_type = match value {
                     Value::Text(_) => primitive_text().clone(),
                     Value::Number(_) => primitive_number().clone(),
-                    Value::Scale(_, unit) => self
-                        .local_types
-                        .get(current_spec_arc)
-                        .and_then(|dt| dt.unit_index.get(unit))
-                        .map(|(lt, _)| lt.clone())
-                        .unwrap_or_else(|| primitive_scale().clone()),
+                    Value::Scale(_, unit) => {
+                        match self
+                            .local_types
+                            .get(current_spec_arc)
+                            .and_then(|dt| dt.unit_index.get(unit))
+                        {
+                            Some((lt, _)) => lt.clone(),
+                            None => {
+                                self.errors.push(self.engine_error(
+                                    format!(
+                                        "Scale literal uses unknown unit '{}' for this spec",
+                                        unit
+                                    ),
+                                    expr_src,
+                                ));
+                                return None;
+                            }
+                        }
+                    }
                     Value::Boolean(_) => primitive_boolean().clone(),
                     Value::Date(_) => primitive_date().clone(),
                     Value::Time(_) => primitive_time().clone(),
@@ -1874,14 +1904,15 @@ impl<'a> GraphBuilder<'a> {
     }
 }
 
-fn find_types_by_name<'a>(
-    types: &'a ResolvedTypesMap,
+/// Find resolved types for a spec by name. Since per-slice resolution registers
+/// at most one version per spec name, this is a simple name match.
+fn find_types_by_name<'b>(
+    types: &'b ResolvedTypesMap,
     name: &str,
-) -> Option<&'a ResolvedSpecTypes> {
+) -> Option<&'b ResolvedSpecTypes> {
     types
         .iter()
-        .filter(|(spec, _)| spec.name == name)
-        .min_by_key(|(spec, _)| spec.effective_from().cloned())
+        .find(|(spec, _)| spec.name == name)
         .map(|(_, t)| t)
 }
 
@@ -3117,7 +3148,7 @@ mod tests {
         sources
     }
 
-    /// Test helper: register types, resolve, and build graph in one call.
+    /// Test helper: build graph in one call. Types are resolved per-slice inside Graph::build.
     fn build_graph(
         main_spec: &LemmaSpec,
         all_specs: &[LemmaSpec],
@@ -3132,46 +3163,16 @@ mod tests {
             .get_spec_effective_from(main_spec.name.as_str(), main_spec.effective_from())
             .expect("main_spec must be in all_specs");
 
-        let mut type_resolver = TypeResolver::new();
-        let mut type_errors = Vec::new();
-        let all_specs_vec: Vec<_> = ctx.iter().collect();
-        for spec_arc in &all_specs_vec {
-            type_errors.extend(type_resolver.register_all(spec_arc));
-        }
-        let (resolved_types, resolve_errors) = type_resolver.resolve(all_specs_vec);
-        type_errors.extend(resolve_errors);
-
-        let spec_hashes: SpecContentHashes = ctx
-            .iter()
-            .map(|s| {
-                (
-                    spec_hash_key(&s),
-                    crate::planning::content_hash::hash_spec(&s, &[]),
-                )
-            })
-            .collect();
-
+        let plan_hashes = crate::planning::PlanHashRegistry::default();
         match Graph::build(
             &main_spec_arc,
             &ctx,
             sources,
-            &type_resolver,
-            &resolved_types,
             main_spec_arc.effective_from().cloned(),
-            &spec_hashes,
+            &plan_hashes,
         ) {
-            Ok((graph, _types)) => {
-                if type_errors.is_empty() {
-                    Ok(graph)
-                } else {
-                    Err(type_errors)
-                }
-            }
-            Err(mut spec_errors) => {
-                let mut all_errors = type_errors;
-                all_errors.append(&mut spec_errors);
-                Err(all_errors)
-            }
+            Ok((graph, _types)) => Ok(graph),
+            Err(errors) => Err(errors),
         }
     }
 
@@ -3534,7 +3535,7 @@ mod tests {
 
     #[test]
     fn test_type_registration_collects_multiple_errors() {
-        use crate::parsing::ast::TypeDef;
+        use crate::parsing::ast::{FactValue, SpecRef, TypeDef};
 
         let type_source = Source::new(
             "a.lemma",
@@ -3544,10 +3545,15 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec test\nfact x: 1\nrule result: x"),
+            Arc::from("spec spec_a\nfact dep: spec spec_b\ntype money: number\ntype money: number"),
         );
         let spec_a = create_test_spec("spec_a")
             .with_attribute("a.lemma".to_string())
+            .add_fact(LemmaFact {
+                reference: Reference::local("dep".to_string()),
+                value: FactValue::SpecReference(SpecRef::local("spec_b")),
+                source_location: type_source.clone(),
+            })
             .add_type(TypeDef::Regular {
                 source_location: type_source.clone(),
                 name: "money".to_string(),
@@ -3569,7 +3575,7 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec test\nfact x: 1\nrule result: x"),
+            Arc::from("spec spec_b\ntype length: number\ntype length: number"),
         );
         let spec_b = create_test_spec("spec_b")
             .with_attribute("b.lemma".to_string())
@@ -3589,7 +3595,8 @@ mod tests {
         let mut sources = HashMap::new();
         sources.insert(
             "a.lemma".to_string(),
-            "spec spec_a\ntype money: number\ntype money: number".to_string(),
+            "spec spec_a\nfact dep: spec spec_b\ntype money: number\ntype money: number"
+                .to_string(),
         );
         sources.insert(
             "b.lemma".to_string(),

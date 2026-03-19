@@ -307,7 +307,7 @@ impl Lexer {
     }
 
     /// Scan a contiguous run of alphanumeric characters as a raw string,
-    /// bypassing normal tokenization. Used for content hashes after `~`
+    /// bypassing normal tokenization. Used for plan hashes after `~`
     /// where sequences like `7e20848b` must not be split by scientific
     /// notation scanning.
     pub fn scan_raw_alphanumeric(&mut self) -> Result<String, Error> {

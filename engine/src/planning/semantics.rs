@@ -36,9 +36,8 @@ pub fn negated_comparison(op: ComparisonComputation) -> ComparisonComputation {
 // Internal-only parsing imports (used only within this module for value/type resolution).
 use crate::parsing::ast::{
     BooleanValue, CalendarUnit, CommandArg, ConversionTarget, DateCalendarKind, DateRelativeKind,
-    DateTimeValue, DurationUnit, TimeValue,
+    DateTimeValue, DurationUnit, LemmaSpec, TimeValue,
 };
-use crate::parsing::literals::{parse_date_string, parse_duration_from_string, parse_time_string};
 use crate::Error;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -231,6 +230,14 @@ pub enum TypeSpecification {
     Undetermined,
 }
 
+fn apply_type_help_command(help: &mut String, args: &[CommandArg]) -> Result<(), String> {
+    let arg = args
+        .first()
+        .ok_or_else(|| "help requires a text argument".to_string())?;
+    *help = arg.value().to_string();
+    Ok(())
+}
+
 impl TypeSpecification {
     pub fn boolean() -> Self {
         TypeSpecification::Boolean {
@@ -318,10 +325,7 @@ impl TypeSpecification {
         match &mut self {
             TypeSpecification::Boolean { help, default } => match command {
                 "help" => {
-                    *help = args
-                        .first()
-                        .map(|a| a.value().to_string())
-                        .unwrap_or_default();
+                    apply_type_help_command(help, args)?;
                 }
                 "default" => {
                     let arg = args
@@ -432,10 +436,7 @@ impl TypeSpecification {
                     *precision = Some(p);
                 }
                 "help" => {
-                    *help = args
-                        .first()
-                        .map(|a| a.value().to_string())
-                        .unwrap_or_default();
+                    apply_type_help_command(help, args)?;
                 }
                 "default" => {
                     if args.len() < 2 {
@@ -537,10 +538,7 @@ impl TypeSpecification {
                     *precision = Some(p);
                 }
                 "help" => {
-                    *help = args
-                        .first()
-                        .map(|a| a.value().to_string())
-                        .unwrap_or_default();
+                    apply_type_help_command(help, args)?;
                 }
                 "default" => {
                     let arg = args
@@ -636,10 +634,7 @@ impl TypeSpecification {
                     *maximum = Some(m);
                 }
                 "help" => {
-                    *help = args
-                        .first()
-                        .map(|a| a.value().to_string())
-                        .unwrap_or_default();
+                    apply_type_help_command(help, args)?;
                 }
                 "default" => {
                     let arg = args
@@ -724,10 +719,7 @@ impl TypeSpecification {
                     *length = Some(l);
                 }
                 "help" => {
-                    *help = args
-                        .first()
-                        .map(|a| a.value().to_string())
-                        .unwrap_or_default();
+                    apply_type_help_command(help, args)?;
                 }
                 "default" => {
                     let arg = args
@@ -762,25 +754,22 @@ impl TypeSpecification {
                     let arg = args
                         .first()
                         .ok_or_else(|| "minimum requires an argument".to_string())?;
-                    *minimum = Some(parse_date_string(arg.value())?);
+                    *minimum = Some(arg.value().parse::<DateTimeValue>()?);
                 }
                 "maximum" => {
                     let arg = args
                         .first()
                         .ok_or_else(|| "maximum requires an argument".to_string())?;
-                    *maximum = Some(parse_date_string(arg.value())?);
+                    *maximum = Some(arg.value().parse::<DateTimeValue>()?);
                 }
                 "help" => {
-                    *help = args
-                        .first()
-                        .map(|a| a.value().to_string())
-                        .unwrap_or_default();
+                    apply_type_help_command(help, args)?;
                 }
                 "default" => {
                     let arg = args
                         .first()
                         .ok_or_else(|| "default requires an argument".to_string())?;
-                    *default = Some(parse_date_string(arg.value())?);
+                    *default = Some(arg.value().parse::<DateTimeValue>()?);
                 }
                 _ => {
                     return Err(format!(
@@ -799,25 +788,22 @@ impl TypeSpecification {
                     let arg = args
                         .first()
                         .ok_or_else(|| "minimum requires an argument".to_string())?;
-                    *minimum = Some(parse_time_string(arg.value())?);
+                    *minimum = Some(arg.value().parse::<TimeValue>()?);
                 }
                 "maximum" => {
                     let arg = args
                         .first()
                         .ok_or_else(|| "maximum requires an argument".to_string())?;
-                    *maximum = Some(parse_time_string(arg.value())?);
+                    *maximum = Some(arg.value().parse::<TimeValue>()?);
                 }
                 "help" => {
-                    *help = args
-                        .first()
-                        .map(|a| a.value().to_string())
-                        .unwrap_or_default();
+                    apply_type_help_command(help, args)?;
                 }
                 "default" => {
                     let arg = args
                         .first()
                         .ok_or_else(|| "default requires an argument".to_string())?;
-                    *default = Some(parse_time_string(arg.value())?);
+                    *default = Some(arg.value().parse::<TimeValue>()?);
                 }
                 _ => {
                     return Err(format!(
@@ -828,10 +814,7 @@ impl TypeSpecification {
             },
             TypeSpecification::Duration { help, default } => match command {
                 "help" => {
-                    *help = args
-                        .first()
-                        .map(|a| a.value().to_string())
-                        .unwrap_or_default();
+                    apply_type_help_command(help, args)?;
                 }
                 "default" if args.len() >= 2 => {
                     let value = args[0]
@@ -874,9 +857,8 @@ pub fn parse_number_unit(
     value_str: &str,
     type_spec: &TypeSpecification,
 ) -> Result<crate::parsing::ast::Value, String> {
+    use crate::literals::{NumberLiteral, NumberWithUnit};
     use crate::parsing::ast::Value;
-    use crate::parsing::literals::parse_number_unit_string;
-    use std::str::FromStr;
 
     let trimmed = value_str.trim();
     match type_spec {
@@ -886,15 +868,20 @@ pub fn parse_number_unit(
                     "BUG: Scale type has no units; should have been validated during planning"
                 );
             }
-            match parse_number_unit_string(trimmed) {
-                Ok((n, unit_name)) => {
-                    let unit = units.get(&unit_name).map_err(|e| e.to_string())?;
-                    Ok(Value::Scale(n, unit.name.clone()))
+            match trimmed.parse::<NumberWithUnit>() {
+                Ok(n) => {
+                    let unit = units.get(&n.1).map_err(|e| e.to_string())?;
+                    Ok(Value::Scale(n.0, unit.name.clone()))
                 }
                 Err(e) => {
                     if trimmed.split_whitespace().count() == 1 && !trimmed.is_empty() {
                         let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
-                        let example_unit = units.iter().next().unwrap().name.as_str();
+                        let example_unit = units
+                            .iter()
+                            .next()
+                            .expect("BUG: units non-empty after guard")
+                            .name
+                            .as_str();
                         Err(format!(
                             "Scale value must include a unit, for example: '{} {}'. Valid units: {}.",
                             trimmed,
@@ -913,24 +900,19 @@ pub fn parse_number_unit(
                     "BUG: Ratio type has no units; should have been validated during planning"
                 );
             }
-            match parse_number_unit_string(trimmed) {
-                Ok((n, unit_name)) => {
-                    let unit = units.get(&unit_name).map_err(|e| e.to_string())?;
-                    Ok(Value::Ratio(n / unit.value, Some(unit.name.clone())))
+            match trimmed.parse::<NumberWithUnit>() {
+                Ok(n) => {
+                    let unit = units.get(&n.1).map_err(|e| e.to_string())?;
+                    Ok(Value::Ratio(n.0 / unit.value, Some(unit.name.clone())))
                 }
                 Err(_) => {
                     if trimmed.split_whitespace().count() == 1 && !trimmed.is_empty() {
-                        let clean = trimmed.replace(['_', ','], "");
-                        let digit_count = clean.chars().filter(|c| c.is_ascii_digit()).count();
-                        if digit_count > crate::limits::MAX_NUMBER_DIGITS {
-                            return Err(format!(
-                                "Number has too many digits (max {})",
-                                crate::limits::MAX_NUMBER_DIGITS
-                            ));
-                        }
-                        let n = Decimal::from_str(&clean)
-                            .map_err(|_| format!("Invalid ratio: '{}'", trimmed))?;
-                        Ok(Value::Ratio(n, None))
+                        trimmed
+                            .parse::<NumberLiteral>()
+                            .map(|n| Value::Ratio(n.0, None))
+                            .map_err(|_| {
+                                "Ratio value must be a number, optionally followed by a unit (e.g. '0.5' or '50 percent').".to_string()
+                            })
                     } else {
                         Err("Ratio value must be a number, optionally followed by a unit (e.g. '0.5' or '50 percent').".to_string())
                     }
@@ -948,51 +930,38 @@ pub fn parse_value_from_string(
     type_spec: &TypeSpecification,
     source: &Source,
 ) -> Result<crate::parsing::ast::Value, Error> {
-    use crate::parsing::ast::{BooleanValue, Value};
-    use std::str::FromStr;
+    use crate::parsing::ast::Value;
 
     let to_err = |msg: String| Error::validation(msg, Some(source.clone()), None::<String>);
 
     match type_spec {
-        TypeSpecification::Text { .. } => Ok(Value::Text(value_str.to_string())),
-        TypeSpecification::Number { .. } => {
-            let clean = value_str.replace(['_', ','], "");
-            let digit_count = clean.chars().filter(|c| c.is_ascii_digit()).count();
-            if digit_count > crate::limits::MAX_NUMBER_DIGITS {
-                return Err(to_err(format!(
-                    "Number has too many digits (max {})",
-                    crate::limits::MAX_NUMBER_DIGITS
-                )));
-            }
-            let n = Decimal::from_str(&clean).map_err(|_| to_err(format!("Invalid number: '{}'", value_str)))?;
-            Ok(Value::Number(n))
-        }
+        TypeSpecification::Text { .. } => value_str
+            .parse::<crate::literals::TextLiteral>()
+            .map(|t| Value::Text(t.0))
+            .map_err(to_err),
+        TypeSpecification::Number { .. } => value_str
+            .parse::<crate::literals::NumberLiteral>()
+            .map(|n| Value::Number(n.0))
+            .map_err(to_err),
         TypeSpecification::Scale { .. } => {
             parse_number_unit(value_str, type_spec).map_err(to_err)
         }
-        TypeSpecification::Boolean { .. } => {
-            let bv = match value_str.to_lowercase().as_str() {
-                "true" => BooleanValue::True,
-                "false" => BooleanValue::False,
-                "yes" => BooleanValue::Yes,
-                "no" => BooleanValue::No,
-                "accept" => BooleanValue::Accept,
-                "reject" => BooleanValue::Reject,
-                _ => return Err(to_err(format!("Invalid boolean: '{}'", value_str))),
-            };
-            Ok(Value::Boolean(bv))
-        }
+        TypeSpecification::Boolean { .. } => value_str
+            .parse::<BooleanValue>()
+            .map(Value::Boolean)
+            .map_err(to_err),
         TypeSpecification::Date { .. } => {
-            let date = parse_date_string(value_str).map_err(to_err)?;
+            let date = value_str.parse::<DateTimeValue>().map_err(to_err)?;
             Ok(Value::Date(date))
         }
         TypeSpecification::Time { .. } => {
-            let time = parse_time_string(value_str).map_err(to_err)?;
+            let time = value_str.parse::<TimeValue>().map_err(to_err)?;
             Ok(Value::Time(time))
         }
-        TypeSpecification::Duration { .. } => {
-            parse_duration_from_string(value_str, source)
-        }
+        TypeSpecification::Duration { .. } => value_str
+            .parse::<crate::literals::DurationLiteral>()
+            .map(|d| Value::Duration(d.0, d.1))
+            .map_err(to_err),
         TypeSpecification::Ratio { .. } => {
             parse_number_unit(value_str, type_spec).map_err(to_err)
         }
@@ -1213,7 +1182,7 @@ pub struct PathSegment {
 ///
 /// Represents a fully resolved path through specs to reach a fact.
 /// All spec references are resolved during planning.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FactPath {
     /// Path segments (each is a spec traversal)
     pub segments: Vec<PathSegment>,
@@ -1374,16 +1343,83 @@ impl ExpressionKind {
 // Resolved types and values
 // -----------------------------------------------------------------------------
 
+/// Whether two resolved specs are the same temporal slice (same `name` and `effective_from` as [`LemmaSpec`]'s `PartialEq`).
+/// Not `Arc` pointer identity: [`Arc`] equality uses the inner value.
+#[inline]
+#[must_use]
+pub fn is_same_spec(left: &LemmaSpec, right: &LemmaSpec) -> bool {
+    left == right
+}
+
+/// Where the custom extension chain is rooted: same spec as this type, or imported from another resolved spec.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TypeDefiningSpec {
+    /// Parent type is defined in the same spec as this type.
+    Local,
+    /// Parent type was resolved from types loaded from this dependency (same concrete version as spec-reference facts).
+    Import { spec: Arc<LemmaSpec> },
+}
+
 /// What this type extends (primitive built-in or custom type by name).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TypeExtends {
     /// Extends a primitive built-in type (number, boolean, text, etc.)
     Primitive,
     /// Extends a custom type: parent is the immediate parent type name; family is the root of the extension chain (topmost custom type name).
-    Custom { parent: String, family: String },
+    /// `defining_spec` records whether the parent chain is local or imported from another spec; see [`TypeDefiningSpec`].
+    Custom {
+        parent: String,
+        family: String,
+        defining_spec: TypeDefiningSpec,
+    },
 }
 
+impl PartialEq for TypeExtends {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (TypeExtends::Primitive, TypeExtends::Primitive) => true,
+            (
+                TypeExtends::Custom {
+                    parent: lp,
+                    family: lf,
+                    defining_spec: ld,
+                },
+                TypeExtends::Custom {
+                    parent: rp,
+                    family: rf,
+                    defining_spec: rd,
+                },
+            ) => {
+                lp == rp
+                    && lf == rf
+                    && match (ld, rd) {
+                        (TypeDefiningSpec::Local, TypeDefiningSpec::Local) => true,
+                        (
+                            TypeDefiningSpec::Import { spec: left },
+                            TypeDefiningSpec::Import { spec: right },
+                        ) => is_same_spec(left, right),
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for TypeExtends {}
+
 impl TypeExtends {
+    /// Custom extension in the same spec as the defining type (no cross-spec import for the parent chain).
+    #[must_use]
+    pub fn custom_local(parent: String, family: String) -> Self {
+        TypeExtends::Custom {
+            parent,
+            family,
+            defining_spec: TypeDefiningSpec::Local,
+        }
+    }
+
     /// Returns the parent type name if this type extends a custom type.
     #[must_use]
     pub fn parent_name(&self) -> Option<&str> {
@@ -1398,7 +1434,7 @@ impl TypeExtends {
 ///
 /// Contains a type specification and optional name. Created during planning
 /// from TypeSpecification and TypeDef in the AST.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LemmaType {
     /// Optional type name (e.g., "age", "temperature")
     pub name: Option<String>,
@@ -1658,7 +1694,7 @@ impl LemmaType {
 }
 
 /// Literal value with type. The single value type in semantics.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct LiteralValue {
     pub value: ValueKind,
     pub lemma_type: LemmaType,
@@ -1823,7 +1859,7 @@ impl LiteralValue {
 }
 
 /// Fact value: literal, type declaration (resolved type only), or spec reference.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FactValue {
     Literal(LiteralValue),
     TypeDeclaration { resolved_type: LemmaType },
@@ -1831,7 +1867,7 @@ pub enum FactValue {
 }
 
 /// Fact: path, value, and source location.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fact {
     pub path: FactPath,
     pub value: FactValue,
@@ -1839,7 +1875,7 @@ pub struct Fact {
 }
 
 /// Resolved fact value for the execution plan: aligned with [`FactValue`] but with source per variant.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FactData {
     /// Value-holding fact: current value (literal or default); type is on the value.
     /// When `is_default` is true, the value came from a type `-> default` constraint
@@ -1854,12 +1890,12 @@ pub enum FactData {
         resolved_type: LemmaType,
         source: Source,
     },
-    /// Spec reference fact: holds the resolved spec.
-    /// When the source ref specified a hash pin, it is stored here for verification.
+    /// Spec reference fact: holds the resolved spec and the dependency's plan hash for this slice.
     SpecRef {
         spec: Arc<crate::parsing::ast::LemmaSpec>,
         source: Source,
-        expected_hash_pin: Option<String>,
+        #[serde(alias = "expected_hash_pin")]
+        resolved_plan_hash: Option<String>,
     },
 }
 
@@ -1908,13 +1944,13 @@ impl FactData {
         }
     }
 
-    /// Returns the expected hash pin for spec reference facts when the source ref specified one; `None` otherwise.
-    pub fn expected_hash_pin(&self) -> Option<&str> {
+    /// Returns the resolved dependency plan hash for spec reference facts; `None` for other fact kinds.
+    pub fn resolved_plan_hash(&self) -> Option<&str> {
         match self {
             FactData::Value { .. } | FactData::TypeDeclaration { .. } => None,
             FactData::SpecRef {
-                expected_hash_pin, ..
-            } => expected_hash_pin.as_deref(),
+                resolved_plan_hash, ..
+            } => resolved_plan_hash.as_deref(),
         }
     }
 
@@ -1941,7 +1977,7 @@ pub fn value_to_semantic(value: &crate::parsing::ast::Value) -> Result<ValueKind
     Ok(match value {
         Value::Number(n) => ValueKind::Number(*n),
         Value::Text(s) => ValueKind::Text(s.clone()),
-        Value::Boolean(b) => ValueKind::Boolean(bool::from(b.clone())),
+        Value::Boolean(b) => ValueKind::Boolean(bool::from(*b)),
         Value::Date(dt) => ValueKind::Date(date_time_to_semantic(dt)),
         Value::Time(t) => ValueKind::Time(time_to_semantic(t)),
         Value::Duration(n, u) => ValueKind::Duration(*n, duration_unit_to_semantic(u)),
@@ -2173,9 +2209,10 @@ impl fmt::Display for LiteralValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parsing::ast::{BooleanValue, DateTimeValue, DurationUnit, TimeValue};
+    use crate::parsing::ast::{BooleanValue, DateTimeValue, DurationUnit, LemmaSpec, TimeValue};
     use rust_decimal::Decimal;
     use std::str::FromStr;
+    use std::sync::Arc;
 
     #[test]
     fn test_negated_comparison() {
@@ -2404,10 +2441,7 @@ mod tests {
         let money_custom = LemmaType::new(
             "money".to_string(),
             scale_spec,
-            TypeExtends::Custom {
-                parent: "money".to_string(),
-                family: "money".to_string(),
-            },
+            TypeExtends::custom_local("money".to_string(), "money".to_string()),
         );
         assert_eq!(money_custom.scale_family_name(), Some("money"));
     }
@@ -2423,10 +2457,7 @@ mod tests {
         let money_custom = LemmaType::new(
             "money".to_string(),
             scale_spec,
-            TypeExtends::Custom {
-                parent: "money".to_string(),
-                family: "money".to_string(),
-            },
+            TypeExtends::custom_local("money".to_string(), "money".to_string()),
         );
         assert!(money_primitive.same_scale_family(&money_custom));
         assert!(money_custom.same_scale_family(&money_primitive));
@@ -2439,10 +2470,7 @@ mod tests {
         let type_x2 = LemmaType::new(
             "x2".to_string(),
             scale_spec,
-            TypeExtends::Custom {
-                parent: "x".to_string(),
-                family: "x".to_string(),
-            },
+            TypeExtends::custom_local("x".to_string(), "x".to_string()),
         );
         assert_eq!(type_x.scale_family_name(), Some("x"));
         assert_eq!(type_x2.scale_family_name(), Some("x"));
@@ -2456,18 +2484,12 @@ mod tests {
         let type_x2_a = LemmaType::new(
             "x2a".to_string(),
             scale_spec.clone(),
-            TypeExtends::Custom {
-                parent: "x".to_string(),
-                family: "x".to_string(),
-            },
+            TypeExtends::custom_local("x".to_string(), "x".to_string()),
         );
         let type_x2_b = LemmaType::new(
             "x2b".to_string(),
             scale_spec,
-            TypeExtends::Custom {
-                parent: "x".to_string(),
-                family: "x".to_string(),
-            },
+            TypeExtends::custom_local("x".to_string(), "x".to_string()),
         );
         assert!(type_x2_a.same_scale_family(&type_x2_b));
     }
@@ -2580,5 +2602,57 @@ mod tests {
             fact.explicit_value().is_none(),
             "TypeDeclaration should yield None from explicit_value()"
         );
+    }
+
+    #[test]
+    fn test_lemma_type_inequality_local_vs_import_same_shape() {
+        let dep = Arc::new(LemmaSpec::new("dep".to_string()));
+        let scale_spec = TypeSpecification::scale();
+        let local = LemmaType::new(
+            "t".to_string(),
+            scale_spec.clone(),
+            TypeExtends::custom_local("money".to_string(), "money".to_string()),
+        );
+        let imported = LemmaType::new(
+            "t".to_string(),
+            scale_spec,
+            TypeExtends::Custom {
+                parent: "money".to_string(),
+                family: "money".to_string(),
+                defining_spec: TypeDefiningSpec::Import {
+                    spec: Arc::clone(&dep),
+                },
+            },
+        );
+        assert_ne!(local, imported);
+    }
+
+    #[test]
+    fn test_lemma_type_equality_import_same_resolved_spec_semantics() {
+        let spec_a = Arc::new(LemmaSpec::new("dep".to_string()));
+        let spec_b = Arc::new(LemmaSpec::new("dep".to_string()));
+        assert!(is_same_spec(spec_a.as_ref(), spec_b.as_ref()));
+        let scale_spec = TypeSpecification::scale();
+        let left = LemmaType::new(
+            "t".to_string(),
+            scale_spec.clone(),
+            TypeExtends::Custom {
+                parent: "money".to_string(),
+                family: "money".to_string(),
+                defining_spec: TypeDefiningSpec::Import {
+                    spec: Arc::clone(&spec_a),
+                },
+            },
+        );
+        let right = LemmaType::new(
+            "t".to_string(),
+            scale_spec,
+            TypeExtends::Custom {
+                parent: "money".to_string(),
+                family: "money".to_string(),
+                defining_spec: TypeDefiningSpec::Import { spec: spec_b },
+            },
+        );
+        assert_eq!(left, right);
     }
 }

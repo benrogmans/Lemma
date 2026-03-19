@@ -71,13 +71,16 @@ impl Default for DepthTracker {
 // -----------------------------------------------------------------------------
 
 use crate::parsing::source::Source;
-use chrono::{Datelike, Timelike};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+pub use crate::literals::{
+    BooleanValue, DateTimeValue, DurationUnit, TimeValue, TimezoneValue, Value,
+};
 
 /// A Lemma spec containing facts and rules.
 /// Ordered and compared by (name, effective_from) for use in BTreeSet; None < Some(_) for Option<DateTimeValue>.
@@ -470,14 +473,14 @@ pub enum MathematicalComputation {
 /// For registry references the `name` includes the leading `@` (e.g. `@org/repo/spec`);
 /// for local references it is a plain base name.  `from_registry` mirrors whether
 /// the source used the `@` qualifier; `hash_pin` pins to a specific temporal version
-/// by content hash; `effective` requests temporal resolution at that datetime.
+/// by plan hash; `effective` requests temporal resolution at that datetime.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpecRef {
     /// Spec name as written in source. Includes `@` for registry references.
     pub name: String,
     /// `true` when the source used the `@` qualifier (registry reference).
     pub from_registry: bool,
-    /// Optional content hash pin to resolve to a specific spec version.
+    /// Optional plan hash pin to resolve to a specific spec version.
     pub hash_pin: Option<String>,
     /// Optional effective datetime for temporal resolution. When used with `hash_pin`, resolve by hash then verify that version was active at this datetime.
     pub effective: Option<DateTimeValue>,
@@ -585,148 +588,6 @@ pub enum FactValue {
 }
 
 /// A type for type declarations
-/// Boolean value with original input preserved
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    serde::Deserialize,
-    strum_macros::EnumString,
-    strum_macros::Display,
-)]
-#[strum(ascii_case_insensitive, serialize_all = "lowercase")]
-pub enum BooleanValue {
-    True,
-    False,
-    Yes,
-    No,
-    Accept,
-    Reject,
-}
-
-impl From<BooleanValue> for bool {
-    fn from(value: BooleanValue) -> bool {
-        match value {
-            BooleanValue::True | BooleanValue::Yes | BooleanValue::Accept => true,
-            BooleanValue::False | BooleanValue::No | BooleanValue::Reject => false,
-        }
-    }
-}
-
-impl From<&BooleanValue> for bool {
-    fn from(value: &BooleanValue) -> bool {
-        match value {
-            BooleanValue::True | BooleanValue::Yes | BooleanValue::Accept => true,
-            BooleanValue::False | BooleanValue::No | BooleanValue::Reject => false,
-        }
-    }
-}
-
-impl From<bool> for BooleanValue {
-    fn from(value: bool) -> BooleanValue {
-        if value {
-            BooleanValue::True
-        } else {
-            BooleanValue::False
-        }
-    }
-}
-
-impl std::ops::Not for BooleanValue {
-    type Output = BooleanValue;
-
-    fn not(self) -> Self::Output {
-        if self.into() {
-            BooleanValue::False
-        } else {
-            BooleanValue::True
-        }
-    }
-}
-
-impl std::ops::Not for &BooleanValue {
-    type Output = BooleanValue;
-
-    fn not(self) -> Self::Output {
-        if self.into() {
-            BooleanValue::False
-        } else {
-            BooleanValue::True
-        }
-    }
-}
-
-/// The actual value data (without type information)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Value {
-    Number(Decimal),
-    Scale(Decimal, String),
-    Text(String),
-    Date(DateTimeValue),
-    Time(TimeValue),
-    Boolean(BooleanValue),
-    Duration(Decimal, DurationUnit),
-    Ratio(Decimal, Option<String>),
-}
-
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Value::Number(n) => write!(f, "{}", n),
-            Value::Text(s) => write!(f, "{}", s),
-            Value::Date(dt) => write!(f, "{}", dt),
-            Value::Boolean(b) => write!(f, "{}", b),
-            Value::Time(time) => write!(f, "{}", time),
-            Value::Scale(n, u) => write!(f, "{} {}", n, u),
-            Value::Duration(n, u) => write!(f, "{} {}", n, u),
-            Value::Ratio(n, u) => match u.as_deref() {
-                Some("percent") => {
-                    let display_value = *n * Decimal::from(100);
-                    let norm = display_value.normalize();
-                    let s = if norm.fract().is_zero() {
-                        norm.trunc().to_string()
-                    } else {
-                        norm.to_string()
-                    };
-                    write!(f, "{}%", s)
-                }
-                Some("permille") => {
-                    let display_value = *n * Decimal::from(1000);
-                    let norm = display_value.normalize();
-                    let s = if norm.fract().is_zero() {
-                        norm.trunc().to_string()
-                    } else {
-                        norm.to_string()
-                    };
-                    write!(f, "{}%%", s)
-                }
-                Some(unit) => {
-                    let norm = n.normalize();
-                    let s = if norm.fract().is_zero() {
-                        norm.trunc().to_string()
-                    } else {
-                        norm.to_string()
-                    };
-                    write!(f, "{} {}", s, unit)
-                }
-                None => {
-                    let norm = n.normalize();
-                    let s = if norm.fract().is_zero() {
-                        norm.trunc().to_string()
-                    } else {
-                        norm.to_string()
-                    };
-                    write!(f, "{}", s)
-                }
-            },
-        }
-    }
-}
-
 impl fmt::Display for FactValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -766,177 +627,6 @@ impl fmt::Display for FactValue {
         }
     }
 }
-
-/// A time value
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, serde::Deserialize,
-)]
-pub struct TimeValue {
-    pub hour: u8,
-    pub minute: u8,
-    pub second: u8,
-    pub timezone: Option<TimezoneValue>,
-}
-
-/// A timezone value
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize)]
-pub struct TimezoneValue {
-    pub offset_hours: i8,
-    pub offset_minutes: u8,
-}
-
-/// A datetime value that preserves timezone information.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize)]
-pub struct DateTimeValue {
-    pub year: i32,
-    pub month: u32,
-    pub day: u32,
-    pub hour: u32,
-    pub minute: u32,
-    pub second: u32,
-    #[serde(default)]
-    pub microsecond: u32,
-    pub timezone: Option<TimezoneValue>,
-}
-
-impl DateTimeValue {
-    pub fn now() -> Self {
-        let now = chrono::Local::now();
-        let offset_secs = now.offset().local_minus_utc();
-        Self {
-            year: now.year(),
-            month: now.month(),
-            day: now.day(),
-            hour: now.time().hour(),
-            minute: now.time().minute(),
-            second: now.time().second(),
-            microsecond: now.time().nanosecond() / 1000 % 1_000_000,
-            timezone: Some(TimezoneValue {
-                offset_hours: (offset_secs / 3600) as i8,
-                offset_minutes: ((offset_secs.abs() % 3600) / 60) as u8,
-            }),
-        }
-    }
-
-    /// Parse a datetime string. Accepts:
-    /// - Full ISO 8601: `2026-03-04T10:30:00Z`, `2026-03-04T10:30:00+02:00`
-    /// - Date + time without tz: `2026-03-04T10:30:00`
-    /// - Date only: `2026-03-04` (midnight)
-    /// - ISO week: `2026-W08` (Monday of ISO week)
-    /// - Year-month: `2026-03` (first of month)
-    /// - Year only: `2026` (Jan 1)
-    pub fn parse(s: &str) -> Option<Self> {
-        if let Some(dtv) = crate::parsing::literals::parse_datetime_str(s) {
-            return Some(dtv);
-        }
-        if let Some(week_val) = Self::parse_iso_week(s) {
-            return Some(week_val);
-        }
-        if let Ok(ym) = chrono::NaiveDate::parse_from_str(&format!("{}-01", s), "%Y-%m-%d") {
-            return Some(Self {
-                year: ym.year(),
-                month: ym.month(),
-                day: 1,
-                hour: 0,
-                minute: 0,
-                second: 0,
-                microsecond: 0,
-                timezone: None,
-            });
-        }
-        if let Ok(year) = s.parse::<i32>() {
-            if (1..=9999).contains(&year) {
-                return Some(Self {
-                    year,
-                    month: 1,
-                    day: 1,
-                    hour: 0,
-                    minute: 0,
-                    second: 0,
-                    microsecond: 0,
-                    timezone: None,
-                });
-            }
-        }
-        None
-    }
-
-    /// Parse ISO week date format: `YYYY-Www` (e.g. `2026-W08`).
-    /// Returns the Monday of that ISO week.
-    fn parse_iso_week(s: &str) -> Option<Self> {
-        let parts: Vec<&str> = s.split("-W").collect();
-        if parts.len() != 2 {
-            return None;
-        }
-        let year: i32 = parts[0].parse().ok()?;
-        let week: u32 = parts[1].parse().ok()?;
-        if week == 0 || week > 53 {
-            return None;
-        }
-        let date = chrono::NaiveDate::from_isoywd_opt(year, week, chrono::Weekday::Mon)?;
-        Some(Self {
-            year: date.year(),
-            month: date.month(),
-            day: date.day(),
-            hour: 0,
-            minute: 0,
-            second: 0,
-            microsecond: 0,
-            timezone: None,
-        })
-    }
-}
-
-/// Unit types for different physical quantities
-macro_rules! impl_unit_serialize {
-    ($($unit_type:ty),+) => {
-        $(
-            impl Serialize for $unit_type {
-                fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-                where
-                    S: serde::Serializer,
-                {
-                    serializer.serialize_str(&self.to_string())
-                }
-            }
-        )+
-    };
-}
-
-impl_unit_serialize!(DurationUnit);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize, strum_macros::EnumString)]
-#[strum(serialize_all = "lowercase")]
-pub enum DurationUnit {
-    Year,
-    Month,
-    Week,
-    Day,
-    Hour,
-    Minute,
-    Second,
-    Millisecond,
-    Microsecond,
-}
-
-impl fmt::Display for DurationUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            DurationUnit::Year => "years",
-            DurationUnit::Month => "months",
-            DurationUnit::Week => "weeks",
-            DurationUnit::Day => "days",
-            DurationUnit::Hour => "hours",
-            DurationUnit::Minute => "minutes",
-            DurationUnit::Second => "seconds",
-            DurationUnit::Millisecond => "milliseconds",
-            DurationUnit::Microsecond => "microseconds",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-//
 
 impl LemmaFact {
     #[must_use]
@@ -1278,50 +968,6 @@ impl fmt::Display for MathematicalComputation {
             MathematicalComputation::Floor => write!(f, "floor"),
             MathematicalComputation::Ceil => write!(f, "ceil"),
             MathematicalComputation::Round => write!(f, "round"),
-        }
-    }
-}
-
-impl fmt::Display for TimeValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:02}:{:02}:{:02}", self.hour, self.minute, self.second)
-    }
-}
-
-impl fmt::Display for TimezoneValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.offset_hours == 0 && self.offset_minutes == 0 {
-            write!(f, "Z")
-        } else {
-            let sign = if self.offset_hours >= 0 { "+" } else { "-" };
-            let hours = self.offset_hours.abs();
-            write!(f, "{}{:02}:{:02}", sign, hours, self.offset_minutes)
-        }
-    }
-}
-
-impl fmt::Display for DateTimeValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let has_time = self.hour != 0
-            || self.minute != 0
-            || self.second != 0
-            || self.microsecond != 0
-            || self.timezone.is_some();
-        if !has_time {
-            write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
-        } else {
-            write!(
-                f,
-                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-                self.year, self.month, self.day, self.hour, self.minute, self.second
-            )?;
-            if self.microsecond != 0 {
-                write!(f, ".{:06}", self.microsecond)?;
-            }
-            if let Some(tz) = &self.timezone {
-                write!(f, "{}", tz)?;
-            }
-            Ok(())
         }
     }
 }
@@ -1784,7 +1430,7 @@ mod tests {
 
     #[test]
     fn test_datetime_parse_iso_week() {
-        let dt = DateTimeValue::parse("2026-W01").unwrap();
+        let dt: DateTimeValue = "2026-W01".parse().unwrap();
         assert_eq!(dt.year, 2025);
         assert_eq!(dt.month, 12);
         assert_eq!(dt.day, 29);

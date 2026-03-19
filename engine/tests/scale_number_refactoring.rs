@@ -1,6 +1,6 @@
 //! Integration tests for Scale/Number arithmetic behavior.
 //!
-//! Unit-resolution and TypeResolver behavior tests live in `src/planning/types.rs`.
+//! Unit-resolution and PerSliceTypeResolver behavior tests live in `src/planning/types.rs`.
 
 use lemma::Engine;
 mod common;

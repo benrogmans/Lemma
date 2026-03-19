@@ -23,7 +23,7 @@ lemma run [<spec>] [--rules=rule1,rule2] [facts...] [options]
 - `spec` -- evaluate all rules
 - `spec --rules=rule` -- evaluate one rule
 - `spec --rules=rule1,rule2` -- evaluate specific rules (comma-separated)
-- `spec~hash` -- pin to content hash (like HTTP `?hash=`)
+- `spec~hash` -- pin to plan hash
 - No arguments with `-i` -- interactive mode
 
 **Options:**
@@ -48,16 +48,16 @@ lemma run spec~a1b2c3d4
 lemma run -i
 ```
 
-### `lemma show` -- inspect spec structure
+### `lemma schema` -- spec schema (facts and rules)
 
-Shows facts, rules, and content hash. Use the hash with `spec~hash` to pin evaluation.
+Shows facts, rules, and plan hash. Use the hash with `spec~hash` to pin evaluation.
 
 ```bash
-lemma show <spec> [-d <path>] [--effective <datetime>] [--hash]
+lemma schema <spec> [-d <path>] [--effective <datetime>] [--hash]
 ```
 
 **Options:**
-- `--hash` -- output only the content hash (for piping, e.g. `lemma run spec~$(lemma show spec --hash)`)
+- `--hash` -- output only the plan hash (for piping, e.g. `lemma run spec~$(lemma schema spec --hash)`)
 
 ### `lemma list` -- list all specs
 

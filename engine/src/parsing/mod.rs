@@ -3,7 +3,6 @@ use crate::limits::ResourceLimits;
 
 pub mod ast;
 pub mod lexer;
-pub mod literals;
 pub mod parser;
 pub mod source;
 
@@ -548,7 +547,7 @@ fact a: spec @user/workspace/spec_a"#;
 
     #[test]
     fn parse_type_import_with_hash() {
-        let input = "spec consumer\ntype money from finance a1b2c3d4\nfact p: [money]";
+        let input = "spec consumer\ntype money from finance~a1b2c3d4\nfact p: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -564,7 +563,7 @@ fact a: spec @user/workspace/spec_a"#;
 
     #[test]
     fn parse_type_import_registry_with_hash() {
-        let input = "spec consumer\ntype money from @lemma/std/finance ab12cd34\nfact p: [money]";
+        let input = "spec consumer\ntype money from @lemma/std/finance~ab12cd34\nfact p: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -581,7 +580,7 @@ fact a: spec @user/workspace/spec_a"#;
 
     #[test]
     fn parse_inline_type_from_with_hash() {
-        let input = "spec consumer\nfact price: [money from finance a1b2c3d4 -> minimum 0]";
+        let input = "spec consumer\nfact price: [money from finance~a1b2c3d4 -> minimum 0]";
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;

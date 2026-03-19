@@ -130,23 +130,27 @@ impl Parser {
         )
     }
 
-    /// Parse a content hash (8 alphanumeric chars) after a `~` token.
-    /// Bypasses normal tokenization to avoid misinterpreting digit+letter
-    /// sequences as scientific notation (e.g. `7e20848b`).
-    fn parse_content_hash(&mut self) -> Result<String, Error> {
-        let hash_span = self.lexer.current_span();
+    /// Parse `~ HASH` where HASH is 8 alphanumeric chars. Optional — returns
+    /// `Ok(None)` when the next token is not `~`. Uses raw scanning after the
+    /// tilde to bypass tokenization (avoids scientific-notation mis-lexing of
+    /// hashes like `7e20848b`).
+    fn try_parse_hash_pin(&mut self) -> Result<Option<String>, Error> {
+        if !self.at(&TokenKind::Tilde)? {
+            return Ok(None);
+        }
+        let tilde_span = self.next()?.span;
         let hash = self.lexer.scan_raw_alphanumeric()?;
         if hash.len() != 8 {
             return Err(Error::parsing(
                 format!(
-                    "Expected an 8-character alphanumeric content hash after '~', found '{}'",
+                    "Expected an 8-character alphanumeric plan hash after '~', found '{}'",
                     hash
                 ),
-                self.make_source(hash_span),
+                self.make_source(tilde_span),
                 None::<String>,
             ));
         }
-        Ok(hash)
+        Ok(Some(hash))
     }
 
     fn make_source(&self, span: Span) -> Source {
@@ -424,7 +428,7 @@ impl Parser {
             }
 
             // Try to parse as datetime
-            if let Some(dtv) = DateTimeValue::parse(&dt_str) {
+            if let Ok(dtv) = dt_str.parse::<DateTimeValue>() {
                 return Ok(Some(dtv));
             }
 
@@ -552,11 +556,7 @@ impl Parser {
         let (name, _name_span) = self.parse_spec_name()?;
         let from_registry = name.starts_with('@');
 
-        let mut hash_pin = None;
-        if self.at(&TokenKind::Tilde)? {
-            self.next()?; // consume ~
-            hash_pin = Some(self.parse_content_hash()?);
-        }
+        let hash_pin = self.try_parse_hash_pin()?;
 
         let mut effective = None;
         // Check for effective datetime after spec reference
@@ -732,17 +732,7 @@ impl Parser {
 
         let (from_name, _from_span) = self.parse_spec_name()?;
         let from_registry = from_name.starts_with('@');
-
-        let mut hash_pin = None;
-        // Check for hash after spec name (space separated, 8 alphanumeric chars)
-        if self.at(&TokenKind::Identifier)? || self.at(&TokenKind::NumberLit)? {
-            let peeked = self.peek()?;
-            let peeked_text = peeked.text.clone();
-            if peeked_text.len() == 8 && peeked_text.chars().all(|c| c.is_ascii_alphanumeric()) {
-                let hash_tok = self.next()?;
-                hash_pin = Some(hash_tok.text.clone());
-            }
-        }
+        let hash_pin = self.try_parse_hash_pin()?;
 
         let from = SpecRef {
             name: from_name,
@@ -793,17 +783,7 @@ impl Parser {
             self.next()?; // consume from
             let (from_name, _) = self.parse_spec_name()?;
             let from_registry = from_name.starts_with('@');
-            let mut hash_pin = None;
-            // Check for hash
-            if self.at(&TokenKind::Identifier)? || self.at(&TokenKind::NumberLit)? {
-                let peeked = self.peek()?;
-                let peeked_text = peeked.text.clone();
-                if peeked_text.len() == 8 && peeked_text.chars().all(|c| c.is_ascii_alphanumeric())
-                {
-                    let hash_tok = self.next()?;
-                    hash_pin = Some(hash_tok.text.clone());
-                }
-            }
+            let hash_pin = self.try_parse_hash_pin()?;
             Some(SpecRef {
                 name: from_name,
                 from_registry,
@@ -1207,7 +1187,7 @@ impl Parser {
             }
         }
 
-        if let Some(dtv) = crate::parsing::literals::parse_datetime_str(&dt_str) {
+        if let Ok(dtv) = dt_str.parse::<crate::literals::DateTimeValue>() {
             return Ok(Value::Date(dtv));
         }
 

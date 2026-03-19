@@ -4,6 +4,7 @@ members = [
     "cli",
     "engine",
     "engine/lsp",
+    "engine/packages/hex/native/lemma_hex",
     "openapi",
 ]
 default-members = ["cli"]

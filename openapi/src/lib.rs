@@ -113,7 +113,7 @@ pub fn generate_openapi_effective(
     let unique_spec_names: Vec<String> = active_specs.iter().map(|s| s.name.clone()).collect();
 
     for spec_name in &unique_spec_names {
-        if let Ok(plan) = engine.plan(spec_name, Some(effective)) {
+        if let Ok(plan) = engine.get_plan(spec_name, Some(effective)) {
             let schema = plan.schema();
             let facts = collect_input_facts_from_schema(&schema);
             let rule_names: Vec<String> = schema.rules.keys().cloned().collect();
@@ -234,20 +234,21 @@ fn collect_input_facts_from_schema(schema: &lemma::SpecSchema) -> Vec<InputFact>
 fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeValue) -> Value {
     let spec_items: Vec<Value> = spec_names
         .iter()
-        .map(|name| {
-            let (facts_count, rules_count) = engine
-                .show(name, Some(effective))
-                .map(|s| {
-                    let facts_count = s.facts.keys().filter(|n| !n.contains('.')).count();
-                    let rules_count = s.rules.len();
-                    (facts_count, rules_count)
+        .map(|name| match engine.schema(name, Some(effective)) {
+            Ok(s) => {
+                let facts_count = s.facts.keys().filter(|n| !n.contains('.')).count();
+                let rules_count = s.rules.len();
+                json!({
+                    "name": name,
+                    "facts": facts_count,
+                    "rules": rules_count
                 })
-                .unwrap_or((0, 0));
-            json!({
+            }
+            Err(e) => json!({
                 "name": name,
-                "facts": facts_count,
-                "rules": rules_count
-            })
+                "schema_error": true,
+                "message": e.to_string()
+            }),
         })
         .collect();
 
@@ -268,9 +269,11 @@ fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeV
                                     "properties": {
                                         "name": { "type": "string" },
                                         "facts": { "type": "integer" },
-                                        "rules": { "type": "integer" }
+                                        "rules": { "type": "integer" },
+                                        "schema_error": { "type": "boolean" },
+                                        "message": { "type": "string" }
                                     },
-                                    "required": ["name", "facts", "rules"]
+                                    "required": ["name"]
                                 }
                             },
                             "example": spec_items
@@ -354,23 +357,6 @@ fn error_response_schema() -> Value {
 fn not_found_response_schema() -> Value {
     json!({
         "description": "Spec not found",
-        "content": {
-            "application/json": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "error": { "type": "string" }
-                    },
-                    "required": ["error"]
-                }
-            }
-        }
-    })
-}
-
-fn hash_conflict_response_schema() -> Value {
-    json!({
-        "description": "Path pin (spec~hash) does not match the resolved spec's content hash",
         "content": {
             "application/json": {
                 "schema": {
@@ -475,8 +461,7 @@ fn build_spec_path_item(
                     }
                 },
                 "400": error_response_schema(),
-                "404": not_found_response_schema(),
-                "409": hash_conflict_response_schema()
+                "404": not_found_response_schema()
             }
         },
         "post": {
@@ -502,8 +487,7 @@ fn build_spec_path_item(
                     }
                 },
                 "400": error_response_schema(),
-                "404": not_found_response_schema(),
-                "409": hash_conflict_response_schema()
+                "404": not_found_response_schema()
             }
         }
     })

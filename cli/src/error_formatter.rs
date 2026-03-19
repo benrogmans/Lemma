@@ -73,6 +73,6 @@ pub fn format_error(error: &Error) -> String {
             details,
             "",
         ),
-        Error::Request(details) => format_details("Request error", details, ""),
+        Error::Request { details, .. } => format_details("Request error", details, ""),
     }
 }

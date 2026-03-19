@@ -142,7 +142,6 @@ pub fn invert(
         Error::request(
             format!("Rule not found: {}.{}", plan.spec_name, rule_name),
             None::<String>,
-            None,
         )
     })?;
 

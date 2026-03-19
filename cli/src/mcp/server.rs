@@ -82,7 +82,7 @@ mod imp {
 
     fn resolve_effective(args: &serde_json::Value) -> Result<DateTimeValue, McpError> {
         match args.get("effective").and_then(|v| v.as_str()) {
-            Some(s) if !s.trim().is_empty() => DateTimeValue::parse(s.trim()).ok_or_else(|| {
+            Some(s) if !s.trim().is_empty() => s.trim().parse::<DateTimeValue>().ok().ok_or_else(|| {
                 McpError::invalid_params(format!(
                     "Invalid effective value '{}'. Expected: YYYY, YYYY-MM, YYYY-MM-DD, or ISO 8601 datetime",
                     s
@@ -360,7 +360,7 @@ mod imp {
 
             let now = DateTimeValue::now();
             for spec_name in &new_spec_names {
-                if let Ok(plan) = self.engine.plan(spec_name, Some(&now)) {
+                if let Ok(plan) = self.engine.get_plan(spec_name, Some(&now)) {
                     output.push_str(&plan.schema().to_string());
                     output.push('\n');
                 }
@@ -388,10 +388,10 @@ mod imp {
                 .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
 
             let now = resolve_effective(args)?;
-            let spec = self.engine.get_spec(spec_name, &now).ok_or_else(|| {
+            let spec = self.engine.get_spec(spec_name, Some(&now)).map_err(|e| {
                 McpError::invalid_params(format!(
-                    "Spec '{}' not found. Use list_specs to see available specs.",
-                    spec_name
+                    "Spec '{}' not found: {}. Use list_specs to see available specs.",
+                    spec_name, e
                 ))
             })?;
 
@@ -421,7 +421,7 @@ mod imp {
                 ));
             }
 
-            let (base_name, _) = lemma::parse_spec_id(spec_id.trim())
+            let (_base_name, _) = lemma::parse_spec_id(spec_id.trim())
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
@@ -456,15 +456,16 @@ mod imp {
 
             let hash = self
                 .engine
-                .hash_pin(&base_name, &now)
-                .map(|h| h.to_string());
+                .get_plan(spec_id.trim(), Some(&now))
+                .map_err(|e| {
+                    McpError::internal_error(format!("BUG: run succeeded but get_plan failed: {e}"))
+                })?
+                .plan_hash();
 
             let mut output = String::new();
             output.push_str(&format!("spec: {}\n", spec_id.trim()));
             output.push_str(&format!("effective: {}\n", now));
-            if let Some(ref h) = hash {
-                output.push_str(&format!("hash: {}\n", h));
-            }
+            output.push_str(&format!("hash: {}\n", hash));
             output.push('\n');
 
             for result in response.results.values() {
@@ -520,7 +521,7 @@ mod imp {
             } else {
                 let schemas: Vec<lemma::SpecSchema> = specs_list
                     .iter()
-                    .filter_map(|s| self.engine.show(&s.name, Some(&now)).ok())
+                    .filter_map(|s| self.engine.schema(&s.name, Some(&now)).ok())
                     .collect();
 
                 schemas
@@ -555,12 +556,15 @@ mod imp {
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let now = resolve_effective(args)?;
-            let plan = self.engine.plan(spec_id.trim(), Some(&now)).map_err(|_| {
-                McpError::invalid_params(format!(
-                    "Spec '{}' not found. Use list_specs to see available specs.",
-                    spec_id.trim()
-                ))
-            })?;
+            let plan = self
+                .engine
+                .get_plan(spec_id.trim(), Some(&now))
+                .map_err(|_| {
+                    McpError::invalid_params(format!(
+                        "Spec '{}' not found. Use list_specs to see available specs.",
+                        spec_id.trim()
+                    ))
+                })?;
 
             let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
                 Some(rule) if !rule.trim().is_empty() => vec![rule.trim().to_string()],

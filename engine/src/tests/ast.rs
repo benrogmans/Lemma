@@ -388,8 +388,8 @@ fn test_expression_get_source_text_source_not_found() {
 
 #[test]
 fn test_datetime_value_parse_year_and_year_month_equal() {
-    let from_year = DateTimeValue::parse("2026").expect("2026 should parse");
-    let from_year_month = DateTimeValue::parse("2026-01").expect("2026-01 should parse");
+    let from_year: DateTimeValue = "2026".parse().expect("2026 should parse");
+    let from_year_month: DateTimeValue = "2026-01".parse().expect("2026-01 should parse");
     assert_eq!(
         from_year, from_year_month,
         "2026 and 2026-01 should normalize to same value"

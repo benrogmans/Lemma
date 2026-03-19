@@ -1,7 +1,7 @@
 /target
 
-# WASM build output
-engine/pkg/
+# npm build output
+engine/packages/npm/dist/
 
 # Fuzz testing artifacts
 engine/fuzz/artifacts/

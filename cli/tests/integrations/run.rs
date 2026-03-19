@@ -106,7 +106,7 @@ rule discount: 0
 }
 
 #[test]
-fn test_cli_show_spec() {
+fn test_cli_schema_spec() {
     let temp_dir = TempDir::new().unwrap();
     let lemma_file = temp_dir.path().join("test.lemma");
 
@@ -122,7 +122,7 @@ rule doubled: value * 2
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("show")
+    cmd.arg("schema")
         .arg("inspect_test")
         .arg("--dir")
         .arg(temp_dir.path());

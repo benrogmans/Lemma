@@ -6,12 +6,14 @@ fn test_wasm_build_and_test() {
     // This test ensures the WASM build and tests work correctly
     println!("Building WASM package...");
 
-    // Build WASM package
+    // Build WASM package (npm package at engine/packages/npm)
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let npm_dir = manifest_dir.join("packages").join("npm");
     let build_status = Command::new("node")
-        .arg("wasm/build.js")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .arg("build.js")
+        .current_dir(&npm_dir)
         .status()
-        .expect("Failed to execute node wasm/build.js");
+        .expect("Failed to execute node build.js in packages/npm");
 
     assert!(
         build_status.success(),
@@ -23,10 +25,10 @@ fn test_wasm_build_and_test() {
 
     // Test WASM package
     let test_status = Command::new("node")
-        .arg("wasm/test.js")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .arg("test.js")
+        .current_dir(&npm_dir)
         .status()
-        .expect("Failed to execute node wasm/test.js");
+        .expect("Failed to execute node test.js in packages/npm");
 
     assert!(
         test_status.success(),
@@ -34,15 +36,15 @@ fn test_wasm_build_and_test() {
         test_status.code()
     );
 
-    println!("✅ WASM build and tests passed!");
+    println!("WASM build and tests passed!");
 }
 
 #[test]
 #[ignore]
 fn test_wasm_scripts_exist() {
-    // This test always runs and just checks that the WASM scripts exist
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let wasm_dir = std::path::Path::new(manifest_dir).join("wasm");
+    // This test always runs and just checks that the WASM/npm package scripts exist
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let wasm_dir = manifest_dir.join("packages").join("npm");
     for name in [
         "build.js",
         "test.js",

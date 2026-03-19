@@ -54,6 +54,7 @@ pub mod evaluation;
 pub mod formatting;
 pub mod inversion;
 pub mod limits;
+pub(crate) mod literals;
 pub mod parsing;
 pub mod planning;
 pub mod registry;
@@ -64,7 +65,7 @@ pub mod spec_id;
 pub mod wasm;
 
 pub use engine::{Context, Engine, LoadSource};
-pub use error::Error;
+pub use error::{Error, RequestErrorKind};
 pub use evaluation::operations::{
     ComputationKind, OperationKind, OperationRecord, OperationResult,
 };
@@ -81,8 +82,8 @@ pub use parsing::parse;
 pub use parsing::ParseResult;
 pub use parsing::Source;
 pub use planning::semantics::{
-    FactPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit, ScaleUnits,
-    SemanticDurationUnit, TypeSpecification, ValueKind,
+    is_same_spec, FactPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit,
+    ScaleUnits, SemanticDurationUnit, TypeDefiningSpec, TypeSpecification, ValueKind,
 };
 pub use planning::{ExecutionPlan, PlanningResult, SpecPlanningResult, SpecSchema};
 #[cfg(feature = "registry")]

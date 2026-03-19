@@ -70,12 +70,8 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
         lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
     );
 
-    if let Some(spec) = engine.get_spec("employment_terms", &now) {
-        engine.remove_spec(spec);
-    }
-    if let Some(spec) = engine.get_spec("base_contract", &now) {
-        engine.remove_spec(spec);
-    }
+    let _ = engine.remove("employment_terms", Some(&now));
+    let _ = engine.remove("base_contract", Some(&now));
 }
 
 #[test]
@@ -149,9 +145,7 @@ rule effective_rate: (tax_amount / income) * 100%
         )))
     );
 
-    if let Some(spec) = engine.get_spec("tax_calculation", &now) {
-        engine.remove_spec(spec);
-    }
+    let _ = engine.remove("tax_calculation", Some(&now));
 }
 
 #[test]
@@ -206,9 +200,7 @@ rule status: "LOW"
         .unwrap();
     assert_eq!(status2.result.value().unwrap().to_string(), "HIGH");
 
-    if let Some(spec) = engine.get_spec("dynamic_config", &now) {
-        engine.remove_spec(spec);
-    }
+    let _ = engine.remove("dynamic_config", Some(&now));
 }
 
 #[test]
@@ -260,9 +252,7 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
         lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(false)))
     );
 
-    if let Some(spec) = engine.get_spec("project_timeline", &now) {
-        engine.remove_spec(spec);
-    }
+    let _ = engine.remove("project_timeline", Some(&now));
 }
 
 // ============================================================================

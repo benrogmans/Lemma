@@ -136,8 +136,8 @@ fact currency: spec base_types
 fact other_spec.price: 15
 ```
 
-Spec reference syntax: **name required**; optional datetime and optional content hash for verification:
-`spec name`, `spec name datetime`, `spec name datetime hash`, `spec name hash`. Hash is verification only; resolution is always by (name, effective).
+Spec reference syntax: **name required**; optional datetime and optional plan hash pin for verification:
+`spec name`, `spec name datetime`, `spec name datetime~hash`, `spec name~hash`. Whitespace around `~` is allowed. Hash is verification only; resolution is always by (name, effective).
 
 Values: literals (number, text, boolean, date, duration, percent, number+unit), type annotation `[type]` or `[type -> ...]`, or `spec other_spec`. Bind a fact in another spec with `fact spec_name.name: value`.
 
@@ -290,4 +290,4 @@ See **documentation/reference.md** and **documentation/index.md** for full synta
 - **Veto** is the way “this rule has no value” is expressed (e.g. division by zero, user `veto "..."`); it is not an error. Propagate Veto according to `veto_semantics.md`.
 - When editing the codebase, preserve these guarantees, use **Error** for invalid Lemma, use **Veto** for domain-level “no value,” and **panic/unreachable** for bugs. Prefer **cargo nextest** and TDD as in the project rules.
 - **Never use placeholders in Lemma code** (no dummy values, TODO literals, or fake data in `.lemma` files, docs, or tests). Placeholders destroy certainty; use real, intended values or omit/fail instead.
-- **CLI:** `lemma show <spec> [--effective T]` displays spec structure and content hash. `lemma run <spec~hash> [--effective T]` pins to that hash. **APIs:** evaluate requests take required spec_name, optional effective, optional content_hash (verify before evaluate).
+- **CLI:** `lemma schema <spec> [--effective T]` displays spec structure and plan hash. `lemma run <spec~hash> [--effective T]` pins to that hash. **APIs:** evaluate requests take required spec_name, optional effective, optional plan hash pin (verify before evaluate).

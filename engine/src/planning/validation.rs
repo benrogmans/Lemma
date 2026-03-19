@@ -1006,7 +1006,6 @@ mod tests {
     use crate::parsing::ast::CommandArg;
     use crate::planning::semantics::TypeSpecification;
     use rust_decimal::Decimal;
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     fn test_source() -> Source {
@@ -1257,11 +1256,15 @@ mod tests {
         // This test now validates that type specification validation works correctly.
         // The actual validation happens during graph building, but we test the validation
         // function directly here.
+        use crate::engine::Context;
         use crate::parsing::ast::{LemmaSpec, TypeDef};
-        use crate::planning::types::TypeResolver;
+        use crate::planning::types::PerSliceTypeResolver;
         use std::sync::Arc;
 
         let spec = Arc::new(LemmaSpec::new("test".to_string()));
+        let mut ctx = Context::new();
+        ctx.insert_spec(Arc::clone(&spec), false)
+            .expect("insert test spec");
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
                 "<test>",
@@ -1287,10 +1290,8 @@ mod tests {
             ]),
         };
 
-        // Register and resolve the type to get its specifications
-        let mut sources = HashMap::new();
-        sources.insert("<test>".to_string(), String::new());
-        let mut type_resolver = TypeResolver::new();
+        let plan_hashes = crate::planning::PlanHashRegistry::default();
+        let mut type_resolver = PerSliceTypeResolver::new(&ctx, None, &plan_hashes);
         type_resolver
             .register_type(&spec, type_def)
             .expect("Should register type");
