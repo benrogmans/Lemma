@@ -235,8 +235,9 @@ rule price_gbp: 100 eur in gbp
 "#;
 
     let mut engine = Engine::new();
-    let errs = add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap_err();
-    let msg = errs
+    let load_err = add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap_err();
+    let msg = load_err
+        .errors
         .iter()
         .map(|e| e.to_string())
         .collect::<Vec<_>>()

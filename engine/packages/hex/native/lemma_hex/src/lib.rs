@@ -61,8 +61,8 @@ fn lemma_load<'a>(
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
     match engine.load(&code, source) {
         Ok(()) => Ok(rustler::Atom::from_str(env, "ok")?.encode(env)),
-        Err(errors) => {
-            let list = error_encoding::encode_errors(env, &errors);
+        Err(load_err) => {
+            let list = error_encoding::encode_errors(env, &load_err.errors);
             Ok((rustler::Atom::from_str(env, "error")?, list).encode(env))
         }
     }
@@ -81,8 +81,8 @@ fn lemma_load_from_paths<'a>(
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
     match engine.load_from_paths(&path_refs, false) {
         Ok(()) => Ok(rustler::Atom::from_str(env, "ok")?.encode(env)),
-        Err(errors) => {
-            let list = error_encoding::encode_errors(env, &errors);
+        Err(load_err) => {
+            let list = error_encoding::encode_errors(env, &load_err.errors);
             Ok((rustler::Atom::from_str(env, "error")?, list).encode(env))
         }
     }

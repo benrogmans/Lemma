@@ -1515,6 +1515,7 @@ dependencies = [
 name = "lemma-engine"
 version = "0.8.3"
 dependencies = [
+ "ariadne",
  "async-trait",
  "boolean_expression",
  "chrono",

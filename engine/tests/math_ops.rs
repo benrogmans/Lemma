@@ -5,13 +5,16 @@ use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::{collections::HashMap, str::FromStr};
 
-fn run(code: &str, rule: &str) -> Result<String, Vec<lemma::Error>> {
+fn run(code: &str, rule: &str) -> Result<String, lemma::LoadError> {
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma")?;
     let now = DateTimeValue::now();
     let mut resp = engine
         .run("test", Some(&now), HashMap::new())
-        .map_err(|e| vec![e])?;
+        .map_err(|e| lemma::LoadError {
+            errors: vec![e],
+            sources: engine.sources().clone(),
+        })?;
     resp.filter_rules(&[rule.to_string()]);
     let v = resp
         .results
@@ -22,7 +25,7 @@ fn run(code: &str, rule: &str) -> Result<String, Vec<lemma::Error>> {
     Ok(v.to_string())
 }
 
-fn run_num(code: &str, rule: &str) -> Result<Decimal, Vec<lemma::Error>> {
+fn run_num(code: &str, rule: &str) -> Result<Decimal, lemma::LoadError> {
     let s = run(code, rule)?;
     Ok(s.parse::<Decimal>()
         .expect("engine result should parse as Decimal"))
@@ -50,7 +53,7 @@ fn tol(scale: u32) -> Decimal {
 }
 
 #[test]
-fn test_exp_and_power() -> Result<(), Vec<lemma::Error>> {
+fn test_exp_and_power() -> Result<(), lemma::LoadError> {
     let code = r#"
     spec test
     rule a: exp 1
@@ -65,7 +68,7 @@ fn test_exp_and_power() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_abs_floor_ceil_round() -> Result<(), Vec<lemma::Error>> {
+fn test_abs_floor_ceil_round() -> Result<(), lemma::LoadError> {
     let code = r#"
     spec test
     rule a: abs -3.5
@@ -87,7 +90,7 @@ fn test_abs_floor_ceil_round() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_sqrt_and_log_basic() -> Result<(), Vec<lemma::Error>> {
+fn test_sqrt_and_log_basic() -> Result<(), lemma::LoadError> {
     let code = r#"
     spec test
     rule a: sqrt 9
@@ -113,7 +116,7 @@ fn test_sqrt_and_log_basic() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_trig_at_zero() -> Result<(), Vec<lemma::Error>> {
+fn test_trig_at_zero() -> Result<(), lemma::LoadError> {
     let code = r#"
     spec test
     rule s: sin 0
@@ -133,7 +136,7 @@ fn test_trig_at_zero() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_nested_math_ops() -> Result<(), Vec<lemma::Error>> {
+fn test_nested_math_ops() -> Result<(), lemma::LoadError> {
     let code = r#"
     spec test
     rule a: round (abs -3.6)

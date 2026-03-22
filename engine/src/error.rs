@@ -468,9 +468,13 @@ impl Error {
         }
     }
 
-    /// Get the source text if available
-    pub fn source_text(&self) -> Option<&str> {
-        self.location().map(|s| &*s.source_text)
+    /// Resolve source text from the sources map (for display). Source no longer stores text.
+    pub fn source_text(
+        &self,
+        sources: &std::collections::HashMap<String, String>,
+    ) -> Option<String> {
+        self.location()
+            .and_then(|s| s.text_from(sources).map(|c| c.into_owned()))
     }
 
     /// Get the suggestion if available
@@ -491,7 +495,6 @@ impl Error {
 mod tests {
     use super::*;
     use crate::parsing::ast::Span;
-    use std::sync::Arc;
 
     fn test_source() -> Source {
         Source::new(
@@ -502,7 +505,6 @@ mod tests {
                 line: 1,
                 col: 15,
             },
-            Arc::from("fact amount: 100"),
         )
     }
 
@@ -521,7 +523,6 @@ mod tests {
                 line: 1,
                 col: 6,
             },
-            Arc::from("fact amont: 100"),
         );
 
         let parse_error_with_suggestion = Error::parsing_with_suggestion(

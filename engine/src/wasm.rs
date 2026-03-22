@@ -1,6 +1,6 @@
 use crate::parsing::ast::DateTimeValue;
 use crate::serialization::fact_values_from_map;
-use crate::{Engine, Error, LoadSource};
+use crate::{Engine, LoadSource};
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -40,8 +40,8 @@ impl WasmEngine {
             let result = engine.borrow_mut().load(&code, source);
             match result {
                 Ok(()) => Ok(JsValue::UNDEFINED),
-                Err(errs) => {
-                    let messages: Vec<String> = errs.iter().map(format_error).collect();
+                Err(load_err) => {
+                    let messages = load_err.format_all();
                     Err(to_js(&messages).expect("BUG: serialize error messages"))
                 }
             }
@@ -66,11 +66,10 @@ impl WasmEngine {
         let rule_names = parse_rule_names(&rule_names).map_err(js_err)?;
         let facts = parse_fact_values(&fact_values).map_err(js_err)?;
 
-        let mut response = self
-            .engine
-            .borrow()
+        let engine = self.engine.borrow();
+        let mut response = engine
             .run(spec, Some(&effective_dt), facts)
-            .map_err(|e| js_err(format_error(&e)))?;
+            .map_err(|e| js_err(crate::format_error(&e, engine.sources())))?;
 
         if !rule_names.is_empty() {
             response.filter_rules(&rule_names);
@@ -98,7 +97,7 @@ impl WasmEngine {
         let engine = self.engine.borrow();
         let plan = engine
             .get_plan(spec, Some(&effective_dt))
-            .map_err(|e| js_err(format_error(&e)))?;
+            .map_err(|e| js_err(crate::format_error(&e, engine.sources())))?;
         let schema = plan.schema();
 
         serialize_engine_json(&schema)
@@ -128,7 +127,11 @@ impl WasmEngine {
         };
         match crate::format_source(code, attr) {
             Ok(formatted) => Ok(JsValue::from_str(&formatted)),
-            Err(e) => Err(js_err(format_error(&e))),
+            Err(e) => {
+                let mut sources = HashMap::new();
+                sources.insert(attr.to_string(), code.to_string());
+                Err(js_err(crate::format_error(&e, &sources)))
+            }
         }
     }
 }
@@ -184,37 +187,4 @@ fn parse_fact_values(v: &JsValue) -> Result<HashMap<String, String>, String> {
     let map: HashMap<String, serde_json::Value> = serde_wasm_bindgen::from_value(v.clone())
         .map_err(|e| format!("fact_values must be a plain object: {}", e))?;
     Ok(fact_values_from_map(map))
-}
-
-fn format_error(error: &Error) -> String {
-    match error {
-        Error::Parsing(details) => format!("Parse Error: {}", details.message),
-        Error::Inversion(details) => format!("Inversion Error: {}", details.message),
-        Error::Validation(details) => format!("Validation Error: {}", details.message),
-        Error::Registry {
-            details,
-            identifier,
-            kind,
-        } => {
-            format!(
-                "Registry Error ({}): {}: {}",
-                kind, identifier, details.message
-            )
-        }
-        Error::ResourceLimitExceeded {
-            details,
-            limit_name,
-            limit_value,
-            actual_value,
-        } => {
-            let mut msg = format!(
-                "Resource Limit Exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value})"
-            );
-            if let Some(suggestion) = &details.suggestion {
-                msg.push_str(&format!(". {suggestion}"));
-            }
-            msg
-        }
-        Error::Request { details, .. } => format!("Request Error: {}", details.message),
-    }
 }

@@ -18,9 +18,9 @@ fn test_file_size_limit() {
 
     let result = add_lemma_code_blocking(&mut engine, &large_code, "test.lemma");
 
-    let errs = result.unwrap_err();
-    let limit_err =
-        find_resource_limit_name(&errs).expect("expected at least one ResourceLimitExceeded");
+    let load_err = result.unwrap_err();
+    let limit_err = find_resource_limit_name(&load_err.errors)
+        .expect("expected at least one ResourceLimitExceeded");
     assert_eq!(limit_err, "max_file_size_bytes");
 }
 
@@ -82,8 +82,8 @@ fn expression_exceeding_max_depth_is_rejected() {
     let code = "spec test\nfact x: 1\nrule r: (((((1 + 1) + 1) + 1) + 1) + 1) + 1";
     let mut engine = Engine::with_limits(limits);
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
-    let errs = result.unwrap_err();
-    let limit_err = find_resource_limit_name(&errs)
+    let load_err = result.unwrap_err();
+    let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for expression depth");
     assert_eq!(limit_err, "max_expression_depth");
 }
@@ -97,8 +97,9 @@ fn expression_depth_error_has_source_location() {
     let code = "spec test\nfact x: 1\nrule r: (((1 + 1) + 1) + 1) + 1";
     let mut engine = Engine::with_limits(limits);
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
-    let errs = result.unwrap_err();
-    let err = errs
+    let load_err = result.unwrap_err();
+    let err = load_err
+        .errors
         .iter()
         .find(|e| matches!(e, Error::ResourceLimitExceeded { .. }))
         .expect("expected ResourceLimitExceeded");
@@ -120,11 +121,11 @@ fn unless_paren_nesting_counts_toward_depth() {
     let code = "spec test\nfact x: 1\nrule r: 0 unless ((x + 1) + 2) > 3 then 1";
     let mut engine = Engine::with_limits(limits);
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
-    let errs = result.unwrap_err();
+    let load_err = result.unwrap_err();
     assert!(
-        find_resource_limit_name(&errs).is_some(),
+        find_resource_limit_name(&load_err.errors).is_some(),
         "Double-nested paren in unless should exceed depth 2: {:?}",
-        errs
+        load_err
     );
 }
 
@@ -174,8 +175,8 @@ fn expression_count_exceeding_limit_is_rejected() {
     let code = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule r: a + b + c + d";
     let mut engine = Engine::with_limits(limits);
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
-    let errs = result.unwrap_err();
-    let limit_err = find_resource_limit_name(&errs)
+    let load_err = result.unwrap_err();
+    let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for expression count");
     assert_eq!(limit_err, "max_expression_count");
 }
@@ -194,8 +195,8 @@ fn expression_count_catches_deep_sqrt_without_depth_guard() {
     let code = format!("spec test\nfact x: 1\nrule r: {}", expr);
     let mut engine = Engine::with_limits(limits);
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
-    let errs = result.unwrap_err();
-    let limit_err = find_resource_limit_name(&errs)
+    let load_err = result.unwrap_err();
+    let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expression count should catch deep sqrt even when depth limit is high");
     assert_eq!(limit_err, "max_expression_count");
 }
@@ -209,8 +210,9 @@ fn expression_count_error_has_source_location() {
     let code = "spec test\nfact x: 1\nrule r: x + 1 + 2";
     let mut engine = Engine::with_limits(limits);
     let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
-    let errs = result.unwrap_err();
-    let err = errs
+    let load_err = result.unwrap_err();
+    let err = load_err
+        .errors
         .iter()
         .find(|e| matches!(e, Error::ResourceLimitExceeded { .. }))
         .expect("expected ResourceLimitExceeded");
@@ -338,9 +340,9 @@ fn spec_name_exceeding_max_length_is_rejected() {
     let code = format!("spec {name}\nfact x: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
-    let errs = result.unwrap_err();
-    let limit_err =
-        find_resource_limit_name(&errs).expect("expected ResourceLimitExceeded for spec name");
+    let load_err = result.unwrap_err();
+    let limit_err = find_resource_limit_name(&load_err.errors)
+        .expect("expected ResourceLimitExceeded for spec name");
     assert_eq!(limit_err, "max_spec_name_length");
 }
 
@@ -362,9 +364,9 @@ fn fact_name_exceeding_max_length_is_rejected() {
     let code = format!("spec test\nfact {name}: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
-    let errs = result.unwrap_err();
-    let limit_err =
-        find_resource_limit_name(&errs).expect("expected ResourceLimitExceeded for fact name");
+    let load_err = result.unwrap_err();
+    let limit_err = find_resource_limit_name(&load_err.errors)
+        .expect("expected ResourceLimitExceeded for fact name");
     assert_eq!(limit_err, "max_fact_name_length");
 }
 
@@ -374,8 +376,8 @@ fn fact_binding_name_exceeding_max_length_is_rejected() {
     let code = format!("spec test\nfact other.{name}: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
-    let errs = result.unwrap_err();
-    let limit_err = find_resource_limit_name(&errs)
+    let load_err = result.unwrap_err();
+    let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for fact binding name");
     assert_eq!(limit_err, "max_fact_name_length");
 }
@@ -398,9 +400,9 @@ fn rule_name_exceeding_max_length_is_rejected() {
     let code = format!("spec test\nrule {name}: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
-    let errs = result.unwrap_err();
-    let limit_err =
-        find_resource_limit_name(&errs).expect("expected ResourceLimitExceeded for rule name");
+    let load_err = result.unwrap_err();
+    let limit_err = find_resource_limit_name(&load_err.errors)
+        .expect("expected ResourceLimitExceeded for rule name");
     assert_eq!(limit_err, "max_rule_name_length");
 }
 
@@ -422,9 +424,9 @@ fn type_name_exceeding_max_length_is_rejected() {
     let code = format!("spec test\ntype {name}: number\nfact x: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
-    let errs = result.unwrap_err();
-    let rle =
-        find_resource_limit_name(&errs).expect("expected ResourceLimitExceeded for type name");
+    let load_err = result.unwrap_err();
+    let rle = find_resource_limit_name(&load_err.errors)
+        .expect("expected ResourceLimitExceeded for type name");
     assert_eq!(rle, "max_type_name_length");
 }
 
@@ -485,8 +487,8 @@ fn type_import_name_exceeding_max_length_is_rejected() {
     let code = format!("spec test\ntype {name} from other\nfact x: 1");
     let mut engine = Engine::default();
     let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
-    let errs = result.unwrap_err();
-    let rle = find_resource_limit_name(&errs)
+    let load_err = result.unwrap_err();
+    let rle = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for type import name");
     assert_eq!(rle, "max_type_name_length");
 }
@@ -529,8 +531,8 @@ fn total_expression_count_accumulates_across_files() {
         "spec s3\nfact e: 1\nfact f: 2\nrule r: e + f + e + f + e + f",
         "f3.lemma",
     );
-    let errs = result.unwrap_err();
-    let rle = find_resource_limit_name(&errs)
+    let load_err = result.unwrap_err();
+    let rle = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for total expression count");
     assert_eq!(rle, "max_total_expression_count");
 }
@@ -564,8 +566,8 @@ fn single_file_exceeding_total_expression_count_is_rejected() {
         "spec test\nfact a: 1\nrule r: a + a + a + a",
         "test.lemma",
     );
-    let errs = result.unwrap_err();
-    let rle = find_resource_limit_name(&errs)
+    let load_err = result.unwrap_err();
+    let rle = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for total expression count");
     assert_eq!(rle, "max_total_expression_count");
 }

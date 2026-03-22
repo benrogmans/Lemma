@@ -425,7 +425,7 @@ mod tests {
         engine: &mut Engine,
         code: &str,
         source: &str,
-    ) -> Result<(), Vec<crate::Error>> {
+    ) -> Result<(), crate::LoadError> {
         engine.load(code, crate::LoadSource::Labeled(source))
     }
 

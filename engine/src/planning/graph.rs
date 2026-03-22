@@ -477,7 +477,7 @@ impl<'a> GraphBuilder<'a> {
 
     fn spec_source(&self, spec: &LemmaSpec) -> Option<Source> {
         let attribute = spec.attribute.as_deref()?;
-        let source_text = self.sources.get(attribute)?;
+        self.sources.get(attribute)?;
         Some(Source::new(
             attribute,
             Span {
@@ -486,7 +486,6 @@ impl<'a> GraphBuilder<'a> {
                 line: spec.start_line,
                 col: 0,
             },
-            Arc::from(source_text.as_str()),
         ))
     }
 
@@ -3138,7 +3137,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec test\nfact x: 1\nrule result: x"),
         )
     }
 
@@ -3545,7 +3543,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec spec_a\nfact dep: spec spec_b\ntype money: number\ntype money: number"),
         );
         let spec_a = create_test_spec("spec_a")
             .with_attribute("a.lemma".to_string())
@@ -3575,7 +3572,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec spec_b\ntype length: number\ntype length: number"),
         );
         let spec_b = create_test_spec("spec_b")
             .with_attribute("b.lemma".to_string())

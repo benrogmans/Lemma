@@ -409,7 +409,6 @@ mod internal_tests {
                         line: 1,
                         col: 0,
                     },
-                    std::sync::Arc::from("spec test\nfact x: 1"),
                 )),
                 None::<String>,
             )]),
@@ -631,7 +630,6 @@ fact contract: spec nonexistent"#;
                 line: 1,
                 col: 0,
             },
-            Arc::from("fact x: []"),
         );
         spec.facts.push(LemmaFact::new(
             Reference {

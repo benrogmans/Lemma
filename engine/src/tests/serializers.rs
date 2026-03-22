@@ -6,7 +6,6 @@ use crate::OperationResult;
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::str::FromStr;
-use std::sync::Arc;
 
 fn dummy_source() -> Source {
     Source::new(
@@ -17,7 +16,6 @@ fn dummy_source() -> Source {
             line: 1,
             col: 1,
         },
-        Arc::from("spec test_spec\nrule dummy: true"),
     )
 }
 

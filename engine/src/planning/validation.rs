@@ -1006,7 +1006,6 @@ mod tests {
     use crate::parsing::ast::CommandArg;
     use crate::planning::semantics::TypeSpecification;
     use rust_decimal::Decimal;
-    use std::sync::Arc;
 
     fn test_source() -> Source {
         Source::new(
@@ -1017,7 +1016,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec test\nfact x: 1"),
         )
     }
 
@@ -1274,7 +1272,6 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                Arc::from("spec test\nfact x: 1"),
             ),
             name: "invalid_money".to_string(),
             parent: "number".to_string(),

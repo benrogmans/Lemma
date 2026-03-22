@@ -262,12 +262,7 @@ fn main() {
     };
 
     if let Err(e) = result {
-        // Check if it's a Error and format it nicely, otherwise use default
-        if let Some(lemma_err) = e.downcast_ref::<lemma::Error>() {
-            eprintln!("{}", error_formatter::format_error(lemma_err));
-        } else {
-            eprintln!("Error: {}", e);
-        }
+        eprintln!("{}", e);
         std::process::exit(1);
     }
 }
@@ -357,7 +352,9 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
         return Err(anyhow::anyhow!("Inversion not implemented"));
     }
 
-    let mut response = engine.run(&spec_id, Some(&now), final_facts)?;
+    let mut response = engine
+        .run(&spec_id, Some(&now), final_facts)
+        .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?;
     if !rules.is_empty() {
         response.filter_rules(&rules);
     }
@@ -435,7 +432,7 @@ fn schema_command(
 
     let plan = engine
         .get_plan(spec_id, Some(&now))
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?;
     let hash = plan.plan_hash();
     if hash_only {
         println!("{}", hash);
@@ -592,11 +589,14 @@ async fn get_single_spec(
     load_workspace(&mut engine, workdir)?;
     engine
         .load(source_text, lemma::LoadSource::Dependency(attribute))
-        .map_err(|errs| {
-            for e in &errs {
-                eprintln!("{}", error_formatter::format_error(e));
+        .map_err(|load_err| {
+            for msg in load_err.format_all() {
+                eprintln!("{}", msg);
             }
-            anyhow::anyhow!("Planning fetched spec failed ({} error(s))", errs.len())
+            anyhow::anyhow!(
+                "Planning fetched spec failed ({} error(s))",
+                load_err.errors.len()
+            )
         })?;
 
     let now = DateTimeValue::now();
@@ -606,7 +606,7 @@ async fn get_single_spec(
         .expect("BUG: parsed specs was non-empty above");
     let hash = engine
         .get_plan_hash(first_spec_name, &now)
-        .map_err(|e| anyhow::anyhow!("Failed to get plan hash: {}", e))?
+        .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?
         .expect("BUG: spec loaded+planned but has no hash");
 
     if let Some(pin) = &hash_pin {
@@ -663,7 +663,8 @@ async fn get_all_workspace_deps(
                 sources.insert(source_id, code);
             }
             Err(e) => {
-                eprintln!("{}", error_formatter::format_error(&e));
+                sources.insert(source_id.clone(), code.clone());
+                eprintln!("{}", error_formatter::format_error(&e, &sources));
                 anyhow::bail!("Parse error in {}", path.display());
             }
         }
@@ -675,7 +676,7 @@ async fn get_all_workspace_deps(
         lemma::resolve_registry_references(&mut ctx, &mut sources, registry, &limits).await
     {
         for e in &errs {
-            eprintln!("{}", error_formatter::format_error(e));
+            eprintln!("{}", error_formatter::format_error(e, &sources));
         }
         anyhow::bail!("Registry resolution failed ({} error(s))", errs.len());
     }
@@ -686,11 +687,14 @@ async fn get_all_workspace_deps(
         if source_keys_before.contains(source_id) {
             continue;
         }
-        if let Err(errs) = engine.load(code, lemma::LoadSource::Dependency(source_id)) {
-            for e in &errs {
-                eprintln!("{}", error_formatter::format_error(e));
+        if let Err(load_err) = engine.load(code, lemma::LoadSource::Dependency(source_id)) {
+            for msg in load_err.format_all() {
+                eprintln!("{}", msg);
             }
-            anyhow::bail!("Planning fetched deps failed ({} error(s))", errs.len());
+            anyhow::bail!(
+                "Planning fetched deps failed ({} error(s))",
+                load_err.errors.len()
+            );
         }
     }
     let now = DateTimeValue::now();
@@ -764,7 +768,9 @@ async fn get_all_workspace_deps(
             .expect("BUG: parsed specs was non-empty");
         let hash_suffix = engine
             .get_plan_hash(first_spec_name, &now)
-            .map_err(|e| anyhow::anyhow!("Failed to get plan hash for '{}': {}", attribute, e))?
+            .map_err(|e| {
+                anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources()))
+            })?
             .expect("BUG: spec loaded+planned but has no hash");
         let dep_path = dep_file_path(attribute, &hash_suffix);
         let dest = deps_dir.join(&dep_path);
@@ -858,11 +864,11 @@ fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> 
             paths.push(entry.path().to_path_buf());
         }
     }
-    if let Err(errs) = engine.load_from_paths(&paths, false) {
-        for e in &errs {
-            eprintln!("{}", error_formatter::format_error(e));
+    if let Err(load_err) = engine.load_from_paths(&paths, false) {
+        for msg in load_err.format_all() {
+            eprintln!("{}", msg);
         }
-        anyhow::bail!("Workspace load failed ({} error(s))", errs.len());
+        anyhow::bail!("Workspace load failed ({} error(s))", load_err.errors.len());
     }
     Ok(())
 }
@@ -923,7 +929,9 @@ fn format_command(paths: &[PathBuf], check: bool, stdout: bool) -> Result<()> {
         let formatted = match lemma::format_source(&source, &attribute) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("{}", error_formatter::format_error(&e));
+                let mut m = std::collections::HashMap::new();
+                m.insert(attribute.clone(), source.clone());
+                eprintln!("{}", error_formatter::format_error(&e, &m));
                 parse_errors += 1;
                 continue;
             }

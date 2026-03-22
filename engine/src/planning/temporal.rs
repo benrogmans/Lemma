@@ -233,16 +233,15 @@ mod tests {
     }
 
     fn dummy_source() -> Source {
-        Source {
-            attribute: "test".to_string(),
-            span: Span {
+        Source::new(
+            "test",
+            Span {
                 start: 0,
                 end: 0,
                 line: 0,
                 col: 0,
             },
-            source_text: "".into(),
-        }
+        )
     }
 
     fn make_spec(name: &str) -> LemmaSpec {

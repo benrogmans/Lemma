@@ -718,11 +718,11 @@ pub mod http {
                 paths.push(entry.path().to_path_buf());
             }
         }
-        if let Err(errs) = engine.load_from_paths(&paths, false) {
-            for e in &errs {
-                tracing::error!("{}", crate::error_formatter::format_error(e));
+        if let Err(load_err) = engine.load_from_paths(&paths, false) {
+            for msg in load_err.format_all() {
+                tracing::error!("{}", msg);
             }
-            anyhow::bail!("Workspace load failed ({} error(s))", errs.len());
+            anyhow::bail!("Workspace load failed ({} error(s))", load_err.errors.len());
         }
         Ok(engine)
     }

@@ -1297,7 +1297,7 @@ rule applied_discount: p.discount
     );
     let errs = result.unwrap_err();
     assert!(
-        !errs.is_empty(),
+        !errs.errors.is_empty(),
         "expected at least one planning error (policy v2 missing discount rule)"
     );
 }

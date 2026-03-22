@@ -336,16 +336,14 @@ mod imp {
 
             self.engine
                 .load(code, lemma::LoadSource::Labeled(&source_id))
-                .map_err(|errs| {
-                    for e in &errs {
-                        error!("{}", e);
+                .map_err(|load_err| {
+                    for msg in load_err.format_all() {
+                        error!("{}", msg);
                     }
-                    let msg = errs
-                        .iter()
-                        .map(|e| e.to_string())
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    McpError::internal_error(format!("Failed to parse spec: {}", msg))
+                    McpError::internal_error(format!(
+                        "Failed to parse spec ({} error(s))",
+                        load_err.errors.len()
+                    ))
                 })?;
 
             let new_spec_names: Vec<String> = self

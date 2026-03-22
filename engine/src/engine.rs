@@ -1,3 +1,4 @@
+use crate::error_format::LoadError;
 use crate::evaluation::Evaluator;
 use crate::parsing::ast::{DateTimeValue, LemmaSpec};
 use crate::planning::SpecSchema;
@@ -433,6 +434,11 @@ impl Engine {
         Self::default()
     }
 
+    /// Source code map (attribute -> content). Used for error display.
+    pub fn sources(&self) -> &HashMap<String, String> {
+        &self.sources
+    }
+
     /// Create an engine with custom resource limits.
     pub fn with_limits(limits: ResourceLimits) -> Self {
         Self {
@@ -448,10 +454,14 @@ impl Engine {
 
     /// Load a single spec from source code.
     /// When `source` is [`LoadSource::Dependency`], content is treated as from a registry bundle (`from_registry: true`).
-    pub fn load(&mut self, code: &str, source: LoadSource<'_>) -> Result<(), Vec<Error>> {
+    pub fn load(&mut self, code: &str, source: LoadSource<'_>) -> Result<(), LoadError> {
         let from_registry = matches!(source, LoadSource::Dependency(_));
         let mut files = HashMap::new();
-        files.insert(source.storage_key()?, code.to_string());
+        let key = source.storage_key().map_err(|errs| LoadError {
+            errors: errs,
+            sources: HashMap::new(),
+        })?;
+        files.insert(key, code.to_string());
         self.add_files_inner(files, from_registry)
     }
 
@@ -463,7 +473,7 @@ impl Engine {
         &mut self,
         paths: &[P],
         from_registry: bool,
-    ) -> Result<(), Vec<Error>> {
+    ) -> Result<(), LoadError> {
         use std::fs;
 
         let mut files = HashMap::new();
@@ -481,19 +491,21 @@ impl Engine {
                     continue;
                 }
                 seen.insert(key.clone());
-                let content = fs::read_to_string(path).map_err(|e| {
-                    vec![Error::request(
+                let content = fs::read_to_string(path).map_err(|e| LoadError {
+                    errors: vec![Error::request(
                         format!("Cannot read '{}': {}", path.display(), e),
                         None::<String>,
-                    )]
+                    )],
+                    sources: HashMap::new(),
                 })?;
                 files.insert(key, content);
             } else if path.is_dir() {
-                let read_dir = fs::read_dir(path).map_err(|e| {
-                    vec![Error::request(
+                let read_dir = fs::read_dir(path).map_err(|e| LoadError {
+                    errors: vec![Error::request(
                         format!("Cannot read directory '{}': {}", path.display(), e),
                         None::<String>,
-                    )]
+                    )],
+                    sources: HashMap::new(),
                 })?;
                 for entry in read_dir.filter_map(Result::ok) {
                     let p = entry.path();
@@ -520,42 +532,51 @@ impl Engine {
         &mut self,
         files: HashMap<String, String>,
         from_registry: bool,
-    ) -> Result<(), Vec<Error>> {
+    ) -> Result<(), LoadError> {
         let limits = &self.limits;
         if files.len() > limits.max_files {
-            return Err(vec![Error::resource_limit_exceeded(
-                "max_files",
-                limits.max_files.to_string(),
-                files.len().to_string(),
-                "Reduce the number of paths or files",
-                None::<crate::Source>,
-                None,
-                None,
-            )]);
-        }
-        let total_loaded_bytes: usize = files.values().map(|s| s.len()).sum();
-        if total_loaded_bytes > limits.max_loaded_bytes {
-            return Err(vec![Error::resource_limit_exceeded(
-                "max_loaded_bytes",
-                limits.max_loaded_bytes.to_string(),
-                total_loaded_bytes.to_string(),
-                "Load fewer or smaller files",
-                None::<crate::Source>,
-                None,
-                None,
-            )]);
-        }
-        for code in files.values() {
-            if code.len() > limits.max_file_size_bytes {
-                return Err(vec![Error::resource_limit_exceeded(
-                    "max_file_size_bytes",
-                    limits.max_file_size_bytes.to_string(),
-                    code.len().to_string(),
-                    "Use a smaller file or increase limit",
+            return Err(LoadError {
+                errors: vec![Error::resource_limit_exceeded(
+                    "max_files",
+                    limits.max_files.to_string(),
+                    files.len().to_string(),
+                    "Reduce the number of paths or files",
                     None::<crate::Source>,
                     None,
                     None,
-                )]);
+                )],
+                sources: files,
+            });
+        }
+        let total_loaded_bytes: usize = files.values().map(|s| s.len()).sum();
+        if total_loaded_bytes > limits.max_loaded_bytes {
+            return Err(LoadError {
+                errors: vec![Error::resource_limit_exceeded(
+                    "max_loaded_bytes",
+                    limits.max_loaded_bytes.to_string(),
+                    total_loaded_bytes.to_string(),
+                    "Load fewer or smaller files",
+                    None::<crate::Source>,
+                    None,
+                    None,
+                )],
+                sources: files,
+            });
+        }
+        for code in files.values() {
+            if code.len() > limits.max_file_size_bytes {
+                return Err(LoadError {
+                    errors: vec![Error::resource_limit_exceeded(
+                        "max_file_size_bytes",
+                        limits.max_file_size_bytes.to_string(),
+                        code.len().to_string(),
+                        "Use a smaller file or increase limit",
+                        None::<crate::Source>,
+                        None,
+                        None,
+                    )],
+                    sources: files,
+                });
             }
         }
 
@@ -575,10 +596,12 @@ impl Engine {
                             None,
                             None,
                         ));
-                        return Err(errors);
+                        return Err(LoadError {
+                            errors,
+                            sources: files,
+                        });
                     }
                     let new_specs = result.specs;
-                    let source_text: Arc<str> = Arc::from(code.as_str());
                     for spec in new_specs {
                         let attribute = spec.attribute.clone().unwrap_or_else(|| spec.name.clone());
                         let start_line = spec.start_line;
@@ -595,7 +618,6 @@ impl Engine {
                                         line: start_line,
                                         col: 0,
                                     },
-                                    Arc::clone(&source_text),
                                 );
                                 errors.push(Error::validation(
                                     format!(
@@ -627,7 +649,6 @@ impl Engine {
                                         line: start_line,
                                         col: 0,
                                     },
-                                    Arc::clone(&source_text),
                                 );
                                 errors.push(Error::validation(
                                     e.to_string(),
@@ -658,7 +679,10 @@ impl Engine {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(errors)
+            Err(LoadError {
+                errors,
+                sources: files,
+            })
         }
     }
 
@@ -1154,7 +1178,7 @@ mod tests {
         engine: &mut Engine,
         code: &str,
         source: &str,
-    ) -> Result<(), Vec<Error>> {
+    ) -> Result<(), LoadError> {
         engine.load(code, LoadSource::Labeled(source))
     }
 
@@ -1669,7 +1693,7 @@ rule formatted: helper_value + 0"#,
         let err = engine
             .load("spec x\nfact a: 1", LoadSource::Labeled("  "))
             .unwrap_err();
-        assert!(err.iter().any(|e| e.message().contains("non-empty")));
+        assert!(err.errors.iter().any(|e| e.message().contains("non-empty")));
     }
 
     #[test]
@@ -1691,6 +1715,7 @@ rule formatted: helper_value + 0"#,
         let errors = result.unwrap_err();
         assert!(
             errors
+                .errors
                 .iter()
                 .any(|e| e.message().contains("registry prefix")),
             "error should mention registry prefix, got: {:?}",
@@ -1728,6 +1753,7 @@ rule formatted: helper_value + 0"#,
         let errors = result.unwrap_err();
         assert!(
             errors
+                .errors
                 .iter()
                 .any(|e| e.message().contains("without '@' prefix")),
             "error should mention missing @ prefix, got: {:?}",
@@ -1748,7 +1774,10 @@ rule formatted: helper_value + 0"#,
         );
         let errors = result.unwrap_err();
         assert!(
-            errors.iter().any(|e| e.message().contains("local_rates")),
+            errors
+                .errors
+                .iter()
+                .any(|e| e.message().contains("local_rates")),
             "error should mention bare ref name, got: {:?}",
             errors
         );
@@ -1767,7 +1796,10 @@ rule formatted: helper_value + 0"#,
         );
         let errors = result.unwrap_err();
         assert!(
-            errors.iter().any(|e| e.message().contains("local_finance")),
+            errors
+                .errors
+                .iter()
+                .any(|e| e.message().contains("local_finance")),
             "error should mention bare ref name, got: {:?}",
             errors
         );
@@ -1813,13 +1845,14 @@ rule total: helper.value + price"#,
         );
 
         assert!(result.is_err(), "Should fail with multiple errors");
-        let errs = result.unwrap_err();
+        let load_err = result.unwrap_err();
         assert!(
-            errs.len() >= 2,
+            load_err.errors.len() >= 2,
             "expected at least 2 errors (type + spec ref), got {}",
-            errs.len()
+            load_err.errors.len()
         );
-        let error_message = errs
+        let error_message = load_err
+            .errors
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()

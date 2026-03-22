@@ -50,6 +50,7 @@ mod tests;
 pub(crate) mod computation;
 pub mod engine;
 pub mod error;
+pub mod error_format;
 pub mod evaluation;
 pub mod formatting;
 pub mod inversion;
@@ -66,6 +67,7 @@ pub mod wasm;
 
 pub use engine::{Context, Engine, LoadSource};
 pub use error::{Error, RequestErrorKind};
+pub use error_format::{format_error, LoadError};
 pub use evaluation::operations::{
     ComputationKind, OperationKind, OperationRecord, OperationResult,
 };

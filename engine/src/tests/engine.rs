@@ -1,11 +1,10 @@
 use crate::engine::Engine;
 use crate::parsing::ast::DateTimeValue;
-use crate::Error;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-fn add_lemma_code(engine: &mut Engine, code: &str, source: &str) -> Result<(), Vec<Error>> {
+fn add_lemma_code(engine: &mut Engine, code: &str, source: &str) -> Result<(), crate::LoadError> {
     engine.load(code, crate::LoadSource::Labeled(source))
 }
 
@@ -296,9 +295,9 @@ rule result: value
     let result = add_lemma_code(&mut engine, code, "test.lemma");
     assert!(result.is_err(), "Engine should reject invalid parent types");
 
-    let errs = result.unwrap_err();
-    assert!(!errs.is_empty(), "expected at least one error");
-    let msg = errs[0].to_string();
+    let load_err = result.unwrap_err();
+    assert!(!load_err.errors.is_empty(), "expected at least one error");
+    let msg = load_err.errors[0].to_string();
     assert!(
         msg.contains("Unknown type: 'nonexistent'"),
         "Error should mention unknown type. Got: {}",
@@ -321,9 +320,9 @@ rule result: value
         "Engine should reject unknown types used in type declarations"
     );
 
-    let errs = result.unwrap_err();
-    assert!(!errs.is_empty(), "expected at least one error");
-    let msg = errs[0].to_string();
+    let load_err = result.unwrap_err();
+    assert!(!load_err.errors.is_empty(), "expected at least one error");
+    let msg = load_err.errors[0].to_string();
     assert!(
         msg.contains("Unknown type: 'invalid_parent_type'"),
         "Error should mention unknown type. Got: {}",
@@ -404,9 +403,9 @@ fact x: 2
         result.is_err(),
         "Duplicate spec names should be rejected (no silent overwrites)"
     );
-    let errs = result.unwrap_err();
-    assert!(!errs.is_empty(), "expected at least one error");
-    let msg = errs[0].to_string();
+    let load_err = result.unwrap_err();
+    assert!(!load_err.errors.is_empty(), "expected at least one error");
+    let msg = load_err.errors[0].to_string();
     assert!(
         msg.contains("Duplicate spec") && msg.contains("test"),
         "Error should mention the duplicate spec name. Got: {}",

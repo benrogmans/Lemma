@@ -762,7 +762,7 @@ mod tests {
         engine: &mut Engine,
         code: &str,
         source: &str,
-    ) -> Result<(), Vec<crate::Error>> {
+    ) -> Result<(), crate::LoadError> {
         engine.load(code, crate::LoadSource::Labeled(source))
     }
 
@@ -881,16 +881,15 @@ mod tests {
 
     fn test_source() -> crate::Source {
         use crate::parsing::ast::Span;
-        crate::Source {
-            attribute: "<test>".to_string(),
-            span: Span {
+        crate::Source::new(
+            "<test>",
+            Span {
                 start: 0,
                 end: 0,
                 line: 1,
                 col: 0,
             },
-            source_text: Arc::from("spec test\nfact x: 1\nrule result: x"),
-        }
+        )
     }
 
     fn create_literal_expr(value: LiteralValue) -> Expression {
@@ -943,7 +942,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();
         facts.insert(
@@ -1001,7 +999,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();
         facts.insert(
@@ -1066,7 +1063,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();
         facts.insert(

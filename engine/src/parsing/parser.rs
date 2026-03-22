@@ -67,10 +67,6 @@ impl Parser {
         }
     }
 
-    fn source_text(&self) -> Arc<str> {
-        self.lexer.source_text()
-    }
-
     fn attribute(&self) -> String {
         self.lexer.attribute().to_string()
     }
@@ -104,11 +100,7 @@ impl Parser {
     fn error_at_token(&self, token: &Token, message: impl Into<String>) -> Error {
         Error::parsing(
             message,
-            Source::new(
-                self.lexer.attribute(),
-                token.span.clone(),
-                self.source_text(),
-            ),
+            Source::new(self.lexer.attribute(), token.span.clone()),
             None::<String>,
         )
     }
@@ -121,11 +113,7 @@ impl Parser {
     ) -> Error {
         Error::parsing(
             message,
-            Source::new(
-                self.lexer.attribute(),
-                token.span.clone(),
-                self.source_text(),
-            ),
+            Source::new(self.lexer.attribute(), token.span.clone()),
             Some(suggestion),
         )
     }
@@ -154,7 +142,7 @@ impl Parser {
     }
 
     fn make_source(&self, span: Span) -> Source {
-        Source::new(self.lexer.attribute(), span, self.source_text())
+        Source::new(self.lexer.attribute(), span)
     }
 
     fn span_from(&self, start: &Span) -> Span {

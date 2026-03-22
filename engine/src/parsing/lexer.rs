@@ -379,11 +379,7 @@ impl Lexer {
     }
 
     fn make_error(&self, message: impl Into<String>, span: Span) -> Error {
-        Error::parsing(
-            message,
-            Source::new(&self.attribute, span, self.source_text.clone()),
-            None::<String>,
-        )
+        Error::parsing(message, Source::new(&self.attribute, span), None::<String>)
     }
 
     fn lex_token(&mut self) -> Result<Token, Error> {

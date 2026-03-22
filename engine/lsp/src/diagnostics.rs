@@ -223,7 +223,6 @@ mod tests {
     #[test]
     fn errors_to_diagnostics_filters_by_file_attribute() {
         use lemma::Span;
-        use std::sync::Arc;
 
         let error_in_file = Error::parsing(
             "bad syntax",
@@ -235,7 +234,6 @@ mod tests {
                     line: 1,
                     col: 1,
                 },
-                Arc::from("spec test"),
             ),
             None::<String>,
         );
@@ -249,7 +247,6 @@ mod tests {
                     line: 1,
                     col: 1,
                 },
-                Arc::from("spec other"),
             ),
             None::<String>,
         );

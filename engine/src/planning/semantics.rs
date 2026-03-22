@@ -2538,7 +2538,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            std::sync::Arc::from("x"),
         );
         let fact = FactData::Value {
             value: LiteralValue::number(Decimal::from(25)),
@@ -2565,7 +2564,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            std::sync::Arc::from("x"),
         );
         let fact = FactData::Value {
             value: LiteralValue::number(Decimal::from(42)),
@@ -2592,7 +2590,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            std::sync::Arc::from("x"),
         );
         let fact = FactData::TypeDeclaration {
             resolved_type: primitive_number().clone(),
