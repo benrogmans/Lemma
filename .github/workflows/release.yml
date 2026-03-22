@@ -93,6 +93,12 @@ jobs:
             ```bash
             npm install @benrogmans/lemma-engine@${{ needs.detect-version-changes.outputs.version }}
             ```
+
+            Or use the Elixir package:
+
+            ```elixir
+            {:lemma, "~> ${{ needs.detect-version-changes.outputs.version }}"}
+            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -216,12 +222,12 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Build WASM
+        working-directory: engine/packages/npm
         run: |
-          cd engine
-          node wasm/build.js
+          node build.js
 
       - name: Publish to npm
-        working-directory: engine/pkg
+        working-directory: engine/packages/npm/dist
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -264,6 +270,54 @@ jobs:
       - name: Publish to Marketplace
         working-directory: engine/lsp/editors/vscode
         run: npx vsce publish -p ${{ secrets.VSCE_PAT }}
+
+  publish-hex:
+    name: Publish to Hex.pm
+    needs: [detect-version-changes, create-release, publish-crates]
+    if: |
+      !cancelled() &&
+      needs.create-release.result == 'success' &&
+      needs.publish-crates.result == 'success' &&
+      needs.detect-version-changes.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+
+      - name: Setup Erlang & Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27'
+          elixir-version: '1.17'
+
+      - name: Rewrite NIF Cargo.toml for standalone build
+        working-directory: engine/packages/hex
+        run: |
+          VERSION="${{ needs.detect-version-changes.outputs.version }}"
+          cd native/lemma_hex
+          sed -i 's|^version\.workspace = true|version = "'"${VERSION}"'"|' Cargo.toml
+          sed -i 's|^edition\.workspace = true|edition = "2021"|' Cargo.toml
+          sed -i '/^authors\.workspace/d' Cargo.toml
+          sed -i '/^license\.workspace/d' Cargo.toml
+          sed -i '/^repository\.workspace/d' Cargo.toml
+          sed -i 's|^lemma-engine = { path = "../../../../" }|lemma-engine = "='"${VERSION}"'"|' Cargo.toml
+          sed -i 's|^serde_json\.workspace = true|serde_json = "1.0"|' Cargo.toml
+          echo "--- Cargo.toml after rewrite ---"
+          cat Cargo.toml
+
+      - name: Install mix deps
+        working-directory: engine/packages/hex
+        run: mix deps.get
+
+      - name: Publish to Hex
+        working-directory: engine/packages/hex
+        run: mix hex.publish --yes
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
 
   publish-docker:
     name: Publish Docker Image

@@ -23,7 +23,12 @@ rule test_passes: price_after_discount == expected
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_money_minus_percentage", Some(&now), HashMap::new())
+        .run(
+            "test_money_minus_percentage",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .unwrap();
 
     let price_after_discount = response.results.get("price_after_discount").unwrap();
@@ -55,7 +60,12 @@ rule test_passes: price_with_markup == expected
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_money_plus_percentage", Some(&now), HashMap::new())
+        .run(
+            "test_money_plus_percentage",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .unwrap();
 
     let price_with_markup = response.results.get("price_with_markup").unwrap();
@@ -84,7 +94,12 @@ rule test_passes: result == expected
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_number_times_percentage", Some(&now), HashMap::new())
+        .run(
+            "test_number_times_percentage",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .unwrap();
 
     let result = response.results.get("result").unwrap();
@@ -114,7 +129,12 @@ rule test_passes: final_price == expected
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_with_rule_reference", Some(&now), HashMap::new())
+        .run(
+            "test_with_rule_reference",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .unwrap();
 
     let discount_amount = response.results.get("discount_amount").unwrap();
@@ -146,7 +166,12 @@ rule test_passes: after_second == expected
     add_lemma_code_blocking(&mut engine, code, "test").unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_chained_percentages", Some(&now), HashMap::new())
+        .run(
+            "test_chained_percentages",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .unwrap();
 
     let after_first = response.results.get("after_first").unwrap();

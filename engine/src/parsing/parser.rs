@@ -1,16 +1,19 @@
 use crate::error::Error;
 use crate::limits::ResourceLimits;
-use crate::parsing::ast::*;
+use crate::parsing::ast::{try_parse_type_constraint_command, *};
 use crate::parsing::lexer::{
-    can_be_label, can_be_reference_segment, is_boolean_keyword, is_duration_unit, is_math_function,
-    is_spec_body_keyword, is_structural_keyword, is_type_keyword, Lexer, Token, TokenKind,
+    can_be_label, can_be_reference_segment, conversion_target_from_token, is_boolean_keyword,
+    is_calendar_unit_token, is_duration_unit, is_math_function, is_spec_body_keyword,
+    is_structural_keyword, is_type_keyword, token_kind_to_boolean_value,
+    token_kind_to_calendar_unit, token_kind_to_duration_unit, token_kind_to_primitive, Lexer,
+    Token, TokenKind,
 };
 use crate::parsing::source::Source;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::sync::Arc;
 
-type TypeArrowChain = (String, Option<SpecRef>, Option<Vec<Constraint>>);
+type TypeArrowChain = (ParentType, Option<SpecRef>, Option<Vec<Constraint>>);
 
 pub struct ParseResult {
     pub specs: Vec<LemmaSpec>,
@@ -67,10 +70,6 @@ impl Parser {
         }
     }
 
-    fn source_text(&self) -> Arc<str> {
-        self.lexer.source_text()
-    }
-
     fn attribute(&self) -> String {
         self.lexer.attribute().to_string()
     }
@@ -104,11 +103,7 @@ impl Parser {
     fn error_at_token(&self, token: &Token, message: impl Into<String>) -> Error {
         Error::parsing(
             message,
-            Source::new(
-                self.lexer.attribute(),
-                token.span.clone(),
-                self.source_text(),
-            ),
+            Source::new(self.lexer.attribute(), token.span.clone()),
             None::<String>,
         )
     }
@@ -121,36 +116,36 @@ impl Parser {
     ) -> Error {
         Error::parsing(
             message,
-            Source::new(
-                self.lexer.attribute(),
-                token.span.clone(),
-                self.source_text(),
-            ),
+            Source::new(self.lexer.attribute(), token.span.clone()),
             Some(suggestion),
         )
     }
 
-    /// Parse a content hash (8 alphanumeric chars) after a `~` token.
-    /// Bypasses normal tokenization to avoid misinterpreting digit+letter
-    /// sequences as scientific notation (e.g. `7e20848b`).
-    fn parse_content_hash(&mut self) -> Result<String, Error> {
-        let hash_span = self.lexer.current_span();
+    /// Parse `~ HASH` where HASH is 8 alphanumeric chars. Optional — returns
+    /// `Ok(None)` when the next token is not `~`. Uses raw scanning after the
+    /// tilde to bypass tokenization (avoids scientific-notation mis-lexing of
+    /// hashes like `7e20848b`).
+    fn try_parse_hash_pin(&mut self) -> Result<Option<String>, Error> {
+        if !self.at(&TokenKind::Tilde)? {
+            return Ok(None);
+        }
+        let tilde_span = self.next()?.span;
         let hash = self.lexer.scan_raw_alphanumeric()?;
         if hash.len() != 8 {
             return Err(Error::parsing(
                 format!(
-                    "Expected an 8-character alphanumeric content hash after '~', found '{}'",
+                    "Expected an 8-character alphanumeric plan hash after '~', found '{}'",
                     hash
                 ),
-                self.make_source(hash_span),
+                self.make_source(tilde_span),
                 None::<String>,
             ));
         }
-        Ok(hash)
+        Ok(Some(hash))
     }
 
     fn make_source(&self, span: Span) -> Source {
-        Source::new(self.lexer.attribute(), span, self.source_text())
+        Source::new(self.lexer.attribute(), span)
     }
 
     fn span_from(&self, start: &Span) -> Span {
@@ -424,7 +419,7 @@ impl Parser {
             }
 
             // Try to parse as datetime
-            if let Some(dtv) = DateTimeValue::parse(&dt_str) {
+            if let Ok(dtv) = dt_str.parse::<DateTimeValue>() {
                 return Ok(Some(dtv));
             }
 
@@ -535,12 +530,12 @@ impl Parser {
         self.expect(&TokenKind::LBracket)?;
 
         // Parse the type name (could be a standard type or custom type)
-        let (base_name, from_spec, constraints) = self.parse_type_arrow_chain()?;
+        let (base, from_spec, constraints) = self.parse_type_arrow_chain()?;
 
         self.expect(&TokenKind::RBracket)?;
 
         Ok(FactValue::TypeDeclaration {
-            base: base_name,
+            base,
             constraints,
             from: from_spec,
         })
@@ -552,11 +547,7 @@ impl Parser {
         let (name, _name_span) = self.parse_spec_name()?;
         let from_registry = name.starts_with('@');
 
-        let mut hash_pin = None;
-        if self.at(&TokenKind::Tilde)? {
-            self.next()?; // consume ~
-            hash_pin = Some(self.parse_content_hash()?);
-        }
+        let hash_pin = self.try_parse_hash_pin()?;
 
         let mut effective = None;
         // Check for effective datetime after spec reference
@@ -732,17 +723,7 @@ impl Parser {
 
         let (from_name, _from_span) = self.parse_spec_name()?;
         let from_registry = from_name.starts_with('@');
-
-        let mut hash_pin = None;
-        // Check for hash after spec name (space separated, 8 alphanumeric chars)
-        if self.at(&TokenKind::Identifier)? || self.at(&TokenKind::NumberLit)? {
-            let peeked = self.peek()?;
-            let peeked_text = peeked.text.clone();
-            if peeked_text.len() == 8 && peeked_text.chars().all(|c| c.is_ascii_alphanumeric()) {
-                let hash_tok = self.next()?;
-                hash_pin = Some(hash_tok.text.clone());
-            }
-        }
+        let hash_pin = self.try_parse_hash_pin()?;
 
         let from = SpecRef {
             name: from_name,
@@ -775,12 +756,11 @@ impl Parser {
 
     /// Parse a type arrow chain: type_name (-> command)* or type_name from spec (-> command)*
     fn parse_type_arrow_chain(&mut self) -> Result<TypeArrowChain, Error> {
-        // Parse the base type name (standard or custom)
         let name_tok = self.next()?;
-        let base_name = if is_type_keyword(&name_tok.kind) {
-            name_tok.text.to_lowercase()
+        let base = if let Some(kind) = token_kind_to_primitive(&name_tok.kind) {
+            ParentType::Primitive(kind)
         } else if can_be_label(&name_tok.kind) {
-            name_tok.text.clone()
+            ParentType::Custom(name_tok.text.clone())
         } else {
             return Err(self.error_at_token(
                 &name_tok,
@@ -793,17 +773,7 @@ impl Parser {
             self.next()?; // consume from
             let (from_name, _) = self.parse_spec_name()?;
             let from_registry = from_name.starts_with('@');
-            let mut hash_pin = None;
-            // Check for hash
-            if self.at(&TokenKind::Identifier)? || self.at(&TokenKind::NumberLit)? {
-                let peeked = self.peek()?;
-                let peeked_text = peeked.text.clone();
-                if peeked_text.len() == 8 && peeked_text.chars().all(|c| c.is_ascii_alphanumeric())
-                {
-                    let hash_tok = self.next()?;
-                    hash_pin = Some(hash_tok.text.clone());
-                }
-            }
+            let hash_pin = self.try_parse_hash_pin()?;
             Some(SpecRef {
                 name: from_name,
                 from_registry,
@@ -818,8 +788,8 @@ impl Parser {
         let mut commands = Vec::new();
         while self.at(&TokenKind::Arrow)? {
             self.next()?; // consume ->
-            let (cmd_name, cmd_args) = self.parse_command()?;
-            commands.push((cmd_name, cmd_args));
+            let (cmd, cmd_args) = self.parse_command()?;
+            commands.push((cmd, cmd_args));
         }
 
         let constraints = if commands.is_empty() {
@@ -828,25 +798,25 @@ impl Parser {
             Some(commands)
         };
 
-        Ok((base_name, from_spec, constraints))
+        Ok((base, from_spec, constraints))
     }
 
     fn parse_remaining_arrow_chain(&mut self) -> Result<TypeArrowChain, Error> {
         let mut commands = Vec::new();
         while self.at(&TokenKind::Arrow)? {
             self.next()?; // consume ->
-            let (cmd_name, cmd_args) = self.parse_command()?;
-            commands.push((cmd_name, cmd_args));
+            let (cmd, cmd_args) = self.parse_command()?;
+            commands.push((cmd, cmd_args));
         }
         let constraints = if commands.is_empty() {
             None
         } else {
             Some(commands)
         };
-        Ok((String::new(), None, constraints))
+        Ok((ParentType::Custom(String::new()), None, constraints))
     }
 
-    fn parse_command(&mut self) -> Result<(String, Vec<CommandArg>), Error> {
+    fn parse_command(&mut self) -> Result<(TypeConstraintCommand, Vec<CommandArg>), Error> {
         let name_tok = self.next()?;
         if !can_be_label(&name_tok.kind) && !is_type_keyword(&name_tok.kind) {
             return Err(self.error_at_token(
@@ -854,7 +824,15 @@ impl Parser {
                 format!("Expected a command name, found {}", name_tok.kind),
             ));
         }
-        let cmd_name = name_tok.text.clone();
+        let cmd = try_parse_type_constraint_command(&name_tok.text).ok_or_else(|| {
+            self.error_at_token(
+                &name_tok,
+                format!(
+                    "Unknown constraint command '{}'. Valid commands: help, default, unit, minimum, maximum, decimals, precision, option, options, length",
+                    name_tok.text
+                ),
+            )
+        })?;
 
         let mut args = Vec::new();
         loop {
@@ -893,7 +871,7 @@ impl Parser {
                 }
                 ref k if is_boolean_keyword(k) => {
                     let tok = self.next()?;
-                    args.push(CommandArg::Boolean(tok.text));
+                    args.push(CommandArg::Boolean(token_kind_to_boolean_value(&tok.kind)));
                 }
                 ref k if can_be_label(k) || is_type_keyword(k) => {
                     let tok = self.next()?;
@@ -903,7 +881,7 @@ impl Parser {
             }
         }
 
-        Ok((cmd_name, args))
+        Ok((cmd, args))
     }
 
     // ========================================================================
@@ -1002,8 +980,7 @@ impl Parser {
             }
             k if is_boolean_keyword(k) => {
                 let tok = self.next()?;
-                let bv = parse_boolean_value(&tok.text);
-                Ok(Value::Boolean(bv))
+                Ok(Value::Boolean(token_kind_to_boolean_value(&tok.kind)))
             }
             TokenKind::NumberLit => self.parse_number_literal(),
             TokenKind::Minus | TokenKind::Plus => self.parse_signed_number_literal(),
@@ -1137,7 +1114,7 @@ impl Parser {
         if is_duration_unit(&peeked.kind) && peeked.kind != TokenKind::PercentKw {
             let unit_tok = self.next()?;
             let decimal = parse_decimal_string(num_text, &num_span, self)?;
-            let duration_unit = parse_duration_unit_from_text(&unit_tok.text);
+            let duration_unit = token_kind_to_duration_unit(&unit_tok.kind);
             return Ok(Value::Duration(decimal, duration_unit));
         }
 
@@ -1207,7 +1184,7 @@ impl Parser {
             }
         }
 
-        if let Some(dtv) = crate::parsing::literals::parse_datetime_str(&dt_str) {
+        if let Ok(dtv) = dt_str.parse::<crate::literals::DateTimeValue>() {
             return Ok(Value::Date(dtv));
         }
 
@@ -1500,7 +1477,7 @@ impl Parser {
         // "in past calendar <unit>" or "in future calendar <unit>"
         if peeked.kind == TokenKind::Past || peeked.kind == TokenKind::Future {
             let direction = self.next()?;
-            let rel_kind = if direction.text.to_lowercase() == "past" {
+            let rel_kind = if direction.kind == TokenKind::Past {
                 DateRelativeKind::InPast
             } else {
                 DateRelativeKind::InFuture
@@ -1509,7 +1486,7 @@ impl Parser {
             // Check for "calendar" keyword
             if self.at(&TokenKind::Calendar)? {
                 self.next()?; // consume "calendar"
-                let cal_kind = if direction.text.to_lowercase() == "past" {
+                let cal_kind = if direction.kind == TokenKind::Past {
                     DateCalendarKind::Past
                 } else {
                     DateCalendarKind::Future
@@ -1566,8 +1543,7 @@ impl Parser {
 
         // "in <unit>" — unit conversion
         let target_tok = self.next()?;
-        let target_text = target_tok.text.clone();
-        let target = parse_conversion_target(&target_text);
+        let target = conversion_target_from_token(&target_tok.kind, &target_tok.text);
 
         let converted = self.new_expression(
             ExpressionKind::UnitConversion(Arc::new(base), target),
@@ -1584,15 +1560,13 @@ impl Parser {
 
     fn parse_calendar_unit(&mut self) -> Result<CalendarUnit, Error> {
         let tok = self.next()?;
-        match tok.text.to_lowercase().as_str() {
-            "year" => Ok(CalendarUnit::Year),
-            "month" => Ok(CalendarUnit::Month),
-            "week" => Ok(CalendarUnit::Week),
-            _ => Err(self.error_at_token(
+        if !is_calendar_unit_token(&tok.kind) {
+            return Err(self.error_at_token(
                 &tok,
                 format!("Expected 'year', 'month', or 'week', found '{}'", tok.text),
-            )),
+            ));
         }
+        Ok(token_kind_to_calendar_unit(&tok.kind))
     }
 
     // ========================================================================
@@ -1808,9 +1782,8 @@ impl Parser {
             // Boolean literals
             k if is_boolean_keyword(k) => {
                 let tok = self.next()?;
-                let bv = parse_boolean_value(&tok.text);
                 self.new_expression(
-                    ExpressionKind::Literal(Value::Boolean(bv)),
+                    ExpressionKind::Literal(Value::Boolean(token_kind_to_boolean_value(&tok.kind))),
                     self.make_source(tok.span),
                 )
             }
@@ -1941,7 +1914,7 @@ impl Parser {
         if is_duration_unit(&self.peek()?.kind) && self.peek()?.kind != TokenKind::PercentKw {
             let unit_tok = self.next()?;
             let decimal = parse_decimal_string(&num_text, &start_span, self)?;
-            let duration_unit = parse_duration_unit_from_text(&unit_tok.text);
+            let duration_unit = token_kind_to_duration_unit(&unit_tok.kind);
             return self.new_expression(
                 ExpressionKind::Literal(Value::Duration(decimal, duration_unit)),
                 self.make_source(self.span_covering(&start_span, &unit_tok.span)),
@@ -2000,18 +1973,6 @@ fn unquote_string(s: &str) -> String {
     }
 }
 
-fn parse_boolean_value(text: &str) -> BooleanValue {
-    match text.to_lowercase().as_str() {
-        "true" => BooleanValue::True,
-        "false" => BooleanValue::False,
-        "yes" => BooleanValue::Yes,
-        "no" => BooleanValue::No,
-        "accept" => BooleanValue::Accept,
-        "reject" => BooleanValue::Reject,
-        other => unreachable!("BUG: '{}' is not a boolean keyword", other),
-    }
-}
-
 fn parse_decimal_string(text: &str, span: &Span, parser: &Parser) -> Result<Decimal, Error> {
     let clean = text.replace(['_', ','], "");
     Decimal::from_str(&clean).map_err(|_| {
@@ -2024,37 +1985,6 @@ fn parse_decimal_string(text: &str, span: &Span, parser: &Parser) -> Result<Deci
             None::<String>,
         )
     })
-}
-
-fn parse_conversion_target(unit_str: &str) -> ConversionTarget {
-    let unit_lower = unit_str.to_lowercase();
-    match unit_lower.as_str() {
-        "year" | "years" => ConversionTarget::Duration(DurationUnit::Year),
-        "month" | "months" => ConversionTarget::Duration(DurationUnit::Month),
-        "week" | "weeks" => ConversionTarget::Duration(DurationUnit::Week),
-        "day" | "days" => ConversionTarget::Duration(DurationUnit::Day),
-        "hour" | "hours" => ConversionTarget::Duration(DurationUnit::Hour),
-        "minute" | "minutes" => ConversionTarget::Duration(DurationUnit::Minute),
-        "second" | "seconds" => ConversionTarget::Duration(DurationUnit::Second),
-        "millisecond" | "milliseconds" => ConversionTarget::Duration(DurationUnit::Millisecond),
-        "microsecond" | "microseconds" => ConversionTarget::Duration(DurationUnit::Microsecond),
-        _ => ConversionTarget::Unit(unit_lower),
-    }
-}
-
-fn parse_duration_unit_from_text(text: &str) -> DurationUnit {
-    match text.to_lowercase().as_str() {
-        "year" | "years" => DurationUnit::Year,
-        "month" | "months" => DurationUnit::Month,
-        "week" | "weeks" => DurationUnit::Week,
-        "day" | "days" => DurationUnit::Day,
-        "hour" | "hours" => DurationUnit::Hour,
-        "minute" | "minutes" => DurationUnit::Minute,
-        "second" | "seconds" => DurationUnit::Second,
-        "millisecond" | "milliseconds" => DurationUnit::Millisecond,
-        "microsecond" | "microseconds" => DurationUnit::Microsecond,
-        other => unreachable!("BUG: '{}' is not a duration unit", other),
-    }
 }
 
 fn is_comparison_operator(kind: &TokenKind) -> bool {

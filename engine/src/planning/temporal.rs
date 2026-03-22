@@ -75,12 +75,11 @@ pub fn compute_temporal_slices(spec_arc: &Arc<LemmaSpec>, context: &Context) -> 
 
         let dep_versions: Vec<Arc<LemmaSpec>> =
             context.iter().filter(|d| d.name == dep_name).collect();
-        assert!(
-            !dep_versions.is_empty(),
-            "BUG: compute_temporal_slices found implicit dep '{}' with no versions in context — \
-             validate_temporal_coverage should have rejected this",
-            dep_name
-        );
+        if dep_versions.is_empty() {
+            // Missing dep — validate_temporal_coverage already reported an error.
+            // Skip so graph building can still collect additional errors.
+            continue;
+        }
 
         let boundaries = context.version_boundaries(&dep_name);
         for boundary in boundaries {
@@ -131,10 +130,8 @@ pub fn compute_temporal_slices(spec_arc: &Arc<LemmaSpec>, context: &Context) -> 
 /// versions that fully cover the spec's effective range. Returns errors
 /// for any dependency that has gaps.
 ///
-/// This replaces the old `validate_later_specs_respect_original` which enforced
-/// that all versions of the same name had identical interfaces. The new
-/// approach allows interface evolution — coverage is checked here, and
-/// interface compatibility is validated per-slice during graph building.
+/// Allows interface evolution: coverage is checked here, and interface
+/// compatibility is validated per-slice during graph building.
 pub fn validate_temporal_coverage(context: &Context) -> Vec<Error> {
     let mut errors = Vec::new();
 
@@ -236,16 +233,15 @@ mod tests {
     }
 
     fn dummy_source() -> Source {
-        Source {
-            attribute: "test".to_string(),
-            span: Span {
+        Source::new(
+            "test",
+            Span {
                 start: 0,
                 end: 0,
                 line: 0,
                 col: 0,
             },
-            source_text: "".into(),
-        }
+        )
     }
 
     fn make_spec(name: &str) -> LemmaSpec {

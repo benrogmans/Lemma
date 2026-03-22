@@ -9,6 +9,7 @@
 
 mod common;
 use common::add_lemma_code_blocking;
+use lemma::planning::semantics::FactData;
 use lemma::{DateTimeValue, Engine, Error};
 use std::collections::HashMap;
 
@@ -27,7 +28,7 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
 
 fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .run(spec_name, Some(effective), HashMap::new())
+        .run(spec_name, Some(effective), HashMap::new(), false)
         .unwrap()
 }
 
@@ -41,7 +42,7 @@ fn eval_with(
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    engine.run(spec_name, Some(effective), map).unwrap()
+    engine.run(spec_name, Some(effective), map, false).unwrap()
 }
 
 fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
@@ -887,13 +888,14 @@ fact rate: 999
     )
     .unwrap();
 
-    // Get the hash of the first (unversioned) config spec
+    // Get the hash of the first (unversioned) config spec (active before 2025-04-01)
+    let v1_effective = date(2025, 1, 1);
     let v1_hash = engine
-        .all_hash_pins()
-        .iter()
-        .find(|(name, af, _)| *name == "config" && af.is_none())
-        .map(|(_, _, h)| h.to_string())
-        .expect("should have hash for config v1");
+        .get_plan_hash("config", &v1_effective)
+        .ok()
+        .flatten()
+        .expect("should have hash for config v1")
+        .to_string();
 
     // Use the hash pin to always resolve config v1
     let pricing_src = format!(
@@ -951,12 +953,14 @@ fact base_price: 50.00 eur
     .unwrap();
 
     let finance_hash = engine
-        .hash_pin("finance", &date(2025, 1, 1))
+        .get_plan_hash("finance", &date(2025, 1, 1))
+        .ok()
+        .flatten()
         .expect("should have finance hash")
         .to_string();
 
     let consumer_src = format!(
-        "spec consumer\ntype money from finance {}\nfact price: 100.00 eur\nrule double: price * 2",
+        "spec consumer\ntype money from finance~{}\nfact price: 100.00 eur\nrule double: price * 2",
         finance_hash
     );
     add_lemma_code_blocking(&mut engine, &consumer_src, "consumer.lemma").unwrap();
@@ -1293,7 +1297,7 @@ rule applied_discount: p.discount
     );
     let errs = result.unwrap_err();
     assert!(
-        !errs.is_empty(),
+        !errs.errors.is_empty(),
         "expected at least one planning error (policy v2 missing discount rule)"
     );
 }
@@ -1687,7 +1691,9 @@ fact x: "text_now"
     .unwrap();
 
     let hash = engine
-        .hash_pin("dep", &date(2025, 1, 1))
+        .get_plan_hash("dep", &date(2025, 1, 1))
+        .ok()
+        .flatten()
         .expect("dep v1 should have hash")
         .to_string();
 
@@ -2505,5 +2511,231 @@ rule val: s.compute
         joined.contains("compute"),
         "Error should mention the missing rule 'compute'. Got: {}",
         joined
+    );
+}
+
+// ============================================================================
+// 14. LOGIC LOCK TESTS
+// ============================================================================
+
+#[test]
+fn unpinned_ref_stores_resolved_plan_hash() {
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine,
+        "spec dep\nfact rate: 100\nrule r: rate",
+        "dep.lemma",
+    )
+    .unwrap();
+    add_lemma_code_blocking(
+        &mut engine,
+        "spec consumer\nfact d: spec dep\nrule val: d.r",
+        "consumer.lemma",
+    )
+    .unwrap();
+
+    let plan = engine
+        .get_plan("consumer", Some(&date(2025, 1, 1)))
+        .unwrap();
+    let d_fact = plan
+        .facts
+        .values()
+        .find(|fd| matches!(fd, FactData::SpecRef { .. }));
+    let d_fact = d_fact.expect("consumer should have a SpecRef fact");
+    assert!(
+        d_fact.resolved_plan_hash().is_some(),
+        "unpinned SpecRef must store resolved_plan_hash, got None"
+    );
+
+    let dep_hash = engine
+        .get_plan_hash("dep", &date(2025, 1, 1))
+        .ok()
+        .flatten()
+        .expect("dep should have hash");
+    assert_eq!(
+        d_fact.resolved_plan_hash().unwrap(),
+        dep_hash.to_ascii_lowercase(),
+        "resolved_plan_hash should equal dep's plan hash"
+    );
+}
+
+#[test]
+fn parent_hash_changes_when_dependency_changes() {
+    let mut engine1 = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine1,
+        "spec dep\nfact rate: 100\nrule r: rate",
+        "dep.lemma",
+    )
+    .unwrap();
+    add_lemma_code_blocking(
+        &mut engine1,
+        "spec consumer\nfact d: spec dep\nrule val: d.r",
+        "consumer.lemma",
+    )
+    .unwrap();
+    let h1 = engine1
+        .get_plan_hash("consumer", &date(2025, 1, 1))
+        .ok()
+        .flatten()
+        .expect("consumer hash v1");
+
+    let mut engine2 = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine2,
+        "spec dep\nfact rate: 200\nrule r: rate",
+        "dep.lemma",
+    )
+    .unwrap();
+    add_lemma_code_blocking(
+        &mut engine2,
+        "spec consumer\nfact d: spec dep\nrule val: d.r",
+        "consumer.lemma",
+    )
+    .unwrap();
+    let h2 = engine2
+        .get_plan_hash("consumer", &date(2025, 1, 1))
+        .ok()
+        .flatten()
+        .expect("consumer hash v2");
+
+    assert_ne!(h1, h2, "consumer hash must change when dep content changes");
+}
+
+#[test]
+fn type_import_pin_mismatch_fails_planning() {
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine,
+        "spec finance\ntype money: scale\n -> unit eur 1.00\n -> decimals 2\nfact p: 10.00 eur",
+        "finance.lemma",
+    )
+    .unwrap();
+
+    let result = add_lemma_code_blocking(
+        &mut engine,
+        "spec consumer\ntype money from finance~deadbeef\nfact price: 10.00 eur\nrule r: price",
+        "consumer.lemma",
+    );
+
+    assert!(
+        result.is_err(),
+        "type import with wrong hash pin should fail planning"
+    );
+    let err_str = result
+        .unwrap_err()
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        err_str.to_lowercase().contains("finance"),
+        "error should mention the spec name: {}",
+        err_str
+    );
+}
+
+#[test]
+fn type_import_pin_match_succeeds_with_correct_hash() {
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine,
+        "spec finance\ntype money: scale\n -> unit eur 1.00\n -> decimals 2\nfact p: 10.00 eur",
+        "finance.lemma",
+    )
+    .unwrap();
+
+    let finance_hash = engine
+        .get_plan_hash("finance", &date(2025, 1, 1))
+        .ok()
+        .flatten()
+        .expect("finance hash")
+        .to_string();
+
+    let consumer_src = format!(
+        "spec consumer\ntype money from finance~{}\nfact price: 10.00 eur\nrule r: price * 2",
+        finance_hash
+    );
+    add_lemma_code_blocking(&mut engine, &consumer_src, "consumer.lemma").unwrap();
+
+    assert_rule_value(
+        &eval(&engine, "consumer", &date(2025, 1, 1)),
+        "r",
+        "20.00 eur",
+    );
+}
+
+#[test]
+fn missing_dependency_hash_when_dep_fails_planning() {
+    let mut engine = Engine::new();
+    // dep has circular rules -> planning will fail for dep
+    let result = add_lemma_code_blocking(
+        &mut engine,
+        "spec dep\nrule a: b\nrule b: a\n\nspec consumer\nfact d: spec dep\nrule val: d.a",
+        "all.lemma",
+    );
+
+    assert!(result.is_err(), "should fail when dep has circular rules");
+    let err_str = result
+        .unwrap_err()
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        err_str.to_lowercase().contains("circular") || err_str.to_lowercase().contains("cycle"),
+        "error should mention circularity: {}",
+        err_str
+    );
+}
+
+#[test]
+fn serde_round_trip_resolved_plan_hash() {
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine,
+        "spec dep\nfact rate: 100\nrule r: rate",
+        "dep.lemma",
+    )
+    .unwrap();
+    add_lemma_code_blocking(
+        &mut engine,
+        "spec consumer\nfact d: spec dep\nrule val: d.r",
+        "consumer.lemma",
+    )
+    .unwrap();
+
+    let plan = engine
+        .get_plan("consumer", Some(&date(2025, 1, 1)))
+        .unwrap();
+    let json = serde_json::to_string(plan).expect("serialize plan");
+    assert!(
+        json.contains("resolved_plan_hash"),
+        "serialized plan should contain resolved_plan_hash key"
+    );
+
+    let deserialized: lemma::ExecutionPlan = serde_json::from_str(&json).expect("deserialize plan");
+    let d_fact = deserialized
+        .facts
+        .values()
+        .find(|fd| matches!(fd, FactData::SpecRef { .. }));
+    let d_fact = d_fact.expect("deserialized plan should have SpecRef");
+    assert!(
+        d_fact.resolved_plan_hash().is_some(),
+        "resolved_plan_hash must survive round-trip"
+    );
+
+    // Also test backward compat: old JSON with expected_hash_pin alias
+    let old_json = json.replace("resolved_plan_hash", "expected_hash_pin");
+    let from_old: lemma::ExecutionPlan =
+        serde_json::from_str(&old_json).expect("deserialize old format");
+    let d_fact_old = from_old
+        .facts
+        .values()
+        .find(|fd| matches!(fd, FactData::SpecRef { .. }))
+        .expect("old format should have SpecRef");
+    assert!(
+        d_fact_old.resolved_plan_hash().is_some(),
+        "expected_hash_pin alias must deserialize into resolved_plan_hash"
     );
 }

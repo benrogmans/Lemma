@@ -21,7 +21,9 @@ fn test_money_plus_number_preserves_money() {
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
-    let mut response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    let mut response = engine
+        .run("test", Some(&now), HashMap::new(), false)
+        .unwrap();
     response.filter_rules(&[String::from("total")]);
     assert_eq!(response.results.len(), 1);
 }
@@ -41,7 +43,9 @@ fn test_number_plus_money_preserves_money() {
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
-    let mut response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    let mut response = engine
+        .run("test", Some(&now), HashMap::new(), false)
+        .unwrap();
     response.filter_rules(&[String::from("total")]);
     assert_eq!(response.results.len(), 1);
 }
@@ -61,7 +65,9 @@ fn test_money_plus_money_preserves_money() {
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
     let now = DateTimeValue::now();
 
-    let mut response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    let mut response = engine
+        .run("test", Some(&now), HashMap::new(), false)
+        .unwrap();
     response.filter_rules(&[String::from("total")]);
     assert_eq!(response.results.len(), 1);
 }
@@ -84,7 +90,9 @@ fn test_different_custom_types_same_base() {
     let now = DateTimeValue::now();
 
     // This should succeed - both extend number (dimensionless), so they're compatible
-    let mut response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    let mut response = engine
+        .run("test", Some(&now), HashMap::new(), false)
+        .unwrap();
     response.filter_rules(&[String::from("total")]);
     assert_eq!(response.results.len(), 1);
 }

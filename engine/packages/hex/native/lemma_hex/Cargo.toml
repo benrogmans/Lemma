@@ -1,0 +1,20 @@
+[package]
+name = "lemma_hex"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lemma engine NIF crate for Elixir/Erlang"
+publish = false
+
+[lib]
+name = "lemma_hex"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+lemma-engine = { path = "../../../../" }
+rustler = "0.37"
+rust_decimal = "1"
+serde_json.workspace = true

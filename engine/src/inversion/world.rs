@@ -1029,6 +1029,7 @@ mod tests {
     use super::*;
     use crate::planning::semantics::ValueKind;
     use rust_decimal::Decimal;
+    use std::collections::BTreeMap;
 
     fn literal_expr(val: LiteralValue) -> Expression {
         Expression::with_source(ExpressionKind::Literal(Box::new(val)), None)
@@ -1069,6 +1070,7 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         }

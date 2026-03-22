@@ -30,7 +30,9 @@ rule is_above_30: savings_ratio > 30%
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("savings", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("savings", Some(&now), HashMap::new(), false)
+        .unwrap();
 
     let ratio_result = response
         .results
@@ -78,7 +80,9 @@ rule tier: "low"
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("summary", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("summary", Some(&now), HashMap::new(), false)
+        .unwrap();
     let tier = response.results.get("tier").expect("tier");
     match &tier.result {
         OperationResult::Value(lit) => {
@@ -103,7 +107,7 @@ rule above_20_permille: as_permille > 20 permille
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("permille_spec", Some(&now), HashMap::new())
+        .run("permille_spec", Some(&now), HashMap::new(), false)
         .unwrap();
     let as_permille = response.results.get("as_permille").expect("as_permille");
     match &as_permille.result {
@@ -162,7 +166,9 @@ rule in_usd: amount in usd
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("pricing", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("pricing", Some(&now), HashMap::new(), false)
+        .unwrap();
     let in_eur = response.results.get("in_eur").expect("in_eur");
     let in_usd = response.results.get("in_usd").expect("in_usd");
 
@@ -193,6 +199,7 @@ rule price: 100 - discount
             "pricing",
             Some(&now),
             HashMap::from([("discount".to_string(), "20 percent".to_string())]),
+            false,
         )
         .unwrap();
 
@@ -247,7 +254,9 @@ rule compared: plus_five > 25%
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("chained", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("chained", Some(&now), HashMap::new(), false)
+        .unwrap();
     let pct = response.results.get("pct").expect("pct");
     let plus_five = response.results.get("plus_five").expect("plus_five");
     let compared = response.results.get("compared").expect("compared");
@@ -293,7 +302,9 @@ rule share_above_20: share_pct > 20%
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("mixed", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("mixed", Some(&now), HashMap::new(), false)
+        .unwrap();
     let as_eur = response.results.get("as_eur").expect("as_eur");
     let share_pct = response.results.get("share_pct").expect("share_pct");
     let share_above_20 = response
@@ -341,7 +352,9 @@ rule exceeds: discount > threshold
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("compare", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("compare", Some(&now), HashMap::new(), false)
+        .unwrap();
     let meets = response.results.get("meets").expect("meets");
     let exceeds = response.results.get("exceeds").expect("exceeds");
 

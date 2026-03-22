@@ -76,10 +76,10 @@ rule workweek_days: workweek in days
 ## Spec References
 
 Reference other specs with `fact name: spec other_spec`. The spec name is
-**required**. You may optionally add a datetime (effective, for temporal version resolution) and/or a content
-hash for verification. Syntax: `spec name`, `spec name datetime`, `spec name datetime hash`,
-or `spec name hash`. A spec name may carry an optional `.version_tag` suffix
-(spec base names cannot contain a period).
+**required**. You may optionally add a datetime (effective, for temporal version resolution) and/or a plan
+hash pin for verification. Syntax: `spec name`, `spec name datetime`, `spec name datetime~hash`,
+or `spec name~hash`. Whitespace around `~` is allowed. A spec name may carry an optional `.version_tag`
+suffix (spec base names cannot contain a period).
 
 ### Versioned names
 
@@ -106,14 +106,15 @@ facts, rules, or state.
   natural sort order (numeric segments compared numerically, so `v10` > `v2`).
   If only an unversioned spec exists, it resolves to that.
 
-### Temporal version resolution and content hash
+### Temporal version resolution and plan hash
 
 - **Datetime:** `fact x: spec pricing 2025` resolves the spec at effective 2025-01-01T00:00:00.
   Use when you need a specific temporal version (see temporal versioning).
-- **Content hash:** `fact x: spec pricing a1b2c3d4` or `fact x: spec pricing 2025 a1b2c3d4`
-  verifies that the resolved spec’s content hash equals the given value (8 hex chars, e.g. `a1b2c3d4`).
+- **Plan hash pin:** `fact x: spec pricing~a1b2c3d4` or `fact x: spec pricing 2025~a1b2c3d4`
+  verifies that the resolved spec’s plan hash equals the given value (8 hex chars, e.g. `a1b2c3d4`).
+  Whitespace around `~` is allowed (e.g. `spec pricing ~ a1b2c3d4`).
   Hash is **verification only**; resolution is always by (name, effective). Mismatch ⇒ validation error.
-  Compute the hash with `lemma show <spec> [--effective T]` (hash is shown in the output).
+  Compute the hash with `lemma schema <spec> [--effective T]` (hash is shown in the output).
 
 ### Self-reference restriction
 

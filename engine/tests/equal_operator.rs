@@ -25,7 +25,7 @@ rule equal_false: a == c
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_equal_numbers", Some(&now), HashMap::new())
+        .run("test_equal_numbers", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let equal_true = response.results.get("equal_true").unwrap();
@@ -55,7 +55,7 @@ rule different_greeting: greeting == other
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_equal_text", Some(&now), HashMap::new())
+        .run("test_equal_text", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let same = response.results.get("same_greeting").unwrap();
@@ -86,7 +86,7 @@ rule different_price: price_a == price_c
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_equal_money", Some(&now), HashMap::new())
+        .run("test_equal_money", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let same = response.results.get("same_price").unwrap();
@@ -117,7 +117,7 @@ rule mixed: flag_a == flag_c
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_equal_booleans", Some(&now), HashMap::new())
+        .run("test_equal_booleans", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let both_true = response.results.get("both_true").unwrap();
@@ -148,7 +148,7 @@ rule message: "inactive"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_equal_conditions", Some(&now), HashMap::new())
+        .run("test_equal_conditions", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let message = response.results.get("message").unwrap();

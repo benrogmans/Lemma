@@ -110,7 +110,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
     ]);
 
     let response = engine
-        .run("coffee_order", Some(&now), fact_values)
+        .run("coffee_order", Some(&now), fact_values, false)
         .expect("Evaluation failed");
 
     // Check base_price: espresso = 2.50 usd
@@ -312,7 +312,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
     ]);
 
     let response = engine
-        .run("coffee_order", Some(&now), fact_values)
+        .run("coffee_order", Some(&now), fact_values, false)
         .expect("Evaluation failed");
 
     // Check base_price: latte = 3.50 usd
@@ -481,7 +481,7 @@ fn test_coffee_order_ordered_priority() {
         let fact_values = HashMap::from([("priority".to_string(), priority.to_string())]);
 
         let response = engine
-            .run("coffee_order", Some(&now), fact_values)
+            .run("coffee_order", Some(&now), fact_values, false)
             .expect("Evaluation failed");
 
         let ordered_priority = response
@@ -519,7 +519,7 @@ fn test_coffee_order_invalid_size_veto() {
     ]);
 
     let response = engine
-        .run("coffee_order", Some(&now), fact_values)
+        .run("coffee_order", Some(&now), fact_values, false)
         .expect("Evaluation should complete (even with veto)");
 
     let size_multiplier = response

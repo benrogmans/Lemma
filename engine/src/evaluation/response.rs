@@ -45,7 +45,7 @@ pub struct RuleResult {
     #[serde(skip_serializing)]
     pub operations: Vec<OperationRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub proof: Option<crate::evaluation::proof::Proof>,
+    pub explanation: Option<crate::evaluation::explanation::Explanation>,
     /// Computed type of this rule's result (semantics).
     pub rule_type: LemmaType,
 }
@@ -79,7 +79,6 @@ mod tests {
                 line: 1,
                 col: 1,
             },
-            std::sync::Arc::from("spec test_spec\nfact x: 1\nrule result: x"),
         )
     }
 
@@ -109,7 +108,7 @@ mod tests {
                 ))),
                 facts: vec![],
                 operations: vec![],
-                proof: None,
+                explanation: None,
                 rule_type: primitive_number().clone(),
             },
         );
@@ -138,7 +137,7 @@ mod tests {
                 result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
                 facts: vec![],
                 operations: vec![],
-                proof: None,
+                explanation: None,
                 rule_type: primitive_boolean().clone(),
             },
         );
@@ -149,7 +148,7 @@ mod tests {
                 result: OperationResult::Value(Box::new(LiteralValue::from_bool(false))),
                 facts: vec![],
                 operations: vec![],
-                proof: None,
+                explanation: None,
                 rule_type: primitive_boolean().clone(),
             },
         );
@@ -175,7 +174,7 @@ mod tests {
             result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
             facts: vec![],
             operations: vec![],
-            proof: None,
+            explanation: None,
             rule_type: primitive_boolean().clone(),
         };
         assert!(matches!(success.result, OperationResult::Value(_)));
@@ -191,7 +190,7 @@ mod tests {
                 source: None,
             }],
             operations: vec![],
-            proof: None,
+            explanation: None,
             rule_type: LemmaType::veto_type(),
         };
         assert_eq!(missing.facts.len(), 1);
@@ -203,7 +202,7 @@ mod tests {
             result: OperationResult::Veto(Some("Vetoed".to_string())),
             facts: vec![],
             operations: vec![],
-            proof: None,
+            explanation: None,
             rule_type: LemmaType::veto_type(),
         };
         assert_eq!(

@@ -28,7 +28,7 @@ rule is_adult: user_age >= 18
     let mut facts = HashMap::new();
     facts.insert("user_age".to_string(), "25".to_string());
 
-    let response = engine.run("test", Some(&now), facts)?;
+    let response = engine.run("test", Some(&now), facts, false)?;
 
     // The fact should be evaluated correctly with the imported type
 
@@ -77,7 +77,7 @@ rule is_senior: user_age >= 65
     let mut facts = HashMap::new();
     facts.insert("user_age".to_string(), "70".to_string());
 
-    let response = engine.run("test", Some(&now), facts)?;
+    let response = engine.run("test", Some(&now), facts, false)?;
 
     // Check the rule result
     let is_senior_result = response

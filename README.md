@@ -209,12 +209,12 @@ lemma run pricing quantity=10 is_vip=true # override facts
 lemma run --interactive                   # interactive mode
 
 lemma run pricing --effective 2025-01-01  # temporal query
-lemma run spec~a1b2c3d4                   # pin to content hash (use lemma show for hash)
+lemma run spec~a1b2c3d4                   # pin to plan hash (use lemma schema for hash)
 
 lemma run pricing -o json                 # JSON output
 lemma run pricing -x                      # show reasoning
 
-lemma show pricing                        # inspect spec structure (includes hash)
+lemma schema pricing                      # spec schema (includes hash)
 lemma list                                # list all specs
 lemma format                               # format .lemma files
 lemma get                                 # fetch registry dependencies
@@ -261,9 +261,8 @@ npm install @benrogmans/lemma-engine
 ```
 
 ```javascript
-import { init, Engine } from '@benrogmans/lemma-engine';
-await init();
-const engine = new Engine();
+import { Lemma } from '@benrogmans/lemma-engine';
+const engine = await Lemma();
 ```
 
 [documentation/wasm.md](documentation/wasm.md)

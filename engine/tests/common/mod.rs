@@ -7,6 +7,6 @@ pub fn add_lemma_code_blocking(
     engine: &mut Engine,
     code: &str,
     source: &str,
-) -> Result<(), Vec<lemma::Error>> {
-    engine.load(code, lemma::LoadSource::Labeled(source))
+) -> Result<(), lemma::Errors> {
+    engine.load(code, lemma::SourceType::Labeled(source))
 }

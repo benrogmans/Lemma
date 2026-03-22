@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Parse JSON to string values for use with ExecutionPlan::with_values().
 ///
@@ -32,7 +32,9 @@ fn json_value_to_string(value: &Value) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Array(_) | Value::Object(_) => serde_json::to_string(value)
             .expect("BUG: serde_json::to_string failed on a serde_json::Value"),
-        Value::Null => String::new(),
+        Value::Null => unreachable!(
+            "null JSON values are filtered in fact_values_from_map before json_value_to_string"
+        ),
     }
 }
 
@@ -51,7 +53,9 @@ pub fn literal_value_to_json(v: &LiteralValue) -> (Value, Option<String>) {
         ValueKind::Scale(n, unit) => (decimal_to_json(n), Some(unit.clone())),
         ValueKind::Ratio(r, _) => (decimal_to_json(r), None),
         ValueKind::Duration(n, unit) => (decimal_to_json(n), Some(unit.to_string())),
-        _ => (Value::String(v.display_value()), None),
+        ValueKind::Text(_) | ValueKind::Date(_) | ValueKind::Time(_) => {
+            (Value::String(v.display_value()), None)
+        }
     }
 }
 
@@ -101,24 +105,6 @@ where
 {
     let entries: Vec<(FactPath, FactData)> = Vec::deserialize(deserializer)?;
     Ok(entries.into_iter().collect())
-}
-
-/// Serializes HashSet<FactPath> as array of FactPath structures.
-pub fn serialize_fact_path_set<S>(set: &HashSet<FactPath>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let items: Vec<&FactPath> = set.iter().collect();
-    items.serialize(serializer)
-}
-
-/// Deserializes array of FactPath structures to HashSet<FactPath>.
-pub fn deserialize_fact_path_set<'de, D>(deserializer: D) -> Result<HashSet<FactPath>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let items: Vec<FactPath> = Vec::deserialize(deserializer)?;
-    Ok(items.into_iter().collect())
 }
 
 #[cfg(test)]

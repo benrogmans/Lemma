@@ -230,12 +230,11 @@ npm install @benrogmans/lemma-engine
 ```
 
 ```javascript
-import { init, Engine } from '@benrogmans/lemma-engine';
-await init();
-new Engine();
+import { Lemma } from '@benrogmans/lemma-engine';
+const engine = await Lemma();
 ```
 
-Build: `node wasm/build.js` (from `engine/`). See [wasm/README.md](wasm/README.md).
+Build: `node build.js` (from `engine/packages/npm/`). See [packages/npm/README.md](packages/npm/README.md).
 
 ## Documentation
 
@@ -243,7 +242,6 @@ Build: `node wasm/build.js` (from `engine/`). See [wasm/README.md](wasm/README.m
 - API documentation: <https://docs.rs/lemma-engine>
 - Examples: <https://github.com/benrogmans/lemma/tree/main/documentation/examples>
 - CLI usage: <https://github.com/benrogmans/lemma/blob/main/documentation/CLI.md>
-- Roadmap: <https://github.com/benrogmans/lemma/blob/main/documentation/roadmap.md>
 
 ## Use cases
 
@@ -256,7 +254,7 @@ Build: `node wasm/build.js` (from `engine/`). See [wasm/README.md](wasm/README.m
 
 ## Contributing
 
-Contributions are very welcome! See [documentation/contributing.md](https://github.com/benrogmans/lemma/blob/main/documentation/contributing.md) and the [project roadmap](https://github.com/benrogmans/lemma/blob/main/documentation/roadmap.md) for ideas.
+Contributions are very welcome!
 
 ## License
 

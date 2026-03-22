@@ -53,7 +53,7 @@ fn test_01_simple_facts() {
 
     // Spec has only facts, no rules - just verify it loads without errors
     let response = engine
-        .run("simple_facts", Some(&now), HashMap::new())
+        .run("simple_facts", Some(&now), HashMap::new(), false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "simple_facts");
@@ -72,7 +72,7 @@ fn test_02_rules_and_unless() {
     facts.insert("customer_age".to_string(), "17".to_string());
 
     let response = engine
-        .run("rules_and_unless", Some(&now), facts)
+        .run("rules_and_unless", Some(&now), facts, false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "rules_and_unless");
@@ -100,7 +100,7 @@ fn test_03_spec_references() {
 
     // Test examples/base_employee spec
     let response = engine
-        .run("base_employee", Some(&now), HashMap::new())
+        .run("base_employee", Some(&now), HashMap::new(), false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "base_employee");
@@ -115,7 +115,7 @@ fn test_03_spec_references() {
 
     // Test examples/specific_employee spec (references base_employee)
     let response = engine
-        .run("specific_employee", Some(&now), HashMap::new())
+        .run("specific_employee", Some(&now), HashMap::new(), false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "specific_employee");
@@ -139,7 +139,7 @@ fn test_03_spec_references() {
 
     // Test examples/contractor spec (also references base_employee)
     let response = engine
-        .run("contractor", Some(&now), HashMap::new())
+        .run("contractor", Some(&now), HashMap::new(), false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "contractor");
@@ -160,7 +160,7 @@ fn test_04_unit_conversions() {
 
     // Spec has all facts defined, no type annotations needed
     let response = engine
-        .run("unit_conversions", Some(&now), HashMap::new())
+        .run("unit_conversions", Some(&now), HashMap::new(), false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "unit_conversions");
@@ -205,7 +205,7 @@ fn test_05_date_handling() {
     facts.insert("current_date".to_string(), "2024-06-15".to_string());
 
     let response = engine
-        .run("date_handling", Some(&now), facts)
+        .run("date_handling", Some(&now), facts, false)
         .expect("Evaluation failed");
 
     // Spec evaluates successfully
@@ -242,7 +242,7 @@ fn test_06_tax_calculation() {
     facts.insert("filing_status".to_string(), "single".to_string());
 
     let response = engine
-        .run("tax_calculation", Some(&now), facts)
+        .run("tax_calculation", Some(&now), facts, false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "tax_calculation");
@@ -303,7 +303,7 @@ fn test_07_shipping_policy() {
     facts.insert("is_hazardous".to_string(), "false".to_string());
 
     let response = engine
-        .run("shipping_policy", Some(&now), facts)
+        .run("shipping_policy", Some(&now), facts, false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "shipping_policy");
@@ -354,7 +354,7 @@ fn test_08_rule_references() {
 
     // Test examples/rule_references spec
     let response = engine
-        .run("rule_references", Some(&now), HashMap::new())
+        .run("rule_references", Some(&now), HashMap::new(), false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "rule_references");
@@ -374,7 +374,7 @@ fn test_08_rule_references() {
 
     // Test examples/eligibility_check spec (also in the same file)
     let response = engine
-        .run("eligibility_check", Some(&now), HashMap::new())
+        .run("eligibility_check", Some(&now), HashMap::new(), false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "eligibility_check");
@@ -411,7 +411,7 @@ fn test_09_stress_test() {
     facts.insert("payment_method".to_string(), "credit".to_string());
 
     let response = engine
-        .run("stress_test", Some(&now), facts)
+        .run("stress_test", Some(&now), facts, false)
         .expect("Evaluation should succeed");
 
     assert_eq!(response.spec_name, "stress_test");
@@ -425,7 +425,7 @@ fn test_09_stress_test_config() {
 
     // Test the config spec (has all facts defined)
     let response = engine
-        .run("stress_test_config", Some(&now), HashMap::new())
+        .run("stress_test_config", Some(&now), HashMap::new(), false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "stress_test_config");
@@ -449,7 +449,7 @@ fn test_09_stress_test_extended() {
     facts.insert("order.payment_method".to_string(), "debit".to_string());
 
     let response = engine
-        .run("stress_test_extended", Some(&now), facts)
+        .run("stress_test_extended", Some(&now), facts, false)
         .expect("Cross-spec rule references now work correctly");
 
     assert_eq!(response.spec_name, "stress_test_extended");
@@ -463,7 +463,12 @@ fn test_10_compensation_policy() {
 
     // Test base_policy spec
     let response = engine
-        .run("compensation/base_policy", Some(&now), HashMap::new())
+        .run(
+            "compensation/base_policy",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "compensation/base_policy");
@@ -474,7 +479,12 @@ fn test_10_compensation_policy() {
 
     // Test engineering_dept spec (has all facts defined)
     let response = engine
-        .run("compensation/engineering_dept", Some(&now), HashMap::new())
+        .run(
+            "compensation/engineering_dept",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "compensation/engineering_dept");
@@ -485,7 +495,12 @@ fn test_10_compensation_policy() {
 
     // Test senior_engineer spec
     let response = engine
-        .run("compensation/senior_engineer", Some(&now), HashMap::new())
+        .run(
+            "compensation/senior_engineer",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .unwrap();
     assert_eq!(response.spec_name, "compensation/senior_engineer");
     assert!(!response.results.is_empty());
@@ -496,6 +511,7 @@ fn test_10_compensation_policy() {
             "compensation/principal_engineer",
             Some(&now),
             HashMap::new(),
+            false,
         )
         .unwrap();
     assert_eq!(response.spec_name, "compensation/principal_engineer");
@@ -509,7 +525,7 @@ fn test_11_spec_composition() {
 
     // Test base pricing configuration
     let response = engine
-        .run("pricing/base_config", Some(&now), HashMap::new())
+        .run("pricing/base_config", Some(&now), HashMap::new(), false)
         .expect("Failed to evaluate base_config");
     assert_eq!(response.spec_name, "pricing/base_config");
     assert!(response
@@ -519,7 +535,7 @@ fn test_11_spec_composition() {
 
     // Test wholesale pricing with bindings
     let response = engine
-        .run("pricing/wholesale", Some(&now), HashMap::new())
+        .run("pricing/wholesale", Some(&now), HashMap::new(), false)
         .expect("Failed to evaluate wholesale");
     assert_eq!(response.spec_name, "pricing/wholesale");
     assert!(response
@@ -529,7 +545,7 @@ fn test_11_spec_composition() {
 
     // Test multi-level nested references - now works correctly!
     let response = engine
-        .run("order/wholesale_order", Some(&now), HashMap::new())
+        .run("order/wholesale_order", Some(&now), HashMap::new(), false)
         .expect("Cross-spec rule references now work correctly");
     assert_eq!(response.spec_name, "order/wholesale_order");
     let order_total = response
@@ -544,7 +560,7 @@ fn test_11_spec_composition() {
 
     // Test comparison spec with multiple references
     let response = engine
-        .run("order/comparison", Some(&now), HashMap::new())
+        .run("order/comparison", Some(&now), HashMap::new(), false)
         .expect("Evaluation should succeed (but rules will veto)");
     assert_eq!(response.spec_name, "order/comparison");
     assert!(response
@@ -562,7 +578,7 @@ fn test_11_spec_composition() {
 
     // Test deep nested bindings
     let response = engine
-        .run("order/custom_wholesale", Some(&now), HashMap::new())
+        .run("order/custom_wholesale", Some(&now), HashMap::new(), false)
         .expect("Failed to evaluate custom_wholesale");
     assert_eq!(response.spec_name, "order/custom_wholesale");
     assert!(response
@@ -572,7 +588,7 @@ fn test_11_spec_composition() {
 
     // Test multiple independent references
     let response = engine
-        .run("complex/multi_reference", Some(&now), HashMap::new())
+        .run("complex/multi_reference", Some(&now), HashMap::new(), false)
         .expect("Failed to evaluate multi_reference");
     assert_eq!(response.spec_name, "complex/multi_reference");
 

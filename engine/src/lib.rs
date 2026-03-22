@@ -8,7 +8,7 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use lemma::{Engine, LoadSource};
+//! use lemma::{Engine, SourceType};
 //! use std::collections::HashMap;
 //!
 //! let mut engine = Engine::new();
@@ -19,11 +19,11 @@
 //!     fact price: 100
 //!     fact quantity: 5
 //!     rule total: price * quantity
-//! "#, LoadSource::Labeled("example.lemma")).expect("failed to load");
+//! "#, SourceType::Labeled("example.lemma")).expect("failed to load");
 //!
 //! // Evaluate the spec (all rules, no fact values)
 //! let now = lemma::DateTimeValue::now();
-//! let response = engine.run("example", Some(&now), HashMap::new()).unwrap();
+//! let response = engine.run("example", Some(&now), HashMap::new(), false).unwrap();
 //! ```
 //!
 //! ## Core Concepts
@@ -54,6 +54,7 @@ pub mod evaluation;
 pub mod formatting;
 pub mod inversion;
 pub mod limits;
+pub(crate) mod literals;
 pub mod parsing;
 pub mod planning;
 pub mod registry;
@@ -63,12 +64,12 @@ pub mod spec_id;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-pub use engine::{Context, Engine, LoadSource};
-pub use error::Error;
+pub use engine::{Context, Engine, Errors, SourceType};
+pub use error::{Error, RequestErrorKind};
+pub use evaluation::explanation;
 pub use evaluation::operations::{
     ComputationKind, OperationKind, OperationRecord, OperationResult,
 };
-pub use evaluation::proof;
 pub use evaluation::response::{Facts, Response, RuleResult};
 pub use formatting::{format_source, format_specs};
 pub use inversion::{Bound, Domain, InversionResponse, Solution, Target, TargetOp};
@@ -81,8 +82,8 @@ pub use parsing::parse;
 pub use parsing::ParseResult;
 pub use parsing::Source;
 pub use planning::semantics::{
-    FactPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit, ScaleUnits,
-    SemanticDurationUnit, TypeSpecification, ValueKind,
+    is_same_spec, FactPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit,
+    ScaleUnits, SemanticDurationUnit, TypeDefiningSpec, TypeSpecification, ValueKind,
 };
 pub use planning::{ExecutionPlan, PlanningResult, SpecPlanningResult, SpecSchema};
 #[cfg(feature = "registry")]

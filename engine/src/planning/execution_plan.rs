@@ -4,18 +4,20 @@
 //! The plan contains all facts, rules flattened into executable branches,
 //! and execution order - no spec structure needed during evaluation.
 
-use crate::parsing::ast::{DateTimeValue, MetaValue};
+use crate::parsing::ast::{DateTimeValue, LemmaSpec, MetaValue};
 use crate::planning::graph::Graph;
 use crate::planning::semantics;
 use crate::planning::semantics::{
     Expression, FactData, FactPath, LemmaType, LiteralValue, RulePath, TypeSpecification, ValueKind,
 };
+use crate::planning::types::ResolvedSpecTypes;
 use crate::Error;
 use crate::ResourceLimits;
 use crate::Source;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 /// A complete execution plan ready for the evaluator
 ///
@@ -40,11 +42,25 @@ pub struct ExecutionPlan {
     /// Spec metadata
     pub meta: HashMap<String, MetaValue>,
 
+    /// Named types defined in or imported by this spec, in deterministic order.
+    /// Only includes named types (not inline type definitions on facts).
+    pub named_types: BTreeMap<String, LemmaType>,
+
     /// Temporal slice start (inclusive). None = -∞.
     pub valid_from: Option<DateTimeValue>,
 
     /// Temporal slice end (exclusive). None = +∞.
     pub valid_to: Option<DateTimeValue>,
+}
+
+impl ExecutionPlan {
+    /// Deterministic 8-char hex plan hash: SHA-256 of semantic fingerprint (excluding sources and meta).
+    #[must_use]
+    pub fn plan_hash(&self) -> String {
+        crate::planning::fingerprint::fingerprint_hash(&crate::planning::fingerprint::from_plan(
+            self,
+        ))
+    }
 }
 
 /// An executable rule with flattened branches
@@ -65,9 +81,7 @@ pub struct ExecutableRule {
     pub branches: Vec<Branch>,
 
     /// All facts this rule needs (direct + inherited from rule dependencies)
-    #[serde(serialize_with = "crate::serialization::serialize_fact_path_set")]
-    #[serde(deserialize_with = "crate::serialization::deserialize_fact_path_set")]
-    pub needs_facts: HashSet<FactPath>,
+    pub needs_facts: BTreeSet<FactPath>,
 
     /// Source location for error messages (always present for rules from parsed specs)
     pub source: Source,
@@ -94,6 +108,7 @@ pub struct Branch {
 /// Internal implementation detail - only called by plan()
 pub(crate) fn build_execution_plan(
     graph: &Graph,
+    resolved_types: &HashMap<Arc<LemmaSpec>, ResolvedSpecTypes>,
     valid_from: Option<DateTimeValue>,
     valid_to: Option<DateTimeValue>,
 ) -> ExecutionPlan {
@@ -101,11 +116,27 @@ pub(crate) fn build_execution_plan(
     let execution_order = graph.execution_order();
 
     let mut executable_rules: Vec<ExecutableRule> = Vec::new();
+    let mut path_to_index: HashMap<RulePath, usize> = HashMap::new();
 
     for rule_path in execution_order {
         let rule_node = graph.rules().get(rule_path).expect(
             "bug: rule from topological sort not in graph - validation should have caught this",
         );
+
+        let mut direct_facts = HashSet::new();
+        for (condition, result) in &rule_node.branches {
+            if let Some(cond) = condition {
+                cond.collect_fact_paths(&mut direct_facts);
+            }
+            result.collect_fact_paths(&mut direct_facts);
+        }
+        let mut needs_facts: BTreeSet<FactPath> = direct_facts.into_iter().collect();
+
+        for dep in &rule_node.depends_on_rules {
+            if let Some(&dep_idx) = path_to_index.get(dep) {
+                needs_facts.extend(executable_rules[dep_idx].needs_facts.iter().cloned());
+            }
+        }
 
         let mut executable_branches = Vec::new();
         for (condition, result) in &rule_node.branches {
@@ -116,88 +147,55 @@ pub(crate) fn build_execution_plan(
             });
         }
 
+        path_to_index.insert(rule_path.clone(), executable_rules.len());
         executable_rules.push(ExecutableRule {
             path: rule_path.clone(),
             name: rule_path.rule.clone(),
             branches: executable_branches,
             source: rule_node.source.clone(),
-            needs_facts: HashSet::new(),
+            needs_facts,
             rule_type: rule_node.rule_type.clone(),
         });
     }
 
-    populate_needs_facts(&mut executable_rules, graph);
+    let main_spec = graph.main_spec();
+    let named_types = build_type_tables(main_spec, resolved_types);
 
     ExecutionPlan {
-        spec_name: graph.main_spec().name.clone(),
+        spec_name: main_spec.name.clone(),
         facts,
         rules: executable_rules,
         sources: graph.sources().clone(),
-        meta: graph
-            .main_spec()
+        meta: main_spec
             .meta_fields
             .iter()
             .map(|f| (f.key.clone(), f.value.clone()))
             .collect(),
+        named_types,
         valid_from,
         valid_to,
     }
 }
 
-fn populate_needs_facts(rules: &mut [ExecutableRule], graph: &Graph) {
-    // Compute direct fact references per rule.
-    let mut direct: HashMap<RulePath, HashSet<FactPath>> = HashMap::new();
-    for rule in rules.iter() {
-        let mut facts = HashSet::new();
-        for branch in &rule.branches {
-            if let Some(cond) = &branch.condition {
-                cond.collect_fact_paths(&mut facts);
-            }
-            branch.result.collect_fact_paths(&mut facts);
+/// Build the named types table from the main spec's resolved types.
+fn build_type_tables(
+    main_spec: &Arc<LemmaSpec>,
+    resolved_types: &HashMap<Arc<LemmaSpec>, ResolvedSpecTypes>,
+) -> BTreeMap<String, LemmaType> {
+    let mut named_types = BTreeMap::new();
+
+    let main_resolved = resolved_types
+        .iter()
+        .find(|(spec, _)| Arc::ptr_eq(spec, main_spec))
+        .map(|(_, types)| types);
+
+    if let Some(resolved) = main_resolved {
+        for (type_name, lemma_type) in &resolved.named_types {
+            named_types.insert(type_name.clone(), lemma_type.clone());
         }
-        direct.insert(rule.path.clone(), facts);
     }
 
-    // Compute transitive closure over rule dependencies (order-independent).
-    fn compute_all_facts(
-        rule_path: &RulePath,
-        graph: &Graph,
-        direct: &HashMap<RulePath, HashSet<FactPath>>,
-        memo: &mut HashMap<RulePath, HashSet<FactPath>>,
-        visiting: &mut HashSet<RulePath>,
-    ) -> HashSet<FactPath> {
-        if let Some(cached) = memo.get(rule_path) {
-            return cached.clone();
-        }
-
-        if !visiting.insert(rule_path.clone()) {
-            unreachable!(
-                "BUG: cycle in rule dependency graph at {:?} — planning should have rejected this",
-                rule_path
-            );
-        }
-
-        let mut out = direct.get(rule_path).cloned().unwrap_or_default();
-        if let Some(node) = graph.rules().get(rule_path) {
-            for dep in &node.depends_on_rules {
-                // Only include dependencies that exist in the executable set.
-                if direct.contains_key(dep) {
-                    out.extend(compute_all_facts(dep, graph, direct, memo, visiting));
-                }
-            }
-        }
-
-        visiting.remove(rule_path);
-        memo.insert(rule_path.clone(), out.clone());
-        out
-    }
-
-    let mut memo: HashMap<RulePath, HashSet<FactPath>> = HashMap::new();
-    let mut visiting: HashSet<RulePath> = HashSet::new();
-
-    for rule in rules.iter_mut() {
-        rule.needs_facts = compute_all_facts(&rule.path, graph, &direct, &mut memo, &mut visiting);
-    }
+    named_types
 }
 
 /// A spec's public interface: its facts (inputs) and rules (outputs) with
@@ -416,7 +414,6 @@ impl ExecutionPlan {
                         rule_name, self.spec_name
                     ),
                     None::<String>,
-                    None,
                 )
             })?;
             needed_facts.extend(rule.needs_facts.iter().cloned());
@@ -492,7 +489,6 @@ impl ExecutionPlan {
                         available.join(", ")
                     ),
                     None::<String>,
-                    None,
                 )
             })?;
             let fact_path = fact_path.clone();
@@ -510,7 +506,6 @@ impl ExecutionPlan {
                         name
                     ),
                     None::<String>,
-                    None,
                 )
             })?;
 
@@ -712,8 +707,8 @@ mod tests {
         engine: &mut Engine,
         code: &str,
         source: &str,
-    ) -> Result<(), Vec<crate::Error>> {
-        engine.load(code, crate::LoadSource::Labeled(source))
+    ) -> Result<(), crate::Errors> {
+        engine.load(code, crate::SourceType::Labeled(source))
     }
 
     #[test]
@@ -730,7 +725,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.plan("test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan("test", Some(&now)).unwrap().clone();
         let fact_path = FactPath::new(vec![], "age".to_string());
 
         let mut values = HashMap::new();
@@ -760,7 +755,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.plan("test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan("test", Some(&now)).unwrap().clone();
 
         let mut values = HashMap::new();
         values.insert("age".to_string(), "thirty".to_string());
@@ -782,7 +777,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.plan("test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan("test", Some(&now)).unwrap().clone();
 
         let mut values = HashMap::new();
         values.insert("unknown".to_string(), "30".to_string());
@@ -807,7 +802,7 @@ mod tests {
         .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.plan("test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan("test", Some(&now)).unwrap().clone();
 
         let mut values = HashMap::new();
         values.insert("rules.base_price".to_string(), "100".to_string());
@@ -831,16 +826,15 @@ mod tests {
 
     fn test_source() -> crate::Source {
         use crate::parsing::ast::Span;
-        crate::Source {
-            attribute: "<test>".to_string(),
-            span: Span {
+        crate::Source::new(
+            "<test>",
+            Span {
                 start: 0,
                 end: 0,
                 line: 1,
                 col: 0,
             },
-            source_text: Arc::from("spec test\nfact x: 1\nrule result: x"),
-        }
+        )
     }
 
     fn create_literal_expr(value: LiteralValue) -> Expression {
@@ -893,7 +887,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();
         facts.insert(
@@ -914,6 +907,7 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         };
@@ -950,7 +944,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();
         facts.insert(
@@ -971,6 +964,7 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         };
@@ -1014,7 +1008,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec test\nfact x: 1\nrule result: x"),
         );
         let mut facts = IndexMap::new();
         facts.insert(
@@ -1036,6 +1029,7 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::from([("<test>".to_string(), "".to_string())]),
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         };
@@ -1074,6 +1068,7 @@ mod tests {
                 s
             },
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         };
@@ -1085,6 +1080,62 @@ mod tests {
         assert_eq!(deserialized.facts.len(), plan.facts.len());
         assert_eq!(deserialized.rules.len(), plan.rules.len());
         assert_eq!(deserialized.sources.len(), plan.sources.len());
+    }
+
+    #[test]
+    fn test_serialize_deserialize_plan_with_imported_named_type_defining_spec() {
+        let dep_spec = Arc::new(crate::parsing::ast::LemmaSpec::new("examples".to_string()));
+        let imported_type = crate::planning::semantics::LemmaType::new(
+            "salary".to_string(),
+            TypeSpecification::scale(),
+            crate::planning::semantics::TypeExtends::Custom {
+                parent: "money".to_string(),
+                family: "money".to_string(),
+                defining_spec: crate::planning::semantics::TypeDefiningSpec::Import {
+                    spec: Arc::clone(&dep_spec),
+                    resolved_plan_hash: "a1b2c3d4".to_string(),
+                },
+            },
+        );
+
+        let mut named_types = BTreeMap::new();
+        named_types.insert("salary".to_string(), imported_type);
+
+        let plan = ExecutionPlan {
+            spec_name: "test".to_string(),
+            facts: IndexMap::new(),
+            rules: Vec::new(),
+            sources: HashMap::new(),
+            meta: HashMap::new(),
+            named_types,
+            valid_from: None,
+            valid_to: None,
+        };
+
+        let json = serde_json::to_string(&plan).expect("Should serialize");
+        let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
+
+        let recovered = deserialized
+            .named_types
+            .get("salary")
+            .expect("salary type should be present");
+        match &recovered.extends {
+            crate::planning::semantics::TypeExtends::Custom {
+                defining_spec:
+                    crate::planning::semantics::TypeDefiningSpec::Import {
+                        spec,
+                        resolved_plan_hash,
+                    },
+                ..
+            } => {
+                assert_eq!(spec.name, "examples");
+                assert_eq!(resolved_plan_hash, "a1b2c3d4");
+            }
+            other => panic!(
+                "Expected imported defining_spec after round-trip, got {:?}",
+                other
+            ),
+        }
     }
 
     #[test]
@@ -1107,6 +1158,7 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         };
@@ -1126,11 +1178,7 @@ mod tests {
                 result: create_literal_expr(create_boolean_literal(true)),
                 source: test_source(),
             }],
-            needs_facts: {
-                let mut set = HashSet::new();
-                set.insert(age_path);
-                set
-            },
+            needs_facts: BTreeSet::from([age_path]),
             source: test_source(),
             rule_type: primitive_boolean().clone(),
         };
@@ -1174,6 +1222,7 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         };
@@ -1226,6 +1275,7 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         };
@@ -1269,6 +1319,7 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         };
@@ -1307,11 +1358,7 @@ mod tests {
                     source: test_source(),
                 },
             ],
-            needs_facts: {
-                let mut set = HashSet::new();
-                set.insert(points_path);
-                set
-            },
+            needs_facts: BTreeSet::from([points_path]),
             source: test_source(),
             rule_type: primitive_text().clone(),
         };
@@ -1336,6 +1383,7 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         };
@@ -1369,6 +1417,7 @@ mod tests {
             rules: Vec::new(),
             sources: HashMap::new(),
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         };
@@ -1388,11 +1437,7 @@ mod tests {
                 ),
                 source: test_source(),
             }],
-            needs_facts: {
-                let mut set = HashSet::new();
-                set.insert(x_path);
-                set
-            },
+            needs_facts: BTreeSet::from([x_path]),
             source: test_source(),
             rule_type: crate::planning::semantics::primitive_number().clone(),
         };
@@ -1443,6 +1488,7 @@ mod tests {
                 s
             },
             meta: HashMap::new(),
+            named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
         };
@@ -1462,11 +1508,7 @@ mod tests {
                 result: create_literal_expr(create_boolean_literal(true)),
                 source: test_source(),
             }],
-            needs_facts: {
-                let mut set = HashSet::new();
-                set.insert(age_path);
-                set
-            },
+            needs_facts: BTreeSet::from([age_path]),
             source: test_source(),
             rule_type: primitive_boolean().clone(),
         };

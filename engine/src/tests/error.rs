@@ -1,10 +1,8 @@
 use crate::error::Error;
 use crate::parsing::ast::Span;
 use crate::parsing::source::Source;
-use std::sync::Arc;
 
 fn test_source() -> Source {
-    let source_text = "fact amount: 100";
     Source::new(
         "test.lemma",
         Span {
@@ -13,7 +11,6 @@ fn test_source() -> Source {
             line: 1,
             col: 15,
         },
-        Arc::from(source_text),
     )
 }
 
@@ -27,7 +24,6 @@ fn test_error_creation_and_display() {
         "Parse error: Invalid currency at test.lemma:1:15"
     );
 
-    let typo_source_text = "fact amont: 100";
     let typo_source = Source::new(
         "suggestion.lemma",
         Span {
@@ -36,7 +32,6 @@ fn test_error_creation_and_display() {
             line: 1,
             col: 6,
         },
-        Arc::from(typo_source_text),
     );
 
     let parse_error_with_suggestion =
