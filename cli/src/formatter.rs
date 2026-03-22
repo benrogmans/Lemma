@@ -1,4 +1,4 @@
-use lemma::evaluation::proof::{NonMatchedBranch, ProofNode, ValueSource};
+use lemma::evaluation::explanation::{ExplanationNode, NonMatchedBranch, ValueSource};
 use lemma::planning::semantics::{FactPath, FactValue, TypeSpecification, ValueKind};
 use lemma::{ExecutionPlan, LiteralValue, OperationResult, Response, RuleResult, SpecSchema};
 use std::collections::HashSet;
@@ -26,7 +26,7 @@ impl Default for Formatter {
 
 impl Formatter {
     /// Format evaluation response. When `explain` is false: one line for a single rule, or one table
-    /// for multiple rules. When true: facts tree and full proof trees per rule.
+    /// for multiple rules. When true: facts tree and full explanation trees per rule.
     pub fn format_response(&self, response: &Response, explain: bool) -> String {
         if response.results.is_empty() {
             return String::new();
@@ -37,7 +37,11 @@ impl Formatter {
         }
 
         if response.results.len() == 1 {
-            let result = response.results.values().next().unwrap();
+            let result = response
+                .results
+                .values()
+                .next()
+                .expect("BUG: len==1 but no values");
             return format!("{}\n", self.format_result_inline(&result.result));
         }
 
@@ -72,7 +76,7 @@ impl Formatter {
         output
     }
 
-    pub fn format_spec_inspection(&self, plan: &ExecutionPlan, hash: Option<&str>) -> String {
+    pub fn format_spec_inspection(&self, plan: &ExecutionPlan, hash: &str) -> String {
         let local_fact_paths: Vec<&FactPath> = plan
             .facts
             .keys()
@@ -114,9 +118,7 @@ impl Formatter {
             }
         }
 
-        if let Some(h) = hash {
-            content_lines.push(format!("hash: {}", h));
-        }
+        content_lines.push(format!("hash: {}", hash));
 
         table.add_row(vec![
             Cell::new(content_lines.join("\n")).set_alignment(CellAlignment::Left)
@@ -284,8 +286,8 @@ impl Formatter {
         let mut rows: Vec<String> = Vec::new();
         let mut expanded: HashSet<String> = HashSet::new();
 
-        if let Some(proof) = &result.proof {
-            self.render_node(&proof.tree, "", &mut rows, &mut expanded);
+        if let Some(explanation) = &result.explanation {
+            self.render_node(explanation.tree.as_ref(), "", &mut rows, &mut expanded);
         }
 
         let mut table = Table::new();
@@ -319,7 +321,7 @@ impl Formatter {
 
     fn render_node(
         &self,
-        node: &ProofNode,
+        node: &ExplanationNode,
         indent: &str,
         rows: &mut Vec<String>,
         expanded: &mut HashSet<String>,
@@ -330,10 +332,10 @@ impl Formatter {
             indent,
         };
         match node {
-            ProofNode::Value { value, source, .. } => {
+            ExplanationNode::Value { value, source, .. } => {
                 self.render_value(value, source, &mut ctx);
             }
-            ProofNode::RuleReference {
+            ExplanationNode::RuleReference {
                 rule_path,
                 result,
                 expansion,
@@ -341,7 +343,7 @@ impl Formatter {
             } => {
                 self.render_rule_reference(rule_path, result, expansion, Connector::Last, &mut ctx);
             }
-            ProofNode::Computation {
+            ExplanationNode::Computation {
                 expression,
                 original_expression,
                 operands,
@@ -349,14 +351,14 @@ impl Formatter {
             } => {
                 self.render_computation(expression, original_expression, operands, &mut ctx);
             }
-            ProofNode::Branches {
+            ExplanationNode::Branches {
                 matched,
                 non_matched,
                 ..
             } => {
                 self.render_branches(matched, non_matched, &mut ctx);
             }
-            ProofNode::Condition {
+            ExplanationNode::Condition {
                 expression,
                 original_expression,
                 result,
@@ -365,7 +367,7 @@ impl Formatter {
             } => {
                 self.render_condition(expression, original_expression, *result, operands, &mut ctx);
             }
-            ProofNode::Veto { message, .. } => {
+            ExplanationNode::Veto { message, .. } => {
                 self.render_veto(message, &mut ctx);
             }
         }
@@ -373,7 +375,7 @@ impl Formatter {
 
     fn render_node_with_connector(
         &self,
-        node: &ProofNode,
+        node: &ExplanationNode,
         indent: &str,
         connector: Connector,
         rows: &mut Vec<String>,
@@ -385,7 +387,7 @@ impl Formatter {
             indent,
         };
         match node {
-            ProofNode::Value { value, source, .. } => {
+            ExplanationNode::Value { value, source, .. } => {
                 let display = match source {
                     ValueSource::Fact { fact_ref } => {
                         format!("{} is {}", fact_ref, self.format_literal_inline(value))
@@ -401,13 +403,19 @@ impl Formatter {
                     display
                 ));
             }
-            ProofNode::RuleReference {
+            ExplanationNode::RuleReference {
                 rule_path,
                 result,
                 expansion,
                 ..
             } => {
-                self.render_rule_reference(rule_path, result, expansion, connector, &mut ctx);
+                self.render_rule_reference(
+                    rule_path,
+                    result,
+                    expansion.as_ref(),
+                    connector,
+                    &mut ctx,
+                );
             }
             _ => {
                 self.render_node(node, indent, rows, expanded);
@@ -429,7 +437,7 @@ impl Formatter {
         &self,
         rule_path: &lemma::RulePath,
         result: &OperationResult,
-        expansion: &ProofNode,
+        expansion: &ExplanationNode,
         connector: Connector,
         ctx: &mut RenderContext,
     ) {
@@ -453,7 +461,7 @@ impl Formatter {
         &self,
         expression: &str,
         original_expression: &str,
-        operands: &[ProofNode],
+        operands: &[ExplanationNode],
         ctx: &mut RenderContext,
     ) {
         ctx.rows.push(format!("{}├─ {}", ctx.indent, expression));
@@ -482,12 +490,12 @@ impl Formatter {
 
     /// Recursively flatten nested Computation operands so that
     /// `(a + b) + c` expands as `[a, b, c]` instead of nesting.
-    fn collect_expandable_operands(operands: &[ProofNode]) -> Vec<&ProofNode> {
+    fn collect_expandable_operands(operands: &[ExplanationNode]) -> Vec<&ExplanationNode> {
         let mut result = Vec::new();
         for op in operands {
             match op {
-                ProofNode::Value { .. } => {}
-                ProofNode::Computation {
+                ExplanationNode::Value { .. } => {}
+                ExplanationNode::Computation {
                     operands: nested, ..
                 } => {
                     result.extend(Self::collect_expandable_operands(nested));
@@ -500,12 +508,12 @@ impl Formatter {
 
     fn render_branches(
         &self,
-        matched: &lemma::evaluation::proof::Branch,
+        matched: &lemma::evaluation::explanation::Branch,
         non_matched: &[NonMatchedBranch],
         ctx: &mut RenderContext,
     ) {
         enum BranchItem<'a> {
-            Matched(&'a lemma::evaluation::proof::Branch),
+            Matched(&'a lemma::evaluation::explanation::Branch),
             NonMatched(&'a NonMatchedBranch),
         }
 
@@ -552,7 +560,7 @@ impl Formatter {
                         ));
                     }
 
-                    if !matches!(&*branch.result, ProofNode::Value { .. }) {
+                    if !matches!(&*branch.result, ExplanationNode::Value { .. }) {
                         let result_indent = if has_condition {
                             format!("{}   ", ctx.indent)
                         } else {
@@ -597,19 +605,18 @@ impl Formatter {
 
     /// Collect RuleReference operands from condition nodes, deduplicated by rule path (first occurrence order).
     fn collect_operands_dedup<'a>(
-        condition_nodes: impl Iterator<Item = &'a ProofNode>,
-    ) -> Vec<&'a ProofNode> {
+        condition_nodes: impl Iterator<Item = &'a ExplanationNode>,
+    ) -> Vec<&'a ExplanationNode> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for node in condition_nodes {
-            let operands: &[ProofNode] = match node {
-                ProofNode::Computation { operands, .. } | ProofNode::Condition { operands, .. } => {
-                    operands.as_ref()
-                }
+            let operands: &[ExplanationNode] = match node {
+                ExplanationNode::Computation { operands, .. }
+                | ExplanationNode::Condition { operands, .. } => operands.as_ref(),
                 _ => continue,
             };
             for op in operands {
-                if let ProofNode::RuleReference { rule_path, .. } = op {
+                if let ExplanationNode::RuleReference { rule_path, .. } = op {
                     if seen.insert(rule_path.to_string()) {
                         out.push(op);
                     }
@@ -624,7 +631,7 @@ impl Formatter {
         expression: &str,
         original_expression: &str,
         _result: bool,
-        operands: &[ProofNode],
+        operands: &[ExplanationNode],
         ctx: &mut RenderContext,
     ) {
         ctx.rows.push(format!("{}├─ {}", ctx.indent, expression));
@@ -732,23 +739,23 @@ impl Formatter {
         }
     }
 
-    fn extract_condition_text(&self, node: &ProofNode) -> String {
+    fn extract_condition_text(&self, node: &ExplanationNode) -> String {
         match node {
-            ProofNode::Computation {
+            ExplanationNode::Computation {
                 original_expression,
                 ..
             } => original_expression.clone(),
-            ProofNode::Condition {
+            ExplanationNode::Condition {
                 original_expression,
                 ..
             } => original_expression.clone(),
-            ProofNode::Value { value, source, .. } => match source {
+            ExplanationNode::Value { value, source, .. } => match source {
                 ValueSource::Fact { fact_ref } => fact_ref.to_string(),
                 ValueSource::Literal | ValueSource::Computed => value.to_string(),
             },
-            ProofNode::RuleReference { rule_path, .. } => rule_path.to_string(),
-            ProofNode::Branches { .. } => "<branches>".to_string(),
-            ProofNode::Veto { message, .. } => {
+            ExplanationNode::RuleReference { rule_path, .. } => rule_path.to_string(),
+            ExplanationNode::Branches { .. } => "<branches>".to_string(),
+            ExplanationNode::Veto { message, .. } => {
                 message.clone().unwrap_or_else(|| "veto".to_string())
             }
         }

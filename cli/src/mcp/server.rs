@@ -82,7 +82,7 @@ mod imp {
 
     fn resolve_effective(args: &serde_json::Value) -> Result<DateTimeValue, McpError> {
         match args.get("effective").and_then(|v| v.as_str()) {
-            Some(s) if !s.trim().is_empty() => DateTimeValue::parse(s.trim()).ok_or_else(|| {
+            Some(s) if !s.trim().is_empty() => s.trim().parse::<DateTimeValue>().ok().ok_or_else(|| {
                 McpError::invalid_params(format!(
                     "Invalid effective value '{}'. Expected: YYYY, YYYY-MM, YYYY-MM-DD, or ISO 8601 datetime",
                     s
@@ -335,17 +335,18 @@ mod imp {
                 .collect();
 
             self.engine
-                .load(code, lemma::LoadSource::Labeled(&source_id))
-                .map_err(|errs| {
-                    for e in &errs {
-                        error!("{}", e);
+                .load(code, lemma::SourceType::Labeled(&source_id))
+                .map_err(|load_err| {
+                    for e in load_err.iter() {
+                        error!(
+                            "{}",
+                            crate::error_formatter::format_error(e, &load_err.sources)
+                        );
                     }
-                    let msg = errs
-                        .iter()
-                        .map(|e| e.to_string())
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    McpError::internal_error(format!("Failed to parse spec: {}", msg))
+                    McpError::internal_error(format!(
+                        "Failed to parse spec ({} error(s))",
+                        load_err.errors.len()
+                    ))
                 })?;
 
             let new_spec_names: Vec<String> = self
@@ -360,7 +361,7 @@ mod imp {
 
             let now = DateTimeValue::now();
             for spec_name in &new_spec_names {
-                if let Ok(plan) = self.engine.plan(spec_name, Some(&now)) {
+                if let Ok(plan) = self.engine.get_plan(spec_name, Some(&now)) {
                     output.push_str(&plan.schema().to_string());
                     output.push('\n');
                 }
@@ -388,10 +389,10 @@ mod imp {
                 .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
 
             let now = resolve_effective(args)?;
-            let spec = self.engine.get_spec(spec_name, &now).ok_or_else(|| {
+            let spec = self.engine.get_spec(spec_name, Some(&now)).map_err(|e| {
                 McpError::invalid_params(format!(
-                    "Spec '{}' not found. Use list_specs to see available specs.",
-                    spec_name
+                    "Spec '{}' not found: {}. Use list_specs to see available specs.",
+                    spec_name, e
                 ))
             })?;
 
@@ -421,7 +422,7 @@ mod imp {
                 ));
             }
 
-            let (base_name, _) = lemma::parse_spec_id(spec_id.trim())
+            let (_base_name, _) = lemma::parse_spec_id(spec_id.trim())
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
@@ -445,7 +446,7 @@ mod imp {
             let now = resolve_effective(args)?;
             let mut response = self
                 .engine
-                .run(spec_id.trim(), Some(&now), fact_values)
+                .run(spec_id.trim(), Some(&now), fact_values, false)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
@@ -456,15 +457,16 @@ mod imp {
 
             let hash = self
                 .engine
-                .hash_pin(&base_name, &now)
-                .map(|h| h.to_string());
+                .get_plan(spec_id.trim(), Some(&now))
+                .map_err(|e| {
+                    McpError::internal_error(format!("BUG: run succeeded but get_plan failed: {e}"))
+                })?
+                .plan_hash();
 
             let mut output = String::new();
             output.push_str(&format!("spec: {}\n", spec_id.trim()));
             output.push_str(&format!("effective: {}\n", now));
-            if let Some(ref h) = hash {
-                output.push_str(&format!("hash: {}\n", h));
-            }
+            output.push_str(&format!("hash: {}\n", hash));
             output.push('\n');
 
             for result in response.results.values() {
@@ -483,8 +485,8 @@ mod imp {
                 }
                 output.push('\n');
 
-                if let Some(proof) = &result.proof {
-                    let steps = format_proof_steps(proof);
+                if let Some(explanation) = &result.explanation {
+                    let steps = format_explanation_steps(explanation);
                     if !steps.is_empty() {
                         output.push_str("\nReasoning:\n");
                         output.push_str(&steps);
@@ -520,7 +522,7 @@ mod imp {
             } else {
                 let schemas: Vec<lemma::SpecSchema> = specs_list
                     .iter()
-                    .filter_map(|s| self.engine.show(&s.name, Some(&now)).ok())
+                    .filter_map(|s| self.engine.schema(&s.name, Some(&now)).ok())
                     .collect();
 
                 schemas
@@ -555,12 +557,15 @@ mod imp {
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let now = resolve_effective(args)?;
-            let plan = self.engine.plan(spec_id.trim(), Some(&now)).map_err(|_| {
-                McpError::invalid_params(format!(
-                    "Spec '{}' not found. Use list_specs to see available specs.",
-                    spec_id.trim()
-                ))
-            })?;
+            let plan = self
+                .engine
+                .get_plan(spec_id.trim(), Some(&now))
+                .map_err(|_| {
+                    McpError::invalid_params(format!(
+                        "Spec '{}' not found. Use list_specs to see available specs.",
+                        spec_id.trim()
+                    ))
+                })?;
 
             let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
                 Some(rule) if !rule.trim().is_empty() => vec![rule.trim().to_string()],
@@ -600,27 +605,32 @@ mod imp {
         }
     }
 
-    // ── Proof formatting ─────────────────────────────────────────────────
+    // ── Explanation formatting ─────────────────────────────────────────────
 
-    /// Linearise a proof tree into plain-English reasoning steps.
-    fn format_proof_steps(proof: &lemma::proof::Proof) -> String {
+    /// Linearise an explanation tree into plain-English reasoning steps.
+    fn format_explanation_steps(explanation: &lemma::explanation::Explanation) -> String {
         let mut steps = Vec::new();
         let mut seen_facts = std::collections::HashSet::new();
         let mut seen_rules = std::collections::HashSet::new();
-        walk_proof_node(&proof.tree, &mut steps, &mut seen_facts, &mut seen_rules);
+        walk_explanation_node(
+            &explanation.tree,
+            &mut steps,
+            &mut seen_facts,
+            &mut seen_rules,
+        );
         steps.join("\n")
     }
 
-    fn walk_proof_node(
-        node: &lemma::proof::ProofNode,
+    fn walk_explanation_node(
+        node: &lemma::explanation::ExplanationNode,
         steps: &mut Vec<String>,
         seen_facts: &mut std::collections::HashSet<String>,
         seen_rules: &mut std::collections::HashSet<String>,
     ) {
-        use lemma::proof::{ProofNode, ValueSource};
+        use lemma::explanation::{ExplanationNode, ValueSource};
 
         match node {
-            ProofNode::Value {
+            ExplanationNode::Value {
                 value,
                 source: ValueSource::Fact { fact_ref },
                 ..
@@ -631,9 +641,9 @@ mod imp {
                 }
             }
 
-            ProofNode::Value { .. } => {}
+            ExplanationNode::Value { .. } => {}
 
-            ProofNode::RuleReference {
+            ExplanationNode::RuleReference {
                 rule_path,
                 result,
                 expansion,
@@ -643,7 +653,7 @@ mod imp {
                 if !seen_rules.insert(key) {
                     return;
                 }
-                walk_proof_node(expansion, steps, seen_facts, seen_rules);
+                walk_explanation_node(expansion, steps, seen_facts, seen_rules);
                 match result {
                     lemma::OperationResult::Value(v) => {
                         steps.push(format!("{}: {}", rule_path.rule, v));
@@ -659,7 +669,7 @@ mod imp {
                 }
             }
 
-            ProofNode::Computation {
+            ExplanationNode::Computation {
                 original_expression,
                 expression,
                 result,
@@ -667,7 +677,7 @@ mod imp {
                 ..
             } => {
                 for op in operands {
-                    walk_proof_node(op, steps, seen_facts, seen_rules);
+                    walk_explanation_node(op, steps, seen_facts, seen_rules);
                 }
                 let expr = if original_expression != expression && !original_expression.is_empty() {
                     original_expression.as_str()
@@ -677,7 +687,7 @@ mod imp {
                 steps.push(format!("{}: {}", expr, result));
             }
 
-            ProofNode::Branches {
+            ExplanationNode::Branches {
                 matched,
                 non_matched,
                 ..
@@ -713,10 +723,10 @@ mod imp {
                 }
 
                 // Walk the matched result
-                walk_proof_node(&matched.result, steps, seen_facts, seen_rules);
+                walk_explanation_node(&matched.result, steps, seen_facts, seen_rules);
             }
 
-            ProofNode::Condition {
+            ExplanationNode::Condition {
                 original_expression,
                 expression,
                 result,
@@ -724,7 +734,7 @@ mod imp {
                 ..
             } => {
                 for op in operands {
-                    walk_proof_node(op, steps, seen_facts, seen_rules);
+                    walk_explanation_node(op, steps, seen_facts, seen_rules);
                 }
                 let expr = if original_expression != expression && !original_expression.is_empty() {
                     original_expression.as_str()
@@ -735,24 +745,24 @@ mod imp {
                 steps.push(format!("{} is {}", expr, verdict));
             }
 
-            ProofNode::Veto { message, .. } => match message {
+            ExplanationNode::Veto { message, .. } => match message {
                 Some(msg) => steps.push(format!("veto: {}", msg)),
                 None => steps.push("veto".to_string()),
             },
         }
     }
 
-    /// Walk a proof node collecting only fact values (no reasoning steps).
+    /// Walk an explanation node collecting only fact values (no reasoning steps).
     /// Used to gather facts from branch conditions before emitting branch decisions.
     fn collect_branch_facts(
-        node: &lemma::proof::ProofNode,
+        node: &lemma::explanation::ExplanationNode,
         steps: &mut Vec<String>,
         seen_facts: &mut std::collections::HashSet<String>,
     ) {
-        use lemma::proof::{ProofNode, ValueSource};
+        use lemma::explanation::{ExplanationNode, ValueSource};
 
         match node {
-            ProofNode::Value {
+            ExplanationNode::Value {
                 value,
                 source: ValueSource::Fact { fact_ref },
                 ..
@@ -762,15 +772,16 @@ mod imp {
                     steps.push(format!("{}: {}", key, value));
                 }
             }
-            ProofNode::Condition { operands, .. } | ProofNode::Computation { operands, .. } => {
+            ExplanationNode::Condition { operands, .. }
+            | ExplanationNode::Computation { operands, .. } => {
                 for op in operands {
                     collect_branch_facts(op, steps, seen_facts);
                 }
             }
-            ProofNode::RuleReference { expansion, .. } => {
+            ExplanationNode::RuleReference { expansion, .. } => {
                 collect_branch_facts(expansion, steps, seen_facts);
             }
-            ProofNode::Branches {
+            ExplanationNode::Branches {
                 matched,
                 non_matched,
                 ..
@@ -787,17 +798,17 @@ mod imp {
         }
     }
 
-    /// Extract the human-readable expression from any proof node.
-    fn node_expression(node: &lemma::proof::ProofNode) -> String {
-        use lemma::proof::{ProofNode, ValueSource};
+    /// Extract the human-readable expression from any explanation node.
+    fn node_expression(node: &lemma::explanation::ExplanationNode) -> String {
+        use lemma::explanation::{ExplanationNode, ValueSource};
 
         match node {
-            ProofNode::Condition {
+            ExplanationNode::Condition {
                 original_expression,
                 expression,
                 ..
             }
-            | ProofNode::Computation {
+            | ExplanationNode::Computation {
                 original_expression,
                 expression,
                 ..
@@ -808,14 +819,14 @@ mod imp {
                     expression.clone()
                 }
             }
-            ProofNode::RuleReference { rule_path, .. } => rule_path.rule.to_string(),
-            ProofNode::Value {
+            ExplanationNode::RuleReference { rule_path, .. } => rule_path.rule.to_string(),
+            ExplanationNode::Value {
                 source: ValueSource::Fact { fact_ref },
                 ..
             } => fact_ref.to_string(),
-            ProofNode::Value { value, .. } => value.to_string(),
-            ProofNode::Branches { .. } => "branch".to_string(),
-            ProofNode::Veto { message, .. } => {
+            ExplanationNode::Value { value, .. } => value.to_string(),
+            ExplanationNode::Branches { .. } => "branch".to_string(),
+            ExplanationNode::Veto { message, .. } => {
                 message.clone().unwrap_or_else(|| "veto".to_string())
             }
         }

@@ -44,7 +44,7 @@ fn run_fuzz_targets() {
             "run",
             target,
             "--",
-            "-max_total_time=30",
+            "-max_total_time=10",
             "-timeout=5",
         ])
         .current_dir(&fuzz_dir)

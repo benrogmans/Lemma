@@ -49,7 +49,7 @@ pub mod http {
         raw: Option<&str>,
     ) -> Result<DateTimeValue, (StatusCode, Json<ErrorResponse>)> {
         match raw {
-            Some(s) => DateTimeValue::parse(s).ok_or_else(|| {
+            Some(s) => s.parse::<DateTimeValue>().ok().ok_or_else(|| {
                 (
                     StatusCode::BAD_REQUEST,
                     Json(ErrorResponse {
@@ -64,7 +64,7 @@ pub mod http {
     #[derive(Clone)]
     struct AppState {
         engine: SharedEngine,
-        proofs_enabled: bool,
+        explanations_enabled: bool,
     }
 
     #[derive(Debug, serde::Serialize)]
@@ -74,10 +74,9 @@ pub mod http {
 
     #[derive(serde::Serialize)]
     struct GetSpecResponse {
-        spec: String,
+        spec_id: String,
         effective_from: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        hash: Option<String>,
+        hash: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         facts: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,15 +94,13 @@ pub mod http {
 
     /// Build ETag, Memento-Datetime, Vary for the resolved spec.
     fn spec_response_headers(
-        _spec_name: &str,
+        _spec_name: &String,
         effective_from: Option<&DateTimeValue>,
-        hash: Option<&str>,
+        hash: &String,
     ) -> Vec<(axum::http::header::HeaderName, HeaderValue)> {
         let mut h = Vec::new();
-        if let Some(hash) = hash {
-            if let Ok(v) = HeaderValue::from_str(&format!("\"{}\"", hash)) {
-                h.push((axum::http::header::ETAG, v));
-            }
+        if let Ok(v) = HeaderValue::from_str(&format!("\"{}\"", hash)) {
+            h.push((axum::http::header::ETAG, v));
         }
         if let Some(af) = effective_from {
             if let Ok(v) = HeaderValue::from_str(&af.to_string()) {
@@ -136,7 +133,7 @@ pub mod http {
         host: &str,
         port: u16,
         watch: bool,
-        proofs: bool,
+        explanations: bool,
         workdir: PathBuf,
     ) -> anyhow::Result<()> {
         tracing_subscriber::fmt()
@@ -154,7 +151,7 @@ pub mod http {
 
         let state = AppState {
             engine: shared_engine,
-            proofs_enabled: proofs,
+            explanations_enabled: explanations,
         };
 
         let app = Router::new()
@@ -194,7 +191,7 @@ pub mod http {
         let specs: Vec<lemma::SpecSchema> = engine
             .list_specs_effective(&now)
             .iter()
-            .filter_map(|s| engine.show(&s.name, Some(&now)).ok())
+            .filter_map(|s| engine.schema(&s.name, Some(&now)).ok())
             .collect();
 
         Ok(Json(specs))
@@ -224,8 +221,11 @@ pub mod http {
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let effective = resolve_effective(q.effective.as_deref())?;
         let engine = state.engine.read().await;
-        let spec =
-            lemma_openapi::generate_openapi_effective(&engine, state.proofs_enabled, &effective);
+        let spec = lemma_openapi::generate_openapi_effective(
+            &engine,
+            state.explanations_enabled,
+            &effective,
+        );
         Ok(Json(spec))
     }
 
@@ -330,26 +330,10 @@ pub mod http {
         headers: HeaderMap,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let spec_id = parse_spec_path(&path);
-        if spec_id.is_empty() {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: "Spec path required".to_string(),
-                }),
-            ));
-        }
-        let (name, pin) = lemma::parse_spec_id(&spec_id).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
         let effective = accept_datetime_from_headers(&headers)?;
         let engine = state.engine.read().await;
 
-        let schema = engine.show(&spec_id, Some(&effective)).map_err(|e| {
+        let schema = engine.schema(&spec_id, Some(&effective)).map_err(|e| {
             (
                 lemma_error_to_status(&e),
                 Json(ErrorResponse {
@@ -362,7 +346,7 @@ pub mod http {
         let schema = if rule_names.is_empty() {
             schema
         } else {
-            let plan = engine.plan(&spec_id, Some(&effective)).map_err(|e| {
+            let plan = engine.get_plan(&spec_id, Some(&effective)).map_err(|e| {
                 (
                     lemma_error_to_status(&e),
                     Json(ErrorResponse {
@@ -380,36 +364,49 @@ pub mod http {
             })?
         };
 
-        let spec_arc = pin
-            .as_ref()
-            .and_then(|h| engine.get_spec_by_hash_pin(&name, h))
-            .or_else(|| engine.get_spec(&name, &effective))
-            .ok_or_else(|| {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(ErrorResponse {
-                        error: format!("Spec '{}' not found", spec_id),
-                    }),
-                )
-            })?;
+        let spec_arc = engine.get_spec(&spec_id, Some(&effective)).map_err(|e| {
+            (
+                lemma_error_to_status(&e),
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
         let versions: Vec<VersionEntry> = engine
-            .all_hash_pins()
+            .list_specs()
             .into_iter()
-            .filter(|(n, _, _)| *n == name)
-            .map(|(_, effective_from, hash)| VersionEntry {
-                effective_from: effective_from.clone(),
-                hash: hash.to_string(),
+            .filter(|s| s.name == spec_arc.name)
+            .map(|arc| {
+                let effective_from = arc.effective_from().cloned();
+                let hash = engine
+                    .get_plan(&arc.name, effective_from.as_ref())
+                    .expect("BUG: loaded spec has no plan")
+                    .plan_hash();
+                VersionEntry {
+                    effective_from: effective_from.map(|d| d.to_string()),
+                    hash,
+                }
             })
             .collect();
 
         let effective_from_str = spec_arc.effective_from().map(|d| d.to_string());
-        let hash = engine.hash_pin_for_spec(&spec_arc);
+        let hash = engine
+            .get_plan(&spec_id, Some(&effective))
+            .map_err(|e| {
+                (
+                    lemma_error_to_status(&e),
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                )
+            })?
+            .plan_hash();
 
         let body = GetSpecResponse {
-            spec: schema.spec.clone(),
+            spec_id,
             effective_from: effective_from_str,
-            hash: hash.map(|h| h.to_string()),
+            hash: hash.clone(),
             facts: Some(
                 serde_json::to_value(&schema.facts).expect("BUG: failed to serialize schema facts"),
             ),
@@ -424,7 +421,7 @@ pub mod http {
 
         let mut response = Json(body).into_response();
         let headers_mut = response.headers_mut();
-        for (k, v) in spec_response_headers(&name, spec_arc.effective_from(), hash) {
+        for (k, v) in spec_response_headers(&spec_arc.name, spec_arc.effective_from(), &hash) {
             headers_mut.insert(k, v);
         }
         Ok(response)
@@ -439,28 +436,12 @@ pub mod http {
         Form(fact_values): Form<std::collections::HashMap<String, String>>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let spec_id = parse_spec_path(&path);
-        if spec_id.is_empty() {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: "Spec path required".to_string(),
-                }),
-            ));
-        }
-        let (name, pin) = lemma::parse_spec_id(&spec_id).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
         let effective = accept_datetime_from_headers(&headers)?;
         let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
         let engine = state.engine.read().await;
 
         let mut response = engine
-            .run(&spec_id, Some(&effective), fact_values)
+            .run(&spec_id, Some(&effective), fact_values, false)
             .map_err(|err| {
                 (
                     lemma_error_to_status(&err),
@@ -473,24 +454,22 @@ pub mod http {
             response.filter_rules(&rule_names);
         }
 
-        let spec_arc = pin
-            .as_ref()
-            .and_then(|h| engine.get_spec_by_hash_pin(&name, h))
-            .or_else(|| engine.get_spec(&name, &effective));
-        let hash = spec_arc
-            .as_ref()
-            .and_then(|arc| engine.hash_pin_for_spec(arc));
-        let effective_from = spec_arc.as_ref().and_then(|arc| arc.effective_from());
+        let spec_arc = engine.get_spec(&spec_id, Some(&effective)).ok();
+        let effective_from = spec_arc.as_ref().and_then(|a| a.effective_from());
+        let hash = engine
+            .get_plan(&spec_id, Some(&effective))
+            .expect("BUG: run succeeded but get_plan failed")
+            .plan_hash();
         let results = response::convert_response_with_hash(
             &response,
-            want_proofs(&state, &headers),
-            &name,
+            want_explanations(&state, &headers),
+            &response.spec_name,
             &effective,
-            hash,
+            &hash,
         );
         let mut axum_response = Json(results).into_response();
         let headers_mut = axum_response.headers_mut();
-        for (k, v) in spec_response_headers(&name, effective_from, hash) {
+        for (k, v) in spec_response_headers(&response.spec_name, effective_from, &hash) {
             headers_mut.insert(k, v);
         }
         Ok(axum_response)
@@ -530,7 +509,7 @@ pub mod http {
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let engine = engine.read().await;
 
-        let plan = engine.plan(spec_name, Some(now)).map_err(|e| {
+        let plan = engine.get_plan(spec_name, Some(now)).map_err(|e| {
             (
                 lemma_error_to_status(&e),
                 Json(ErrorResponse {
@@ -555,10 +534,10 @@ pub mod http {
         Ok(Json(schema))
     }
 
-    fn want_proofs(state: &AppState, headers: &HeaderMap) -> bool {
-        state.proofs_enabled
+    fn want_explanations(state: &AppState, headers: &HeaderMap) -> bool {
+        state.explanations_enabled
             && headers
-                .get("x-proofs")
+                .get("x-explanations")
                 .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
                 .map(|s: &str| !s.trim().is_empty())
                 .unwrap_or(false)
@@ -566,13 +545,15 @@ pub mod http {
 
     /// Map a `Error` to an HTTP status code.
     ///
-    /// Engine errors mentioning "not found" → 404; everything else → 400.
+    /// SpecNotFound → 404; InvalidRequest → 400.
     fn lemma_error_to_status(err: &lemma::Error) -> StatusCode {
-        let msg = err.to_string();
-        if msg.contains("not found") {
-            StatusCode::NOT_FOUND
-        } else {
-            StatusCode::BAD_REQUEST
+        use lemma::RequestErrorKind;
+        match err {
+            lemma::Error::Request {
+                kind: RequestErrorKind::SpecNotFound,
+                ..
+            } => StatusCode::NOT_FOUND,
+            _ => StatusCode::BAD_REQUEST,
         }
     }
 
@@ -740,11 +721,14 @@ pub mod http {
                 paths.push(entry.path().to_path_buf());
             }
         }
-        if let Err(errs) = engine.load_from_paths(&paths) {
-            for e in &errs {
-                tracing::error!("{}", crate::error_formatter::format_error(e));
+        if let Err(load_err) = engine.load_from_paths(&paths, false) {
+            for e in load_err.iter() {
+                tracing::error!(
+                    "{}",
+                    crate::error_formatter::format_error(e, &load_err.sources)
+                );
             }
-            anyhow::bail!("Workspace load failed ({} error(s))", errs.len());
+            anyhow::bail!("Workspace load failed ({} error(s))", load_err.errors.len());
         }
         Ok(engine)
     }

@@ -93,18 +93,18 @@ fn test_server_help_shows_watch_flag() {
 }
 
 #[test]
-fn test_server_help_shows_proofs_flag() {
+fn test_server_help_shows_explanations_flag() {
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("server").arg("--help");
 
     cmd.assert()
         .success()
-        .stdout(predicates::str::contains("--proofs"))
-        .stdout(predicates::str::contains("x-proofs"));
+        .stdout(predicates::str::contains("--explanations"))
+        .stdout(predicates::str::contains("x-explanations"));
 }
 
 #[test]
-fn test_get_with_x_proofs_header_returns_proof_when_proofs_enabled() {
+fn test_get_with_x_explanations_header_returns_explanation_when_explanations_enabled() {
     let temp_dir = tempfile::tempdir().unwrap();
     let lemma_file = temp_dir.path().join("single.lemma");
     std::fs::write(
@@ -124,7 +124,7 @@ rule result: x
         .arg(temp_dir.path())
         .arg("--port")
         .arg(port.to_string())
-        .arg("--proofs")
+        .arg("--explanations")
         .spawn()
         .unwrap();
 
@@ -139,7 +139,7 @@ rule result: x
     let url = format!("http://127.0.0.1:{}/single_spec", port);
     let resp = client
         .post(&url)
-        .header("x-proofs", "true")
+        .header("x-explanations", "true")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body("x=42")
         .send()
@@ -152,7 +152,7 @@ rule result: x
 
     assert!(
         status.is_success(),
-        "POST with x-proofs should return 2xx, got {}",
+        "POST with x-explanations should return 2xx, got {}",
         status
     );
     let results = body
@@ -162,8 +162,8 @@ rule result: x
         .get("result")
         .expect("results should have 'result' rule");
     assert!(
-        rule_result.get("proof").is_some(),
-        "response should include proof when x-proofs header sent: {:?}",
+        rule_result.get("explanation").is_some(),
+        "response should include explanation when x-explanations header sent: {:?}",
         body
     );
     assert_eq!(

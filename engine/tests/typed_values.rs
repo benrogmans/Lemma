@@ -18,7 +18,9 @@ rule net_multiplier: 1 - discount
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("pricing", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("pricing", Some(&now), HashMap::new(), false)
+        .unwrap();
     let result = response
         .results
         .get("net_multiplier")
@@ -49,7 +51,7 @@ rule double_meeting: meeting_length * 2
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("scheduling", Some(&now), HashMap::new())
+        .run("scheduling", Some(&now), HashMap::new(), false)
         .unwrap();
     let result = response
         .results
@@ -83,7 +85,9 @@ rule end: start + 7 days
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("dates", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("dates", Some(&now), HashMap::new(), false)
+        .unwrap();
     let result = response.results.get("end").unwrap().result.value().unwrap();
 
     match result {
@@ -112,7 +116,9 @@ rule can_access: is_active and not is_premium
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("logic", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("logic", Some(&now), HashMap::new(), false)
+        .unwrap();
     let result = response
         .results
         .get("can_access")
@@ -144,7 +150,9 @@ rule message: greeting
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("strings", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("strings", Some(&now), HashMap::new(), false)
+        .unwrap();
     let result = response
         .results
         .get("message")

@@ -40,7 +40,7 @@ rule total: age + adult_age + twenties
     facts.insert("twenties".to_string(), "25".to_string());
 
     let response = engine
-        .run("test_types", Some(&now), facts)
+        .run("test_types", Some(&now), facts, false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "test_types");
@@ -78,7 +78,7 @@ fn test_scale_type_default_before_unit_declarations() {
     .expect("default before unit should be valid");
     let now = DateTimeValue::now();
 
-    let plan = engine.plan("pricing", Some(&now)).unwrap();
+    let plan = engine.get_plan("pricing", Some(&now)).unwrap();
     let schema = plan.schema();
     assert!(
         schema.facts.contains_key("price"),
@@ -107,7 +107,7 @@ fn test_scale_type_default_after_unit_declarations() {
     .expect("default after unit should be valid");
     let now = DateTimeValue::now();
 
-    let plan = engine.plan("pricing", Some(&now)).unwrap();
+    let plan = engine.get_plan("pricing", Some(&now)).unwrap();
     let schema = plan.schema();
     assert!(
         schema.facts.contains_key("price"),
@@ -133,7 +133,7 @@ fn test_schema_returns_facts_in_definition_order() {
     .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.plan("ordering", Some(&now)).unwrap();
+    let plan = engine.get_plan("ordering", Some(&now)).unwrap();
     let schema = plan.schema();
     let fact_names: Vec<&String> = schema.facts.keys().collect();
     assert_eq!(
@@ -161,7 +161,7 @@ fn test_schema_for_rules_returns_facts_in_definition_order() {
     .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.plan("ordering", Some(&now)).unwrap();
+    let plan = engine.get_plan("ordering", Some(&now)).unwrap();
     let schema = plan.schema_for_rules(&["total".to_string()]).unwrap();
     let fact_names: Vec<&String> = schema.facts.keys().collect();
     assert_eq!(
@@ -189,7 +189,7 @@ fn test_schema_reports_none_for_default_valued_facts() {
     .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.plan("defaults", Some(&now)).unwrap();
+    let plan = engine.get_plan("defaults", Some(&now)).unwrap();
     let schema = plan.schema();
 
     let (_, quantity_val) = schema.facts.get("quantity").expect("quantity should exist");
@@ -231,7 +231,7 @@ fn test_schema_scale_default_reports_none() {
     .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.plan("salary", Some(&now)).unwrap();
+    let plan = engine.get_plan("salary", Some(&now)).unwrap();
     let schema = plan.schema();
 
     let (_, salary_val) = schema.facts.get("salary").expect("salary should exist");

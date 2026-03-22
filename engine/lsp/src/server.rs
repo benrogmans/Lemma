@@ -137,8 +137,8 @@ impl LemmaLanguageServer {
                 let mut engine = lemma::Engine::new();
                 let mut errors = Vec::new();
                 for (attr, code) in &files {
-                    if let Err(errs) = engine.load(code, lemma::LoadSource::Labeled(attr)) {
-                        errors.extend(errs);
+                    if let Err(load_err) = engine.load(code, lemma::SourceType::Labeled(attr)) {
+                        errors.extend(load_err.errors);
                     }
                 }
 

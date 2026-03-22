@@ -142,7 +142,6 @@ pub fn invert(
         Error::request(
             format!("Rule not found: {}.{}", plan.spec_name, rule_name),
             None::<String>,
-            None,
         )
     })?;
 
@@ -426,8 +425,8 @@ mod tests {
         engine: &mut Engine,
         code: &str,
         source: &str,
-    ) -> Result<(), Vec<crate::Error>> {
-        engine.load(code, crate::LoadSource::Labeled(source))
+    ) -> Result<(), crate::Errors> {
+        engine.load(code, crate::SourceType::Labeled(source))
     }
 
     #[test]

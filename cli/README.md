@@ -32,7 +32,7 @@ lemma run tax_calculation income=75000 filing_status="married"
 lemma run --interactive
 
 # Show spec structure
-lemma show pricing
+lemma schema pricing
 
 # List available specs
 lemma list ./documentation/examples
@@ -80,11 +80,10 @@ lemma run shipping --raw > output.json
 - Language guide: <https://benrogmans.github.io/lemma/>
 - API docs (engine): <https://docs.rs/lemma-engine>
 - Examples: <https://github.com/benrogmans/lemma/tree/main/documentation/examples>
-- Roadmap: <https://github.com/benrogmans/lemma/blob/main/documentation/roadmap.md>
 
 ## Contributing
 
-Contributions are very welcome! See [documentation/contributing.md](https://github.com/benrogmans/lemma/blob/main/documentation/contributing.md) and the [project roadmap](https://github.com/benrogmans/lemma/blob/main/documentation/roadmap.md) for ideas.
+Contributions are very welcome!
 
 ## License
 

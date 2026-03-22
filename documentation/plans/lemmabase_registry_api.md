@@ -4,7 +4,7 @@
 
 LemmaBase.com is the default Registry for the Lemma engine. Its **Registry API** serves Lemma source text for `@...` identifiers so that clients (CLI, LSP, WASM, etc.) can resolve `spec @...` and `type ... from @...` references before loading specs into the engine (`load` / `load_from_paths` after `resolve_registry_references`).
 
-This document specifies the API that LemmaBase.com must expose for Registry resolution. It does not cover the separate **evaluation API** (e.g. `GET /pricing?quantity=10`) described in [server.md](server.md); that can be implemented and versioned independently.
+This document specifies the API that LemmaBase.com must expose for Registry resolution. It does not cover the separate **evaluation API** (e.g. `GET /pricing?quantity=10`) described in `lemma-openapi`; that can be implemented and versioned independently.
 
 ---
 
@@ -83,7 +83,7 @@ This is optional for Registry resolution but improves UX when users click throug
 - **Authentication and authorization:** Not part of the current Registry trait. When added, the server may require tokens or cookies and return 401/403 as above. Design (headers, flows) TBD.
 - **API stability:** The Registry API is not yet declared stable (see [registry.md](../registry.md)); expect possible small changes (e.g. optional query params, headers) before a 1.0.
 - **Versioning:** The client does not send a version (e.g. `@org/spec@v2`). If LemmaBase.com introduces versions later, the default could be “latest” and version selection could be added via query or path.
-- **Evaluation API:** Serving and evaluating specs (e.g. `GET /pricing?quantity=10`) is a separate API; see [server.md](server.md) and `lemma-openapi`.
+- **Evaluation API:** Serving and evaluating specs (e.g. `GET /pricing?quantity=10`) is a separate API; see `lemma-openapi`.
 
 ---
 

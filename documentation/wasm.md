@@ -15,10 +15,9 @@ npm install @benrogmans/lemma-engine
 ## Usage
 
 ```javascript
-import { init, Engine } from '@benrogmans/lemma-engine';
+import { Lemma } from '@benrogmans/lemma-engine';
 
-await init();
-const engine = new Engine();
+const engine = await Lemma();
 ```
 
 `lemma_bg.wasm` loads from the package URL (via generated `lemma.bindings.js`). Use **http(s)** — not `file://`.
@@ -42,26 +41,28 @@ console.log(response.results);
 
 | Artifact | Role |
 |----------|------|
-| `lemma.js` | Public entry: `init`, `initSync`, `Engine` |
+| `lemma.js` | Public entry: `Lemma()`, `init`, `initSync`, `Engine` |
 | `lemma.bindings.js` | wasm-pack glue (do not import directly) |
-| `lsp.js` | `serve`, `ServerConfig` for browser LSP |
+| `lsp-client.js` | `LspClient`: `start()`, `initialize()`, `didOpen`, diagnostics, formatting, semantic tokens |
+| `lsp.js` | Low-level `serve`, `ServerConfig` (used by LspClient; override via `start(serve, ServerConfig)` if needed) |
 
 ## API
 
+- **`Lemma()`** — async; initializes WASM once, returns an `Engine` (recommended).
 - **`init()`** — await once (browser).
 - **`initSync({ module })`** — Node + `readFileSync('…/lemma_bg.wasm')`.
-- **`Engine`** — `load`, `list`, `show`, `run`, `format`; `invert` throws.
-- **`@benrogmans/lemma-engine/lsp`** — LSP streams after `init()`.
+- **`Engine`** — `load`, `list`, `schema`, `run`, `format`; `invert` throws.
+- **`@benrogmans/lemma-engine/lsp-client`** — `LspClient`: `start()` (no args), `initialize()`, `didOpen`, `onDiagnostics`, `formatting`, `semanticTokensFull`. Call `init()` first.
 
 **Spec id** (for `show` / `run`): `name` or `name~` + 8 hex chars (same as CLI).
 
-See [engine/wasm/README.md](../engine/wasm/README.md).
+See [engine/packages/npm/README.md](../engine/packages/npm/README.md).
 
 ## Build from source
 
 ```bash
-cd lemma/engine
-node wasm/build.js
+cd lemma/engine/packages/npm
+node build.js
 ```
 
-Output: `engine/pkg/`.
+Output: `engine/packages/npm/dist/`.

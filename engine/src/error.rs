@@ -51,7 +51,19 @@ pub enum Error {
 
     /// Request error: invalid or unsatisfiable API request (e.g. spec not found, invalid parameters).
     /// Not a parse/planning failure; the request itself is invalid. Such errors occur *before* any evaluation and *never during* evaluation.
-    Request(Box<ErrorDetails>),
+    Request {
+        details: Box<ErrorDetails>,
+        kind: RequestErrorKind,
+    },
+}
+
+/// Distinguishes HTTP 404 (not found) from 400 (bad request) for request errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestErrorKind {
+    /// Spec not found, no temporal version for effective, or plan hash pin not found — map to 404.
+    SpecNotFound,
+    /// Invalid spec id, etc. — map to 400.
+    InvalidRequest,
 }
 
 impl Error {
@@ -159,20 +171,35 @@ impl Error {
         }))
     }
 
-    /// Create a request error (invalid API request, e.g. spec not found).
+    /// Create a request error (invalid API request, e.g. bad spec id).
     /// Request errors never have source locations — they are API-level.
-    pub fn request(
+    pub fn request(message: impl Into<String>, suggestion: Option<impl Into<String>>) -> Self {
+        Self::request_with_kind(message, suggestion, RequestErrorKind::InvalidRequest)
+    }
+
+    /// Create a "spec not found" request error — map to HTTP 404.
+    pub fn request_not_found(
         message: impl Into<String>,
         suggestion: Option<impl Into<String>>,
-        spec_context: Option<Arc<LemmaSpec>>,
     ) -> Self {
-        Self::Request(Box::new(ErrorDetails {
-            message: message.into(),
-            source: None,
-            suggestion: suggestion.map(Into::into),
-            spec_context,
-            related_spec: None,
-        }))
+        Self::request_with_kind(message, suggestion, RequestErrorKind::SpecNotFound)
+    }
+
+    fn request_with_kind(
+        message: impl Into<String>,
+        suggestion: Option<impl Into<String>>,
+        kind: RequestErrorKind,
+    ) -> Self {
+        Self::Request {
+            details: Box::new(ErrorDetails {
+                message: message.into(),
+                source: None,
+                suggestion: suggestion.map(Into::into),
+                spec_context: None,
+                related_spec: None,
+            }),
+            kind,
+        }
     }
 
     /// Create a resource-limit-exceeded error with optional source location and spec context.
@@ -272,10 +299,13 @@ impl Error {
                     actual_value,
                 }
             }
-            Error::Request(details) => {
+            Error::Request { details, kind } => {
                 let mut d = *details;
                 d.spec_context = Some(spec);
-                Error::Request(Box::new(d))
+                Error::Request {
+                    details: Box::new(d),
+                    kind,
+                }
             }
         }
     }
@@ -388,7 +418,7 @@ impl fmt::Display for Error {
                 }
                 write_source_location(f, &details.source)
             }
-            Error::Request(details) => {
+            Error::Request { details, .. } => {
                 if let Some(ref spec) = details.spec_context {
                     write_spec_context(f, spec)?;
                 }
@@ -418,7 +448,7 @@ impl Error {
             Error::Parsing(details)
             | Error::Inversion(details)
             | Error::Validation(details)
-            | Error::Request(details) => &details.message,
+            | Error::Request { details, .. } => &details.message,
             Error::Registry { details, .. } | Error::ResourceLimitExceeded { details, .. } => {
                 &details.message
             }
@@ -431,16 +461,20 @@ impl Error {
             Error::Parsing(details)
             | Error::Inversion(details)
             | Error::Validation(details)
-            | Error::Request(details) => details.source.as_ref(),
+            | Error::Request { details, .. } => details.source.as_ref(),
             Error::Registry { details, .. } | Error::ResourceLimitExceeded { details, .. } => {
                 details.source.as_ref()
             }
         }
     }
 
-    /// Get the source text if available
-    pub fn source_text(&self) -> Option<&str> {
-        self.location().map(|s| &*s.source_text)
+    /// Resolve source text from the sources map (for display). Source no longer stores text.
+    pub fn source_text(
+        &self,
+        sources: &std::collections::HashMap<String, String>,
+    ) -> Option<String> {
+        self.location()
+            .and_then(|s| s.text_from(sources).map(|c| c.into_owned()))
     }
 
     /// Get the suggestion if available
@@ -449,7 +483,7 @@ impl Error {
             Error::Parsing(details)
             | Error::Inversion(details)
             | Error::Validation(details)
-            | Error::Request(details) => details.suggestion.as_deref(),
+            | Error::Request { details, .. } => details.suggestion.as_deref(),
             Error::Registry { details, .. } | Error::ResourceLimitExceeded { details, .. } => {
                 details.suggestion.as_deref()
             }
@@ -461,7 +495,6 @@ impl Error {
 mod tests {
     use super::*;
     use crate::parsing::ast::Span;
-    use std::sync::Arc;
 
     fn test_source() -> Source {
         Source::new(
@@ -472,7 +505,6 @@ mod tests {
                 line: 1,
                 col: 15,
             },
-            Arc::from("fact amount: 100"),
         )
     }
 
@@ -491,7 +523,6 @@ mod tests {
                 line: 1,
                 col: 6,
             },
-            Arc::from("fact amont: 100"),
         );
 
         let parse_error_with_suggestion = Error::parsing_with_suggestion(

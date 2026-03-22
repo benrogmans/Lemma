@@ -16,7 +16,6 @@ pub fn parse_spec_id(s: &str) -> Result<(String, Option<String>), Error> {
         return Err(Error::request(
             "Spec identifier cannot be empty",
             Some("Provide a spec name or spec~hash (e.g. pricing or pricing~a1b2c3d4)"),
-            None,
         ));
     }
     let (name, hash) = if let Some(tilde_pos) = s.rfind('~') {
@@ -28,7 +27,6 @@ pub fn parse_spec_id(s: &str) -> Result<(String, Option<String>), Error> {
                     hash_part
                 ),
                 Some("Use spec~a1b2c3d4 (8 hex digits after the tilde) or omit the hash"),
-                None,
             ));
         }
         let name = s[..tilde_pos].trim();
@@ -36,7 +34,6 @@ pub fn parse_spec_id(s: &str) -> Result<(String, Option<String>), Error> {
             return Err(Error::request(
                 "Spec identifier has empty name (e.g. ~a1b2c3d4)",
                 Some("Use spec_name~hash (e.g. pricing~a1b2c3d4)"),
-                None,
             ));
         }
         (name.to_string(), Some(hash_part.to_lowercase()))
@@ -50,7 +47,6 @@ pub fn parse_spec_id(s: &str) -> Result<(String, Option<String>), Error> {
                 MAX_SPEC_NAME_LENGTH
             ),
             Some("Shorten the spec name"),
-            None,
         ));
     }
     Ok((name, hash))

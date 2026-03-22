@@ -1003,11 +1003,9 @@ pub fn collect_bare_registry_refs(spec: &LemmaSpec) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parsing::ast::CommandArg;
+    use crate::parsing::ast::{CommandArg, TypeConstraintCommand};
     use crate::planning::semantics::TypeSpecification;
     use rust_decimal::Decimal;
-    use std::collections::HashMap;
-    use std::sync::Arc;
 
     fn test_source() -> Source {
         Source::new(
@@ -1018,7 +1016,6 @@ mod tests {
                 line: 1,
                 col: 0,
             },
-            Arc::from("spec test\nfact x: 1"),
         )
     }
 
@@ -1026,10 +1023,16 @@ mod tests {
     fn validate_number_minimum_greater_than_maximum() {
         let mut specs = TypeSpecification::number();
         specs = specs
-            .apply_constraint("minimum", &[CommandArg::Number("100".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Minimum,
+                &[CommandArg::Number("100".to_string())],
+            )
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &[CommandArg::Number("50".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Maximum,
+                &[CommandArg::Number("50".to_string())],
+            )
             .unwrap();
 
         let src = test_source();
@@ -1044,10 +1047,16 @@ mod tests {
     fn validate_number_valid_range() {
         let mut specs = TypeSpecification::number();
         specs = specs
-            .apply_constraint("minimum", &[CommandArg::Number("0".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Minimum,
+                &[CommandArg::Number("0".to_string())],
+            )
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &[CommandArg::Number("100".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Maximum,
+                &[CommandArg::Number("100".to_string())],
+            )
             .unwrap();
 
         let src = test_source();
@@ -1113,10 +1122,16 @@ mod tests {
     fn validate_text_minimum_greater_than_maximum() {
         let mut specs = TypeSpecification::text();
         specs = specs
-            .apply_constraint("minimum", &[CommandArg::Number("100".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Minimum,
+                &[CommandArg::Number("100".to_string())],
+            )
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &[CommandArg::Number("50".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Maximum,
+                &[CommandArg::Number("50".to_string())],
+            )
             .unwrap();
 
         let src = test_source();
@@ -1131,10 +1146,16 @@ mod tests {
     fn validate_text_length_inconsistent_with_minimum() {
         let mut specs = TypeSpecification::text();
         specs = specs
-            .apply_constraint("minimum", &[CommandArg::Number("10".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Minimum,
+                &[CommandArg::Number("10".to_string())],
+            )
             .unwrap();
         specs = specs
-            .apply_constraint("length", &[CommandArg::Number("5".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Length,
+                &[CommandArg::Number("5".to_string())],
+            )
             .unwrap();
 
         let src = test_source();
@@ -1203,10 +1224,16 @@ mod tests {
     fn validate_date_minimum_after_maximum() {
         let mut specs = TypeSpecification::date();
         specs = specs
-            .apply_constraint("minimum", &[CommandArg::Label("2024-12-31".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Minimum,
+                &[CommandArg::Label("2024-12-31".to_string())],
+            )
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &[CommandArg::Label("2024-01-01".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Maximum,
+                &[CommandArg::Label("2024-01-01".to_string())],
+            )
             .unwrap();
 
         let src = test_source();
@@ -1222,10 +1249,16 @@ mod tests {
     fn validate_date_valid_range() {
         let mut specs = TypeSpecification::date();
         specs = specs
-            .apply_constraint("minimum", &[CommandArg::Label("2024-01-01".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Minimum,
+                &[CommandArg::Label("2024-01-01".to_string())],
+            )
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &[CommandArg::Label("2024-12-31".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Maximum,
+                &[CommandArg::Label("2024-12-31".to_string())],
+            )
             .unwrap();
 
         let src = test_source();
@@ -1237,10 +1270,16 @@ mod tests {
     fn validate_time_minimum_after_maximum() {
         let mut specs = TypeSpecification::time();
         specs = specs
-            .apply_constraint("minimum", &[CommandArg::Label("23:00:00".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Minimum,
+                &[CommandArg::Label("23:00:00".to_string())],
+            )
             .unwrap();
         specs = specs
-            .apply_constraint("maximum", &[CommandArg::Label("10:00:00".to_string())])
+            .apply_constraint(
+                TypeConstraintCommand::Maximum,
+                &[CommandArg::Label("10:00:00".to_string())],
+            )
             .unwrap();
 
         let src = test_source();
@@ -1257,11 +1296,15 @@ mod tests {
         // This test now validates that type specification validation works correctly.
         // The actual validation happens during graph building, but we test the validation
         // function directly here.
-        use crate::parsing::ast::{LemmaSpec, TypeDef};
-        use crate::planning::types::TypeResolver;
+        use crate::engine::Context;
+        use crate::parsing::ast::{LemmaSpec, ParentType, PrimitiveKind, TypeDef};
+        use crate::planning::types::PerSliceTypeResolver;
         use std::sync::Arc;
 
         let spec = Arc::new(LemmaSpec::new("test".to_string()));
+        let mut ctx = Context::new();
+        ctx.insert_spec(Arc::clone(&spec), false)
+            .expect("insert test spec");
         let type_def = TypeDef::Regular {
             source_location: crate::Source::new(
                 "<test>",
@@ -1271,26 +1314,23 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                Arc::from("spec test\nfact x: 1"),
             ),
             name: "invalid_money".to_string(),
-            parent: "number".to_string(),
+            parent: ParentType::Primitive(PrimitiveKind::Number),
             constraints: Some(vec![
                 (
-                    "minimum".to_string(),
+                    TypeConstraintCommand::Minimum,
                     vec![CommandArg::Number("100".to_string())],
                 ),
                 (
-                    "maximum".to_string(),
+                    TypeConstraintCommand::Maximum,
                     vec![CommandArg::Number("50".to_string())],
                 ),
             ]),
         };
 
-        // Register and resolve the type to get its specifications
-        let mut sources = HashMap::new();
-        sources.insert("<test>".to_string(), String::new());
-        let mut type_resolver = TypeResolver::new();
+        let plan_hashes = crate::planning::PlanHashRegistry::default();
+        let mut type_resolver = PerSliceTypeResolver::new(&ctx, None, &plan_hashes);
         type_resolver
             .register_type(&spec, type_def)
             .expect("Should register type");

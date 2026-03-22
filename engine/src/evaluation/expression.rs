@@ -3,8 +3,8 @@
 //! Evaluates expressions without recursion using a stack-based approach.
 //! All runtime errors (division by zero, etc.) result in Veto instead of errors.
 
+use super::explanation::{ExplanationNode, ValueSource};
 use super::operations::{ComputationKind, OperationKind, OperationResult};
-use super::proof::{ProofNode, ValueSource};
 use crate::computation::{arithmetic_operation, comparison_operation};
 use crate::planning::semantics::{
     negated_comparison, Expression, ExpressionKind, LiteralValue, MathematicalComputation,
@@ -12,25 +12,29 @@ use crate::planning::semantics::{
 };
 use crate::planning::ExecutableRule;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-/// Get a proof node for an expression that was already evaluated.
-/// Panics if the proof node is missing — this indicates a bug in the evaluator,
-/// since we always set a proof node immediately after evaluating an expression.
-fn get_proof_node_required(
+/// Get an explanation node for an expression that was already evaluated.
+/// Panics if the explanation node is missing — this indicates a bug in the evaluator,
+/// since we always set an explanation node immediately after evaluating an expression.
+fn get_explanation_node_required(
     context: &crate::evaluation::EvaluationContext,
     expr: &Expression,
     operand_name: &str,
-) -> ProofNode {
+) -> ExplanationNode {
     let loc = expr
         .source_location
         .as_ref()
         .expect("BUG: expression missing source in evaluation");
-    context.get_proof_node(expr).cloned().unwrap_or_else(|| {
-        unreachable!(
-            "BUG: {} was evaluated but has no proof node ({}:{}:{})",
-            operand_name, loc.attribute, loc.span.line, loc.span.col
-        )
-    })
+    context
+        .get_explanation_node(expr)
+        .cloned()
+        .unwrap_or_else(|| {
+            unreachable!(
+                "BUG: {} was evaluated but has no explanation node ({}:{}:{})",
+                operand_name, loc.attribute, loc.span.line, loc.span.col
+            )
+        })
 }
 
 fn expr_ptr(expr: &Expression) -> usize {
@@ -74,34 +78,34 @@ fn unwrap_value_after_veto_check<'a>(
     })
 }
 
-/// Propagate veto proof from operand to current expression
-fn propagate_veto_proof(
+/// Propagate veto explanation from operand to current expression
+fn propagate_veto_explanation(
     context: &mut crate::evaluation::EvaluationContext,
     current: &Expression,
     vetoed_operand: &Expression,
     veto_result: OperationResult,
     operand_name: &str,
 ) -> OperationResult {
-    let proof = get_proof_node_required(context, vetoed_operand, operand_name);
-    context.set_proof_node(current, proof);
+    let node = get_explanation_node_required(context, vetoed_operand, operand_name);
+    context.set_explanation_node(current, node);
     veto_result
 }
 
-/// Evaluate a rule to produce its final result and proof.
+/// Evaluate a rule to produce its final result and explanation.
 /// After planning, evaluation is guaranteed to complete — this function never returns
-/// a Error. It produces an OperationResult (Value or Veto) and a Proof tree.
+/// a Error. It produces an OperationResult (Value or Veto) and an Explanation tree.
 pub(crate) fn evaluate_rule(
     exec_rule: &ExecutableRule,
     context: &mut crate::evaluation::EvaluationContext,
-) -> (OperationResult, crate::evaluation::proof::Proof) {
-    use crate::evaluation::proof::{Branch, NonMatchedBranch};
+) -> (OperationResult, crate::evaluation::explanation::Explanation) {
+    use crate::evaluation::explanation::{Branch, NonMatchedBranch};
 
     // If rule has no unless clauses, just evaluate the default expression
     if exec_rule.branches.len() == 1 {
         return evaluate_rule_without_unless(exec_rule, context);
     }
 
-    // Rule has unless clauses - collect all branch evaluations for Branches proof node
+    // Rule has unless clauses - collect all branch evaluations for Branches explanation node
     let mut non_matched_branches: Vec<NonMatchedBranch> = Vec::new();
 
     // Evaluate branches in reverse order (last matching wins)
@@ -112,7 +116,8 @@ pub(crate) fn evaluate_rule(
             let result_expr = branch.result.get_source_text(&context.sources);
 
             let condition_result = evaluate_expression(condition, context);
-            let condition_proof = get_proof_node_required(context, condition, "condition");
+            let condition_explanation =
+                get_explanation_node_required(context, condition, "condition");
 
             let matched = match condition_result {
                 OperationResult::Veto(ref msg) => {
@@ -128,8 +133,8 @@ pub(crate) fn evaluate_rule(
 
                     // Build Branches node with this as the matched branch
                     let matched_branch = Branch {
-                        condition: Some(Box::new(condition_proof)),
-                        result: Box::new(ProofNode::Veto {
+                        condition: Some(Box::new(condition_explanation)),
+                        result: Box::new(ExplanationNode::Veto {
                             message: msg.clone(),
                             source_location: branch.result.source_location.clone(),
                         }),
@@ -137,19 +142,19 @@ pub(crate) fn evaluate_rule(
                         source_location: Some(branch.source.clone()),
                     };
 
-                    let branches_node = ProofNode::Branches {
+                    let branches_node = ExplanationNode::Branches {
                         matched: Box::new(matched_branch),
                         non_matched: non_matched_branches,
                         source_location: Some(exec_rule.source.clone()),
                     };
 
-                    let proof = crate::evaluation::proof::Proof {
+                    let explanation = crate::evaluation::explanation::Explanation {
                         rule_path: exec_rule.path.clone(),
                         source: Some(exec_rule.source.clone()),
                         result: OperationResult::Veto(msg.clone()),
-                        tree: branches_node,
+                        tree: Arc::new(branches_node),
                     };
-                    return (OperationResult::Veto(msg.clone()), proof);
+                    return (OperationResult::Veto(msg.clone()), explanation);
                 }
                 OperationResult::Value(lit) => match &lit.value {
                     ValueKind::Boolean(b) => *b,
@@ -157,18 +162,18 @@ pub(crate) fn evaluate_rule(
                         let veto = OperationResult::Veto(Some(
                             "Unless condition must evaluate to boolean".to_string(),
                         ));
-                        let proof = crate::evaluation::proof::Proof {
+                        let explanation = crate::evaluation::explanation::Explanation {
                             rule_path: exec_rule.path.clone(),
                             source: Some(exec_rule.source.clone()),
                             result: veto.clone(),
-                            tree: ProofNode::Veto {
+                            tree: Arc::new(ExplanationNode::Veto {
                                 message: Some(
                                     "Unless condition must evaluate to boolean".to_string(),
                                 ),
                                 source_location: Some(exec_rule.source.clone()),
-                            },
+                            }),
                         };
-                        return (veto, proof);
+                        return (veto, explanation);
                     }
                 },
             };
@@ -187,29 +192,30 @@ pub(crate) fn evaluate_rule(
                     result_value: Some(result.clone()),
                 });
 
-                let result_proof = get_proof_node_required(context, &branch.result, "result");
+                let result_explanation =
+                    get_explanation_node_required(context, &branch.result, "result");
 
                 // Build Branches node with this as the matched branch
                 let matched_branch = Branch {
-                    condition: Some(Box::new(condition_proof)),
-                    result: Box::new(result_proof),
+                    condition: Some(Box::new(condition_explanation)),
+                    result: Box::new(result_explanation),
                     clause_index: Some(unless_clause_index),
                     source_location: Some(branch.source.clone()),
                 };
 
-                let branches_node = ProofNode::Branches {
+                let branches_node = ExplanationNode::Branches {
                     matched: Box::new(matched_branch),
                     non_matched: non_matched_branches,
                     source_location: Some(exec_rule.source.clone()),
                 };
 
-                let proof = crate::evaluation::proof::Proof {
+                let explanation = crate::evaluation::explanation::Explanation {
                     rule_path: exec_rule.path.clone(),
                     source: Some(exec_rule.source.clone()),
                     result: result.clone(),
-                    tree: branches_node,
+                    tree: Arc::new(branches_node),
                 };
-                return (result, proof);
+                return (result, explanation);
             }
             // Branch didn't match - record it as non-matched.
             context.push_operation(OperationKind::RuleBranchEvaluated {
@@ -221,7 +227,7 @@ pub(crate) fn evaluate_rule(
             });
 
             non_matched_branches.push(NonMatchedBranch {
-                condition: Box::new(condition_proof),
+                condition: Box::new(condition_explanation),
                 result: None,
                 clause_index: Some(unless_clause_index),
                 source_location: Some(branch.source.clone()),
@@ -242,38 +248,38 @@ pub(crate) fn evaluate_rule(
         result_value: Some(default_result.clone()),
     });
 
-    let default_result_proof =
-        get_proof_node_required(context, &default_branch.result, "default result");
+    let default_result_explanation =
+        get_explanation_node_required(context, &default_branch.result, "default result");
 
     // Default branch has no condition
     let matched_branch = Branch {
         condition: None,
-        result: Box::new(default_result_proof),
+        result: Box::new(default_result_explanation),
         clause_index: None,
         source_location: Some(default_branch.source.clone()),
     };
 
-    let branches_node = ProofNode::Branches {
+    let branches_node = ExplanationNode::Branches {
         matched: Box::new(matched_branch),
         non_matched: non_matched_branches,
         source_location: Some(exec_rule.source.clone()),
     };
 
-    let proof = crate::evaluation::proof::Proof {
+    let explanation = crate::evaluation::explanation::Explanation {
         rule_path: exec_rule.path.clone(),
         source: Some(exec_rule.source.clone()),
         result: default_result.clone(),
-        tree: branches_node,
+        tree: Arc::new(branches_node),
     };
 
-    (default_result, proof)
+    (default_result, explanation)
 }
 
 /// Evaluate a rule that has no unless clauses (simple case)
 fn evaluate_rule_without_unless(
     exec_rule: &ExecutableRule,
     context: &mut crate::evaluation::EvaluationContext,
-) -> (OperationResult, crate::evaluation::proof::Proof) {
+) -> (OperationResult, crate::evaluation::explanation::Explanation) {
     let default_branch = &exec_rule.branches[0];
     let default_expr = default_branch.result.get_source_text(&context.sources);
     let default_result = evaluate_expression(&default_branch.result, context);
@@ -286,17 +292,17 @@ fn evaluate_rule_without_unless(
         result_value: Some(default_result.clone()),
     });
 
-    let root_proof_node =
-        get_proof_node_required(context, &default_branch.result, "default result");
+    let root_explanation_node =
+        get_explanation_node_required(context, &default_branch.result, "default result");
 
-    let proof = crate::evaluation::proof::Proof {
+    let explanation = crate::evaluation::explanation::Explanation {
         rule_path: exec_rule.path.clone(),
         source: Some(exec_rule.source.clone()),
         result: default_result.clone(),
-        tree: root_proof_node,
+        tree: Arc::new(root_explanation_node),
     };
 
-    (default_result, proof)
+    (default_result, explanation)
 }
 
 /// Evaluate an expression iteratively without recursion.
@@ -388,12 +394,12 @@ fn evaluate_single_expression(
     match &current.kind {
         ExpressionKind::Literal(lit) => {
             let value = lit.as_ref().clone();
-            let proof_node = ProofNode::Value {
+            let explanation_node = ExplanationNode::Value {
                 value: value.clone(),
                 source: ValueSource::Literal,
                 source_location: current.source_location.clone(),
             };
-            context.set_proof_node(current, proof_node);
+            context.set_explanation_node(current, explanation_node);
             OperationResult::Value(Box::new(value))
         }
 
@@ -409,22 +415,22 @@ fn evaluate_single_expression(
                         fact_ref: fact_path_clone.clone(),
                         value: v.clone(),
                     });
-                    let proof_node = ProofNode::Value {
+                    let explanation_node = ExplanationNode::Value {
                         value: v.clone(),
                         source: ValueSource::Fact {
                             fact_ref: fact_path_clone,
                         },
                         source_location: current.source_location.clone(),
                     };
-                    context.set_proof_node(current, proof_node);
+                    context.set_explanation_node(current, explanation_node);
                     OperationResult::Value(Box::new(v))
                 }
                 None => {
-                    let proof_node = ProofNode::Veto {
+                    let explanation_node = ExplanationNode::Veto {
                         message: Some(format!("Missing fact: {}", fact_path)),
                         source_location: current.source_location.clone(),
                     };
-                    context.set_proof_node(current, proof_node);
+                    context.set_explanation_node(current, explanation_node);
                     OperationResult::Veto(Some(format!("Missing fact: {}", fact_path)))
                 }
             }
@@ -451,26 +457,26 @@ fn evaluate_single_expression(
                 result: r.clone(),
             });
 
-            // Get the full proof tree from the referenced rule
-            let expansion = match context.get_rule_proof(rule_path) {
-                Some(existing_proof) => existing_proof.tree.clone(),
-                None => ProofNode::Value {
+            // Share expansion via Arc instead of cloning (avoids O(n²) for deep chains)
+            let expansion = match context.get_rule_explanation(rule_path) {
+                Some(existing_explanation) => Arc::clone(&existing_explanation.tree),
+                None => Arc::new(ExplanationNode::Value {
                     value: match &r {
                         OperationResult::Value(v) => v.as_ref().clone(),
                         OperationResult::Veto(_) => LiteralValue::from_bool(false),
                     },
                     source: ValueSource::Computed,
                     source_location: current.source_location.clone(),
-                },
+                }),
             };
 
-            let proof_node = ProofNode::RuleReference {
+            let explanation_node = ExplanationNode::RuleReference {
                 rule_path: rule_path_clone,
                 result: r.clone(),
                 source_location: current.source_location.clone(),
-                expansion: Box::new(expansion),
+                expansion,
             };
-            context.set_proof_node(current, proof_node);
+            context.set_explanation_node(current, explanation_node);
             r
         }
 
@@ -479,10 +485,16 @@ fn evaluate_single_expression(
             let right_result = get_operand_result(results, right, "right");
 
             if let OperationResult::Veto(_) = left_result {
-                return propagate_veto_proof(context, current, left, left_result, "left operand");
+                return propagate_veto_explanation(
+                    context,
+                    current,
+                    left,
+                    left_result,
+                    "left operand",
+                );
             }
             if let OperationResult::Veto(_) = right_result {
-                return propagate_veto_proof(
+                return propagate_veto_explanation(
                     context,
                     current,
                     right,
@@ -504,12 +516,12 @@ fn evaluate_single_expression(
 
             let result = arithmetic_operation(left_val, op, right_val);
 
-            let left_proof = get_proof_node_required(context, left, "left operand");
-            let right_proof = get_proof_node_required(context, right, "right operand");
+            let left_explanation = get_explanation_node_required(context, left, "left operand");
+            let right_explanation = get_explanation_node_required(context, right, "right operand");
 
             if let OperationResult::Value(ref val) = result {
                 let expr_text = current.get_source_text(&context.sources);
-                // Use source text if available, otherwise construct from values for proof display
+                // Use source text if available, otherwise construct from values for explanation display
                 let original_expr = expr_text
                     .clone()
                     .unwrap_or_else(|| format!("{} {} {}", left_val, op.symbol(), right_val));
@@ -520,17 +532,17 @@ fn evaluate_single_expression(
                     result: val.as_ref().clone(),
                     expr: expr_text,
                 });
-                let proof_node = ProofNode::Computation {
+                let explanation_node = ExplanationNode::Computation {
                     kind: ComputationKind::Arithmetic(op.clone()),
                     original_expression: original_expr,
                     expression: substituted_expr,
                     result: val.as_ref().clone(),
                     source_location: current.source_location.clone(),
-                    operands: vec![left_proof, right_proof],
+                    operands: vec![left_explanation, right_explanation],
                 };
-                context.set_proof_node(current, proof_node);
+                context.set_explanation_node(current, explanation_node);
             } else if let OperationResult::Veto(_) = result {
-                context.set_proof_node(current, left_proof);
+                context.set_explanation_node(current, left_explanation);
             }
             result
         }
@@ -540,10 +552,16 @@ fn evaluate_single_expression(
             let right_result = get_operand_result(results, right, "right");
 
             if let OperationResult::Veto(_) = left_result {
-                return propagate_veto_proof(context, current, left, left_result, "left operand");
+                return propagate_veto_explanation(
+                    context,
+                    current,
+                    left,
+                    left_result,
+                    "left operand",
+                );
             }
             if let OperationResult::Veto(_) = right_result {
-                return propagate_veto_proof(
+                return propagate_veto_explanation(
                     context,
                     current,
                     right,
@@ -565,8 +583,8 @@ fn evaluate_single_expression(
 
             let result = comparison_operation(left_val, op, right_val);
 
-            let left_proof = get_proof_node_required(context, left, "left operand");
-            let right_proof = get_proof_node_required(context, right, "right operand");
+            let left_explanation = get_explanation_node_required(context, left, "left operand");
+            let right_explanation = get_explanation_node_required(context, right, "right operand");
 
             if let OperationResult::Value(ref val) = result {
                 let is_false = matches!(val.as_ref().value, ValueKind::Boolean(false));
@@ -603,17 +621,17 @@ fn evaluate_single_expression(
                     result: val.as_ref().clone(),
                     expr: expr_text,
                 });
-                let proof_node = ProofNode::Computation {
+                let explanation_node = ExplanationNode::Computation {
                     kind: ComputationKind::Comparison(display_op),
                     original_expression: original_expr,
                     expression: substituted_expr,
                     result: display_result,
                     source_location: current.source_location.clone(),
-                    operands: vec![left_proof, right_proof],
+                    operands: vec![left_explanation, right_explanation],
                 };
-                context.set_proof_node(current, proof_node);
+                context.set_explanation_node(current, explanation_node);
             } else if let OperationResult::Veto(_) = result {
-                context.set_proof_node(current, left_proof);
+                context.set_explanation_node(current, left_explanation);
             }
             result
         }
@@ -621,7 +639,13 @@ fn evaluate_single_expression(
         ExpressionKind::LogicalAnd(left, right) => {
             let left_result = get_operand_result(results, left, "left");
             if let OperationResult::Veto(_) = left_result {
-                return propagate_veto_proof(context, current, left, left_result, "left operand");
+                return propagate_veto_explanation(
+                    context,
+                    current,
+                    left,
+                    left_result,
+                    "left operand",
+                );
             }
 
             let left_val = unwrap_value_after_veto_check(
@@ -637,13 +661,14 @@ fn evaluate_single_expression(
             };
 
             if !*left_bool {
-                let left_proof = get_proof_node_required(context, left, "left operand");
-                context.set_proof_node(current, left_proof);
+                let left_explanation = get_explanation_node_required(context, left, "left operand");
+                context.set_explanation_node(current, left_explanation);
                 OperationResult::Value(Box::new(LiteralValue::from_bool(false)))
             } else {
                 let right_result = get_operand_result(results, right, "right");
-                let right_proof = get_proof_node_required(context, right, "right operand");
-                context.set_proof_node(current, right_proof);
+                let right_explanation =
+                    get_explanation_node_required(context, right, "right operand");
+                context.set_explanation_node(current, right_explanation);
                 right_result
             }
         }
@@ -651,15 +676,15 @@ fn evaluate_single_expression(
         ExpressionKind::LogicalNegation(operand, _) => {
             let result = get_operand_result(results, operand, "operand");
             if let OperationResult::Veto(_) = result {
-                return propagate_veto_proof(context, current, operand, result, "operand");
+                return propagate_veto_explanation(context, current, operand, result, "operand");
             }
 
             let value = unwrap_value_after_veto_check(&result, "operand", &current.source_location);
-            let operand_proof = get_proof_node_required(context, operand, "operand");
+            let operand_explanation = get_explanation_node_required(context, operand, "operand");
             match &value.value {
                 ValueKind::Boolean(b) => {
                     let result_bool = !*b;
-                    context.set_proof_node(current, operand_proof);
+                    context.set_explanation_node(current, operand_explanation);
                     OperationResult::Value(Box::new(LiteralValue::from_bool(result_bool)))
                 }
                 _ => unreachable!(
@@ -671,55 +696,55 @@ fn evaluate_single_expression(
         ExpressionKind::UnitConversion(value_expr, target) => {
             let result = get_operand_result(results, value_expr, "operand");
             if let OperationResult::Veto(_) = result {
-                return propagate_veto_proof(context, current, value_expr, result, "operand");
+                return propagate_veto_explanation(context, current, value_expr, result, "operand");
             }
 
             let value = unwrap_value_after_veto_check(&result, "operand", &current.source_location);
-            let operand_proof = get_proof_node_required(context, value_expr, "operand");
+            let operand_explanation = get_explanation_node_required(context, value_expr, "operand");
 
             let conversion_result = crate::computation::convert_unit(value, target);
 
-            context.set_proof_node(current, operand_proof);
+            context.set_explanation_node(current, operand_explanation);
             conversion_result
         }
 
         ExpressionKind::MathematicalComputation(op, operand) => {
             let result = get_operand_result(results, operand, "operand");
             if let OperationResult::Veto(_) = result {
-                return propagate_veto_proof(context, current, operand, result, "operand");
+                return propagate_veto_explanation(context, current, operand, result, "operand");
             }
 
             let value = unwrap_value_after_veto_check(&result, "operand", &current.source_location);
-            let operand_proof = get_proof_node_required(context, operand, "operand");
+            let operand_explanation = get_explanation_node_required(context, operand, "operand");
             let math_result = evaluate_mathematical_operator(op, value, context);
-            context.set_proof_node(current, operand_proof);
+            context.set_explanation_node(current, operand_explanation);
             math_result
         }
 
         ExpressionKind::Veto(veto_expr) => {
-            let proof_node = ProofNode::Veto {
+            let explanation_node = ExplanationNode::Veto {
                 message: veto_expr.message.clone(),
                 source_location: current.source_location.clone(),
             };
-            context.set_proof_node(current, proof_node);
+            context.set_explanation_node(current, explanation_node);
             OperationResult::Veto(veto_expr.message.clone())
         }
 
         ExpressionKind::Now => {
             let value = context.now().clone();
-            let proof_node = ProofNode::Value {
+            let explanation_node = ExplanationNode::Value {
                 value: value.clone(),
                 source: ValueSource::Computed,
                 source_location: current.source_location.clone(),
             };
-            context.set_proof_node(current, proof_node);
+            context.set_explanation_node(current, explanation_node);
             OperationResult::Value(Box::new(value))
         }
 
         ExpressionKind::DateRelative(kind, date_expr, tolerance_expr) => {
             let date_result = get_operand_result(results, date_expr, "date operand");
             if let OperationResult::Veto(_) = date_result {
-                return propagate_veto_proof(
+                return propagate_veto_explanation(
                     context,
                     current,
                     date_expr,
@@ -751,7 +776,7 @@ fn evaluate_single_expression(
                 Some(tol_expr) => {
                     let tol_result = get_operand_result(results, tol_expr, "tolerance operand");
                     if let OperationResult::Veto(_) = tol_result {
-                        return propagate_veto_proof(
+                        return propagate_veto_explanation(
                             context,
                             current,
                             tol_expr,
@@ -781,15 +806,16 @@ fn evaluate_single_expression(
                 now_semantic,
             );
 
-            let date_proof = get_proof_node_required(context, date_expr, "date operand");
-            context.set_proof_node(current, date_proof);
+            let date_explanation =
+                get_explanation_node_required(context, date_expr, "date operand");
+            context.set_explanation_node(current, date_explanation);
             result
         }
 
         ExpressionKind::DateCalendar(kind, unit, date_expr) => {
             let date_result = get_operand_result(results, date_expr, "date operand");
             if let OperationResult::Veto(_) = date_result {
-                return propagate_veto_proof(
+                return propagate_veto_explanation(
                     context,
                     current,
                     date_expr,
@@ -824,8 +850,9 @@ fn evaluate_single_expression(
                 now_semantic,
             );
 
-            let date_proof = get_proof_node_required(context, date_expr, "date operand");
-            context.set_proof_node(current, date_proof);
+            let date_explanation =
+                get_explanation_node_required(context, date_expr, "date operand");
+            context.set_explanation_node(current, date_explanation);
             result
         }
     }

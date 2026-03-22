@@ -5,13 +5,16 @@ use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::{collections::HashMap, str::FromStr};
 
-fn run(code: &str, rule: &str) -> Result<String, Vec<lemma::Error>> {
+fn run(code: &str, rule: &str) -> Result<String, lemma::Errors> {
     let mut engine = Engine::new();
     add_lemma_code_blocking(&mut engine, code, "test.lemma")?;
     let now = DateTimeValue::now();
     let mut resp = engine
-        .run("test", Some(&now), HashMap::new())
-        .map_err(|e| vec![e])?;
+        .run("test", Some(&now), HashMap::new(), false)
+        .map_err(|e| lemma::Errors {
+            errors: vec![e],
+            sources: engine.sources().clone(),
+        })?;
     resp.filter_rules(&[rule.to_string()]);
     let v = resp
         .results
@@ -22,7 +25,7 @@ fn run(code: &str, rule: &str) -> Result<String, Vec<lemma::Error>> {
     Ok(v.to_string())
 }
 
-fn run_num(code: &str, rule: &str) -> Result<Decimal, Vec<lemma::Error>> {
+fn run_num(code: &str, rule: &str) -> Result<Decimal, lemma::Errors> {
     let s = run(code, rule)?;
     Ok(s.parse::<Decimal>()
         .expect("engine result should parse as Decimal"))
@@ -50,7 +53,7 @@ fn tol(scale: u32) -> Decimal {
 }
 
 #[test]
-fn test_exp_and_power() -> Result<(), Vec<lemma::Error>> {
+fn test_exp_and_power() -> Result<(), lemma::Errors> {
     let code = r#"
     spec test
     rule a: exp 1
@@ -65,7 +68,7 @@ fn test_exp_and_power() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_abs_floor_ceil_round() -> Result<(), Vec<lemma::Error>> {
+fn test_abs_floor_ceil_round() -> Result<(), lemma::Errors> {
     let code = r#"
     spec test
     rule a: abs -3.5
@@ -87,7 +90,7 @@ fn test_abs_floor_ceil_round() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_sqrt_and_log_basic() -> Result<(), Vec<lemma::Error>> {
+fn test_sqrt_and_log_basic() -> Result<(), lemma::Errors> {
     let code = r#"
     spec test
     rule a: sqrt 9
@@ -113,7 +116,7 @@ fn test_sqrt_and_log_basic() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_trig_at_zero() -> Result<(), Vec<lemma::Error>> {
+fn test_trig_at_zero() -> Result<(), lemma::Errors> {
     let code = r#"
     spec test
     rule s: sin 0
@@ -133,7 +136,7 @@ fn test_trig_at_zero() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_nested_math_ops() -> Result<(), Vec<lemma::Error>> {
+fn test_nested_math_ops() -> Result<(), lemma::Errors> {
     let code = r#"
     spec test
     rule a: round (abs -3.6)
@@ -166,7 +169,9 @@ fn test_sqrt_negative_and_log_domain_errors() {
     .unwrap();
     let now = DateTimeValue::now();
 
-    let res1 = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    let res1 = engine
+        .run("test", Some(&now), HashMap::new(), false)
+        .unwrap();
     let rule = res1
         .results
         .values()
@@ -178,7 +183,9 @@ fn test_sqrt_negative_and_log_domain_errors() {
         rule.result
     );
 
-    let res2 = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    let res2 = engine
+        .run("test", Some(&now), HashMap::new(), false)
+        .unwrap();
     let rule = res2
         .results
         .values()
@@ -190,7 +197,9 @@ fn test_sqrt_negative_and_log_domain_errors() {
         rule.result
     );
 
-    let res3 = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    let res3 = engine
+        .run("test", Some(&now), HashMap::new(), false)
+        .unwrap();
     let rule = res3
         .results
         .values()
@@ -218,7 +227,9 @@ fn test_inverse_trig_domain_error() {
     .unwrap();
     let now = DateTimeValue::now();
 
-    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("test", Some(&now), HashMap::new(), false)
+        .unwrap();
 
     let rule = response
         .results

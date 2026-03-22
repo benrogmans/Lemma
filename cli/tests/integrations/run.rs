@@ -106,7 +106,7 @@ rule discount: 0
 }
 
 #[test]
-fn test_cli_show_spec() {
+fn test_cli_schema_spec() {
     let temp_dir = TempDir::new().unwrap();
     let lemma_file = temp_dir.path().join("test.lemma");
 
@@ -122,7 +122,7 @@ rule doubled: value * 2
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("show")
+    cmd.arg("schema")
         .arg("inspect_test")
         .arg("--dir")
         .arg(temp_dir.path());
@@ -278,7 +278,7 @@ fn test_cli_explain_shows_all_operands_in_nested_arithmetic() {
     fs::write(
         temp_dir.path().join("test.lemma"),
         r#"
-spec nested_proof
+spec nested_explanation
 fact x: 10
 fact y: 20
 fact z: 30
@@ -292,7 +292,7 @@ rule total: a + b + c
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("nested_proof")
+        .arg("nested_explanation")
         .arg("--rules=total")
         .arg("--explain")
         .arg("--dir")

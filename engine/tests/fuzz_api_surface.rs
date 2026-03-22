@@ -3,16 +3,16 @@
 //! nightly-only fuzz job ever runs.
 
 use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, LoadSource};
+use lemma::{Engine, SourceType};
 use std::collections::HashMap;
 
 fn engine_with_files(files: HashMap<String, String>) -> Engine {
     let mut engine = Engine::new();
     for (attr, code) in files {
         let src = if attr.trim().is_empty() {
-            LoadSource::Inline
+            SourceType::Inline
         } else {
-            LoadSource::Labeled(attr.as_str())
+            SourceType::Labeled(attr.as_str())
         };
         let _ = engine.load(&code, src);
     }
@@ -121,13 +121,13 @@ fn fuzz_fact_bindings_api_valid_number() {
     let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
     if engine
-        .load(code, LoadSource::Labeled("fuzz_binding"))
+        .load(code, SourceType::Labeled("fuzz_binding"))
         .is_ok()
     {
         let mut facts = HashMap::new();
         facts.insert("x".to_string(), "42".to_string());
         let now = DateTimeValue::now();
-        let _ = engine.run("fuzz_test", Some(&now), facts);
+        let _ = engine.run("fuzz_test", Some(&now), facts, false);
     }
 }
 
@@ -136,13 +136,13 @@ fn fuzz_fact_bindings_api_garbage_value() {
     let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
     if engine
-        .load(code, LoadSource::Labeled("fuzz_binding"))
+        .load(code, SourceType::Labeled("fuzz_binding"))
         .is_ok()
     {
         let mut facts = HashMap::new();
         facts.insert("x".to_string(), "not_a_number".to_string());
         let now = DateTimeValue::now();
-        let _ = engine.run("fuzz_test", Some(&now), facts);
+        let _ = engine.run("fuzz_test", Some(&now), facts, false);
     }
 }
 
@@ -151,13 +151,13 @@ fn fuzz_fact_bindings_api_empty_value() {
     let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
     if engine
-        .load(code, LoadSource::Labeled("fuzz_binding"))
+        .load(code, SourceType::Labeled("fuzz_binding"))
         .is_ok()
     {
         let mut facts = HashMap::new();
         facts.insert("x".to_string(), String::new());
         let now = DateTimeValue::now();
-        let _ = engine.run("fuzz_test", Some(&now), facts);
+        let _ = engine.run("fuzz_test", Some(&now), facts, false);
     }
 }
 
@@ -166,12 +166,12 @@ fn fuzz_fact_bindings_api_number_too_long_no_panic() {
     let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
     engine
-        .load(code, LoadSource::Labeled("fuzz_binding"))
+        .load(code, SourceType::Labeled("fuzz_binding"))
         .unwrap();
     let mut facts = HashMap::new();
     facts.insert("x".to_string(), "40000000000000000460903669760".to_string());
     let now = DateTimeValue::now();
-    let result = engine.run("fuzz_test", Some(&now), facts);
+    let result = engine.run("fuzz_test", Some(&now), facts, false);
     assert!(
         result.is_err(),
         "expected validation error for 29-digit number, got {:?}",

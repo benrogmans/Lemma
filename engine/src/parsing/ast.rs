@@ -71,13 +71,16 @@ impl Default for DepthTracker {
 // -----------------------------------------------------------------------------
 
 use crate::parsing::source::Source;
-use chrono::{Datelike, Timelike};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+pub use crate::literals::{
+    BooleanValue, DateTimeValue, DurationUnit, TimeValue, TimezoneValue, Value,
+};
 
 /// A Lemma spec containing facts and rules.
 /// Ordered and compared by (name, effective_from) for use in BTreeSet; None < Some(_) for Option<DateTimeValue>.
@@ -431,6 +434,7 @@ pub enum ConversionTarget {
 
 /// Types of logical negation
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum NegationType {
     Not,
 }
@@ -470,14 +474,14 @@ pub enum MathematicalComputation {
 /// For registry references the `name` includes the leading `@` (e.g. `@org/repo/spec`);
 /// for local references it is a plain base name.  `from_registry` mirrors whether
 /// the source used the `@` qualifier; `hash_pin` pins to a specific temporal version
-/// by content hash; `effective` requests temporal resolution at that datetime.
+/// by plan hash; `effective` requests temporal resolution at that datetime.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpecRef {
     /// Spec name as written in source. Includes `@` for registry references.
     pub name: String,
     /// `true` when the source used the `@` qualifier (registry reference).
     pub from_registry: bool,
-    /// Optional content hash pin to resolve to a specific spec version.
+    /// Optional plan hash pin to resolve to a specific spec version.
     pub hash_pin: Option<String>,
     /// Optional effective datetime for temporal resolution. When used with `hash_pin`, resolve by hash then verify that version was active at this datetime.
     pub effective: Option<DateTimeValue>,
@@ -536,7 +540,7 @@ pub enum CommandArg {
     /// Matched `number_literal` (e.g. `10`, `3.14`)
     Number(String),
     /// Matched `boolean_literal` (e.g. `true`, `false`, `yes`, `no`, `accept`, `reject`)
-    Boolean(String),
+    Boolean(BooleanValue),
     /// Matched `text_literal` (e.g. `"hello"`) — stores the content between quotes,
     /// without surrounding quote characters.
     Text(String),
@@ -551,10 +555,8 @@ impl CommandArg {
     /// (e.g. `.parse::<Decimal>()`) but do not need to distinguish the literal kind.
     pub fn value(&self) -> &str {
         match self {
-            CommandArg::Number(s)
-            | CommandArg::Boolean(s)
-            | CommandArg::Text(s)
-            | CommandArg::Label(s) => s,
+            CommandArg::Number(s) | CommandArg::Text(s) | CommandArg::Label(s) => s.as_str(),
+            CommandArg::Boolean(bv) => bv.as_str(),
         }
     }
 }
@@ -565,8 +567,60 @@ impl fmt::Display for CommandArg {
     }
 }
 
-/// A single constraint command: name and its typed arguments.
-pub type Constraint = (String, Vec<CommandArg>);
+/// Constraint command for type definitions. Derived from lexer tokens; no string matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeConstraintCommand {
+    Help,
+    Default,
+    Unit,
+    Minimum,
+    Maximum,
+    Decimals,
+    Precision,
+    Option,
+    Options,
+    Length,
+}
+
+impl fmt::Display for TypeConstraintCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            TypeConstraintCommand::Help => "help",
+            TypeConstraintCommand::Default => "default",
+            TypeConstraintCommand::Unit => "unit",
+            TypeConstraintCommand::Minimum => "minimum",
+            TypeConstraintCommand::Maximum => "maximum",
+            TypeConstraintCommand::Decimals => "decimals",
+            TypeConstraintCommand::Precision => "precision",
+            TypeConstraintCommand::Option => "option",
+            TypeConstraintCommand::Options => "options",
+            TypeConstraintCommand::Length => "length",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+/// Parses a constraint command name. Returns None for unknown (parser returns error).
+#[must_use]
+pub fn try_parse_type_constraint_command(s: &str) -> Option<TypeConstraintCommand> {
+    match s.trim().to_lowercase().as_str() {
+        "help" => Some(TypeConstraintCommand::Help),
+        "default" => Some(TypeConstraintCommand::Default),
+        "unit" => Some(TypeConstraintCommand::Unit),
+        "minimum" => Some(TypeConstraintCommand::Minimum),
+        "maximum" => Some(TypeConstraintCommand::Maximum),
+        "decimals" => Some(TypeConstraintCommand::Decimals),
+        "precision" => Some(TypeConstraintCommand::Precision),
+        "option" => Some(TypeConstraintCommand::Option),
+        "options" => Some(TypeConstraintCommand::Options),
+        "length" => Some(TypeConstraintCommand::Length),
+        _ => None,
+    }
+}
+
+/// A single constraint command and its typed arguments.
+pub type Constraint = (TypeConstraintCommand, Vec<CommandArg>);
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -578,155 +632,13 @@ pub enum FactValue {
     SpecReference(SpecRef),
     /// A type declaration (inline type annotation on a fact)
     TypeDeclaration {
-        base: String,
+        base: ParentType,
         constraints: Option<Vec<Constraint>>,
         from: Option<SpecRef>,
     },
 }
 
 /// A type for type declarations
-/// Boolean value with original input preserved
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    serde::Deserialize,
-    strum_macros::EnumString,
-    strum_macros::Display,
-)]
-#[strum(ascii_case_insensitive, serialize_all = "lowercase")]
-pub enum BooleanValue {
-    True,
-    False,
-    Yes,
-    No,
-    Accept,
-    Reject,
-}
-
-impl From<BooleanValue> for bool {
-    fn from(value: BooleanValue) -> bool {
-        match value {
-            BooleanValue::True | BooleanValue::Yes | BooleanValue::Accept => true,
-            BooleanValue::False | BooleanValue::No | BooleanValue::Reject => false,
-        }
-    }
-}
-
-impl From<&BooleanValue> for bool {
-    fn from(value: &BooleanValue) -> bool {
-        match value {
-            BooleanValue::True | BooleanValue::Yes | BooleanValue::Accept => true,
-            BooleanValue::False | BooleanValue::No | BooleanValue::Reject => false,
-        }
-    }
-}
-
-impl From<bool> for BooleanValue {
-    fn from(value: bool) -> BooleanValue {
-        if value {
-            BooleanValue::True
-        } else {
-            BooleanValue::False
-        }
-    }
-}
-
-impl std::ops::Not for BooleanValue {
-    type Output = BooleanValue;
-
-    fn not(self) -> Self::Output {
-        if self.into() {
-            BooleanValue::False
-        } else {
-            BooleanValue::True
-        }
-    }
-}
-
-impl std::ops::Not for &BooleanValue {
-    type Output = BooleanValue;
-
-    fn not(self) -> Self::Output {
-        if self.into() {
-            BooleanValue::False
-        } else {
-            BooleanValue::True
-        }
-    }
-}
-
-/// The actual value data (without type information)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Value {
-    Number(Decimal),
-    Scale(Decimal, String),
-    Text(String),
-    Date(DateTimeValue),
-    Time(TimeValue),
-    Boolean(BooleanValue),
-    Duration(Decimal, DurationUnit),
-    Ratio(Decimal, Option<String>),
-}
-
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Value::Number(n) => write!(f, "{}", n),
-            Value::Text(s) => write!(f, "{}", s),
-            Value::Date(dt) => write!(f, "{}", dt),
-            Value::Boolean(b) => write!(f, "{}", b),
-            Value::Time(time) => write!(f, "{}", time),
-            Value::Scale(n, u) => write!(f, "{} {}", n, u),
-            Value::Duration(n, u) => write!(f, "{} {}", n, u),
-            Value::Ratio(n, u) => match u.as_deref() {
-                Some("percent") => {
-                    let display_value = *n * Decimal::from(100);
-                    let norm = display_value.normalize();
-                    let s = if norm.fract().is_zero() {
-                        norm.trunc().to_string()
-                    } else {
-                        norm.to_string()
-                    };
-                    write!(f, "{}%", s)
-                }
-                Some("permille") => {
-                    let display_value = *n * Decimal::from(1000);
-                    let norm = display_value.normalize();
-                    let s = if norm.fract().is_zero() {
-                        norm.trunc().to_string()
-                    } else {
-                        norm.to_string()
-                    };
-                    write!(f, "{}%%", s)
-                }
-                Some(unit) => {
-                    let norm = n.normalize();
-                    let s = if norm.fract().is_zero() {
-                        norm.trunc().to_string()
-                    } else {
-                        norm.to_string()
-                    };
-                    write!(f, "{} {}", s, unit)
-                }
-                None => {
-                    let norm = n.normalize();
-                    let s = if norm.fract().is_zero() {
-                        norm.trunc().to_string()
-                    } else {
-                        norm.to_string()
-                    };
-                    write!(f, "{}", s)
-                }
-            },
-        }
-    }
-}
-
 impl fmt::Display for FactValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -742,7 +654,7 @@ impl fmt::Display for FactValue {
                 let base_str = if let Some(from_spec) = from {
                     format!("{} from {}", base, from_spec)
                 } else {
-                    base.clone()
+                    format!("{}", base)
                 };
                 if let Some(ref constraints_vec) = constraints {
                     let constraint_str = constraints_vec
@@ -751,7 +663,7 @@ impl fmt::Display for FactValue {
                             let args_str: Vec<&str> = args.iter().map(|a| a.value()).collect();
                             let joined = args_str.join(" ");
                             if joined.is_empty() {
-                                cmd.clone()
+                                format!("{}", cmd)
                             } else {
                                 format!("{} {}", cmd, joined)
                             }
@@ -766,177 +678,6 @@ impl fmt::Display for FactValue {
         }
     }
 }
-
-/// A time value
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, serde::Deserialize,
-)]
-pub struct TimeValue {
-    pub hour: u8,
-    pub minute: u8,
-    pub second: u8,
-    pub timezone: Option<TimezoneValue>,
-}
-
-/// A timezone value
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize)]
-pub struct TimezoneValue {
-    pub offset_hours: i8,
-    pub offset_minutes: u8,
-}
-
-/// A datetime value that preserves timezone information.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize)]
-pub struct DateTimeValue {
-    pub year: i32,
-    pub month: u32,
-    pub day: u32,
-    pub hour: u32,
-    pub minute: u32,
-    pub second: u32,
-    #[serde(default)]
-    pub microsecond: u32,
-    pub timezone: Option<TimezoneValue>,
-}
-
-impl DateTimeValue {
-    pub fn now() -> Self {
-        let now = chrono::Local::now();
-        let offset_secs = now.offset().local_minus_utc();
-        Self {
-            year: now.year(),
-            month: now.month(),
-            day: now.day(),
-            hour: now.time().hour(),
-            minute: now.time().minute(),
-            second: now.time().second(),
-            microsecond: now.time().nanosecond() / 1000 % 1_000_000,
-            timezone: Some(TimezoneValue {
-                offset_hours: (offset_secs / 3600) as i8,
-                offset_minutes: ((offset_secs.abs() % 3600) / 60) as u8,
-            }),
-        }
-    }
-
-    /// Parse a datetime string. Accepts:
-    /// - Full ISO 8601: `2026-03-04T10:30:00Z`, `2026-03-04T10:30:00+02:00`
-    /// - Date + time without tz: `2026-03-04T10:30:00`
-    /// - Date only: `2026-03-04` (midnight)
-    /// - ISO week: `2026-W08` (Monday of ISO week)
-    /// - Year-month: `2026-03` (first of month)
-    /// - Year only: `2026` (Jan 1)
-    pub fn parse(s: &str) -> Option<Self> {
-        if let Some(dtv) = crate::parsing::literals::parse_datetime_str(s) {
-            return Some(dtv);
-        }
-        if let Some(week_val) = Self::parse_iso_week(s) {
-            return Some(week_val);
-        }
-        if let Ok(ym) = chrono::NaiveDate::parse_from_str(&format!("{}-01", s), "%Y-%m-%d") {
-            return Some(Self {
-                year: ym.year(),
-                month: ym.month(),
-                day: 1,
-                hour: 0,
-                minute: 0,
-                second: 0,
-                microsecond: 0,
-                timezone: None,
-            });
-        }
-        if let Ok(year) = s.parse::<i32>() {
-            if (1..=9999).contains(&year) {
-                return Some(Self {
-                    year,
-                    month: 1,
-                    day: 1,
-                    hour: 0,
-                    minute: 0,
-                    second: 0,
-                    microsecond: 0,
-                    timezone: None,
-                });
-            }
-        }
-        None
-    }
-
-    /// Parse ISO week date format: `YYYY-Www` (e.g. `2026-W08`).
-    /// Returns the Monday of that ISO week.
-    fn parse_iso_week(s: &str) -> Option<Self> {
-        let parts: Vec<&str> = s.split("-W").collect();
-        if parts.len() != 2 {
-            return None;
-        }
-        let year: i32 = parts[0].parse().ok()?;
-        let week: u32 = parts[1].parse().ok()?;
-        if week == 0 || week > 53 {
-            return None;
-        }
-        let date = chrono::NaiveDate::from_isoywd_opt(year, week, chrono::Weekday::Mon)?;
-        Some(Self {
-            year: date.year(),
-            month: date.month(),
-            day: date.day(),
-            hour: 0,
-            minute: 0,
-            second: 0,
-            microsecond: 0,
-            timezone: None,
-        })
-    }
-}
-
-/// Unit types for different physical quantities
-macro_rules! impl_unit_serialize {
-    ($($unit_type:ty),+) => {
-        $(
-            impl Serialize for $unit_type {
-                fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-                where
-                    S: serde::Serializer,
-                {
-                    serializer.serialize_str(&self.to_string())
-                }
-            }
-        )+
-    };
-}
-
-impl_unit_serialize!(DurationUnit);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize, strum_macros::EnumString)]
-#[strum(serialize_all = "lowercase")]
-pub enum DurationUnit {
-    Year,
-    Month,
-    Week,
-    Day,
-    Hour,
-    Minute,
-    Second,
-    Millisecond,
-    Microsecond,
-}
-
-impl fmt::Display for DurationUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            DurationUnit::Year => "years",
-            DurationUnit::Month => "months",
-            DurationUnit::Week => "weeks",
-            DurationUnit::Day => "days",
-            DurationUnit::Hour => "hours",
-            DurationUnit::Minute => "minutes",
-            DurationUnit::Second => "seconds",
-            DurationUnit::Millisecond => "milliseconds",
-            DurationUnit::Microsecond => "microseconds",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-//
 
 impl LemmaFact {
     #[must_use]
@@ -1282,51 +1023,62 @@ impl fmt::Display for MathematicalComputation {
     }
 }
 
-impl fmt::Display for TimeValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:02}:{:02}:{:02}", self.hour, self.minute, self.second)
+// -----------------------------------------------------------------------------
+// Primitive type kinds and parent type references
+// -----------------------------------------------------------------------------
+
+/// Built-in primitive type kind. Single source of truth for type keywords.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrimitiveKind {
+    Boolean,
+    Scale,
+    Number,
+    Percent,
+    Ratio,
+    Text,
+    Date,
+    Time,
+    Duration,
+}
+
+impl std::fmt::Display for PrimitiveKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            PrimitiveKind::Boolean => "boolean",
+            PrimitiveKind::Scale => "scale",
+            PrimitiveKind::Number => "number",
+            PrimitiveKind::Percent => "percent",
+            PrimitiveKind::Ratio => "ratio",
+            PrimitiveKind::Text => "text",
+            PrimitiveKind::Date => "date",
+            PrimitiveKind::Time => "time",
+            PrimitiveKind::Duration => "duration",
+        };
+        write!(f, "{}", s)
     }
 }
 
-impl fmt::Display for TimezoneValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.offset_hours == 0 && self.offset_minutes == 0 {
-            write!(f, "Z")
-        } else {
-            let sign = if self.offset_hours >= 0 { "+" } else { "-" };
-            let hours = self.offset_hours.abs();
-            write!(f, "{}{:02}:{:02}", sign, hours, self.offset_minutes)
+/// Parent type in a type definition: built-in primitive or custom type name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ParentType {
+    Primitive(PrimitiveKind),
+    Custom(String),
+}
+
+impl std::fmt::Display for ParentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParentType::Primitive(k) => write!(f, "{}", k),
+            ParentType::Custom(name) => write!(f, "{}", name),
         }
     }
 }
 
-impl fmt::Display for DateTimeValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let has_time = self.hour != 0
-            || self.minute != 0
-            || self.second != 0
-            || self.microsecond != 0
-            || self.timezone.is_some();
-        if !has_time {
-            write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
-        } else {
-            write!(
-                f,
-                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-                self.year, self.month, self.day, self.hour, self.minute, self.second
-            )?;
-            if self.microsecond != 0 {
-                write!(f, ".{:06}", self.microsecond)?;
-            }
-            if let Some(tz) = &self.timezone {
-                write!(f, "{}", tz)?;
-            }
-            Ok(())
-        }
-    }
-}
-
-//
+// -----------------------------------------------------------------------------
+// Type definition (named, import, or inline)
+// -----------------------------------------------------------------------------
 
 /// Type definition (named, import, or inline).
 /// Applying constraints to produce TypeSpecification is done in planning (semantics).
@@ -1336,7 +1088,7 @@ pub enum TypeDef {
     Regular {
         source_location: Source,
         name: String,
-        parent: String,
+        parent: ParentType,
         constraints: Option<Vec<Constraint>>,
     },
     Import {
@@ -1348,7 +1100,7 @@ pub enum TypeDef {
     },
     Inline {
         source_location: Source,
-        parent: String,
+        parent: ParentType,
         constraints: Option<Vec<Constraint>>,
         fact_ref: Reference,
         from: Option<SpecRef>,
@@ -1370,10 +1122,10 @@ impl TypeDef {
         }
     }
 
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> String {
         match self {
-            TypeDef::Regular { name, .. } | TypeDef::Import { name, .. } => name,
-            TypeDef::Inline { parent, .. } => parent,
+            TypeDef::Regular { name, .. } | TypeDef::Import { name, .. } => name.clone(),
+            TypeDef::Inline { parent, .. } => format!("{}", parent),
         }
     }
 }
@@ -1498,9 +1250,8 @@ impl<'a> fmt::Display for AsLemmaSource<'a, CommandArg> {
                 let clean: String = s.chars().filter(|c| *c != '_' && *c != ',').collect();
                 write!(f, "{}", group_digits(&clean))
             }
-            CommandArg::Boolean(s) | CommandArg::Label(s) => {
-                write!(f, "{}", s)
-            }
+            CommandArg::Boolean(bv) => write!(f, "{}", bv),
+            CommandArg::Label(s) => write!(f, "{}", s),
         }
     }
 }
@@ -1509,7 +1260,7 @@ impl<'a> fmt::Display for AsLemmaSource<'a, CommandArg> {
 ///
 /// Each `CommandArg` already knows its literal kind (from parsing), so formatting
 /// is simply delegated to `AsLemmaSource<CommandArg>` — no lookup table needed.
-fn format_constraint_as_source(cmd: &str, args: &[CommandArg]) -> String {
+fn format_constraint_as_source(cmd: &TypeConstraintCommand, args: &[CommandArg]) -> String {
     if args.is_empty() {
         cmd.to_string()
     } else {
@@ -1523,10 +1274,7 @@ fn format_constraint_as_source(cmd: &str, args: &[CommandArg]) -> String {
 
 /// Format a constraint list as valid Lemma source.
 /// Returns the `cmd arg -> cmd arg` portion joined by `separator`.
-fn format_constraints_as_source(
-    constraints: &[(String, Vec<CommandArg>)],
-    separator: &str,
-) -> String {
+fn format_constraints_as_source(constraints: &[Constraint], separator: &str) -> String {
     constraints
         .iter()
         .map(|(cmd, args)| format_constraint_as_source(cmd, args))
@@ -1551,7 +1299,7 @@ impl<'a> fmt::Display for AsLemmaSource<'a, FactValue> {
                 let base_str = if let Some(from_spec) = from {
                     format!("{} from {}", base, from_spec)
                 } else {
-                    base.clone()
+                    format!("{}", base)
                 };
                 if let Some(ref constraints_vec) = constraints {
                     let constraint_str = format_constraints_as_source(constraints_vec, " -> ");
@@ -1784,7 +1532,7 @@ mod tests {
 
     #[test]
     fn test_datetime_parse_iso_week() {
-        let dt = DateTimeValue::parse("2026-W01").unwrap();
+        let dt: DateTimeValue = "2026-W01".parse().unwrap();
         assert_eq!(dt.year, 2025);
         assert_eq!(dt.month, 12);
         assert_eq!(dt.day, 29);
@@ -1856,9 +1604,9 @@ mod tests {
     #[test]
     fn as_lemma_source_text_default_is_quoted() {
         let fv = FactValue::TypeDeclaration {
-            base: "text".to_string(),
+            base: ParentType::Primitive(PrimitiveKind::Text),
             constraints: Some(vec![(
-                "default".to_string(),
+                TypeConstraintCommand::Default,
                 vec![CommandArg::Text("single".to_string())],
             )]),
             from: None,
@@ -1872,9 +1620,9 @@ mod tests {
     #[test]
     fn as_lemma_source_number_default_not_quoted() {
         let fv = FactValue::TypeDeclaration {
-            base: "number".to_string(),
+            base: ParentType::Primitive(PrimitiveKind::Number),
             constraints: Some(vec![(
-                "default".to_string(),
+                TypeConstraintCommand::Default,
                 vec![CommandArg::Number("10".to_string())],
             )]),
             from: None,
@@ -1885,9 +1633,9 @@ mod tests {
     #[test]
     fn as_lemma_source_help_always_quoted() {
         let fv = FactValue::TypeDeclaration {
-            base: "number".to_string(),
+            base: ParentType::Primitive(PrimitiveKind::Number),
             constraints: Some(vec![(
-                "help".to_string(),
+                TypeConstraintCommand::Help,
                 vec![CommandArg::Text("Enter a quantity".to_string())],
             )]),
             from: None,
@@ -1901,14 +1649,14 @@ mod tests {
     #[test]
     fn as_lemma_source_text_option_quoted() {
         let fv = FactValue::TypeDeclaration {
-            base: "text".to_string(),
+            base: ParentType::Primitive(PrimitiveKind::Text),
             constraints: Some(vec![
                 (
-                    "option".to_string(),
+                    TypeConstraintCommand::Option,
                     vec![CommandArg::Text("active".to_string())],
                 ),
                 (
-                    "option".to_string(),
+                    TypeConstraintCommand::Option,
                     vec![CommandArg::Text("inactive".to_string())],
                 ),
             ]),
@@ -1923,17 +1671,17 @@ mod tests {
     #[test]
     fn as_lemma_source_scale_unit_not_quoted() {
         let fv = FactValue::TypeDeclaration {
-            base: "scale".to_string(),
+            base: ParentType::Primitive(PrimitiveKind::Scale),
             constraints: Some(vec![
                 (
-                    "unit".to_string(),
+                    TypeConstraintCommand::Unit,
                     vec![
                         CommandArg::Label("eur".to_string()),
                         CommandArg::Number("1.00".to_string()),
                     ],
                 ),
                 (
-                    "unit".to_string(),
+                    TypeConstraintCommand::Unit,
                     vec![
                         CommandArg::Label("usd".to_string()),
                         CommandArg::Number("1.10".to_string()),
@@ -1951,9 +1699,9 @@ mod tests {
     #[test]
     fn as_lemma_source_scale_minimum_with_unit() {
         let fv = FactValue::TypeDeclaration {
-            base: "scale".to_string(),
+            base: ParentType::Primitive(PrimitiveKind::Scale),
             constraints: Some(vec![(
-                "minimum".to_string(),
+                TypeConstraintCommand::Minimum,
                 vec![
                     CommandArg::Number("0".to_string()),
                     CommandArg::Label("eur".to_string()),
@@ -1970,10 +1718,10 @@ mod tests {
     #[test]
     fn as_lemma_source_boolean_default() {
         let fv = FactValue::TypeDeclaration {
-            base: "boolean".to_string(),
+            base: ParentType::Primitive(PrimitiveKind::Boolean),
             constraints: Some(vec![(
-                "default".to_string(),
-                vec![CommandArg::Boolean("true".to_string())],
+                TypeConstraintCommand::Default,
+                vec![CommandArg::Boolean(BooleanValue::True)],
             )]),
             from: None,
         };
@@ -1986,9 +1734,9 @@ mod tests {
     #[test]
     fn as_lemma_source_duration_default() {
         let fv = FactValue::TypeDeclaration {
-            base: "duration".to_string(),
+            base: ParentType::Primitive(PrimitiveKind::Duration),
             constraints: Some(vec![(
-                "default".to_string(),
+                TypeConstraintCommand::Default,
                 vec![
                     CommandArg::Number("40".to_string()),
                     CommandArg::Label("hours".to_string()),
@@ -2007,9 +1755,9 @@ mod tests {
         // Named types (user-defined): the parser produces CommandArg::Text for
         // quoted default values like `default "single"`.
         let fv = FactValue::TypeDeclaration {
-            base: "filing_status_type".to_string(),
+            base: ParentType::Custom("filing_status_type".to_string()),
             constraints: Some(vec![(
-                "default".to_string(),
+                TypeConstraintCommand::Default,
                 vec![CommandArg::Text("single".to_string())],
             )]),
             from: None,
@@ -2023,9 +1771,9 @@ mod tests {
     #[test]
     fn as_lemma_source_help_escapes_quotes() {
         let fv = FactValue::TypeDeclaration {
-            base: "text".to_string(),
+            base: ParentType::Primitive(PrimitiveKind::Text),
             constraints: Some(vec![(
-                "help".to_string(),
+                TypeConstraintCommand::Help,
                 vec![CommandArg::Text("say \"hello\"".to_string())],
             )]),
             from: None,
@@ -2047,17 +1795,16 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                std::sync::Arc::from("spec test\nfact x: 1"),
             ),
             name: "status".to_string(),
-            parent: "text".to_string(),
+            parent: ParentType::Primitive(PrimitiveKind::Text),
             constraints: Some(vec![
                 (
-                    "option".to_string(),
+                    TypeConstraintCommand::Option,
                     vec![CommandArg::Text("active".to_string())],
                 ),
                 (
-                    "option".to_string(),
+                    TypeConstraintCommand::Option,
                     vec![CommandArg::Text("inactive".to_string())],
                 ),
             ]),
@@ -2078,24 +1825,23 @@ mod tests {
                     line: 1,
                     col: 0,
                 },
-                std::sync::Arc::from("spec test\nfact x: 1"),
             ),
             name: "money".to_string(),
-            parent: "scale".to_string(),
+            parent: ParentType::Primitive(PrimitiveKind::Scale),
             constraints: Some(vec![
                 (
-                    "unit".to_string(),
+                    TypeConstraintCommand::Unit,
                     vec![
                         CommandArg::Label("eur".to_string()),
                         CommandArg::Number("1.00".to_string()),
                     ],
                 ),
                 (
-                    "decimals".to_string(),
+                    TypeConstraintCommand::Decimals,
                     vec![CommandArg::Number("2".to_string())],
                 ),
                 (
-                    "minimum".to_string(),
+                    TypeConstraintCommand::Minimum,
                     vec![CommandArg::Number("0".to_string())],
                 ),
             ]),

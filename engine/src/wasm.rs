@@ -1,6 +1,6 @@
 use crate::parsing::ast::DateTimeValue;
 use crate::serialization::fact_values_from_map;
-use crate::{Engine, Error, LoadSource};
+use crate::{Engine, SourceType};
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -34,14 +34,15 @@ impl WasmEngine {
         let engine = self.engine.clone();
         wasm_bindgen_futures::future_to_promise(async move {
             let source = match &label {
-                None => LoadSource::Inline,
-                Some(s) => LoadSource::Labeled(s.as_str()),
+                None => SourceType::Inline,
+                Some(s) => SourceType::Labeled(s.as_str()),
             };
             let result = engine.borrow_mut().load(&code, source);
             match result {
                 Ok(()) => Ok(JsValue::UNDEFINED),
-                Err(errs) => {
-                    let messages: Vec<String> = errs.iter().map(format_error).collect();
+                Err(load_err) => {
+                    let messages: Vec<String> =
+                        load_err.errors.iter().map(|e| e.to_string()).collect();
                     Err(to_js(&messages).expect("BUG: serialize error messages"))
                 }
             }
@@ -60,17 +61,16 @@ impl WasmEngine {
         let effective_dt = effective
             .as_ref()
             .filter(|s| !s.trim().is_empty())
-            .and_then(|s| DateTimeValue::parse(s))
+            .and_then(|s| s.parse::<DateTimeValue>().ok())
             .unwrap_or_else(DateTimeValue::now);
 
         let rule_names = parse_rule_names(&rule_names).map_err(js_err)?;
         let facts = parse_fact_values(&fact_values).map_err(js_err)?;
 
-        let mut response = self
-            .engine
-            .borrow()
-            .run(spec, Some(&effective_dt), facts)
-            .map_err(|e| js_err(format_error(&e)))?;
+        let engine = self.engine.borrow();
+        let mut response = engine
+            .run(spec, Some(&effective_dt), facts, false)
+            .map_err(|e| js_err(e.to_string()))?;
 
         if !rule_names.is_empty() {
             response.filter_rules(&rule_names);
@@ -87,18 +87,18 @@ impl WasmEngine {
     }
 
     /// Planning schema for the spec ([`crate::planning::execution_plan::SpecSchema`]). Throws on error.
-    #[wasm_bindgen(js_name = show)]
-    pub fn show(&self, spec: &str, effective: Option<String>) -> Result<JsValue, JsValue> {
+    #[wasm_bindgen(js_name = schema)]
+    pub fn schema(&self, spec: &str, effective: Option<String>) -> Result<JsValue, JsValue> {
         let effective_dt = effective
             .as_ref()
             .filter(|s| !s.trim().is_empty())
-            .and_then(|s| DateTimeValue::parse(s))
+            .and_then(|s| s.parse::<DateTimeValue>().ok())
             .unwrap_or_else(DateTimeValue::now);
 
         let engine = self.engine.borrow();
         let plan = engine
-            .plan(spec, Some(&effective_dt))
-            .map_err(|e| js_err(format_error(&e)))?;
+            .get_plan(spec, Some(&effective_dt))
+            .map_err(|e| js_err(e.to_string()))?;
         let schema = plan.schema();
 
         serialize_engine_json(&schema)
@@ -124,11 +124,11 @@ impl WasmEngine {
             .filter(|s| !s.is_empty())
         {
             Some(s) => s,
-            None => LoadSource::INLINE_KEY,
+            None => SourceType::INLINE_KEY,
         };
         match crate::format_source(code, attr) {
             Ok(formatted) => Ok(JsValue::from_str(&formatted)),
-            Err(e) => Err(js_err(format_error(&e))),
+            Err(e) => Err(js_err(e.to_string())),
         }
     }
 }
@@ -143,10 +143,10 @@ fn serialize_engine_json<T: Serialize>(v: &T) -> Result<JsValue, JsValue> {
     let s = serde_json::to_string(v)
         .map_err(|e| js_err(format!("BUG: serde_json::to_string failed: {}", e)))?;
     js_sys::JSON::parse(&s).map_err(|e| {
-        js_err(format!(
-            "BUG: JSON.parse failed: {}",
-            e.as_string().unwrap_or_default()
-        ))
+        let detail = e
+            .as_string()
+            .unwrap_or_else(|| format!("(non-string error from JSON.parse)"));
+        js_err(format!("BUG: JSON.parse failed: {}", detail))
     })
 }
 
@@ -184,37 +184,4 @@ fn parse_fact_values(v: &JsValue) -> Result<HashMap<String, String>, String> {
     let map: HashMap<String, serde_json::Value> = serde_wasm_bindgen::from_value(v.clone())
         .map_err(|e| format!("fact_values must be a plain object: {}", e))?;
     Ok(fact_values_from_map(map))
-}
-
-fn format_error(error: &Error) -> String {
-    match error {
-        Error::Parsing(details) => format!("Parse Error: {}", details.message),
-        Error::Inversion(details) => format!("Inversion Error: {}", details.message),
-        Error::Validation(details) => format!("Validation Error: {}", details.message),
-        Error::Registry {
-            details,
-            identifier,
-            kind,
-        } => {
-            format!(
-                "Registry Error ({}): {}: {}",
-                kind, identifier, details.message
-            )
-        }
-        Error::ResourceLimitExceeded {
-            details,
-            limit_name,
-            limit_value,
-            actual_value,
-        } => {
-            let mut msg = format!(
-                "Resource Limit Exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value})"
-            );
-            if let Some(suggestion) = &details.suggestion {
-                msg.push_str(&format!(". {suggestion}"));
-            }
-            msg
-        }
-        Error::Request(details) => format!("Request Error: {}", details.message),
-    }
 }
