@@ -87,8 +87,8 @@ pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
 ///
 /// Convenience wrapper around [`generate_openapi_effective`]. The spec reflects
 /// only the specs and interfaces active at `DateTimeValue::now()`.
-pub fn generate_openapi(engine: &Engine, proofs_enabled: bool) -> Value {
-    generate_openapi_effective(engine, proofs_enabled, &DateTimeValue::now())
+pub fn generate_openapi(engine: &Engine, explanations_enabled: bool) -> Value {
+    generate_openapi_effective(engine, explanations_enabled, &DateTimeValue::now())
 }
 
 /// Generate a complete OpenAPI 3.1 specification for a specific point in time.
@@ -99,11 +99,11 @@ pub fn generate_openapi(engine: &Engine, proofs_enabled: bool) -> Value {
 /// - Response schemas with evaluation envelope (`spec`, `effective`, `hash`, `result`)
 /// - Meta routes (`/`, `/health`, `/openapi.json`, `/docs`)
 ///
-/// When `proofs_enabled` is true, the spec adds the `x-proofs` header parameter
-/// to evaluation endpoints and describes the optional `proof` object in responses.
+/// When `explanations_enabled` is true, the spec adds the `x-explanations` header parameter
+/// to evaluation endpoints and describes the optional `explanation` object in responses.
 pub fn generate_openapi_effective(
     engine: &Engine,
-    proofs_enabled: bool,
+    explanations_enabled: bool,
     effective: &DateTimeValue,
 ) -> Value {
     let mut paths = Map::new();
@@ -113,7 +113,7 @@ pub fn generate_openapi_effective(
     let unique_spec_names: Vec<String> = active_specs.iter().map(|s| s.name.clone()).collect();
 
     for spec_name in &unique_spec_names {
-        if let Ok(plan) = engine.plan(spec_name, Some(effective)) {
+        if let Ok(plan) = engine.get_plan(spec_name, Some(effective)) {
             let schema = plan.schema();
             let facts = collect_input_facts_from_schema(&schema);
             let rule_names: Vec<String> = schema.rules.keys().cloned().collect();
@@ -122,7 +122,7 @@ pub fn generate_openapi_effective(
             let response_schema_name = format!("{}_response", safe_name);
             components_schemas.insert(
                 response_schema_name.clone(),
-                build_response_schema(&schema, &rule_names, proofs_enabled),
+                build_response_schema(&schema, &rule_names, explanations_enabled),
             );
 
             let post_body_schema_name = format!("{}_request", safe_name);
@@ -140,7 +140,7 @@ pub fn generate_openapi_effective(
                     &response_schema_name,
                     &post_body_schema_name,
                     &rule_names,
-                    proofs_enabled,
+                    explanations_enabled,
                 ),
             );
         }
@@ -234,20 +234,21 @@ fn collect_input_facts_from_schema(schema: &lemma::SpecSchema) -> Vec<InputFact>
 fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeValue) -> Value {
     let spec_items: Vec<Value> = spec_names
         .iter()
-        .map(|name| {
-            let (facts_count, rules_count) = engine
-                .show(name, Some(effective))
-                .map(|s| {
-                    let facts_count = s.facts.keys().filter(|n| !n.contains('.')).count();
-                    let rules_count = s.rules.len();
-                    (facts_count, rules_count)
+        .map(|name| match engine.schema(name, Some(effective)) {
+            Ok(s) => {
+                let facts_count = s.facts.keys().filter(|n| !n.contains('.')).count();
+                let rules_count = s.rules.len();
+                json!({
+                    "name": name,
+                    "facts": facts_count,
+                    "rules": rules_count
                 })
-                .unwrap_or((0, 0));
-            json!({
+            }
+            Err(e) => json!({
                 "name": name,
-                "facts": facts_count,
-                "rules": rules_count
-            })
+                "schema_error": true,
+                "message": e.to_string()
+            }),
         })
         .collect();
 
@@ -268,9 +269,11 @@ fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeV
                                     "properties": {
                                         "name": { "type": "string" },
                                         "facts": { "type": "integer" },
-                                        "rules": { "type": "integer" }
+                                        "rules": { "type": "integer" },
+                                        "schema_error": { "type": "boolean" },
+                                        "message": { "type": "string" }
                                     },
-                                    "required": ["name", "facts", "rules"]
+                                    "required": ["name"]
                                 }
                             },
                             "example": spec_items
@@ -368,33 +371,16 @@ fn not_found_response_schema() -> Value {
     })
 }
 
-fn hash_conflict_response_schema() -> Value {
-    json!({
-        "description": "Path pin (spec~hash) does not match the resolved spec's content hash",
-        "content": {
-            "application/json": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "error": { "type": "string" }
-                    },
-                    "required": ["error"]
-                }
-            }
-        }
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Spec path items
 // ---------------------------------------------------------------------------
 
-fn x_proofs_header_parameter() -> Value {
+fn x_explanations_header_parameter() -> Value {
     json!({
-        "name": "x-proofs",
+        "name": "x-explanations",
         "in": "header",
         "required": false,
-        "description": "Set to request proof objects in the response (server must be started with --proofs)",
+        "description": "Set to request explanation objects in the response (server must be started with --explanations)",
         "schema": { "type": "string", "default": "true" }
     })
 }
@@ -416,7 +402,7 @@ fn build_spec_path_item(
     response_schema_name: &str,
     post_body_schema_name: &str,
     rule_names: &[String],
-    proofs_enabled: bool,
+    explanations_enabled: bool,
 ) -> Value {
     let response_ref = json!({
         "$ref": format!("#/components/schemas/{}", response_schema_name)
@@ -444,8 +430,8 @@ fn build_spec_path_item(
 
     let mut get_parameters: Vec<Value> = vec![rules_param.clone()];
     get_parameters.push(accept_datetime_header_parameter());
-    if proofs_enabled {
-        get_parameters.push(x_proofs_header_parameter());
+    if explanations_enabled {
+        get_parameters.push(x_explanations_header_parameter());
     }
 
     let get_summary = "Schema of resolved version (spec, facts, rules, meta, versions)".to_string();
@@ -455,8 +441,8 @@ fn build_spec_path_item(
 
     let mut post_parameters: Vec<Value> = vec![rules_param];
     post_parameters.push(accept_datetime_header_parameter());
-    if proofs_enabled {
-        post_parameters.push(x_proofs_header_parameter());
+    if explanations_enabled {
+        post_parameters.push(x_explanations_header_parameter());
     }
 
     json!({
@@ -475,8 +461,7 @@ fn build_spec_path_item(
                     }
                 },
                 "400": error_response_schema(),
-                "404": not_found_response_schema(),
-                "409": hash_conflict_response_schema()
+                "404": not_found_response_schema()
             }
         },
         "post": {
@@ -502,8 +487,7 @@ fn build_spec_path_item(
                     }
                 },
                 "400": error_response_schema(),
-                "404": not_found_response_schema(),
-                "409": hash_conflict_response_schema()
+                "404": not_found_response_schema()
             }
         }
     })
@@ -627,14 +611,14 @@ fn build_post_type_schema(lemma_type: &LemmaType) -> Value {
 fn build_response_schema(
     schema: &lemma::SpecSchema,
     rule_names: &[String],
-    proofs_enabled: bool,
+    explanations_enabled: bool,
 ) -> Value {
     let mut properties = Map::new();
 
-    let proof_prop = proofs_enabled.then(|| {
+    let explanation_prop = explanations_enabled.then(|| {
         json!({
             "type": "object",
-            "description": "Proof tree (included when x-proofs header is sent and server started with --proofs)"
+            "description": "Explanation tree (included when x-explanations header is sent and server started with --explanations)"
         })
     });
 
@@ -649,8 +633,8 @@ fn build_response_schema(
                     "description": format!("Computed value (type: {})", result_type_name)
                 }),
             );
-            if let Some(ref p) = proof_prop {
-                value_props.insert("proof".to_string(), p.clone());
+            if let Some(ref p) = explanation_prop {
+                value_props.insert("explanation".to_string(), p.clone());
             }
             let mut veto_props = Map::new();
             veto_props.insert(
@@ -660,8 +644,8 @@ fn build_response_schema(
                     "description": "Reason the rule was vetoed (no value produced)"
                 }),
             );
-            if let Some(ref p) = proof_prop {
-                veto_props.insert("proof".to_string(), p.clone());
+            if let Some(ref p) = explanation_prop {
+                veto_props.insert("explanation".to_string(), p.clone());
             }
             let value_branch = json!({
                 "type": "object",
@@ -716,12 +700,12 @@ fn type_base_name(lemma_type: &LemmaType) -> String {
 mod tests {
     use super::*;
     use lemma::parsing::ast::DateTimeValue;
-    use lemma::LoadSource;
+    use lemma::SourceType;
 
     fn create_engine_with_code(code: &str) -> Engine {
         let mut engine = Engine::new();
         engine
-            .load(code, LoadSource::Labeled("test.lemma"))
+            .load(code, SourceType::Labeled("test.lemma"))
             .expect("failed to parse lemma code");
         engine
     }
@@ -730,7 +714,7 @@ mod tests {
         let mut engine = Engine::new();
         for (name, code) in files {
             engine
-                .load(code, LoadSource::Labeled(name))
+                .load(code, SourceType::Labeled(name))
                 .expect("failed to parse lemma code");
         }
         engine
@@ -909,18 +893,18 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_openapi_proofs_enabled_adds_x_proofs_and_proof_schema() {
+    fn test_generate_openapi_explanations_enabled_adds_x_explanations_and_explanation_schema() {
         let engine =
             create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
         let spec = generate_openapi(&engine, true);
 
         let get_params = &spec["paths"]["/pricing"]["get"]["parameters"];
-        assert!(has_param(get_params, "x-proofs"));
+        assert!(has_param(get_params, "x-explanations"));
 
         let response_schema = &spec["components"]["schemas"]["pricing_response"];
         let total_props = &response_schema["properties"]["total"]["oneOf"];
         let first_branch = &total_props[0]["properties"];
-        assert!(first_branch["proof"].is_object());
+        assert!(first_branch["explanation"].is_object());
     }
 
     #[test]

@@ -25,34 +25,33 @@ pub struct RuleResultJson {
     pub veto_reason: Option<String>,
     /// The rule's result type (e.g. "number", "boolean", "money").
     pub rule_type: String,
-    /// Structured proof tree (JSON). Included only when the caller opts in.
+    /// Structured explanation tree (JSON). Included only when the caller opts in.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub proof: Option<serde_json::Value>,
+    pub explanation: Option<serde_json::Value>,
 }
 
-/// Evaluation response envelope with spec identity, effective datetime, and content hash.
+/// Evaluation response envelope with spec identity, effective datetime, and plan hash.
 #[derive(Debug, Serialize)]
 pub struct EvaluationEnvelope {
     pub spec: String,
     pub effective: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hash: Option<String>,
+    pub hash: String,
     pub result: IndexMap<String, RuleResultJson>,
 }
 
 /// Convert an engine `Response` into an envelope with traceability fields.
 pub fn convert_response_with_hash(
     response: &lemma::Response,
-    include_proofs: bool,
+    include_explanations: bool,
     spec_name: &str,
     effective: &lemma::DateTimeValue,
-    hash: Option<&str>,
+    hash: &str,
 ) -> EvaluationEnvelope {
-    let result = convert_response(response, include_proofs);
+    let result = convert_response(response, include_explanations);
     EvaluationEnvelope {
         spec: spec_name.to_string(),
         effective: effective.to_string(),
-        hash: hash.map(|h| h.to_string()),
+        hash: hash.to_string(),
         result,
     }
 }
@@ -61,7 +60,7 @@ pub fn convert_response_with_hash(
 /// ordered by definition line in the source spec.
 pub fn convert_response(
     response: &lemma::Response,
-    include_proofs: bool,
+    include_explanations: bool,
 ) -> IndexMap<String, RuleResultJson> {
     let mut entries: Vec<_> = response
         .results
@@ -75,11 +74,11 @@ pub fn convert_response(
                 }
                 lemma::OperationResult::Veto(msg) => (None, None, None, true, msg.clone()),
             };
-            let proof = if include_proofs {
+            let explanation = if include_explanations {
                 rule_result
-                    .proof
+                    .explanation
                     .as_ref()
-                    .and_then(|p| serde_json::to_value(p).ok())
+                    .and_then(|e| serde_json::to_value(e).ok())
             } else {
                 None
             };
@@ -93,7 +92,7 @@ pub fn convert_response(
                     vetoed,
                     veto_reason,
                     rule_type: rule_result.rule_type.name(),
-                    proof,
+                    explanation,
                 },
             )
         })

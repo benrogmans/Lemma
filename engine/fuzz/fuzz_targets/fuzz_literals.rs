@@ -10,6 +10,6 @@ fuzz_target!(|data: &[u8]| {
 spec fuzz_test
 fact test_value: {}
 "#, s);
-        let _ = engine.load(&code, lemma::LoadSource::Labeled("fuzz_literal"));
+        let _ = engine.load(&code, lemma::SourceType::Labeled("fuzz_literal"));
     }
 });

@@ -26,5 +26,5 @@ fuzz_target!(|data: &[u8]| {
     );
 
     let mut engine = Engine::new();
-    let _ = engine.load(&code, lemma::LoadSource::Labeled("fuzz_nested"));
+    let _ = engine.load(&code, lemma::SourceType::Labeled("fuzz_nested"));
 });

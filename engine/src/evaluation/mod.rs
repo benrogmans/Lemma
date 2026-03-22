@@ -4,11 +4,12 @@
 //! The execution plan is self-contained with all rules flattened into branches.
 //! The evaluator executes rules linearly without recursion or tree traversal.
 
+pub mod explanation;
 pub mod expression;
 pub mod operations;
-pub mod proof;
 pub mod response;
 
+use crate::evaluation::explanation::{ExplanationNode, ValueSource};
 use crate::evaluation::response::EvaluatedRule;
 use crate::planning::semantics::{Expression, Fact, FactPath, FactValue, LiteralValue, RulePath};
 use crate::planning::ExecutionPlan;
@@ -21,16 +22,15 @@ use std::collections::HashMap;
 pub(crate) struct EvaluationContext {
     fact_values: HashMap<FactPath, LiteralValue>,
     pub(crate) rule_results: HashMap<RulePath, OperationResult>,
-    rule_proofs: HashMap<RulePath, crate::evaluation::proof::Proof>,
-    operations: Vec<crate::OperationRecord>,
+    rule_explanations: HashMap<RulePath, crate::evaluation::explanation::Explanation>,
+    operations: Option<Vec<crate::OperationRecord>>,
     pub(crate) sources: HashMap<String, String>,
-    proof_nodes: HashMap<usize, crate::evaluation::proof::ProofNode>,
-    /// The effective datetime (`now` keyword resolves to this).
+    explanation_nodes: HashMap<usize, crate::evaluation::explanation::ExplanationNode>,
     now: LiteralValue,
 }
 
 impl EvaluationContext {
-    fn new(plan: &ExecutionPlan, now: LiteralValue) -> Self {
+    fn new(plan: &ExecutionPlan, now: LiteralValue, record_operations: bool) -> Self {
         let fact_values: HashMap<FactPath, LiteralValue> = plan
             .facts
             .iter()
@@ -39,10 +39,14 @@ impl EvaluationContext {
         Self {
             fact_values,
             rule_results: HashMap::new(),
-            rule_proofs: HashMap::new(),
-            operations: Vec::new(),
+            rule_explanations: HashMap::new(),
+            operations: if record_operations {
+                Some(Vec::new())
+            } else {
+                None
+            },
             sources: plan.sources.clone(),
-            proof_nodes: HashMap::new(),
+            explanation_nodes: HashMap::new(),
             now,
         }
     }
@@ -56,32 +60,87 @@ impl EvaluationContext {
     }
 
     fn push_operation(&mut self, kind: OperationKind) {
-        self.operations.push(OperationRecord { kind });
+        if let Some(ref mut ops) = self.operations {
+            ops.push(OperationRecord { kind });
+        }
     }
 
-    fn set_proof_node(
+    fn set_explanation_node(
         &mut self,
         expression: &Expression,
-        node: crate::evaluation::proof::ProofNode,
+        node: crate::evaluation::explanation::ExplanationNode,
     ) {
-        self.proof_nodes
+        self.explanation_nodes
             .insert(expression as *const Expression as usize, node);
     }
 
-    fn get_proof_node(
+    fn get_explanation_node(
         &self,
         expression: &Expression,
-    ) -> Option<&crate::evaluation::proof::ProofNode> {
-        self.proof_nodes
+    ) -> Option<&crate::evaluation::explanation::ExplanationNode> {
+        self.explanation_nodes
             .get(&(expression as *const Expression as usize))
     }
 
-    fn get_rule_proof(&self, rule_path: &RulePath) -> Option<&crate::evaluation::proof::Proof> {
-        self.rule_proofs.get(rule_path)
+    fn get_rule_explanation(
+        &self,
+        rule_path: &RulePath,
+    ) -> Option<&crate::evaluation::explanation::Explanation> {
+        self.rule_explanations.get(rule_path)
     }
 
-    fn set_rule_proof(&mut self, rule_path: RulePath, proof: crate::evaluation::proof::Proof) {
-        self.rule_proofs.insert(rule_path, proof);
+    fn set_rule_explanation(
+        &mut self,
+        rule_path: RulePath,
+        explanation: crate::evaluation::explanation::Explanation,
+    ) {
+        self.rule_explanations.insert(rule_path, explanation);
+    }
+}
+
+fn collect_used_facts_from_explanation(
+    node: &ExplanationNode,
+    out: &mut HashMap<FactPath, LiteralValue>,
+) {
+    match node {
+        ExplanationNode::Value {
+            value,
+            source: ValueSource::Fact { fact_ref },
+            ..
+        } => {
+            out.entry(fact_ref.clone()).or_insert_with(|| value.clone());
+        }
+        ExplanationNode::Value { .. } => {}
+        ExplanationNode::RuleReference { expansion, .. } => {
+            collect_used_facts_from_explanation(expansion.as_ref(), out);
+        }
+        ExplanationNode::Computation { operands, .. } => {
+            for op in operands {
+                collect_used_facts_from_explanation(op, out);
+            }
+        }
+        ExplanationNode::Branches {
+            matched,
+            non_matched,
+            ..
+        } => {
+            if let Some(ref cond) = matched.condition {
+                collect_used_facts_from_explanation(cond, out);
+            }
+            collect_used_facts_from_explanation(&matched.result, out);
+            for nm in non_matched {
+                collect_used_facts_from_explanation(&nm.condition, out);
+                if let Some(ref res) = nm.result {
+                    collect_used_facts_from_explanation(res, out);
+                }
+            }
+        }
+        ExplanationNode::Condition { operands, .. } => {
+            for op in operands {
+                collect_used_facts_from_explanation(op, out);
+            }
+        }
+        ExplanationNode::Veto { .. } => {}
     }
 }
 
@@ -98,8 +157,17 @@ impl Evaluator {
     /// After planning, evaluation is guaranteed to complete. This function never returns
     /// a Error — runtime issues (division by zero, missing facts, user-defined veto)
     /// produce Vetoes, which are valid evaluation outcomes.
-    pub(crate) fn evaluate(&self, plan: &ExecutionPlan, now: LiteralValue) -> Response {
-        let mut context = EvaluationContext::new(plan, now);
+    ///
+    /// When `record_operations` is true, each rule's evaluation records a trace of
+    /// operations (facts used, rules used, computations, branch evaluations) into
+    /// `RuleResult::operations`. When false, no trace is recorded.
+    pub(crate) fn evaluate(
+        &self,
+        plan: &ExecutionPlan,
+        now: LiteralValue,
+        record_operations: bool,
+    ) -> Response {
+        let mut context = EvaluationContext::new(plan, now, record_operations);
 
         let mut response = Response {
             spec_name: plan.spec_name.clone(),
@@ -110,27 +178,21 @@ impl Evaluator {
             results: IndexMap::new(),
         };
 
-        let mut used_facts: HashMap<FactPath, LiteralValue> = HashMap::new();
-
         // Execute each rule in topological order (already sorted by ExecutionPlan)
         for exec_rule in &plan.rules {
-            context.operations.clear();
-            context.proof_nodes.clear();
+            if let Some(ref mut ops) = context.operations {
+                ops.clear();
+            }
+            context.explanation_nodes.clear();
 
-            let (result, proof) = expression::evaluate_rule(exec_rule, &mut context);
+            let (result, explanation) = expression::evaluate_rule(exec_rule, &mut context);
 
             context
                 .rule_results
                 .insert(exec_rule.path.clone(), result.clone());
-            context.set_rule_proof(exec_rule.path.clone(), proof.clone());
+            context.set_rule_explanation(exec_rule.path.clone(), explanation.clone());
 
-            let rule_operations = context.operations.clone();
-
-            for op in &rule_operations {
-                if let OperationKind::FactUsed { fact_ref, value } = &op.kind {
-                    used_facts.entry(fact_ref.clone()).or_insert(value.clone());
-                }
-            }
+            let rule_operations = context.operations.clone().unwrap_or_default();
 
             if !exec_rule.path.segments.is_empty() {
                 continue;
@@ -153,9 +215,16 @@ impl Evaluator {
                 result,
                 facts: vec![],
                 operations: rule_operations,
-                proof: Some(proof),
+                explanation: Some(explanation),
                 rule_type: exec_rule.rule_type.clone(),
             });
+        }
+
+        let mut used_facts: HashMap<FactPath, LiteralValue> = HashMap::new();
+        for rule_result in response.results.values() {
+            if let Some(ref explanation) = rule_result.explanation {
+                collect_used_facts_from_explanation(explanation.tree.as_ref(), &mut used_facts);
+            }
         }
 
         // Build fact list in definition order (plan.facts is an IndexMap)

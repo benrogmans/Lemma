@@ -26,7 +26,9 @@ rule with_spaces: not  (  x  )
     add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("test", Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run("test", Some(&now), HashMap::new(), false)
+        .unwrap();
 
     // not(x) evaluates to false (since x = true)
     let not_x_rule = response.results.get("not_x").unwrap();

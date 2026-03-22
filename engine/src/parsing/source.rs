@@ -1,11 +1,9 @@
 use crate::parsing::ast::Span;
-use std::sync::Arc;
+use std::collections::HashMap;
 
-/// Positional source location: file, span, and source text.
+/// Positional source location: file and span.
 ///
-/// Purely positional — does not carry spec identity. Spec context for errors
-/// is on `ErrorDetails.spec_context`; planning functions receive spec identity
-/// as an explicit parameter.
+/// Text is resolved via `text_from(sources)` when needed. No embedded source text.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Source {
     /// Source file identifier (e.g., filename)
@@ -13,26 +11,32 @@ pub struct Source {
 
     /// Span in source code
     pub span: Span,
-
-    /// Full source text of the file this location refers to
-    pub source_text: Arc<str>,
 }
 
 impl Source {
     #[must_use]
-    pub fn new(attribute: impl Into<String>, span: Span, source_text: Arc<str>) -> Self {
+    pub fn new(attribute: impl Into<String>, span: Span) -> Self {
         Self {
             attribute: attribute.into(),
             span,
-            source_text,
         }
     }
-}
 
-impl Source {
-    /// Extract the source text for this location from the given source string
+    /// Resolve source text from the sources map.
+    #[must_use]
+    pub fn text_from<'a>(
+        &self,
+        sources: &'a HashMap<String, String>,
+    ) -> Option<std::borrow::Cow<'a, str>> {
+        let s = sources.get(&self.attribute)?;
+        s.get(self.span.start..self.span.end)
+            .map(std::borrow::Cow::Borrowed)
+    }
+
+    /// Extract the source text from the given source string.
     ///
-    /// Returns `None` if the span is out of bounds for the source.
+    /// Returns `None` if the span is out of bounds.
+    #[must_use]
     pub fn extract_text(&self, source: &str) -> Option<String> {
         let bytes = source.as_bytes();
         if self.span.start < bytes.len() && self.span.end <= bytes.len() {
@@ -46,10 +50,7 @@ impl Source {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn test_arc() -> Arc<str> {
-        Arc::from("hello world")
-    }
+    use std::collections::HashMap;
 
     #[test]
     fn test_extract_text_valid() {
@@ -60,7 +61,7 @@ mod tests {
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span, test_arc());
+        let loc = Source::new("test.lemma", span);
         assert_eq!(loc.extract_text(source), Some("hello".to_string()));
     }
 
@@ -73,7 +74,7 @@ mod tests {
             line: 1,
             col: 6,
         };
-        let loc = Source::new("test.lemma", span, test_arc());
+        let loc = Source::new("test.lemma", span);
         assert_eq!(loc.extract_text(source), Some("world".to_string()));
     }
 
@@ -86,7 +87,7 @@ mod tests {
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span, test_arc());
+        let loc = Source::new("test.lemma", span);
         assert_eq!(loc.extract_text(source), Some("hello world".to_string()));
     }
 
@@ -99,7 +100,7 @@ mod tests {
             line: 1,
             col: 5,
         };
-        let loc = Source::new("test.lemma", span, test_arc());
+        let loc = Source::new("test.lemma", span);
         assert_eq!(loc.extract_text(source), Some("".to_string()));
     }
 
@@ -112,7 +113,7 @@ mod tests {
             line: 1,
             col: 10,
         };
-        let loc = Source::new("test.lemma", span, test_arc());
+        let loc = Source::new("test.lemma", span);
         assert_eq!(loc.extract_text(source), None);
     }
 
@@ -125,7 +126,7 @@ mod tests {
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span, test_arc());
+        let loc = Source::new("test.lemma", span);
         assert_eq!(loc.extract_text(source), None);
     }
 
@@ -138,33 +139,35 @@ mod tests {
             line: 1,
             col: 6,
         };
-        let loc = Source::new("test.lemma", span, test_arc());
+        let loc = Source::new("test.lemma", span);
         assert_eq!(loc.extract_text(source), Some("世界".to_string()));
     }
 
     #[test]
-    fn test_new_with_string() {
+    fn test_new() {
         let span = Span {
             start: 0,
             end: 5,
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span, test_arc());
+        let loc = Source::new("test.lemma", span);
         assert_eq!(loc.attribute, "test.lemma");
-        assert_eq!(&*loc.source_text, "hello world");
     }
 
     #[test]
-    fn test_new_with_str() {
-        let span = Span {
-            start: 0,
-            end: 5,
-            line: 1,
-            col: 0,
-        };
-        let loc = Source::new("test.lemma", span, Arc::from("other"));
-        assert_eq!(loc.attribute, "test.lemma");
-        assert_eq!(&*loc.source_text, "other");
+    fn test_text_from() {
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), "hello world".to_string());
+        let loc = Source::new(
+            "test.lemma",
+            Span {
+                start: 0,
+                end: 5,
+                line: 1,
+                col: 0,
+            },
+        );
+        assert_eq!(loc.text_from(&sources).as_deref(), Some("hello"));
     }
 }

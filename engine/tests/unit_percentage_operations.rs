@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 #[test]
-fn test_unit_subtract_percentage() -> Result<(), Vec<lemma::Error>> {
+fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
     // This is shown in the README as a feature - it must work
@@ -31,8 +31,11 @@ fn test_unit_subtract_percentage() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("pricing", Some(&now), HashMap::new())
-        .map_err(|e| vec![e])?;
+        .run("pricing", Some(&now), HashMap::new(), false)
+        .map_err(|e| lemma::Errors {
+            errors: vec![e],
+            sources: engine.sources().clone(),
+        })?;
 
     // Check discount rule result
     let discount_result = response
@@ -76,7 +79,7 @@ fn test_unit_subtract_percentage() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_unit_add_percentage() -> Result<(), Vec<lemma::Error>> {
+fn test_unit_add_percentage() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
     add_lemma_code_blocking(
@@ -94,8 +97,11 @@ fn test_unit_add_percentage() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("tax_calculation", Some(&now), HashMap::new())
-        .map_err(|e| vec![e])?;
+        .run("tax_calculation", Some(&now), HashMap::new(), false)
+        .map_err(|e| lemma::Errors {
+            errors: vec![e],
+            sources: engine.sources().clone(),
+        })?;
 
     let result = response
         .results
@@ -127,7 +133,7 @@ fn test_unit_add_percentage() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_various_unit_percentage_operations() -> Result<(), Vec<lemma::Error>> {
+fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
     add_lemma_code_blocking(
@@ -148,8 +154,11 @@ fn test_various_unit_percentage_operations() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("unit_percentage_ops", Some(&now), HashMap::new())
-        .map_err(|e| vec![e])?;
+        .run("unit_percentage_ops", Some(&now), HashMap::new(), false)
+        .map_err(|e| lemma::Errors {
+            errors: vec![e],
+            sources: engine.sources().clone(),
+        })?;
 
     // Check increased (50 + 20% = 60)
     let increased_result = response
@@ -227,7 +236,7 @@ fn test_various_unit_percentage_operations() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_complex_discount_scenario() -> Result<(), Vec<lemma::Error>> {
+fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
     add_lemma_code_blocking(
@@ -247,8 +256,11 @@ fn test_complex_discount_scenario() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("complex_pricing", Some(&now), HashMap::new())
-        .map_err(|e| vec![e])?;
+        .run("complex_pricing", Some(&now), HashMap::new(), false)
+        .map_err(|e| lemma::Errors {
+            errors: vec![e],
+            sources: engine.sources().clone(),
+        })?;
 
     // Check after_bulk (1000 - 15% = 850)
     let after_bulk_result = response
@@ -308,7 +320,7 @@ fn test_complex_discount_scenario() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_percentage_arithmetic() -> Result<(), Vec<lemma::Error>> {
+fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
     add_lemma_code_blocking(
@@ -331,8 +343,11 @@ fn test_percentage_arithmetic() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("percentage_ops", Some(&now), HashMap::new())
-        .map_err(|e| vec![e])?;
+        .run("percentage_ops", Some(&now), HashMap::new(), false)
+        .map_err(|e| lemma::Errors {
+            errors: vec![e],
+            sources: engine.sources().clone(),
+        })?;
 
     // Check combined_discount (5% + 10% = 15%)
     let combined_result = response
@@ -452,7 +467,7 @@ fn test_percentage_arithmetic() -> Result<(), Vec<lemma::Error>> {
 }
 
 #[test]
-fn test_averaging_percentages() -> Result<(), Vec<lemma::Error>> {
+fn test_averaging_percentages() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
     add_lemma_code_blocking(
@@ -472,8 +487,11 @@ fn test_averaging_percentages() -> Result<(), Vec<lemma::Error>> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("avg_percentages", Some(&now), HashMap::new())
-        .map_err(|e| vec![e])?;
+        .run("avg_percentages", Some(&now), HashMap::new(), false)
+        .map_err(|e| lemma::Errors {
+            errors: vec![e],
+            sources: engine.sources().clone(),
+        })?;
 
     // Check sum (10% + 20% + 15% = 45%)
     let sum_result = response

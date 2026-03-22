@@ -31,7 +31,7 @@ pub struct RegistryBundle {
     /// Lemma source containing one or more `spec ...` blocks.
     pub lemma_source: String,
 
-    /// Source identifier used for diagnostics and proofs
+    /// Source identifier used for diagnostics and explanations
     /// (for example `"@user/workspace/somespec"`).
     pub attribute: String,
 }

@@ -44,13 +44,13 @@ enum Commands {
     ///
     /// Syntax: spec [--rules=rule1,rule2] [spec~hash for hash pin]
     Run {
-        /// Spec to evaluate (optionally suffixed with ~hash to pin to a content hash)
+        /// Spec to evaluate (optionally suffixed with ~hash to pin to a plan hash)
         ///
         /// Examples:
         ///   pricing                    - evaluate all rules in pricing spec
-        ///   nl/tax/net_salary~a1b2c3d4 - pin to specific content hash (like HTTP ?hash=)
+        ///   nl/tax/net_salary~a1b2c3d4 - pin to specific plan hash
         #[arg(value_name = "SPEC")]
-        spec_name: Option<String>,
+        spec_id: Option<String>,
         /// Rules to evaluate (comma-separated); omit to evaluate all rules
         #[arg(long, value_name = "RULES")]
         rules: Option<String>,
@@ -79,7 +79,7 @@ enum Commands {
             default_value = "table"
         )]
         output: OutputFormat,
-        /// Include facts and proof trees (table) or proof objects (json)
+        /// Include facts and explanation trees (table) or explanation objects (json)
         #[arg(short = 'x', long)]
         explain: bool,
         /// Enable interactive mode for spec/rule/fact selection
@@ -89,20 +89,19 @@ enum Commands {
         #[arg(long)]
         effective: Option<String>,
     },
-    /// Show spec structure
+    /// Spec schema (facts and rules)
     ///
-    /// Shows all facts and rules in a spec.
-    /// Useful for understanding spec structure and dependencies.
-    Show {
-        /// Name of the spec to show
+    /// Displays spec structure and dependencies.
+    Schema {
+        /// Name of the spec
         spec_name: String,
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
-        /// Show at effective datetime (e.g. 2026, 2026-03-04)
+        /// Effective datetime (e.g. 2026, 2026-03-04)
         #[arg(long)]
         effective: Option<String>,
-        /// Output only the content hash (for piping, e.g. lemma run spec~$(lemma show spec --hash))
+        /// Output only the plan hash (for piping, e.g. lemma run spec~$(lemma schema spec --hash))
         #[arg(long)]
         hash: bool,
     },
@@ -145,9 +144,9 @@ enum Commands {
         /// Watch workspace for .lemma file changes and reload automatically
         #[arg(short, long)]
         watch: bool,
-        /// Enable proof generation; clients send header x-proofs to receive proof objects in responses
+        /// Enable explanation generation; clients send header x-explanations to receive explanation objects in responses
         #[arg(long)]
-        proofs: bool,
+        explanations: bool,
     },
     /// Start MCP server for AI assistant integration (stdio)
     ///
@@ -175,7 +174,7 @@ enum Commands {
     Get {
         /// Specific spec to fetch (e.g. @user/repo/spec). If omitted, resolves all @... references.
         #[arg(value_name = "SPEC")]
-        spec: Option<String>,
+        spec_id: Option<String>,
         /// Workspace root directory containing .lemma files
         #[arg(short = 'd', long = "dir", default_value = ".")]
         workdir: PathBuf,
@@ -202,7 +201,9 @@ enum Commands {
 
 fn resolve_effective(raw: Option<&String>) -> Result<DateTimeValue> {
     match raw {
-        Some(s) => DateTimeValue::parse(s)
+        Some(s) => s
+            .parse::<DateTimeValue>()
+            .ok()
             .ok_or_else(|| anyhow::anyhow!("Invalid --effective value '{}'. Expected: YYYY, YYYY-MM, YYYY-MM-DD, or full ISO 8601 datetime", s)),
         None => Ok(DateTimeValue::now()),
     }
@@ -214,7 +215,7 @@ fn main() {
     let result = match &cli.command {
         Commands::Run {
             workdir,
-            spec_name,
+            spec_id,
             rules,
             facts,
             target,
@@ -224,8 +225,8 @@ fn main() {
             effective,
         } => run_command(RunOptions {
             workdir,
-            spec_name: spec_name.as_ref(),
-            rules: rules.as_deref(),
+            spec_id: spec_id.as_ref(),
+            rules: rules.as_ref(),
             facts,
             target: target.as_ref(),
             output: *output,
@@ -233,26 +234,26 @@ fn main() {
             interactive: *interactive,
             effective_raw: effective.as_ref(),
         }),
-        Commands::Show {
+        Commands::Schema {
             workdir,
             spec_name,
             effective,
             hash,
-        } => show_command(workdir, spec_name, effective.as_ref(), *hash),
+        } => schema_command(workdir, spec_name, effective.as_ref(), *hash),
         Commands::List { root, effective } => list_command(root, effective.as_ref()),
         Commands::Server {
             workdir,
             host,
             port,
             watch,
-            proofs,
-        } => server_command(workdir, host, *port, *watch, *proofs),
+            explanations,
+        } => server_command(workdir, host, *port, *watch, *explanations),
         Commands::Mcp { workdir, admin } => mcp_command(workdir, *admin),
         Commands::Get {
-            spec,
+            spec_id,
             workdir,
             force,
-        } => get_command(workdir, spec.as_deref(), *force),
+        } => get_command(workdir, spec_id.as_ref(), *force),
         Commands::Format {
             paths,
             check,
@@ -261,20 +262,15 @@ fn main() {
     };
 
     if let Err(e) = result {
-        // Check if it's a Error and format it nicely, otherwise use default
-        if let Some(lemma_err) = e.downcast_ref::<lemma::Error>() {
-            eprintln!("{}", error_formatter::format_error(lemma_err));
-        } else {
-            eprintln!("Error: {}", e);
-        }
+        eprintln!("{}", e);
         std::process::exit(1);
     }
 }
 
 struct RunOptions<'a> {
     workdir: &'a Path,
-    spec_name: Option<&'a String>,
-    rules: Option<&'a str>,
+    spec_id: Option<&'a String>,
+    rules: Option<&'a String>,
     facts: &'a [String],
     target: Option<&'a String>,
     output: OutputFormat,
@@ -288,8 +284,8 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
     let mut engine = Engine::new();
     load_workspace(&mut engine, opts.workdir)?;
 
-    let (spec, rules, final_facts, final_target) = if opts.interactive || opts.spec_name.is_none() {
-        if opts.spec_name.is_none() && !opts.interactive {
+    let (spec_id, rules, final_facts, target) = if opts.interactive || opts.spec_id.is_none() {
+        if opts.spec_id.is_none() && !opts.interactive {
             eprintln!("Error: No spec specified\n");
             eprintln!("Usage: lemma run [SPEC] [--rules=rule1,rule2] [FACTS...] [OPTIONS]\n");
             eprintln!("Examples:");
@@ -301,7 +297,7 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
                 "  lemma run pricing --rules=total,tax     - Evaluate 'total' and 'tax' rules"
             );
             eprintln!("  lemma run pricing price=100 qty=5      - Evaluate with fact values");
-            eprintln!("  lemma run spec~a1b2c3d4                - Pin to content hash (use lemma show for hash)");
+            eprintln!("  lemma run spec~a1b2c3d4                - Pin to plan hash (use lemma schema for hash)");
             eprintln!(
                 "  lemma run --interactive                - Interactive mode for selection\n"
             );
@@ -312,19 +308,25 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
             std::process::exit(1);
         }
 
-        let (parsed_spec, parsed_rules) = match opts.spec_name {
+        let (parsed_spec, parsed_rules) = match opts.spec_id {
             Some(spec_id) => {
                 let (name, _) =
                     lemma::parse_spec_id(spec_id).map_err(|e| anyhow::anyhow!("{}", e))?;
-                (Some(name), opts.rules.map(parse_rule_names))
+                (Some(name), opts.rules.map(|r| parse_rule_names(r.as_str())))
             }
             None => (None, None),
         };
 
         let cli_facts: std::collections::HashMap<String, String> = parse_fact_strings(opts.facts);
 
-        let (s, r, interactive_facts, interactive_target) =
-            interactive::run_interactive(&engine, parsed_spec, parsed_rules, &cli_facts, &now)?;
+        let (s, r, interactive_facts, interactive_target) = interactive::run_interactive(
+            &engine,
+            parsed_spec,
+            parsed_rules,
+            &cli_facts,
+            opts.target,
+            &now,
+        )?;
 
         // Add a blank line after the final interactive prompt so the
         // formatted output sections ("Facts", "Rules", etc.) don't run
@@ -334,37 +336,41 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
         let mut all_facts = cli_facts;
         all_facts.extend(interactive_facts);
         (s, r.unwrap_or_default(), all_facts, interactive_target)
-    } else if let Some(spec_id) = opts.spec_name {
+    } else if let Some(spec_id) = opts.spec_id {
         lemma::parse_spec_id(spec_id).map_err(|e| anyhow::anyhow!("{}", e))?;
-        let rules = opts.rules.map(parse_rule_names).unwrap_or_default();
+        let rules = opts
+            .rules
+            .map(|r| parse_rule_names(r.as_str()))
+            .unwrap_or_default();
         let fact_values = parse_fact_strings(opts.facts);
-        (spec_id.clone(), rules, fact_values, None)
+        (spec_id.to_owned(), rules, fact_values, None)
     } else {
         unreachable!()
     };
 
-    let target_str = opts.target.or(final_target.as_ref());
-    if target_str.is_some() {
+    if target.is_some() {
         return Err(anyhow::anyhow!("Inversion not implemented"));
     }
 
-    let (name, _) = lemma::parse_spec_id(&spec).map_err(|e| anyhow::anyhow!("{}", e))?;
-    let mut response = engine.run(&spec, Some(&now), final_facts)?;
+    let mut response = engine
+        .run(&spec_id, Some(&now), final_facts, false)
+        .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?;
     if !rules.is_empty() {
         response.filter_rules(&rules);
     }
-    let hash = engine.hash_pin(&name, &now).map(|h| h.to_string());
+    let hash = engine
+        .get_plan(&spec_id, Some(&now))
+        .expect("BUG: run succeeded but get_plan failed")
+        .plan_hash();
     let formatter = Formatter;
 
     match opts.output {
         OutputFormat::Table => {
             print!("{}", formatter.format_response(&response, opts.explain));
-            if let Some(ref h) = hash {
-                println!("Hash: {}", h);
-            }
+            println!("Hash: {}", hash);
         }
         OutputFormat::Json => {
-            let json = format_response_json(&response, opts.explain, &now, hash.as_deref());
+            let json = format_response_json(&response, opts.explain, &now, &hash);
             let json_str = serde_json::to_string_pretty(&json)
                 .expect("BUG: failed to serialize response JSON");
             println!("{}", json_str);
@@ -376,10 +382,9 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
 
 #[derive(Serialize)]
 struct RunOutputJson {
-    spec: String,
+    spec_name: String,
     effective: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    hash: Option<String>,
+    hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     facts: Option<Vec<lemma::Facts>>,
     result: indexmap::IndexMap<String, response::RuleResultJson>,
@@ -389,12 +394,12 @@ fn format_response_json(
     response: &lemma::Response,
     explain: bool,
     effective: &DateTimeValue,
-    hash: Option<&str>,
+    hash: &str,
 ) -> RunOutputJson {
     RunOutputJson {
-        spec: response.spec_name.clone(),
+        spec_name: response.spec_name.clone(),
         effective: effective.to_string(),
-        hash: hash.map(|h| h.to_string()),
+        hash: hash.to_string(),
         facts: if explain {
             Some(response.facts.clone())
         } else {
@@ -415,7 +420,7 @@ fn parse_fact_strings(facts: &[String]) -> HashMap<String, String> {
         .collect()
 }
 
-fn show_command(
+fn schema_command(
     workdir: &Path,
     spec_id: &str,
     effective_raw: Option<&String>,
@@ -425,20 +430,15 @@ fn show_command(
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
-    let (name, _) = lemma::parse_spec_id(spec_id).map_err(|e| anyhow::anyhow!("{}", e))?;
     let plan = engine
-        .plan(spec_id, Some(&now))
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-    let hash = engine.hash_pin(&name, &now);
+        .get_plan(spec_id, Some(&now))
+        .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?;
+    let hash = plan.plan_hash();
     if hash_only {
-        if let Some(h) = hash {
-            println!("{}", h);
-        } else {
-            std::process::exit(1);
-        }
+        println!("{}", hash);
     } else {
         let formatter = Formatter;
-        print!("{}", formatter.format_spec_inspection(plan, hash));
+        print!("{}", formatter.format_spec_inspection(plan, &hash));
     }
     Ok(())
 }
@@ -463,7 +463,7 @@ fn list_command(root: &PathBuf, effective_raw: Option<&String>) -> Result<()> {
                 .effective_from()
                 .cloned()
                 .unwrap_or_else(|| now.clone());
-            engine.show(&spec.name, Some(&effective)).ok()
+            engine.schema(&spec.name, Some(&effective)).ok()
         })
         .collect();
 
@@ -476,7 +476,13 @@ fn list_command(root: &PathBuf, effective_raw: Option<&String>) -> Result<()> {
     Ok(())
 }
 
-fn server_command(workdir: &Path, host: &str, port: u16, watch: bool, proofs: bool) -> Result<()> {
+fn server_command(
+    workdir: &Path,
+    host: &str,
+    port: u16,
+    watch: bool,
+    explanations: bool,
+) -> Result<()> {
     use tokio::runtime::Runtime;
     let rt = Runtime::new()?;
     rt.block_on(async {
@@ -486,7 +492,15 @@ fn server_command(workdir: &Path, host: &str, port: u16, watch: bool, proofs: bo
         let spec_names = engine.list_specs();
         let spec_count = spec_names.len();
         println!("Starting HTTP server with {} spec(s) loaded...", spec_count);
-        server::http::start_server(engine, host, port, watch, proofs, workdir.to_path_buf()).await
+        server::http::start_server(
+            engine,
+            host,
+            port,
+            watch,
+            explanations,
+            workdir.to_path_buf(),
+        )
+        .await
     })?;
     Ok(())
 }
@@ -505,34 +519,34 @@ fn mcp_command(workdir: &Path, admin: bool) -> Result<()> {
     Ok(())
 }
 
-fn get_command(workdir: &Path, spec: Option<&str>, force: bool) -> Result<()> {
+fn get_command(workdir: &Path, spec_id: Option<&String>, force: bool) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(get_command_async(workdir, spec, force))
+    rt.block_on(get_command_async(workdir, spec_id, force))
 }
 
-async fn get_command_async(workdir: &Path, spec: Option<&str>, force: bool) -> Result<()> {
+async fn get_command_async(workdir: &Path, spec_id: Option<&String>, force: bool) -> Result<()> {
     let registry = make_fetch_registry();
 
-    match spec {
-        Some(raw) => get_single_spec(workdir, raw, &*registry, force).await,
+    match spec_id {
+        Some(spec_id) => get_single_spec(workdir, spec_id, &*registry, force).await,
         None => get_all_workspace_deps(workdir, &*registry, force).await,
     }
 }
 
 async fn get_single_spec(
     workdir: &Path,
-    raw: &str,
+    spec_id: &str,
     registry: &dyn lemma::Registry,
     force: bool,
 ) -> Result<()> {
-    if raw.is_empty() {
+    if spec_id.is_empty() {
         anyhow::bail!("Empty spec identifier. Usage: lemma get @user/repo/spec");
     }
 
     let bundle = registry
-        .get_specs(raw)
+        .get_specs(spec_id)
         .await
-        .map_err(|e| anyhow::anyhow!("Registry error for {}: {}", raw, e.message))?;
+        .map_err(|e| anyhow::anyhow!("Registry error for {}: {}", spec_id, e.message))?;
 
     let attribute = &bundle.attribute;
     let source_text = &bundle.lemma_source;
@@ -554,7 +568,7 @@ async fn get_single_spec(
             let path = entry.path();
             let existing_content = fs::read_to_string(path)?;
             if existing_content == *source_text {
-                eprintln!("Already up to date: {}.", raw);
+                eprintln!("Already up to date: {}.", spec_id);
                 return Ok(());
             }
             let existing_specs =
@@ -582,8 +596,46 @@ async fn get_single_spec(
         }
     }
 
-    let hash_suffix = lemma::planning::content_hash::hash_bytes(source_text.as_bytes());
-    let dep_path = dep_file_path(attribute, &hash_suffix);
+    let (_parsed_name, hash_pin) =
+        lemma::parse_spec_id(spec_id).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let mut engine = Engine::new();
+    load_workspace(&mut engine, workdir)?;
+    engine
+        .load(source_text, lemma::SourceType::Dependency(attribute))
+        .map_err(|load_err| {
+            for e in load_err.iter() {
+                eprintln!("{}", error_formatter::format_error(e, &load_err.sources));
+            }
+            anyhow::anyhow!(
+                "Planning fetched spec failed ({} error(s))",
+                load_err.errors.len()
+            )
+        })?;
+
+    let now = DateTimeValue::now();
+    let first_spec_name = new_specs
+        .first()
+        .map(|s| s.name.as_str())
+        .expect("BUG: parsed specs was non-empty above");
+    let hash = engine
+        .get_plan_hash(first_spec_name, &now)
+        .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?
+        .expect("BUG: spec loaded+planned but has no hash");
+
+    if let Some(pin) = &hash_pin {
+        if !pin.eq_ignore_ascii_case(&hash) {
+            anyhow::bail!(
+                "Plan hash mismatch for '{}': requested ~{}, computed {}. \
+                 The registry may have served different content.",
+                spec_id,
+                pin,
+                hash
+            );
+        }
+    }
+
+    let dep_path = dep_file_path(attribute, &hash);
     let dest = deps_dir.join(&dep_path);
 
     if let Some(parent) = dest.parent() {
@@ -591,7 +643,6 @@ async fn get_single_spec(
     }
     fs::write(&dest, source_text)?;
 
-    let now = DateTimeValue::now();
     warn_past_effective(attribute, source_text, &now);
 
     eprintln!("  fetched: {} -> {}", attribute, dep_path.display());
@@ -626,7 +677,8 @@ async fn get_all_workspace_deps(
                 sources.insert(source_id, code);
             }
             Err(e) => {
-                eprintln!("{}", error_formatter::format_error(&e));
+                sources.insert(source_id.clone(), code.clone());
+                eprintln!("{}", error_formatter::format_error(&e, &sources));
                 anyhow::bail!("Parse error in {}", path.display());
             }
         }
@@ -638,10 +690,28 @@ async fn get_all_workspace_deps(
         lemma::resolve_registry_references(&mut ctx, &mut sources, registry, &limits).await
     {
         for e in &errs {
-            eprintln!("{}", error_formatter::format_error(e));
+            eprintln!("{}", error_formatter::format_error(e, &sources));
         }
         anyhow::bail!("Registry resolution failed ({} error(s))", errs.len());
     }
+
+    let mut engine = Engine::new();
+    load_workspace(&mut engine, workdir)?;
+    for (source_id, code) in &sources {
+        if source_keys_before.contains(source_id) {
+            continue;
+        }
+        if let Err(load_err) = engine.load(code, lemma::SourceType::Dependency(source_id)) {
+            for e in load_err.iter() {
+                eprintln!("{}", error_formatter::format_error(e, &load_err.sources));
+            }
+            anyhow::bail!(
+                "Planning fetched deps failed ({} error(s))",
+                load_err.errors.len()
+            );
+        }
+    }
+    let now = DateTimeValue::now();
 
     let deps_dir = lemma_deps_dir(workdir);
 
@@ -668,7 +738,6 @@ async fn get_all_workspace_deps(
     let mut fetched_count = 0u32;
     let mut skipped_count = 0u32;
     let mut removed: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    let now = DateTimeValue::now();
 
     for (attribute, source_text) in &sources {
         if source_keys_before.contains(attribute) {
@@ -707,7 +776,16 @@ async fn get_all_workspace_deps(
             }
         }
 
-        let hash_suffix = lemma::planning::content_hash::hash_bytes(source_text.as_bytes());
+        let first_spec_name = new_specs
+            .first()
+            .map(|s| s.name.as_str())
+            .expect("BUG: parsed specs was non-empty");
+        let hash_suffix = engine
+            .get_plan_hash(first_spec_name, &now)
+            .map_err(|e| {
+                anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources()))
+            })?
+            .expect("BUG: spec loaded+planned but has no hash");
         let dep_path = dep_file_path(attribute, &hash_suffix);
         let dest = deps_dir.join(&dep_path);
 
@@ -800,11 +878,11 @@ fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> 
             paths.push(entry.path().to_path_buf());
         }
     }
-    if let Err(errs) = engine.load_from_paths(&paths) {
-        for e in &errs {
-            eprintln!("{}", error_formatter::format_error(e));
+    if let Err(load_err) = engine.load_from_paths(&paths, false) {
+        for e in load_err.iter() {
+            eprintln!("{}", error_formatter::format_error(e, &load_err.sources));
         }
-        anyhow::bail!("Workspace load failed ({} error(s))", errs.len());
+        anyhow::bail!("Workspace load failed ({} error(s))", load_err.errors.len());
     }
     Ok(())
 }
@@ -865,7 +943,9 @@ fn format_command(paths: &[PathBuf], check: bool, stdout: bool) -> Result<()> {
         let formatted = match lemma::format_source(&source, &attribute) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("{}", error_formatter::format_error(&e));
+                let mut m = std::collections::HashMap::new();
+                m.insert(attribute.clone(), source.clone());
+                eprintln!("{}", error_formatter::format_error(&e, &m));
                 parse_errors += 1;
                 continue;
             }

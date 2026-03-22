@@ -1,5 +1,7 @@
 use crate::error::Error;
-use crate::parsing::ast::Span;
+use crate::parsing::ast::{
+    BooleanValue, CalendarUnit, ConversionTarget, DurationUnit, PrimitiveKind, Span,
+};
 use crate::parsing::source::Source;
 use std::sync::Arc;
 
@@ -307,7 +309,7 @@ impl Lexer {
     }
 
     /// Scan a contiguous run of alphanumeric characters as a raw string,
-    /// bypassing normal tokenization. Used for content hashes after `~`
+    /// bypassing normal tokenization. Used for plan hashes after `~`
     /// where sequences like `7e20848b` must not be split by scientific
     /// notation scanning.
     pub fn scan_raw_alphanumeric(&mut self) -> Result<String, Error> {
@@ -379,11 +381,7 @@ impl Lexer {
     }
 
     fn make_error(&self, message: impl Into<String>, span: Span) -> Error {
-        Error::parsing(
-            message,
-            Source::new(&self.attribute, span, self.source_text.clone()),
-            None::<String>,
-        )
+        Error::parsing(message, Source::new(&self.attribute, span), None::<String>)
     }
 
     fn lex_token(&mut self) -> Result<Token, Error> {
@@ -799,18 +797,24 @@ pub fn is_structural_keyword(kind: &TokenKind) -> bool {
 /// Returns true if the given token kind represents a type keyword
 /// (used for type declarations and inline type annotations).
 pub fn is_type_keyword(kind: &TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::BooleanKw
-            | TokenKind::ScaleKw
-            | TokenKind::NumberKw
-            | TokenKind::PercentKw
-            | TokenKind::RatioKw
-            | TokenKind::TextKw
-            | TokenKind::DateKw
-            | TokenKind::TimeKw
-            | TokenKind::DurationKw
-    )
+    token_kind_to_primitive(kind).is_some()
+}
+
+/// Map type keyword token to PrimitiveKind. Single source of truth for type keywords.
+#[must_use]
+pub fn token_kind_to_primitive(kind: &TokenKind) -> Option<PrimitiveKind> {
+    match kind {
+        TokenKind::BooleanKw => Some(PrimitiveKind::Boolean),
+        TokenKind::ScaleKw => Some(PrimitiveKind::Scale),
+        TokenKind::NumberKw => Some(PrimitiveKind::Number),
+        TokenKind::PercentKw => Some(PrimitiveKind::Percent),
+        TokenKind::RatioKw => Some(PrimitiveKind::Ratio),
+        TokenKind::TextKw => Some(PrimitiveKind::Text),
+        TokenKind::DateKw => Some(PrimitiveKind::Date),
+        TokenKind::TimeKw => Some(PrimitiveKind::Time),
+        TokenKind::DurationKw => Some(PrimitiveKind::Duration),
+        _ => None,
+    }
 }
 
 /// Returns true if the token kind represents a boolean literal keyword.
@@ -850,6 +854,82 @@ pub fn is_duration_unit(kind: &TokenKind) -> bool {
             | TokenKind::Microsecond
             | TokenKind::PercentKw
     )
+}
+
+/// Maps a duration-unit token kind to DurationUnit. Call only when `is_duration_unit(kind) && kind != PercentKw`.
+#[must_use]
+pub fn token_kind_to_duration_unit(kind: &TokenKind) -> DurationUnit {
+    match kind {
+        TokenKind::Years | TokenKind::Year => DurationUnit::Year,
+        TokenKind::Months | TokenKind::Month => DurationUnit::Month,
+        TokenKind::Weeks | TokenKind::Week => DurationUnit::Week,
+        TokenKind::Days | TokenKind::Day => DurationUnit::Day,
+        TokenKind::Hours | TokenKind::Hour => DurationUnit::Hour,
+        TokenKind::Minutes | TokenKind::Minute => DurationUnit::Minute,
+        TokenKind::Seconds | TokenKind::Second => DurationUnit::Second,
+        TokenKind::Milliseconds | TokenKind::Millisecond => DurationUnit::Millisecond,
+        TokenKind::Microseconds | TokenKind::Microsecond => DurationUnit::Microsecond,
+        _ => unreachable!(
+            "BUG: token_kind_to_duration_unit called with non-duration token {:?}",
+            kind
+        ),
+    }
+}
+
+/// Builds ConversionTarget from a token. For duration-unit tokens returns Duration(unit);
+/// otherwise returns Unit(fallback_text) for identifiers/custom units.
+#[must_use]
+pub fn conversion_target_from_token(kind: &TokenKind, fallback_text: &str) -> ConversionTarget {
+    if is_duration_unit(kind) && *kind != TokenKind::PercentKw {
+        ConversionTarget::Duration(token_kind_to_duration_unit(kind))
+    } else {
+        ConversionTarget::Unit(fallback_text.to_lowercase())
+    }
+}
+
+/// Returns true if the token kind is a calendar unit (year, month, week).
+#[must_use]
+pub fn is_calendar_unit_token(kind: &TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Years
+            | TokenKind::Year
+            | TokenKind::Months
+            | TokenKind::Month
+            | TokenKind::Weeks
+            | TokenKind::Week
+    )
+}
+
+/// Maps a calendar-unit token kind to CalendarUnit. Call only when `is_calendar_unit_token(kind)`.
+#[must_use]
+pub fn token_kind_to_calendar_unit(kind: &TokenKind) -> CalendarUnit {
+    match kind {
+        TokenKind::Years | TokenKind::Year => CalendarUnit::Year,
+        TokenKind::Months | TokenKind::Month => CalendarUnit::Month,
+        TokenKind::Weeks | TokenKind::Week => CalendarUnit::Week,
+        _ => unreachable!(
+            "BUG: token_kind_to_calendar_unit called with non-calendar token {:?}",
+            kind
+        ),
+    }
+}
+
+/// Maps a boolean-keyword token kind to BooleanValue. Call only when `is_boolean_keyword(kind)`.
+#[must_use]
+pub fn token_kind_to_boolean_value(kind: &TokenKind) -> BooleanValue {
+    match kind {
+        TokenKind::True => BooleanValue::True,
+        TokenKind::False => BooleanValue::False,
+        TokenKind::Yes => BooleanValue::Yes,
+        TokenKind::No => BooleanValue::No,
+        TokenKind::Accept => BooleanValue::Accept,
+        TokenKind::Reject => BooleanValue::Reject,
+        _ => unreachable!(
+            "BUG: token_kind_to_boolean_value called with non-boolean token {:?}",
+            kind
+        ),
+    }
 }
 
 /// Returns true if the token kind represents a math function keyword.

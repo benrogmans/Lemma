@@ -17,7 +17,7 @@ fn get_rule_value(
     facts: HashMap<String, String>,
 ) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
-    let response = engine.run(spec_name, Some(&now), facts).unwrap();
+    let response = engine.run(spec_name, Some(&now), facts, false).unwrap();
     response
         .results
         .get(rule_name)

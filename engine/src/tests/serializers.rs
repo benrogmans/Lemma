@@ -6,7 +6,6 @@ use crate::OperationResult;
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::str::FromStr;
-use std::sync::Arc;
 
 fn dummy_source() -> Source {
     Source::new(
@@ -17,7 +16,6 @@ fn dummy_source() -> Source {
             line: 1,
             col: 1,
         },
-        Arc::from("spec test_spec\nrule dummy: true"),
     )
 }
 
@@ -47,7 +45,7 @@ fn test_response_serialization() {
             ))),
             facts: vec![],
             operations: vec![],
-            proof: None,
+            explanation: None,
             rule_type: crate::planning::semantics::primitive_number().clone(),
         },
     );
@@ -83,7 +81,7 @@ fn test_response_filter_rules() {
             result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
             facts: vec![],
             operations: vec![],
-            proof: None,
+            explanation: None,
             rule_type: crate::planning::semantics::primitive_boolean().clone(),
         },
     );
@@ -94,7 +92,7 @@ fn test_response_filter_rules() {
             result: OperationResult::Value(Box::new(LiteralValue::from_bool(false))),
             facts: vec![],
             operations: vec![],
-            proof: None,
+            explanation: None,
             rule_type: crate::planning::semantics::primitive_boolean().clone(),
         },
     );
@@ -120,7 +118,7 @@ fn test_rule_result_types() {
         result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
         facts: vec![],
         operations: vec![],
-        proof: None,
+        explanation: None,
         rule_type: crate::planning::semantics::primitive_boolean().clone(),
     };
     assert!(matches!(success.result, OperationResult::Value(_)));
@@ -136,7 +134,7 @@ fn test_rule_result_types() {
             source: None,
         }],
         operations: vec![],
-        proof: None,
+        explanation: None,
         rule_type: crate::planning::LemmaType::veto_type(),
     };
     assert_eq!(missing.facts.len(), 1);
@@ -148,7 +146,7 @@ fn test_rule_result_types() {
         result: OperationResult::Veto(Some("Vetoed".to_string())),
         facts: vec![],
         operations: vec![],
-        proof: None,
+        explanation: None,
         rule_type: crate::planning::LemmaType::veto_type(),
     };
     assert_eq!(

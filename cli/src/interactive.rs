@@ -34,6 +34,7 @@ pub fn run_interactive(
     spec_name: Option<String>,
     rule_names: Option<Vec<String>>,
     provided_facts: &HashMap<String, String>,
+    target: Option<&String>,
     now: &DateTimeValue,
 ) -> Result<InteractiveResult> {
     let spec = match spec_name {
@@ -46,9 +47,12 @@ pub fn run_interactive(
         None => select_rules(engine, &spec, now)?,
     };
 
-    // let target = prompt_target(engine, &spec, &rules, &now)?;
-    let target = None;
     let facts = prompt_facts(engine, &spec, &rules, provided_facts, now)?;
+
+    let target = match target {
+        Some(t) => Some(t.clone()),
+        None => prompt_target(engine, &spec, &rules, now)?,
+    };
 
     Ok((spec, rules, facts, target))
 }
@@ -72,7 +76,7 @@ fn select_spec(engine: &Engine, now: &DateTimeValue) -> Result<String> {
         .iter()
         .map(|spec| {
             let (facts_count, rules_count) = engine
-                .plan(&spec.name, Some(now))
+                .get_plan(&spec.name, Some(now))
                 .ok()
                 .map(|p| (p.facts.len(), p.rules.len()))
                 .unwrap_or((0, 0));
@@ -102,7 +106,7 @@ fn select_rules(
     now: &DateTimeValue,
 ) -> Result<Option<Vec<String>>> {
     let plan = engine
-        .plan(spec_name, Some(now))
+        .get_plan(spec_name, Some(now))
         .map_err(|e| anyhow::anyhow!("{}", e))
         .context(format!("Spec '{}' not found", spec_name))?;
     let rule_names: Vec<String> = plan.schema().rules.keys().cloned().collect();
@@ -127,7 +131,7 @@ fn select_rules(
     }
 }
 
-fn _prompt_target(
+fn prompt_target(
     engine: &Engine,
     spec_name: &str,
     rule_names: &Option<Vec<String>>,
@@ -135,17 +139,23 @@ fn _prompt_target(
 ) -> Result<Option<String>> {
     use inquire::Confirm;
 
-    let wants_inversion =
-        Confirm::new("Do you want to invert a rule (find inputs for a target output)?")
-            .with_default(false)
-            .prompt()
-            .context("Failed to get inversion preference")?;
-
-    if !wants_inversion {
+    if !Confirm::new("Do you want to invert a rule (find inputs for a target output)?")
+        .with_default(false)
+        .prompt()
+        .context("Failed to get inversion preference")?
+    {
         return Ok(None);
     }
 
-    let available_rules = engine.get_spec_rules(spec_name, now)?;
+    let plan = engine
+        .get_plan(spec_name, Some(now))
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let available_rules: Vec<String> = plan
+        .rules
+        .iter()
+        .filter(|r| r.path.segments.is_empty())
+        .map(|r| r.name.clone())
+        .collect();
     if available_rules.is_empty() {
         return Ok(None);
     }
@@ -154,10 +164,10 @@ fn _prompt_target(
         if selected_rules.len() == 1 {
             vec![selected_rules[0].clone()]
         } else {
-            available_rules.iter().map(|r| r.name.clone()).collect()
+            available_rules
         }
     } else {
-        available_rules.iter().map(|r| r.name.clone()).collect()
+        available_rules
     };
 
     if rule_options.is_empty() {
@@ -195,7 +205,7 @@ fn prompt_facts(
     now: &DateTimeValue,
 ) -> Result<HashMap<String, String>> {
     let plan = engine
-        .plan(spec_name, Some(now))
+        .get_plan(spec_name, Some(now))
         .map_err(|e| anyhow::anyhow!("{}", e))
         .context(format!("Spec '{}' not found", spec_name))?;
 
@@ -239,7 +249,7 @@ fn prompt_facts(
             trial_facts.extend(facts.clone());
             trial_facts.insert(fact_name.clone(), input_value.clone());
 
-            match engine.run(spec_name, Some(now), trial_facts) {
+            match engine.run(spec_name, Some(now), trial_facts, false) {
                 Ok(_) => {
                     facts.insert(fact_name.clone(), input_value);
                     break;

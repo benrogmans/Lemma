@@ -7,7 +7,9 @@ use std::collections::HashMap;
 
 fn get_rule_value(engine: &Engine, spec_name: &str, rule_name: &str) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
-    let response = engine.run(spec_name, Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run(spec_name, Some(&now), HashMap::new(), false)
+        .unwrap();
     response
         .results
         .values()

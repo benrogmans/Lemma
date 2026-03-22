@@ -18,18 +18,16 @@ name = "lemma"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+postcard = { version = "1", features = ["alloc"] }
 chrono.workspace = true
-regex = "1.0"
 serde.workspace = true
 serde_json.workspace = true
 rust_decimal.workspace = true
-strum = "0.26"
-strum_macros = "0.26"
 indexmap = { version = "2.0", features = ["serde"] }
 sha2 = "0.10"
 boolean_expression = "0.4"
 async-trait = "0.1"
-reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", optional = true, default-features = false, features = ["rustls"] }
 
 [features]
 default = ["registry"]

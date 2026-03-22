@@ -1,14 +1,23 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use lemma::error::ErrorDetails;
 use lemma::Error;
+use std::collections::HashMap;
 
-/// Render an Ariadne error report for any error variant that carries ErrorDetails.
-///
-/// `error_type` is the human-readable category (e.g. "Parse error", "Planning error").
-/// `label_message` is the inline annotation on the source span (empty string for most variants).
-fn format_details(error_type: &str, details: &ErrorDetails, label_message: &str) -> String {
+fn format_details(
+    error_type: &str,
+    details: &ErrorDetails,
+    label_message: &str,
+    sources: &HashMap<String, String>,
+) -> String {
     let Some(ref src) = details.source else {
         return format!("{}: {}", error_type, details.message);
+    };
+
+    let Some(full_content) = sources.get(&src.attribute) else {
+        return format!(
+            "{}: {} ({}:{})",
+            error_type, details.message, src.attribute, src.span.line
+        );
     };
 
     let mut output = Vec::new();
@@ -24,10 +33,11 @@ fn format_details(error_type: &str, details: &ErrorDetails, label_message: &str)
         ),
     };
 
-    let mut report = Report::build(ReportKind::Error, &src.attribute, src.span.start)
+    let span = (src.attribute.as_str(), src.span.start..src.span.end);
+    let mut report = Report::build(ReportKind::Error, span.clone())
         .with_message(header)
         .with_label(
-            Label::new((&src.attribute, src.span.start..src.span.end))
+            Label::new(span)
                 .with_message(label_message)
                 .with_color(Color::Red),
         );
@@ -36,43 +46,44 @@ fn format_details(error_type: &str, details: &ErrorDetails, label_message: &str)
         report = report.with_help(suggestion);
     }
 
-    match report.finish().write(
-        (&src.attribute, Source::from(src.source_text.as_ref())),
-        &mut output,
-    ) {
-        Ok(()) => String::from_utf8_lossy(&output).to_string(),
-        Err(_) => format!(
-            "{}: {} at {}:{}:{}",
-            error_type, details.message, src.attribute, src.span.line, src.span.col
-        ),
+    let content: &str = full_content.as_str();
+    if report
+        .finish()
+        .write((src.attribute.as_str(), Source::from(content)), &mut output)
+        .is_err()
+    {
+        return format!(
+            "{}: {} ({}:{})",
+            error_type, details.message, src.attribute, src.span.line
+        );
     }
+    String::from_utf8_lossy(&output).to_string()
 }
 
-/// Format a Error with rich terminal output using Ariadne
-pub fn format_error(error: &Error) -> String {
+#[must_use]
+pub fn format_error(error: &Error, sources: &HashMap<String, String>) -> String {
+    let fmt = |typ: &str, details: &ErrorDetails, label: &str| {
+        format_details(typ, details, label, sources)
+    };
     match error {
-        Error::Parsing(details) => format_details("Parse error", details, ""),
-        Error::Inversion(details) => format_details("Inversion error", details, ""),
-        Error::Validation(details) => format_details("Validation error", details, ""),
+        Error::Parsing(details) => fmt("Parse error", details, ""),
+        Error::Inversion(details) => fmt("Inversion error", details, ""),
+        Error::Validation(details) => fmt("Validation error", details, ""),
         Error::Registry {
             details,
             identifier,
             kind,
-        } => format_details(
-            &format!("Registry error ({})", kind),
-            details,
-            identifier,
-        ),
+        } => fmt(&format!("Registry error ({})", kind), details, identifier),
         Error::ResourceLimitExceeded {
             details,
             limit_name,
             limit_value,
             actual_value,
-        } => format_details(
+        } => fmt(
             &format!("Resource limit exceeded: {limit_name} (limit: {limit_value}, actual: {actual_value})"),
             details,
             "",
         ),
-        Error::Request(details) => format_details("Request error", details, ""),
+        Error::Request { details, .. } => fmt("Request error", details, ""),
     }
 }

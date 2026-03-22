@@ -16,7 +16,9 @@ fn get_rule_result(
     rule_name: &str,
 ) -> lemma::OperationResult {
     let now = DateTimeValue::now();
-    let response = engine.run(spec_name, Some(&now), HashMap::new()).unwrap();
+    let response = engine
+        .run(spec_name, Some(&now), HashMap::new(), false)
+        .unwrap();
     response
         .results
         .values()
@@ -132,7 +134,7 @@ rule doubled: x * 2
         let mut facts: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         facts.insert("x".to_string(), format!("{}", n));
         let now = DateTimeValue::now();
-        let response = engine.run("test", Some(&now), facts).unwrap();
+        let response = engine.run("test", Some(&now), facts, false).unwrap();
 
         let result = response
             .results.values()
