@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Workspace automation (precommit checks)"
+license.workspace = true
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"

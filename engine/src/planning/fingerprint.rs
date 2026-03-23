@@ -4,6 +4,10 @@
 //! Uses dedicated fingerprint types (no LemmaType, LiteralValue, Arc<LemmaSpec>) so the hash
 //! does not depend on external types or other specs. Excludes sources, meta, source locations.
 //! Schema is explicit and stable: adding Rust fields does not change hashes for unused content.
+//!
+//! **Format versioning:** `fingerprint_hash` hashes `LMFP` + big-endian `FINGERPRINT_FORMAT_VERSION`
+//! (u32) + postcard(`PlanFingerprint`). Bump the version when the encoded semantics change in a
+//! way that must not share hashes with prior formats.
 
 use crate::parsing::ast::{CalendarUnit, DateCalendarKind, DateRelativeKind, DateTimeValue};
 use crate::planning::execution_plan::{Branch, ExecutableRule, ExecutionPlan};
@@ -16,6 +20,11 @@ use crate::planning::semantics::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+
+/// Bumped when the byte layout hashed by [`fingerprint_hash`] changes incompatibly (prefix + postcard).
+pub const FINGERPRINT_FORMAT_VERSION: u32 = 1;
+
+const FINGERPRINT_MAGIC: &[u8; 4] = b"LMFP";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -301,8 +310,12 @@ fn expression_kind_fingerprint(kind: &ExpressionKind) -> ExpressionKindFingerpri
 
 /// Compute deterministic 8-char hex hash from fingerprint.
 pub fn fingerprint_hash(fp: &PlanFingerprint) -> String {
-    let bytes = postcard::to_allocvec(fp).expect("PlanFingerprint serialization");
-    let digest = Sha256::digest(&bytes);
+    let payload = postcard::to_allocvec(fp).expect("PlanFingerprint serialization");
+    let mut prefixed = Vec::with_capacity(FINGERPRINT_MAGIC.len() + 4 + payload.len());
+    prefixed.extend_from_slice(FINGERPRINT_MAGIC.as_slice());
+    prefixed.extend_from_slice(&FINGERPRINT_FORMAT_VERSION.to_be_bytes());
+    prefixed.extend_from_slice(&payload);
+    let digest = Sha256::digest(&prefixed);
     let n = (u32::from(digest[0]) << 24)
         | (u32::from(digest[1]) << 16)
         | (u32::from(digest[2]) << 8)
@@ -350,5 +363,27 @@ mod tests {
         let h1 = fingerprint_hash(&from_plan(&empty_plan("a")));
         let h2 = fingerprint_hash(&from_plan(&empty_plan("b")));
         assert_ne!(h1, h2);
+    }
+
+    /// Golden vectors for `FINGERPRINT_FORMAT_VERSION` + postcard layout. Update when bumping format.
+    #[test]
+    fn golden_plan_hash_empty_spec_names() {
+        assert_eq!(
+            fingerprint_hash(&from_plan(&empty_plan("golden_empty"))),
+            "fc4c852f"
+        );
+        assert_eq!(fingerprint_hash(&from_plan(&empty_plan("x"))), "e97e410c");
+        let mut p = empty_plan("golden_valid_from");
+        p.valid_from = Some(DateTimeValue {
+            year: 2024,
+            month: 6,
+            day: 15,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            microsecond: 0,
+            timezone: None,
+        });
+        assert_eq!(fingerprint_hash(&from_plan(&p)), "b301d0c3");
     }
 }

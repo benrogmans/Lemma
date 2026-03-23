@@ -54,7 +54,8 @@ pub struct ExecutionPlan {
 }
 
 impl ExecutionPlan {
-    /// Deterministic 8-char hex plan hash: SHA-256 of semantic fingerprint (excluding sources and meta).
+    /// Deterministic 8-char hex plan hash: SHA-256 of `LMFP` + format version + postcard(semantic fingerprint)
+    /// (excluding sources and meta). See [`crate::planning::fingerprint::FINGERPRINT_FORMAT_VERSION`].
     #[must_use]
     pub fn plan_hash(&self) -> String {
         crate::planning::fingerprint::fingerprint_hash(&crate::planning::fingerprint::from_plan(
