@@ -1,0 +1,2 @@
+[alias]
+precommit = "run --package xtask --"

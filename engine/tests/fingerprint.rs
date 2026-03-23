@@ -2,6 +2,9 @@
 //!
 //! Locks in behaviour: semantic equivalence => same hash, semantic difference => different hash.
 //! Source-only changes (labels, etc.) must not affect the hash.
+//!
+//! Golden hashes below: load Lemma source into `Engine`, `get_plan`, then `plan_hash`
+//! (format version `lemma::planning::fingerprint::FINGERPRINT_FORMAT_VERSION`, same encoding as unit goldens).
 
 mod common;
 use common::add_lemma_code_blocking;
@@ -25,6 +28,142 @@ fn plan_hash(engine: &Engine, spec: &str, effective: &DateTimeValue) -> String {
         .get_plan_hash(spec, effective)
         .unwrap()
         .expect("spec must have plan")
+}
+
+fn plan_hash_from_loaded_plan(engine: &Engine, spec: &str, effective: &DateTimeValue) -> String {
+    engine.get_plan(spec, Some(effective)).unwrap().plan_hash()
+}
+
+// -----------------------------------------------------------------------------
+// Golden plan hashes (Lemma source -> engine -> get_plan -> plan_hash)
+//
+// Covers: minimal/unless/facts-only; temporal slice + effective query; commentary + meta +
+// custom type; cross-spec ref with `spec dep~plan_hash` pin (hash matches engine plan hash).
+// -----------------------------------------------------------------------------
+
+#[test]
+fn golden_loaded_minimal_fact_and_rule() {
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine,
+        "spec golden_loaded_minimal\nfact x: 1\nrule r: x",
+        "golden.lemma",
+    )
+    .unwrap();
+    let eff = date(2025, 1, 1);
+    assert_eq!(
+        plan_hash_from_loaded_plan(&engine, "golden_loaded_minimal", &eff),
+        "56c29a91"
+    );
+}
+
+#[test]
+fn golden_loaded_unless_rule() {
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine,
+        "spec golden_loaded_unless\nfact q: 10\nrule r: 0\n unless q >= 5 then 5",
+        "golden.lemma",
+    )
+    .unwrap();
+    let eff = date(2025, 1, 1);
+    assert_eq!(
+        plan_hash_from_loaded_plan(&engine, "golden_loaded_unless", &eff),
+        "6a33b890"
+    );
+}
+
+#[test]
+fn golden_loaded_facts_only_no_rules() {
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine,
+        "spec golden_loaded_facts\nfact a: 1\nfact b: 2",
+        "golden.lemma",
+    )
+    .unwrap();
+    let eff = date(2025, 1, 1);
+    assert_eq!(
+        plan_hash_from_loaded_plan(&engine, "golden_loaded_facts", &eff),
+        "696ce61c"
+    );
+}
+
+#[test]
+fn golden_loaded_temporal_effective_slice() {
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"spec golden_temporal_adv 2025-06-01
+
+fact x: 42
+rule r: x"#,
+        "golden.lemma",
+    )
+    .unwrap();
+    let eff = date(2025, 7, 1);
+    assert_eq!(
+        plan_hash_from_loaded_plan(&engine, "golden_temporal_adv", &eff),
+        "6d8cc867"
+    );
+}
+
+#[test]
+fn golden_loaded_commentary_meta_and_custom_type() {
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"spec golden_rich_adv
+"""
+Golden integration fixture: commentary and meta are not part of the semantic plan hash.
+"""
+meta title: "Golden rich"
+meta version: v2.0.0
+
+type money: scale
+ -> unit eur 1.00
+ -> decimals 2
+
+fact balance: 50 eur
+rule total: balance"#,
+        "golden.lemma",
+    )
+    .unwrap();
+    let eff = date(2025, 1, 1);
+    assert_eq!(
+        plan_hash_from_loaded_plan(&engine, "golden_rich_adv", &eff),
+        "d5f0b7ae"
+    );
+}
+
+#[test]
+fn golden_loaded_spec_ref_hash_pinned() {
+    let mut engine = Engine::new();
+    add_lemma_code_blocking(
+        &mut engine,
+        r#"spec golden_dep_ref
+fact seed: 7
+rule computed: seed + 1"#,
+        "dep.lemma",
+    )
+    .unwrap();
+    let dep_h = plan_hash(&engine, "golden_dep_ref", &date(2025, 1, 1));
+    add_lemma_code_blocking(
+        &mut engine,
+        &format!(
+            r#"spec golden_consumer_ref
+fact link: spec golden_dep_ref~{}
+rule out: link.computed"#,
+            dep_h
+        ),
+        "consumer.lemma",
+    )
+    .unwrap();
+    let eff = date(2025, 1, 1);
+    assert_eq!(
+        plan_hash_from_loaded_plan(&engine, "golden_consumer_ref", &eff),
+        "c161b54e"
+    );
 }
 
 // -----------------------------------------------------------------------------

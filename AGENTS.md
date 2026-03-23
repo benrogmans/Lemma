@@ -264,6 +264,7 @@ See **documentation/reference.md** and **documentation/index.md** for full synta
 - **Use TDD.** Failing tests define missing or broken behaviour; do not hide or remove them to make the suite pass.
 - **Unit tests** live in the same module (to allow testing private functions); **integration tests** in `engine/tests/`.
 - Run tests with **cargo nextest**, not `cargo test`.
+- From repo root, **cargo precommit** runs `fmt --check`, clippy, nextest, and cargo-deny (needs `cargo-nextest` and `cargo-deny` on `PATH`, same as CI).
 - When adding features, add tests that lock in the intended behaviour (including Veto propagation and error cases).
 
 ---

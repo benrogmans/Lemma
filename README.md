@@ -84,7 +84,7 @@ $ lemma run shipping
 ├───────────────┼───────────┤
 │ total_cost    ┆ 13.98 eur │
 └───────────────┴───────────┘
-Hash: b28318af
+Hash: 1d2e8f6d
 ```
 
 Override facts from the command line:
@@ -298,6 +298,8 @@ Lemma is in early development and **not yet recommended for production use**. Ex
 ## Contributing
 
 Contributions welcome! See [contributing](documentation/contributing.md) for setup and workflow.
+
+From the repository root, run **`cargo precommit`** before opening a PR. It runs `fmt --check`, Clippy, Nextest, and cargo-deny (install [`cargo-nextest`](https://nexte.st/) and [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) first, same as CI).
 
 ## License
 
