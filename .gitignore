@@ -1,10 +1,5 @@
 /target
 
-# Elixir / Rustler NIFs (rebuilt by mix compile in engine/packages/hex)
-engine/packages/hex/priv/native/*.so
-engine/packages/hex/priv/native/*.dylib
-engine/packages/hex/priv/native/*.dll
-
 # npm build output
 engine/packages/npm/dist/
 
