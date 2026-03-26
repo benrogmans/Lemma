@@ -758,9 +758,11 @@ impl Parser {
     fn parse_type_arrow_chain(&mut self) -> Result<TypeArrowChain, Error> {
         let name_tok = self.next()?;
         let base = if let Some(kind) = token_kind_to_primitive(&name_tok.kind) {
-            ParentType::Primitive(kind)
+            ParentType::Primitive { primitive: kind }
         } else if can_be_label(&name_tok.kind) {
-            ParentType::Custom(name_tok.text.clone())
+            ParentType::Custom {
+                name: name_tok.text.clone(),
+            }
         } else {
             return Err(self.error_at_token(
                 &name_tok,
@@ -813,7 +815,13 @@ impl Parser {
         } else {
             Some(commands)
         };
-        Ok((ParentType::Custom(String::new()), None, constraints))
+        Ok((
+            ParentType::Custom {
+                name: String::new(),
+            },
+            None,
+            constraints,
+        ))
     }
 
     fn parse_command(&mut self) -> Result<(TypeConstraintCommand, Vec<CommandArg>), Error> {

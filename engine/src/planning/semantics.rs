@@ -12,7 +12,7 @@ pub use crate::parsing::ast::{
 pub use crate::parsing::source::Source;
 
 /// Logical computation operators (defined in semantics, not used by the parser).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogicalComputation {
     And,

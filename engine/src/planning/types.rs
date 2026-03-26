@@ -529,7 +529,9 @@ impl<'a> PerSliceTypeResolver<'a> {
                 constraints,
                 ..
             } => (
-                ParentType::Custom(source_type.clone()),
+                ParentType::Custom {
+                    name: source_type.clone(),
+                },
                 Some(from.clone()),
                 constraints.clone(),
                 name.clone(),
@@ -584,12 +586,12 @@ impl<'a> PerSliceTypeResolver<'a> {
 
         visited.remove(&key);
 
-        let extends = if matches!(parent, ParentType::Primitive(_)) {
+        let extends = if matches!(parent, ParentType::Primitive { .. }) {
             TypeExtends::Primitive
         } else {
             let parent_name = match &parent {
-                ParentType::Custom(name) => name.clone(),
-                ParentType::Primitive(_) => unreachable!("already handled above"),
+                ParentType::Custom { name } => name.clone(),
+                ParentType::Primitive { .. } => unreachable!("already handled above"),
             };
             let parent_spec = match self.get_spec_arc_for_parent(spec, &from) {
                 Ok(x) => x,
@@ -646,13 +648,13 @@ impl<'a> PerSliceTypeResolver<'a> {
         visited: &mut HashSet<String>,
         source: &crate::Source,
     ) -> Result<Option<TypeSpecification>, Vec<Error>> {
-        if let ParentType::Primitive(kind) = parent {
+        if let ParentType::Primitive { primitive: kind } = parent {
             return Ok(Some(semantics::type_spec_for_primitive(*kind)));
         }
 
         let parent_name = match parent {
-            ParentType::Custom(name) => name.as_str(),
-            ParentType::Primitive(_) => unreachable!("already returned above"),
+            ParentType::Custom { name } => name.as_str(),
+            ParentType::Primitive { .. } => unreachable!("already returned above"),
         };
 
         let parent_spec = match self.get_spec_arc_for_parent(spec, from) {
@@ -828,12 +830,12 @@ impl<'a> PerSliceTypeResolver<'a> {
             parent_specs
         };
 
-        let extends = if matches!(parent, ParentType::Primitive(_)) {
+        let extends = if matches!(parent, ParentType::Primitive { .. }) {
             TypeExtends::Primitive
         } else {
             let parent_name = match parent {
-                ParentType::Custom(ref name) => name.clone(),
-                ParentType::Primitive(_) => unreachable!("already handled above"),
+                ParentType::Custom { ref name } => name.clone(),
+                ParentType::Primitive { .. } => unreachable!("already handled above"),
             };
             let parent_spec = match self.get_spec_arc_for_parent(spec, from) {
                 Ok(x) => x,
@@ -1103,7 +1105,9 @@ mod tests {
                 },
             ),
             name: "money".to_string(),
-            parent: ParentType::Primitive(PrimitiveKind::Number),
+            parent: ParentType::Primitive {
+                primitive: PrimitiveKind::Number,
+            },
             constraints: None,
         };
 
@@ -1128,7 +1132,9 @@ mod tests {
                     col: 0,
                 },
             ),
-            parent: ParentType::Primitive(PrimitiveKind::Number),
+            parent: ParentType::Primitive {
+                primitive: PrimitiveKind::Number,
+            },
             constraints: Some(vec![
                 (
                     TypeConstraintCommand::Minimum,
@@ -1165,7 +1171,9 @@ mod tests {
                 },
             ),
             name: "money".to_string(),
-            parent: ParentType::Primitive(PrimitiveKind::Number),
+            parent: ParentType::Primitive {
+                primitive: PrimitiveKind::Number,
+            },
             constraints: None,
         };
 
@@ -1190,7 +1198,9 @@ mod tests {
                 },
             ),
             name: "money".to_string(),
-            parent: ParentType::Primitive(PrimitiveKind::Number),
+            parent: ParentType::Primitive {
+                primitive: PrimitiveKind::Number,
+            },
             constraints: None,
         };
 
@@ -1619,7 +1629,9 @@ fact bruto_salaris: 0 eur"#;
         let fact_ref = Reference::local("bruto_salaris".to_string());
         let inline_def = TypeDef::Inline {
             source_location: spec_arc.types[0].source_location().clone(),
-            parent: ParentType::Primitive(PrimitiveKind::Scale),
+            parent: ParentType::Primitive {
+                primitive: PrimitiveKind::Scale,
+            },
             constraints: Some(vec![(
                 TypeConstraintCommand::Unit,
                 vec![

@@ -1063,15 +1063,17 @@ impl std::fmt::Display for PrimitiveKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ParentType {
-    Primitive(PrimitiveKind),
-    Custom(String),
+    /// Struct variant (`primitive` field) so `#[serde(tag = "kind")]` merges with a JSON object.
+    Primitive { primitive: PrimitiveKind },
+    /// Struct variant so `#[serde(tag = "kind")]` merges with a JSON object.
+    Custom { name: String },
 }
 
 impl std::fmt::Display for ParentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParentType::Primitive(k) => write!(f, "{}", k),
-            ParentType::Custom(name) => write!(f, "{}", name),
+            ParentType::Primitive { primitive: k } => write!(f, "{}", k),
+            ParentType::Custom { name } => write!(f, "{}", name),
         }
     }
 }
@@ -1580,6 +1582,28 @@ mod tests {
     }
 
     #[test]
+    fn parent_type_primitive_serde_internally_tagged() {
+        let p = ParentType::Primitive {
+            primitive: PrimitiveKind::Number,
+        };
+        let json = serde_json::to_string(&p).expect("ParentType::Primitive must serialize");
+        assert!(json.contains("\"kind\"") && json.contains("\"primitive\""));
+        let back: ParentType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn parent_type_custom_serde_internally_tagged() {
+        let p = ParentType::Custom {
+            name: "money".to_string(),
+        };
+        let json = serde_json::to_string(&p).expect("ParentType::Custom must serialize");
+        assert!(json.contains("\"kind\"") && json.contains("\"name\""));
+        let back: ParentType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, p);
+    }
+
+    #[test]
     fn test_veto_expression() {
         let veto_with_message = VetoExpression {
             message: Some("Must be over 18".to_string()),
@@ -1604,7 +1628,9 @@ mod tests {
     #[test]
     fn as_lemma_source_text_default_is_quoted() {
         let fv = FactValue::TypeDeclaration {
-            base: ParentType::Primitive(PrimitiveKind::Text),
+            base: ParentType::Primitive {
+                primitive: PrimitiveKind::Text,
+            },
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
                 vec![CommandArg::Text("single".to_string())],
@@ -1620,7 +1646,9 @@ mod tests {
     #[test]
     fn as_lemma_source_number_default_not_quoted() {
         let fv = FactValue::TypeDeclaration {
-            base: ParentType::Primitive(PrimitiveKind::Number),
+            base: ParentType::Primitive {
+                primitive: PrimitiveKind::Number,
+            },
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
                 vec![CommandArg::Number("10".to_string())],
@@ -1633,7 +1661,9 @@ mod tests {
     #[test]
     fn as_lemma_source_help_always_quoted() {
         let fv = FactValue::TypeDeclaration {
-            base: ParentType::Primitive(PrimitiveKind::Number),
+            base: ParentType::Primitive {
+                primitive: PrimitiveKind::Number,
+            },
             constraints: Some(vec![(
                 TypeConstraintCommand::Help,
                 vec![CommandArg::Text("Enter a quantity".to_string())],
@@ -1649,7 +1679,9 @@ mod tests {
     #[test]
     fn as_lemma_source_text_option_quoted() {
         let fv = FactValue::TypeDeclaration {
-            base: ParentType::Primitive(PrimitiveKind::Text),
+            base: ParentType::Primitive {
+                primitive: PrimitiveKind::Text,
+            },
             constraints: Some(vec![
                 (
                     TypeConstraintCommand::Option,
@@ -1671,7 +1703,9 @@ mod tests {
     #[test]
     fn as_lemma_source_scale_unit_not_quoted() {
         let fv = FactValue::TypeDeclaration {
-            base: ParentType::Primitive(PrimitiveKind::Scale),
+            base: ParentType::Primitive {
+                primitive: PrimitiveKind::Scale,
+            },
             constraints: Some(vec![
                 (
                     TypeConstraintCommand::Unit,
@@ -1699,7 +1733,9 @@ mod tests {
     #[test]
     fn as_lemma_source_scale_minimum_with_unit() {
         let fv = FactValue::TypeDeclaration {
-            base: ParentType::Primitive(PrimitiveKind::Scale),
+            base: ParentType::Primitive {
+                primitive: PrimitiveKind::Scale,
+            },
             constraints: Some(vec![(
                 TypeConstraintCommand::Minimum,
                 vec![
@@ -1718,7 +1754,9 @@ mod tests {
     #[test]
     fn as_lemma_source_boolean_default() {
         let fv = FactValue::TypeDeclaration {
-            base: ParentType::Primitive(PrimitiveKind::Boolean),
+            base: ParentType::Primitive {
+                primitive: PrimitiveKind::Boolean,
+            },
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
                 vec![CommandArg::Boolean(BooleanValue::True)],
@@ -1734,7 +1772,9 @@ mod tests {
     #[test]
     fn as_lemma_source_duration_default() {
         let fv = FactValue::TypeDeclaration {
-            base: ParentType::Primitive(PrimitiveKind::Duration),
+            base: ParentType::Primitive {
+                primitive: PrimitiveKind::Duration,
+            },
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
                 vec![
@@ -1755,7 +1795,9 @@ mod tests {
         // Named types (user-defined): the parser produces CommandArg::Text for
         // quoted default values like `default "single"`.
         let fv = FactValue::TypeDeclaration {
-            base: ParentType::Custom("filing_status_type".to_string()),
+            base: ParentType::Custom {
+                name: "filing_status_type".to_string(),
+            },
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
                 vec![CommandArg::Text("single".to_string())],
@@ -1771,7 +1813,9 @@ mod tests {
     #[test]
     fn as_lemma_source_help_escapes_quotes() {
         let fv = FactValue::TypeDeclaration {
-            base: ParentType::Primitive(PrimitiveKind::Text),
+            base: ParentType::Primitive {
+                primitive: PrimitiveKind::Text,
+            },
             constraints: Some(vec![(
                 TypeConstraintCommand::Help,
                 vec![CommandArg::Text("say \"hello\"".to_string())],
@@ -1797,7 +1841,9 @@ mod tests {
                 },
             ),
             name: "status".to_string(),
-            parent: ParentType::Primitive(PrimitiveKind::Text),
+            parent: ParentType::Primitive {
+                primitive: PrimitiveKind::Text,
+            },
             constraints: Some(vec![
                 (
                     TypeConstraintCommand::Option,
@@ -1827,7 +1873,9 @@ mod tests {
                 },
             ),
             name: "money".to_string(),
-            parent: ParentType::Primitive(PrimitiveKind::Scale),
+            parent: ParentType::Primitive {
+                primitive: PrimitiveKind::Scale,
+            },
             constraints: Some(vec![
                 (
                     TypeConstraintCommand::Unit,

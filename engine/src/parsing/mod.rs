@@ -592,7 +592,12 @@ fact a: spec @user/workspace/spec_a"#;
                 constraints,
                 ..
             } => {
-                assert_eq!(base, &ParentType::Custom("money".to_string()));
+                assert_eq!(
+                    base,
+                    &ParentType::Custom {
+                        name: "money".to_string(),
+                    }
+                );
                 let spec_ref = from.as_ref().expect("expected from spec ref");
                 assert_eq!(spec_ref.name, "finance");
                 assert_eq!(spec_ref.hash_pin.as_deref(), Some("a1b2c3d4"));

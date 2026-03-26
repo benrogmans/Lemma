@@ -66,7 +66,6 @@ rule discount: 0
 | `Lemma.list/1` | List loaded specs |
 | `Lemma.schema/3` | Get spec schema (facts, rules, types) |
 | `Lemma.run/3` | Evaluate a spec with facts |
-| `Lemma.invert/6` | Find inputs that produce a target outcome |
 | `Lemma.remove_spec/3` | Remove a spec from the engine |
 | `Lemma.format/1` | Format Lemma source code (no engine needed) |
 
