@@ -1,1 +1,20 @@
+# Mix
 _build/
+deps/
+
+# Rustler NIF (copied from workspace cargo build)
+priv/native/*.so
+priv/native/*.dylib
+priv/native/*.dll
+
+# Erlang
+erl_crash.dump
+
+# ex_doc
+doc/
+
+# mix test --cover
+cover/
+
+# ElixirLS
+.elixir_ls/
