@@ -638,7 +638,9 @@ fact contract: spec nonexistent"#;
                 name: "x".to_string(),
             },
             FactValue::TypeDeclaration {
-                base: ParentType::Custom(String::new()),
+                base: ParentType::Custom {
+                    name: String::new(),
+                },
                 constraints: None,
                 from: None,
             },

@@ -203,6 +203,8 @@ jobs:
       needs.create-release.result == 'success' &&
       needs.detect-version-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    env:
+      WASM_PACK_VERSION: 0.14.0
     steps:
       - uses: actions/checkout@v4
 
@@ -212,8 +214,26 @@ jobs:
           toolchain: 1.92.0
           targets: wasm32-unknown-unknown
 
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-publish-npm-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-publish-npm-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache wasm-pack binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: wasm-pack-${{ env.WASM_PACK_VERSION }}-${{ runner.os }}
+
       - name: Install wasm-pack
-        run: curl -sSfL https://drager.github.io/wasm-pack/installer/init.sh | bash
+        run: cargo install wasm-pack --version ${{ env.WASM_PACK_VERSION }} --locked
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

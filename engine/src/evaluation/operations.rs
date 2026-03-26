@@ -4,7 +4,7 @@ use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, FactPath, LiteralValue, LogicalComputation,
     MathematicalComputation, RulePath,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Result of an operation (evaluating a rule or expression)
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -31,8 +31,8 @@ impl OperationResult {
 }
 
 /// The kind of computation performed
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "computation", rename_all = "snake_case")]
 pub enum ComputationKind {
     Arithmetic(ArithmeticComputation),
     Comparison(ComparisonComputation),
@@ -77,4 +77,46 @@ pub enum OperationKind {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         result_value: Option<OperationResult>,
     },
+}
+
+#[cfg(test)]
+mod computation_kind_serde_tests {
+    use super::ComputationKind;
+    use crate::parsing::ast::{
+        ArithmeticComputation, ComparisonComputation, MathematicalComputation,
+    };
+    use crate::planning::semantics::LogicalComputation;
+
+    #[test]
+    fn computation_kind_arithmetic_round_trip() {
+        let k = ComputationKind::Arithmetic(ArithmeticComputation::Add);
+        let json = serde_json::to_string(&k).expect("serialize");
+        assert!(json.contains("\"type\"") && json.contains("\"computation\""));
+        let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, k);
+    }
+
+    #[test]
+    fn computation_kind_comparison_round_trip() {
+        let k = ComputationKind::Comparison(ComparisonComputation::GreaterThan);
+        let json = serde_json::to_string(&k).expect("serialize");
+        let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, k);
+    }
+
+    #[test]
+    fn computation_kind_logical_round_trip() {
+        let k = ComputationKind::Logical(LogicalComputation::And);
+        let json = serde_json::to_string(&k).expect("serialize");
+        let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, k);
+    }
+
+    #[test]
+    fn computation_kind_mathematical_round_trip() {
+        let k = ComputationKind::Mathematical(MathematicalComputation::Sqrt);
+        let json = serde_json::to_string(&k).expect("serialize");
+        let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, k);
+    }
 }

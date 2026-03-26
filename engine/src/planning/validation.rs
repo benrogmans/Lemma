@@ -1316,7 +1316,9 @@ mod tests {
                 },
             ),
             name: "invalid_money".to_string(),
-            parent: ParentType::Primitive(PrimitiveKind::Number),
+            parent: ParentType::Primitive {
+                primitive: PrimitiveKind::Number,
+            },
             constraints: Some(vec![
                 (
                     TypeConstraintCommand::Minimum,

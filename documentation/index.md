@@ -303,43 +303,6 @@ rule days_until_deadline: deadline - today
 rule is_overdue: today > deadline
 ```
 
-## Inverse Reasoning
-
-Find what input values produce a desired output. Available in the Rust engine library.
-
-```rust
-use lemma::{Engine, Target, LiteralValue};
-use lemma::parsing::ast::DateTimeValue;
-use std::collections::HashMap;
-use rust_decimal::Decimal;
-
-let mut engine = Engine::new();
-
-engine.load(r#"
-    spec pricing
-    fact quantity: [number]
-    fact is_vip: false
-
-    rule discount: 0%
-      unless quantity >= 10 then 10%
-      unless quantity >= 50 then 20%
-      unless is_vip then 25%
-"#, Some("pricing.lemma"))?;
-
-let now = DateTimeValue::now();
-let response = engine.invert(
-    "pricing",
-    &now,
-    "discount",
-    Target::value(LiteralValue::Ratio(Decimal::from(25), Some("percent".to_string()))),
-    HashMap::new(),
-)?;
-```
-
-The response contains **solutions** (domain constraints), **shape** (symbolic representation), and **free variables**.
-
-See the [engine README](../engine/README.md#inverse-reasoning) for the full API.
-
 ## Examples
 
 Browse [examples/](examples/) or [cli/tests/integrations/examples/](../cli/tests/integrations/examples/):
