@@ -233,7 +233,7 @@ jobs:
           key: wasm-pack-${{ env.WASM_PACK_VERSION }}-${{ runner.os }}
 
       - name: Install wasm-pack
-        run: cargo install wasm-pack --version ${{ env.WASM_PACK_VERSION }} --locked
+        run: cargo install wasm-pack --version ${{ env.WASM_PACK_VERSION }} --locked --force
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
