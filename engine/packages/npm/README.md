@@ -73,7 +73,6 @@ client.didOpen(uri, 'lemma', 1, documentText);
 | `schema(spec, effective?)` | `SpecSchema` |
 | `run(spec, rules, facts, effective?)` | `Response` |
 | `format(code, attribute?)` | string or throw |
-| `invert(...)` | throws (N/A) |
 
 ## Build (maintainers)
 

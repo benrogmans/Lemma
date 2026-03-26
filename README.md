@@ -7,33 +7,40 @@
 
 > **A language that means business.**
 
-Lemma is a declarative language for business rules. Specs flow like natural language and encode pricing rules, tax calculations, eligibility criteria, contracts, and policies. Business stakeholders can read and validate them, while software systems enforce and automate them.
+Lemma is a declarative language for business rules. It flows like natural language and encodes pricing rules, tax calculations, eligibility criteria, contracts, policies and law. Stakeholders can read them, systems can evaluate them.
+
+Rules in Lemma are transparent, deterministic, logically consistent, temporally bound and explainable. So with the same facts for the same spec and the same effective point in time, you will get the same result. Lemma can also tell you why you got that result. Audits and tracing become trivial, even as time passes and rules change.
 
 ```lemma
-spec pricing
+spec pricing 2026-01-01
 
-fact quantity: [number]
-fact is_vip: false
+fact quantity : [number]
+fact is_vip   : false
 
-rule discount: 0%
+rule discount:
+  0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
-  unless is_vip         then 25%
+  unless is_vip then 25%
 
-rule price: quantity * 20 - discount
+rule price:
+  quantity * 20 - discount
 ```
 
-The last matching `unless` wins — mirroring how business rules, legal documents, and SOPs are written: "In principle X applies, unless Y, unless Z..."
+The last matching `unless` wins, mirroring how business rules, legal documents, and SOPs are written: "In principle X applies, unless Y, unless Z..."
+
 
 ## Why Lemma?
 
-Business rules traditionally live in natural language that humans can read but machines cannot execute, or in imperative code that machines execute but humans struggle to read. Lemma bridges this gap: one source of truth that is both human-readable and machine-executable.
+Law, policies, and business rules traditionally live in natural language. Humans must understand these rules but in this day and age, we build systems to enforce them. Let's be honest: we are not managing this well. Over time we build massive IT infrastructures that contain all our intricate business rules and policies. As both rules and systems evolve over time, the disconnect only increases. Lemma solves this gap: one pure source of truth that is human-readable, machine-executable, and respectful of time, so you can move quickly on policy changes without losing traceability.
+
+### Direction
+
+Lemma aims to combine **deterministic evaluation**, **transparent explanations**, **temporal versioning** (rules that evolve on a timeline, separate from how you deploy code), **registry-style sharing** of specs, **semantic hash pinning** for integrity, and **interop** (CLI, HTTP, WASM, MCP, and stable language bindings). Planned work includes **inversion** (constraint-style “what would satisfy this outcome?” queries), **tables** as a first-class data type for data-driven rules, and **performance** competitive with high performance programming languages.
 
 ### What about AI?
 
-AI models approximate — they don't calculate. Great at language, not reliable for math or following protocols. For some things in life we need certainty, not probabilities.
-
-**Lemma provides certainty.** Every answer is exact, delivered in microseconds, with verifiable reasoning. Use Lemma's MCP server to make your LLMs deterministic.
+AI models approximate. They don't calculate. Great at language, not reliable for math or following protocols. For some things in life we need certainty, not probability. **Lemma provides certainty.** Every answer is exact, delivered in microseconds, with verifiable reasoning. Lemma provides great interop to make your AI systems deterministic.
 
 ## Quick Start
 
@@ -57,20 +64,23 @@ type money: scale
   -> minimum 0
 
 type weight: scale
-  -> unit kilogram 1.0
+  -> unit kilogram 1
   -> unit gram 0.001
 
-fact is_express: true
-fact package_weight: 2.5 kilogram
+fact is_express     : true
+fact package_weight : 2.5 kilogram
 
-rule express_fee: 0 eur
+rule express_fee:
+  0 eur
   unless is_express then 4.99 eur
 
-rule base_shipping: 5.99 eur
-  unless package_weight > 1 kilogram  then  8.99 eur
+rule base_shipping:
+  5.99 eur
+  unless package_weight > 1 kilogram then 8.99 eur
   unless package_weight > 5 kilogram then 15.99 eur
 
-rule total_cost: base_shipping + express_fee
+rule total_cost:
+  base_shipping + express_fee
 ```
 
 Run it:
@@ -100,6 +110,8 @@ lemma run shipping is_express=false package_weight=6.0
 Define custom types with units, constraints, and automatic conversion:
 
 ```lemma
+spec type_examples
+
 type money: scale
   -> unit eur 1.00
   -> unit usd 1.19
@@ -123,20 +135,30 @@ Reference facts and rules across specs:
 
 ```lemma
 spec employee
-fact years_service: 8
+
+fact years_service : 8
+
 
 spec leave_policy
-fact senior_threshold: 5
-fact base_leave_days: 25
-fact bonus_leave_days: 5
+
+fact senior_threshold : 5
+fact base_leave_days  : 25
+fact bonus_leave_days : 5
+
 
 spec leave_entitlement
-fact employee: spec employee
-fact leave_policy: spec leave_policy
 
-rule is_senior: employee.years_service >= leave_policy.senior_threshold
-rule annual_leave_days: leave_policy.base_leave_days
-  unless is_senior then leave_policy.base_leave_days + leave_policy.bonus_leave_days
+fact employee : spec employee
+
+fact leave_policy : spec leave_policy
+
+rule is_senior:
+  employee.years_service >= leave_policy.senior_threshold
+
+rule annual_leave_days:
+  leave_policy.base_leave_days
+  unless is_senior
+    then leave_policy.base_leave_days + leave_policy.bonus_leave_days
 ```
 
 ### Temporal versioning
@@ -145,14 +167,21 @@ Multiple versions of a spec can coexist. The engine resolves the correct one bas
 
 ```lemma
 spec pricing
-fact base_price: 20
-fact quantity: [number]
-rule total: base_price * quantity
+
+fact base_price : 20
+fact quantity   : [number]
+
+rule total:
+  base_price * quantity
+
 
 spec pricing 2025-01-01
-fact base_price: 25
-fact quantity: [number]
-rule total: base_price * quantity
+
+fact base_price : 25
+fact quantity   : [number]
+
+rule total:
+  base_price * quantity
 ```
 
 ```bash
@@ -167,14 +196,16 @@ When type constraints are not enough, `veto` blocks a rule entirely:
 ```lemma
 spec performance_review
 
-fact start_date: [date]
-fact review_date: [date]
-fact performance_score: [number -> minimum 0 -> maximum 100]
+fact start_date        : [date]
+fact review_date       : [date]
+fact performance_score : [number -> minimum 0 -> maximum 100]
 
-rule bonus_percentage: 0%
+rule bonus_percentage:
+  0%
   unless performance_score >= 70 then 5%
   unless performance_score >= 90 then 10%
-  unless review_date < start_date then veto "Review date must be after start date"
+  unless review_date < start_date
+    then veto "Review date must be after start date"
 ```
 
 A vetoed rule produces no result. See [veto semantics](documentation/veto_semantics.md).
@@ -188,11 +219,14 @@ spec invoicing
 
 type currency from @lemma/std/finance
 
-fact subtotal: 250 eur
-fact tax_rate: 21%
+fact subtotal : 250 eur
+fact tax_rate : 21%
 
-rule tax: subtotal * tax_rate
-rule total: subtotal + tax
+rule tax:
+  subtotal * tax_rate
+
+rule total:
+  subtotal + tax
 ```
 
 ```bash

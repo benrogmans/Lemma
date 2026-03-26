@@ -556,7 +556,7 @@ impl<'a> GraphBuilder<'a> {
             );
         };
 
-        if let ParentType::Custom(ref name) = base {
+        if let ParentType::Custom { ref name } = base {
             if name.is_empty() {
                 return Err(vec![
                     self.engine_error("TypeDeclaration base cannot be empty", decl_source)
@@ -581,15 +581,15 @@ impl<'a> GraphBuilder<'a> {
         }
 
         let base_name = format!("{}", base);
-        let (base_lemma_type, extends) = if let ParentType::Primitive(kind) = base {
+        let (base_lemma_type, extends) = if let ParentType::Primitive { primitive: kind } = base {
             (
                 LemmaType::primitive(type_spec_for_primitive(*kind)),
                 TypeExtends::Primitive,
             )
         } else {
             let parent_name = match base {
-                ParentType::Custom(ref name) => name.as_str(),
-                ParentType::Primitive(_) => unreachable!("already handled above"),
+                ParentType::Custom { ref name } => name.as_str(),
+                ParentType::Primitive { .. } => unreachable!("already handled above"),
             };
             let resolved_types = self.local_types.get(source_spec_arc).ok_or_else(|| {
                 vec![self.engine_error(
@@ -1261,7 +1261,7 @@ impl<'a> GraphBuilder<'a> {
                     from,
                 } = &fact.value
                 {
-                    if let ParentType::Custom(ref name) = base {
+                    if let ParentType::Custom { ref name } = base {
                         if name.is_empty() {
                             self.errors.push(self.engine_error(
                                 "TypeDeclaration base cannot be empty",
@@ -3572,13 +3572,17 @@ mod tests {
             .add_type(TypeDef::Regular {
                 source_location: type_source.clone(),
                 name: "money".to_string(),
-                parent: ParentType::Primitive(PrimitiveKind::Number),
+                parent: ParentType::Primitive {
+                    primitive: PrimitiveKind::Number,
+                },
                 constraints: None,
             })
             .add_type(TypeDef::Regular {
                 source_location: type_source,
                 name: "money".to_string(),
-                parent: ParentType::Primitive(PrimitiveKind::Number),
+                parent: ParentType::Primitive {
+                    primitive: PrimitiveKind::Number,
+                },
                 constraints: None,
             });
 
@@ -3596,13 +3600,17 @@ mod tests {
             .add_type(TypeDef::Regular {
                 source_location: type_source_b.clone(),
                 name: "length".to_string(),
-                parent: ParentType::Primitive(PrimitiveKind::Number),
+                parent: ParentType::Primitive {
+                    primitive: PrimitiveKind::Number,
+                },
                 constraints: None,
             })
             .add_type(TypeDef::Regular {
                 source_location: type_source_b,
                 name: "length".to_string(),
-                parent: ParentType::Primitive(PrimitiveKind::Number),
+                parent: ParentType::Primitive {
+                    primitive: PrimitiveKind::Number,
+                },
                 constraints: None,
             });
 

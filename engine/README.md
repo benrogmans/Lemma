@@ -84,122 +84,15 @@ let now = DateTimeValue::now();
 let response = engine.run("shipping", Some(&now), values)?;
 ```
 
-### Inverse reasoning
-
-Inversion allows you to find what input values produce a desired output. This is useful for questions like "What quantity gives me a 30% discount?" or "What salary produces a total compensation of €100,000?"
-
-#### Basic example
-
-```rust
-use lemma::{Engine, Target, LiteralValue};
-use lemma::parsing::ast::DateTimeValue;
-use std::collections::HashMap;
-use rust_decimal::Decimal;
-
-let mut engine = Engine::new();
-
-engine.load(r#"
-    spec pricing
-    fact quantity: [number]
-    fact is_vip: false
-
-    rule discount: 0%
-      unless quantity >= 10 then 10%
-      unless quantity >= 50 then 20%
-      unless is_vip then 25%
-"#, Some("example.lemma"))?;
-
-let now = DateTimeValue::now();
-let response = engine.invert(
-    "pricing",
-    &now,
-    "discount",
-    Target::value(LiteralValue::Percentage(Decimal::from(30))),
-    HashMap::new(),
-)?;
-
-// Response contains solutions showing: is_vip must be true
-```
-
-#### API variants
-
-**1. `invert()` - String-based values (user-friendly)**
-
-Accepts string values that are automatically parsed based on spec types:
-
-```rust
-let mut values = HashMap::new();
-values.insert("is_vip".to_string(), "true".to_string());
-
-let now = DateTimeValue::now();
-let response = engine.invert(
-    "pricing",
-    &now,
-    "discount",
-    Target::value(LiteralValue::Percentage(Decimal::from(25))),
-    values,
-)?;
-```
-
-#### Target specification
-
-Use `Target` to specify the desired outcome:
-
-```rust
-use lemma::{Target, TargetOp, OperationResult};
-
-// Exact value (equality)
-Target::value(LiteralValue::Percentage(Decimal::from(30)))
-
-// Comparison operators
-Target::with_op(
-    TargetOp::Gt,
-    OperationResult::Value(LiteralValue::number(100))
-)  // > 100
-
-Target::with_op(
-    TargetOp::Lte,
-    OperationResult::Value(LiteralValue::number(50))
-)  // <= 50
-
-// Find any veto
-Target::any_veto()
-
-// Find specific veto message
-Target::veto(Some("Invalid input".to_string()))
-```
-
-#### Response structure
-
-`InversionResponse` contains:
-
-- **`solutions`**: Concrete domain constraints for each free variable
-- **`shape`**: Symbolic representation of the solution space (piecewise function)
-- **`free_variables`**: Facts that are not fully determined
-- **`is_fully_constrained`**: Whether all facts have concrete values
-
-```rust
-let response = engine.invert(...)?;
-
-if response.is_fully_constrained {
-    println!("All variables are determined");
-} else {
-    println!("Free variables: {:?}", response.free_variables);
-}
-
-for (var, domain) in &response.solutions {
-    println!("{}: {:?}", var, domain);
-}
-```
-
 ## Features
 
 - **Rich type system** – percentages, mass, length, duration, temperature, pressure, power, energy, frequency, and data sizes
 - **Automatic unit conversions** – convert between units inside expressions without extra code
 - **Spec composition** – extend specs, bind facts, and reuse rules across modules
 - **Audit trail** – every evaluation returns the operations that led to each result
-- **Inverse reasoning** – find what inputs produce desired outputs
 - **WebAssembly build** – `npm install @benrogmans/lemma-engine` to run Lemma in browsers and at the edge
+
+Constraint-style **inversion** (what inputs would yield a given outcome?) is planned; it is not documented as a supported API yet.
 
 ## Installation options
 
@@ -220,7 +113,7 @@ lemma run pricing quantity=10
 
 ```bash
 cargo install lemma-cli
-lemma server --port 8080
+lemma server --port 8012
 ```
 
 ### WebAssembly
