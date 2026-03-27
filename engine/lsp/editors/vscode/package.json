@@ -2,7 +2,7 @@
   "name": "lemma-language",
   "displayName": "Lemma Language",
   "description": "Language support for Lemma: syntax highlighting, inline diagnostics, and clickable Registry references",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "publisher": "lemma",
   "license": "Apache-2.0",
   "repository": {
@@ -61,7 +61,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package"
+    "package": "vsce package",
+    "precommit": "npm ci && npm run compile"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

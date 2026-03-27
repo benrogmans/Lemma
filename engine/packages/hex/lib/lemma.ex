@@ -77,6 +77,7 @@ defmodule Lemma do
   @spec schema(engine(), spec_name(), keyword()) :: {:ok, map()} | {:error, term()}
   def schema(engine, spec, opts \\ []) do
     effective = Keyword.get(opts, :effective)
+
     case Lemma.Native.lemma_schema(engine, spec, effective) do
       {:ok, binary} -> {:ok, Jason.decode!(binary)}
       err -> err
@@ -89,6 +90,7 @@ defmodule Lemma do
   @spec execution_plan(engine(), spec_name(), keyword()) :: {:ok, map()} | {:error, term()}
   def execution_plan(engine, spec, opts \\ []) do
     effective = Keyword.get(opts, :effective)
+
     case Lemma.Native.lemma_execution_plan(engine, spec, effective) do
       {:ok, binary} -> {:ok, Jason.decode!(binary)}
       err -> err
@@ -103,6 +105,7 @@ defmodule Lemma do
   def run(engine, spec, opts \\ []) do
     effective = Keyword.get(opts, :effective)
     facts = Keyword.get(opts, :facts, %{})
+
     case Lemma.Native.lemma_run(engine, spec, effective, facts) do
       {:ok, binary} -> {:ok, Jason.decode!(binary)}
       err -> err
@@ -115,7 +118,8 @@ defmodule Lemma do
   Target is a map with `:outcome` ("value" | "veto" | "any_value" | "any_veto"),
   optionally `:op` ("eq" | "neq" | "lt" | etc.), and for "value"/"veto": `:value` or `:message`.
   """
-  @spec invert(engine(), spec_name(), String.t(), String.t(), map(), map()) :: {:ok, map()} | {:error, term()}
+  @spec invert(engine(), spec_name(), String.t(), String.t(), map(), map()) ::
+          {:ok, map()} | {:error, term()}
   def invert(engine, spec_name, effective, rule_name, target, values \\ %{}) do
     case Lemma.Native.lemma_invert(engine, spec_name, effective, rule_name, target, values) do
       {:ok, binary} -> {:ok, Jason.decode!(binary)}

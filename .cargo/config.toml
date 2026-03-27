@@ -2,3 +2,4 @@
 precommit = "run --package xtask --"
 bump = "run -q --package xtask -- versions-bump"
 verify = "run -q --package xtask -- versions-verify"
+changelog = "run -q --package xtask -- versions-diff"

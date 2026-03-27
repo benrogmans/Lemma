@@ -7,6 +7,18 @@ Elixir client for the [Lemma](https://github.com/benrogmans/lemma) rules engine,
 - Elixir >= 1.14
 - Rust toolchain (stable) — Rustler compiles the NIF from source
 
+With [mise](https://mise.jdx.dev/), from this directory: `mise install` (uses `.mise.toml`: Erlang/OTP 28.4 + Elixir 1.19.5).
+
+## Development
+
+From this directory (Rust on `PATH` for Rustler):
+
+```bash
+mix precommit
+```
+
+Runs format check, `mix deps.get --check-locked`, and `mix compile` (builds the NIF).
+
 ## Installation
 
 Add to `mix.exs`:
