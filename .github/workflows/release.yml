@@ -97,7 +97,7 @@ jobs:
             Or use the Elixir package:
 
             ```elixir
-            {:lemma, "~> ${{ needs.detect-version-changes.outputs.version }}"}
+            {:lemma_engine, "~> ${{ needs.detect-version-changes.outputs.version }}"}
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
