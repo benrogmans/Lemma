@@ -26,7 +26,7 @@ Add to `mix.exs`:
 ```elixir
 def deps do
   [
-    {:lemma, "~> 0.8"}
+    {:lemma_engine, "~> 0.8"}
   ]
 end
 ```
@@ -34,7 +34,7 @@ end
 Or from git:
 
 ```elixir
-{:lemma, git: "https://github.com/benrogmans/lemma", sparse: "engine/packages/hex"}
+{:lemma_engine, git: "https://github.com/benrogmans/lemma", sparse: "engine/packages/hex"}
 ```
 
 ## Usage
