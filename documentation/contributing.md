@@ -43,6 +43,15 @@ cargo deny check --config .cargo/deny.toml
    cargo fmt --all
    ```
 
+### Release version (maintainers)
+
+The workspace release is `[workspace.package] version` in the root `Cargo.toml`. The same number must appear in path-dep pins, Hex `mix.exs`, `engine/README.md`, and the VS Code extension `package.json` (see `xtask/src/versions.rs` module `tracked`).
+
+- **`cargo bump <semver>`** — update all locations and refresh `Cargo.lock` via `cargo metadata`.
+- **`cargo verify`** — confirm everything matches; CI runs this in the lint job.
+
+Do not hand-edit those copies unless you keep them in sync.
+
 ## Pull Requests
 
 Automated checks that must pass:
