@@ -31,8 +31,11 @@ The last matching `unless` wins, mirroring how business rules, legal documents, 
 
 
 ## Why Lemma?
+Laws, policies, and business rules traditionally exist in natural language. While humans must understand these rules, we rely on systems to enforce them. Over time, organizations have built massive IT infrastructures to house these rules; however, as both the regulations and the systems evolve, they become harder to manage and the disconnect between them grows.
 
-Law, policies, and business rules traditionally live in natural language. Humans must understand these rules but in this day and age, we build systems to enforce them. Let's be honest: we are not managing this well. Over time we build massive IT infrastructures that contain all our intricate business rules and policies. As both rules and systems evolve over time, the disconnect only increases. Lemma solves this gap: one pure source of truth that is human-readable, machine-executable, and respectful of time, so you can move quickly on policy changes without losing traceability.
+Lemma provides a single source of truth. Rules written in Lemma are human-readable, time-aware, and pure. Its logic engine guarantees deterministic and logically consistent outcomes through static analysis, eliminating runtime errors. Furthermore, Lemma provides unrivaled auditability by explaining exactly how rules were applied for every evaluation.
+
+This allows you to implement policy changes rapidly without compromising compliance. Lemma requires no database and maintains no state; by design, it is secure, able to run within existing applications and yes, it is blazingly fast.
 
 ### Direction
 
@@ -40,7 +43,9 @@ Lemma aims to combine **deterministic evaluation**, **transparent explanations**
 
 ### What about AI?
 
-AI models approximate. They don't calculate. Great at language, not reliable for math or following protocols. For some things in life we need certainty, not probability. **Lemma provides certainty.** Every answer is exact, delivered in microseconds, with verifiable reasoning. Lemma provides great interop to make your AI systems deterministic.
+AI models operate on approximations. The complexity of their neural networks makes tracing decisions ("explaining") practically impossible. While they excel at natural language, they are ill-suited for mathematics, strict protocols, or compliance.
+
+Lemma provides certainty and transparency. Every result is exact, verifiable, and delivered in microseconds. Lemma offers seamless interoperability, allowing you to ground your AI systems in deterministic logic.
 
 ## Quick Start
 
