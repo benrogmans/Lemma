@@ -1,7 +1,7 @@
 defmodule Lemma.MixProject do
   use Mix.Project
 
-  @version "0.8.4"
+  @version "0.8.5"
   @source_url "https://github.com/benrogmans/lemma"
 
   def project do
@@ -11,6 +11,7 @@ defmodule Lemma.MixProject do
       elixir: "~> 1.14",
       compilers: Mix.compilers(),
       start_permanent: Mix.env() == :prod,
+      aliases: aliases(),
       deps: deps(),
       description: "Lemma rules engine for Elixir",
       package: package(),
@@ -22,11 +23,17 @@ defmodule Lemma.MixProject do
     []
   end
 
+  defp aliases do
+    [
+      precommit: ["format --check-formatted", "deps.get --check-locked", "compile"]
+    ]
+  end
+
   defp deps do
     [
       {:jason, "~> 1.4"},
       {:rustler, "~> 0.37", runtime: false},
-      {:ex_doc, "~> 0.31", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.40.1", only: :dev, runtime: false}
     ]
   end
 
