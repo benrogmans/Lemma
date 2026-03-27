@@ -3,8 +3,12 @@ name = "xtask"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Workspace automation (precommit checks)"
+description = "Workspace automation (precommit, version bump/verify)"
 license.workspace = true
+
+[dependencies]
+semver = "1"
+serde_json.workspace = true
 
 [[bin]]
 name = "xtask"
