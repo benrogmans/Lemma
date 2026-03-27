@@ -107,6 +107,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Verify workspace release versions
+        run: cargo run -p xtask -- versions-verify
+
   build:
     name: Build
     runs-on: ubuntu-latest

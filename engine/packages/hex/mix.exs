@@ -24,8 +24,9 @@ defmodule Lemma.MixProject do
 
   defp deps do
     [
+      {:jason, "~> 1.4"},
       {:rustler, "~> 0.37", runtime: false},
-      {:jason, "~> 1.4"}
+      {:ex_doc, "~> 0.31", only: :dev, runtime: false}
     ]
   end
 

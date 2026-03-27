@@ -333,7 +333,7 @@ Lemma is in early development and **not yet recommended for production use**. Ex
 
 Contributions welcome! See [contributing](documentation/contributing.md) for setup and workflow.
 
-From the repository root, run **`cargo precommit`** before opening a PR. It runs `fmt --check`, Clippy, Nextest, and cargo-deny (install [`cargo-nextest`](https://nexte.st/) and [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) first, same as CI).
+From the repository root, run **`cargo precommit`** before opening a PR. It runs **`versions-verify`**, then `fmt --check`, Clippy, Nextest, and cargo-deny (install [`cargo-nextest`](https://nexte.st/) and [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) first, same as CI). When bumping the workspace release version, use **`cargo bump <version>`** and **`cargo verify`** so every mirrored copy stays aligned (see [`xtask/README.md`](xtask/README.md)).
 
 ## License
 

@@ -264,7 +264,8 @@ See **documentation/reference.md** and **documentation/index.md** for full synta
 - **Use TDD.** Failing tests define missing or broken behaviour; do not hide or remove them to make the suite pass.
 - **Unit tests** live in the same module (to allow testing private functions); **integration tests** in `engine/tests/`.
 - Run tests with **cargo nextest**, not `cargo test`.
-- From repo root, **cargo precommit** runs `fmt --check`, clippy, nextest, and cargo-deny (needs `cargo-nextest` and `cargo-deny` on `PATH`, same as CI).
+- From repo root, **cargo precommit** runs **`versions-verify`**, then `fmt --check`, clippy, nextest, and cargo-deny (needs `cargo-nextest` and `cargo-deny` on `PATH`; CI runs the same checks across lint / test / security jobs).
+- **The release version** is `[workspace.package] version` in the root `Cargo.toml`. Use **`cargo bump <version>`** to bump the version everywhere, then commit. **`cargo verify`** verifies that all version values are aligned.
 - When adding features, add tests that lock in the intended behaviour (including Veto propagation and error cases).
 
 ---
@@ -274,6 +275,7 @@ See **documentation/reference.md** and **documentation/index.md** for full synta
 | Resource | Purpose |
 |----------|--------|
 | **README.md** | Project overview, quick start, features |
+| **xtask/README.md** | precommit, `cargo bump` / `cargo verify`, tracked release paths |
 | **documentation/index.md** | Language concepts, specs, facts, rules |
 | **documentation/reference.md** | Operators, types, literals, syntax |
 | **documentation/veto_semantics.md** | When Veto applies and propagates |
