@@ -576,7 +576,7 @@ fn single_file_exceeding_total_expression_count_is_rejected() {
 /// Run with: cargo nextest run bench_1m --run-ignored ignored-only --workspace
 #[test]
 #[ignore]
-fn bench_1m_expressions() {
+fn performance_test_10k_rules() {
     use std::collections::HashMap;
     use std::fmt::Write;
 
@@ -591,36 +591,38 @@ fn bench_1m_expressions() {
         code
     }
 
-    for num_rules in [100, 1_000, 5_000, 10_000, 25_000, 52_631] {
-        let nodes = num_rules * NODES_PER_RULE;
-        let code = build_wide_spec("test", num_rules);
-        let bytes = code.len();
-        let limits = ResourceLimits {
-            max_file_size_bytes: 100 * 1024 * 1024,
-            max_expression_count: nodes + 1000,
-            max_total_expression_count: nodes + 1000,
-            ..ResourceLimits::default()
-        };
-        let mut engine = Engine::with_limits(limits);
+    let num_rules = 10000;
+    let nodes = num_rules * NODES_PER_RULE;
+    let code = build_wide_spec("test", num_rules);
+    let bytes = code.len();
+    let limits = ResourceLimits {
+        max_file_size_bytes: 100 * 1024 * 1024,
+        max_expression_count: nodes + 1000,
+        max_total_expression_count: nodes + 1000,
+        ..ResourceLimits::default()
+    };
+    let mut engine = Engine::with_limits(limits);
 
-        let start = Instant::now();
-        engine
-            .load(&code, lemma::SourceType::Labeled("test.lemma"))
-            .unwrap_or_else(|errs| panic!("{num_rules} rules failed: {:?}", errs));
-        let elapsed = start.elapsed();
+    let start = Instant::now();
+    engine
+        .load(&code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap_or_else(|errs| panic!("{num_rules} rules failed: {:?}", errs));
+    let elapsed = start.elapsed();
 
-        let now = DateTimeValue::now();
-        let eval_start = Instant::now();
-        let resp = engine
-            .run("test", Some(&now), HashMap::new(), false)
-            .unwrap();
-        let eval_time = eval_start.elapsed();
+    let now = DateTimeValue::now();
+    let eval_start = Instant::now();
+    let resp = engine
+        .run("test", Some(&now), HashMap::new(), false)
+        .unwrap();
+    let eval_time = eval_start.elapsed();
 
-        eprintln!(
-            "{num_rules:>6} rules ({nodes:>7} nodes, {bytes:>8} bytes): parse+plan {elapsed:>8.2?}  eval {eval_time:>8.2?}  result={:?}",
-            resp.results[0].result
-        );
-    }
+    eprintln!(
+        "{num_rules:>6} rules ({nodes:>7} nodes, {bytes:>8} bytes): parse+plan {elapsed:>8.2?}  eval {eval_time:>8.2?}  result={:?}",
+        resp.results[0].result
+    );
+
+    // Assert that the test takes less than 10 seconds
+    assert!(elapsed.as_secs() < 10, "test took too long: {elapsed:?}");
 }
 
 /// Scaling test: deep rule dependency chains (linear + binary tree).

@@ -193,22 +193,63 @@ pub fn versions_bump(root: &Path, new: &str) -> Result<(), String> {
     let pkg = root.join(tracked::VSCODE_PACKAGE_JSON);
     bump_package_json_version(&pkg, &old, new)?;
 
-    run_cargo_metadata(root)?;
+    run_cargo_generate_lockfile(root)?;
+    run_mix_deps_get(root)?;
+    run_npm_package_lock_only(root)?;
     Ok(())
 }
 
-fn run_cargo_metadata(root: &Path) -> Result<(), String> {
-    eprintln!("xtask: cargo metadata (refresh lockfile)");
+fn run_cargo_generate_lockfile(root: &Path) -> Result<(), String> {
+    eprintln!("xtask: cargo generate-lockfile");
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let st = Command::new(&cargo)
-        .args(["metadata", "--format-version", "1"])
+        .args(["generate-lockfile"])
         .current_dir(root)
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
         .status()
-        .map_err(|e| format!("failed to run {cargo} metadata: {e}"))?;
+        .map_err(|e| format!("failed to run {cargo} generate-lockfile: {e}"))?;
     if !st.success() {
-        return Err("cargo metadata failed".into());
+        return Err("cargo generate-lockfile failed".into());
+    }
+    Ok(())
+}
+
+fn run_mix_deps_get(root: &Path) -> Result<(), String> {
+    eprintln!("xtask: mix deps.get (hex)");
+    let hex_dir = root.join(
+        Path::new(tracked::HEX_MIX)
+            .parent()
+            .expect("HEX_MIX must have a parent directory"),
+    );
+    let st = Command::new("mix")
+        .args(["deps.get"])
+        .current_dir(&hex_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("failed to run mix deps.get in {}: {e}", hex_dir.display()))?;
+    if !st.success() {
+        return Err("mix deps.get failed".into());
+    }
+    Ok(())
+}
+
+fn run_npm_package_lock_only(root: &Path) -> Result<(), String> {
+    eprintln!("xtask: npm install --package-lock-only (vscode extension)");
+    let pkg_json = root.join(tracked::VSCODE_PACKAGE_JSON);
+    let vscode_dir = pkg_json
+        .parent()
+        .expect("VSCODE_PACKAGE_JSON must have a parent directory");
+    let st = Command::new("npm")
+        .args(["install", "--package-lock-only"])
+        .current_dir(vscode_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("failed to run npm in {}: {e}", vscode_dir.display()))?;
+    if !st.success() {
+        return Err("npm install --package-lock-only failed".into());
     }
     Ok(())
 }

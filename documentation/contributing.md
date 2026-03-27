@@ -47,7 +47,7 @@ cargo deny check --config .cargo/deny.toml
 
 The workspace release is `[workspace.package] version` in the root `Cargo.toml`. The same number must appear in path-dep pins, Hex `mix.exs`, `engine/README.md`, and the VS Code extension `package.json` (see `xtask/src/versions.rs` module `tracked`).
 
-- **`cargo bump <semver>`** — update all locations and refresh `Cargo.lock` via `cargo metadata`.
+- **`cargo bump <semver>`** — update all locations, then refresh `Cargo.lock` (`cargo generate-lockfile`), Hex `mix.lock` (`mix deps.get`), and VS Code `package-lock.json` (`npm install --package-lock-only`).
 - **`cargo verify`** — confirm everything matches; CI runs this in the lint job.
 
 Do not hand-edit those copies unless you keep them in sync.
