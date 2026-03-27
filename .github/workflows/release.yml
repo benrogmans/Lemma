@@ -268,17 +268,6 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Set extension version
-        working-directory: engine/lsp/editors/vscode
-        run: |
-          node -e "
-            const p = require('./package.json');
-            p.version = process.env.VERSION;
-            require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
-          "
-        env:
-          VERSION: ${{ needs.detect-version-changes.outputs.version }}
-
       - name: Install dependencies
         working-directory: engine/lsp/editors/vscode
         run: npm ci
