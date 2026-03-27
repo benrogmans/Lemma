@@ -6,6 +6,14 @@ The release version is `[workspace.package] version` in the root `Cargo.toml`. G
 
 Draft notes for the next version quickly: from the repo root run `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`).
 
+## [0.8.6] - 2025-03-27
+
+### Changed
+
+- Hex publishes the Elixir package as `lemma_engine` instead of `lemma`. Replace `{:lemma, ...}` with `{:lemma_engine, ...}` in `mix.exs`, README, and the GitHub release workflow Elixir snippet; `mix.exs` sets `package` `name: "lemma_engine"`.
+- Workspace and artifacts are bumped to **0.8.6** (root `Cargo.toml` / lockfile, `lemma-cli`, `lemma-engine`, `lemma-openapi`, `lsp`, VS Code `package.json` / lockfile, Hex `@version`).
+- Root **README** rewrites the “Why Lemma?” and “What about AI?” sections: clearer story on rules vs systems, single source of truth, determinism and auditability, and how Lemma differs from approximate AI for compliance-style logic.
+
 ## [0.8.5] - 2025-03-27
 
 ### Added
