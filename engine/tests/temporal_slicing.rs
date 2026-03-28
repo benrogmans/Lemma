@@ -2713,18 +2713,4 @@ fn serde_round_trip_resolved_plan_hash() {
         d_fact.resolved_plan_hash().is_some(),
         "resolved_plan_hash must survive round-trip"
     );
-
-    // Also test backward compat: old JSON with expected_hash_pin alias
-    let old_json = json.replace("resolved_plan_hash", "expected_hash_pin");
-    let from_old: lemma::ExecutionPlan =
-        serde_json::from_str(&old_json).expect("deserialize old format");
-    let d_fact_old = from_old
-        .facts
-        .values()
-        .find(|fd| matches!(fd, FactData::SpecRef { .. }))
-        .expect("old format should have SpecRef");
-    assert!(
-        d_fact_old.resolved_plan_hash().is_some(),
-        "expected_hash_pin alias must deserialize into resolved_plan_hash"
-    );
 }

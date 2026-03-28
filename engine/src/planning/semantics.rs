@@ -1908,7 +1908,6 @@ pub enum FactData {
     SpecRef {
         spec: Arc<crate::parsing::ast::LemmaSpec>,
         source: Source,
-        #[serde(alias = "expected_hash_pin")]
         resolved_plan_hash: Option<String>,
     },
 }

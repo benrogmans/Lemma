@@ -10,7 +10,7 @@
 //! way that must not share hashes with prior formats.
 
 use crate::parsing::ast::{CalendarUnit, DateCalendarKind, DateRelativeKind, DateTimeValue};
-use crate::planning::execution_plan::{Branch, ExecutableRule, ExecutionPlan};
+use crate::planning::execution_plan::{Branch, ExecutableRule, ExecutionPlan, SpecId};
 use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, FactData, FactPath,
     LemmaType, LiteralValue, MathematicalComputation, NegationType, RulePath,
@@ -145,7 +145,7 @@ fn type_defining_spec_fingerprint(ds: &TypeDefiningSpec) -> TypeDefiningSpecFing
             spec,
             resolved_plan_hash,
         } => TypeDefiningSpecFingerprint::Import {
-            spec_id: format!("{}~{}", spec.name, resolved_plan_hash),
+            spec_id: SpecId::new(spec.name.clone(), resolved_plan_hash.clone()).to_string(),
             effective_from: spec.effective_from.clone(),
         },
     }
@@ -224,7 +224,7 @@ fn fact_fingerprint(data: &FactData) -> FactFingerprint {
         } => FactFingerprint::SpecRef {
             spec_id: resolved_plan_hash
                 .as_ref()
-                .map(|h| format!("{}~{}", spec.name, h))
+                .map(|h| SpecId::new(spec.name.clone(), h.clone()).to_string())
                 .unwrap_or_else(|| spec.name.clone()),
             effective_from: spec.effective_from.clone(),
         },
@@ -326,7 +326,7 @@ pub fn fingerprint_hash(fp: &PlanFingerprint) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use indexmap::IndexMap;
+    use indexmap::{IndexMap, IndexSet};
     use std::collections::HashMap;
 
     fn empty_plan(spec_name: &str) -> ExecutionPlan {
@@ -339,6 +339,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         }
     }
 

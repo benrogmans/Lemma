@@ -1073,6 +1073,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: indexmap::IndexSet::new(),
         }
     }
 

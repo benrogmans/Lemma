@@ -19,10 +19,30 @@ use crate::planning::types::ResolvedSpecTypes;
 use crate::Error;
 use crate::ResourceLimits;
 use crate::Source;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+
+/// Identifies a dependency spec by name and its computed plan hash.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SpecId {
+    pub name: String,
+    pub plan_hash: String,
+}
+
+impl SpecId {
+    #[must_use]
+    pub fn new(name: String, plan_hash: String) -> Self {
+        Self { name, plan_hash }
+    }
+}
+
+impl std::fmt::Display for SpecId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}~{}", self.name, self.plan_hash)
+    }
+}
 
 /// A complete execution plan ready for the evaluator
 ///
@@ -56,6 +76,9 @@ pub struct ExecutionPlan {
 
     /// Temporal slice end (exclusive). None = +∞.
     pub valid_to: Option<DateTimeValue>,
+
+    /// Spec dependencies actually used by rules, identified by name + computed plan hash.
+    pub dependencies: IndexSet<SpecId>,
 }
 
 impl ExecutionPlan {
@@ -123,6 +146,7 @@ pub(crate) fn build_execution_plan(
 
     let mut executable_rules: Vec<ExecutableRule> = Vec::new();
     let mut path_to_index: HashMap<RulePath, usize> = HashMap::new();
+    let mut dependencies: IndexSet<SpecId> = IndexSet::new();
 
     for rule_path in execution_order {
         let rule_node = graph.rules().get(rule_path).expect(
@@ -153,6 +177,21 @@ pub(crate) fn build_execution_plan(
             });
         }
 
+        let is_dependency_rule = !rule_path.segments.is_empty();
+        if is_dependency_rule {
+            let spec_ref_path = FactPath {
+                segments: vec![],
+                fact: rule_path.segments[0].fact.clone(),
+            };
+            if let Some(fact_data) = facts.get(&spec_ref_path) {
+                if let (Some(name), Some(hash)) =
+                    (fact_data.spec_ref(), fact_data.resolved_plan_hash())
+                {
+                    dependencies.insert(SpecId::new(name.to_string(), hash.to_string()));
+                }
+            }
+        }
+
         path_to_index.insert(rule_path.clone(), executable_rules.len());
         executable_rules.push(ExecutableRule {
             path: rule_path.clone(),
@@ -180,6 +219,7 @@ pub(crate) fn build_execution_plan(
         named_types,
         valid_from,
         valid_to,
+        dependencies,
     }
 }
 
@@ -915,6 +955,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let mut values = HashMap::new();
@@ -972,6 +1013,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let mut values = HashMap::new();
@@ -1037,6 +1079,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let mut values = HashMap::new();
@@ -1076,6 +1119,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1115,6 +1159,7 @@ mod tests {
             named_types,
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1166,6 +1211,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let rule = ExecutableRule {
@@ -1230,6 +1276,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1283,6 +1330,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1327,6 +1375,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let rule = ExecutableRule {
@@ -1391,6 +1440,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1425,6 +1475,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let rule = ExecutableRule {
@@ -1496,6 +1547,7 @@ mod tests {
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
+            dependencies: IndexSet::new(),
         };
 
         let rule = ExecutableRule {

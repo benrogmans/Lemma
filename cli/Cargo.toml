@@ -12,7 +12,6 @@ name = "lemma"
 path = "src/main.rs"
 
 [dependencies]
-# Exact version: avoid cargo install resolving a newer lemma-engine patch that may be API-incompatible.
 lemma = { package = "lemma-engine", version = "=0.8.6", path = "../engine", default-features = false }
 lemma-openapi = { version = "=0.8.6", path = "../openapi" }
 clap = { version = "4.0", features = ["derive"] }
