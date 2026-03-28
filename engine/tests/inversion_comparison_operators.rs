@@ -1,7 +1,5 @@
-use lemma::{Engine, FactPath, LiteralValue, OperationResult, Target, TargetOp};
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, FactPath, LiteralValue, OperationResult, Target, TargetOp};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -18,7 +16,9 @@ fn premium_greater_than_or_equal() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // Find ages where premium >= 80
     let now = DateTimeValue::now();
@@ -68,7 +68,9 @@ fn discount_greater_than_threshold() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // Find quantities where discount > 5%
     let now = DateTimeValue::now();
@@ -118,7 +120,9 @@ fn price_less_than_budget() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // Find combinations where total < 100
     let now = DateTimeValue::now();
@@ -161,7 +165,9 @@ fn temperature_in_comfortable_range() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // Find temps where comfort >= 2 (most comfortable)
     let now = DateTimeValue::now();
@@ -206,7 +212,9 @@ fn get_valid_domain_with_threshold() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // First, find when shipping_cost <= 0 (free shipping)
     let now = DateTimeValue::now();
@@ -249,7 +257,9 @@ fn all_comparison_operators() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // Test all operators
     let test_cases = vec![

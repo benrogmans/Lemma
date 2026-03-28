@@ -1,7 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -30,7 +28,9 @@ fact leap_date: 2024-02-29
 rule check: leap_date
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "check");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -51,7 +51,9 @@ fact leap_date: 2000-02-29
 rule check: leap_date
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "check");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -72,7 +74,9 @@ fact start_date: 1900-02-28
 rule next_day: start_date + 1 day
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -93,7 +97,9 @@ fact start_date: 2100-02-28
 rule next_day: start_date + 1 day
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -114,7 +120,9 @@ fact start_date: 2024-01-31
 rule next_month: start_date + 1 month
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_month");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -135,7 +143,9 @@ fact start_date: 2023-01-31
 rule next_month: start_date + 1 month
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_month");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -156,7 +166,9 @@ fact leap_date: 2024-02-29
 rule next_year: leap_date + 1 year
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_year");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -177,7 +189,9 @@ fact leap_date: 2024-02-29
 rule four_years_later: leap_date + 4 years
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "four_years_later");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -198,7 +212,9 @@ fact start_date: 2024-02-15
 rule three_months_ago: start_date - 3 months
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "three_months_ago");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -219,7 +235,9 @@ fact start_date: 2023-01-15
 rule twenty_months_later: start_date + 20 months
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "twenty_months_later");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -240,7 +258,9 @@ fact start_date: 2024-01-01
 rule last_year: start_date - 1 year
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "last_year");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -262,7 +282,9 @@ fact end_date: 2025-01-01
 rule days_diff: end_date - start_date
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "days_diff");
     if let lemma::ValueKind::Duration(seconds, _) = &lit.value {
@@ -283,7 +305,9 @@ fact end_date: 2024-01-01
 rule days_diff: end_date - start_date
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "days_diff");
     if let lemma::ValueKind::Duration(seconds, _) = &lit.value {
@@ -303,7 +327,9 @@ fact start_datetime: 2024-03-15T22:00:00
 rule next_day: start_datetime + 5 hours
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -326,7 +352,9 @@ fact start_datetime: 2024-03-16T02:00:00
 rule prev_day: start_datetime - 5 hours
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "prev_day");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -349,7 +377,9 @@ fact start_time: 2024-03-15T10:30:45
 rule later: start_time + 90 minutes
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -370,7 +400,9 @@ fact start_time: 2024-03-15T10:30:30
 rule later: start_time + 90 seconds
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -391,7 +423,9 @@ fact evening_time: 23:30:00
 rule after_midnight: evening_time + 90 minutes
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "after_midnight");
     if let lemma::ValueKind::Time(time) = &lit.value {
@@ -413,7 +447,9 @@ fact end_time: 15:30:00
 rule timespan: end_time - start_time
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "timespan");
     if let lemma::ValueKind::Duration(seconds, _) = &lit.value {
@@ -434,7 +470,9 @@ fact end_time: 10:00:00
 rule timespan: end_time - start_time
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "timespan");
     if let lemma::ValueKind::Duration(seconds, _) = &lit.value {
@@ -454,7 +492,9 @@ fact start_date: 2024-01-01
 rule future: start_date + 1000 days
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "future");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -475,7 +515,9 @@ fact start_time: 2024-03-15T10:00:00
 rule later: start_time + 2.5 hours
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -497,7 +539,9 @@ fact date2: 2024-01-01T00:00:00
 rule is_before: date1 < date2
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "is_before");
     if let lemma::ValueKind::Boolean(value) = &lit.value {
@@ -516,7 +560,9 @@ fact start_date: 2024-03-31
 rule april: start_date + 1 month
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "april");
     if let lemma::ValueKind::Date(date) = &lit.value {
@@ -537,7 +583,9 @@ fact start_date: 2023-12-31
 rule january: start_date + 1 month
     "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "january");
     if let lemma::ValueKind::Date(date) = &lit.value {

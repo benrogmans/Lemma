@@ -1,7 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::*;
-mod common;
-use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -9,17 +7,17 @@ use std::str::FromStr;
 #[test]
 fn test_modulo_simple() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
 spec test
 fact a: 10
 fact b: 3
 rule remainder: a % b
 "#,
-        "test",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("test"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine
@@ -42,17 +40,17 @@ rule remainder: a % b
 #[test]
 fn test_power_simple() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
 spec test
 fact base: 2
 fact exponent: 3
 rule result: base ^ exponent
 "#,
-        "test",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("test"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine
@@ -75,17 +73,17 @@ rule result: base ^ exponent
 #[test]
 fn test_modulo_in_expression() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
 spec test
 fact value: 17
 rule is_even: (value % 2) == 0
 rule is_odd: (value % 2) == 1
 "#,
-        "test",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("test"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine
@@ -108,16 +106,16 @@ rule is_odd: (value % 2) == 1
 #[test]
 fn test_power_with_fractions() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
 spec test
 fact base: 4
 rule square_root: base ^ 0.5
 "#,
-        "test",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("test"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine
@@ -140,17 +138,17 @@ rule square_root: base ^ 0.5
 #[test]
 fn test_combined_operations() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
 spec test
 fact x: 10
 fact y: 3
 rule calculation: (x % y) + (2 ^ 3)
 "#,
-        "test",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("test"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine

@@ -1,7 +1,5 @@
-use lemma::{Engine, LiteralValue, ResourceLimits, Target};
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, LiteralValue, ResourceLimits, Target};
 use std::collections::HashMap;
 
 #[test]
@@ -25,7 +23,9 @@ fn bdd_unification_simplifies_to_single_atom() {
         ..ResourceLimits::default()
     };
     let mut engine = Engine::with_limits(limits);
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let solutions = engine

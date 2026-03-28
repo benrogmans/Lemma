@@ -1198,37 +1198,29 @@ mod tests {
         assert_eq!(gaps, vec![(None, Some(date(2025, 6, 1)))]);
     }
 
-    fn add_lemma_code_blocking(
-        engine: &mut Engine,
-        code: &str,
-        source: &str,
-    ) -> Result<(), Errors> {
-        engine.load(code, SourceType::Labeled(source))
-    }
-
     #[test]
     fn get_spec_resolves_temporal_version_by_effective() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
         spec pricing 2025-01-01
         fact x: 1
         rule r: x
     "#,
-            "a.lemma",
-        )
-        .unwrap();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+                SourceType::Labeled("a.lemma"),
+            )
+            .unwrap();
+        engine
+            .load(
+                r#"
         spec pricing 2025-06-01
         fact x: 2
         rule r: x
     "#,
-            "b.lemma",
-        )
-        .unwrap();
+                SourceType::Labeled("b.lemma"),
+            )
+            .unwrap();
 
         let jan = DateTimeValue {
             year: 2025,
@@ -1281,18 +1273,18 @@ mod tests {
     #[test]
     fn test_evaluate_spec_all_rules() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
         spec test
         fact x: 10
         fact y: 5
         rule sum: x + y
         rule product: x * y
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+                SourceType::Labeled("test.lemma"),
+            )
+            .unwrap();
 
         let now = DateTimeValue::now();
         let response = engine
@@ -1328,16 +1320,16 @@ mod tests {
     #[test]
     fn test_evaluate_empty_facts() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
         spec test
         fact price: 100
         rule total: price * 2
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+                SourceType::Labeled("test.lemma"),
+            )
+            .unwrap();
 
         let now = DateTimeValue::now();
         let response = engine
@@ -1355,16 +1347,16 @@ mod tests {
     #[test]
     fn test_evaluate_boolean_rule() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
         spec test
         fact age: 25
         rule is_adult: age >= 18
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+                SourceType::Labeled("test.lemma"),
+            )
+            .unwrap();
 
         let now = DateTimeValue::now();
         let response = engine
@@ -1379,17 +1371,17 @@ mod tests {
     #[test]
     fn test_evaluate_with_unless_clause() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
         spec test
         fact quantity: 15
         rule discount: 0
           unless quantity >= 10 then 10
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+                SourceType::Labeled("test.lemma"),
+            )
+            .unwrap();
 
         let now = DateTimeValue::now();
         let response = engine
@@ -1415,27 +1407,27 @@ mod tests {
     #[test]
     fn test_multiple_specs() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
         spec spec1
         fact x: 10
         rule result: x * 2
     "#,
-            "spec 1.lemma",
-        )
-        .unwrap();
+                SourceType::Labeled("spec 1.lemma"),
+            )
+            .unwrap();
 
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
         spec spec2
         fact y: 5
         rule result: y * 3
     "#,
-            "spec 2.lemma",
-        )
-        .unwrap();
+                SourceType::Labeled("spec 2.lemma"),
+            )
+            .unwrap();
 
         let now = DateTimeValue::now();
         let response1 = engine
@@ -1462,17 +1454,17 @@ mod tests {
     #[test]
     fn test_runtime_error_mapping() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
         spec test
         fact numerator: 10
         fact denominator: 0
         rule division: numerator / denominator
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+                SourceType::Labeled("test.lemma"),
+            )
+            .unwrap();
 
         let now = DateTimeValue::now();
         let result = engine.run("test", Some(&now), HashMap::new(), false);
@@ -1505,9 +1497,9 @@ mod tests {
     #[test]
     fn test_rules_sorted_by_source_order() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
         spec test
         fact a: 1
         fact b: 2
@@ -1515,9 +1507,9 @@ mod tests {
         rule y: a * b
         rule x: a - b
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+                SourceType::Labeled("test.lemma"),
+            )
+            .unwrap();
 
         let now = DateTimeValue::now();
         let response = engine
@@ -1561,18 +1553,18 @@ mod tests {
     #[test]
     fn test_rule_filtering_evaluates_dependencies() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
         spec test
         fact base: 100
         rule subtotal: base * 2
         rule tax: subtotal * 10%
         rule total: subtotal + tax
     "#,
-            "test.lemma",
-        )
-        .unwrap();
+                SourceType::Labeled("test.lemma"),
+            )
+            .unwrap();
 
         // User filters to 'total' after run (deps were still computed)
         let now = DateTimeValue::now();
@@ -1642,38 +1634,50 @@ rule value: external.quantity"#,
     fn load_no_external_refs_works() {
         let mut engine = Engine::new();
 
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"spec local_only
+        engine
+            .load(
+                r#"spec local_only
 fact price: 100
 rule doubled: price * 2"#,
-            "local.lemma",
-        )
-        .expect("should succeed when there are no @... references");
+                SourceType::Labeled("local.lemma"),
+            )
+            .expect("should succeed when there are no @... references");
 
         let now = DateTimeValue::now();
         let response = engine
             .run("local_only", Some(&now), HashMap::new(), false)
             .expect("evaluate should succeed");
 
-        assert!(response.results.contains_key("doubled"));
+        let doubled = response
+            .results
+            .get("doubled")
+            .expect("doubled rule")
+            .result
+            .value()
+            .expect("value");
+        assert_eq!(doubled.to_string(), "200");
     }
 
     #[test]
     fn unresolved_external_ref_without_deps_fails() {
         let mut engine = Engine::new();
 
-        let result = add_lemma_code_blocking(
-            &mut engine,
+        let result = engine.load(
             r#"spec main_spec
 fact external: spec @org/project/missing
 rule value: external.quantity"#,
-            "main.lemma",
+            SourceType::Labeled("main.lemma"),
         );
 
+        let errs = result.expect_err("Should fail when @... dep is not in file map");
+        let msg = errs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
-            result.is_err(),
-            "Should fail when @... dep is not in file map"
+            msg.contains("missing") || msg.contains("not found") || msg.contains("Unknown"),
+            "error should indicate missing dep: {msg}"
         );
     }
 
@@ -1723,8 +1727,40 @@ rule formatted: helper_value + 0"#,
             .run("registry_demo", Some(&now), HashMap::new(), false)
             .expect("evaluate should succeed");
 
-        assert!(response.results.contains_key("helper_value"));
-        assert!(response.results.contains_key("formatted"));
+        assert_eq!(
+            response
+                .results
+                .get("helper_value")
+                .expect("helper_value")
+                .result
+                .value()
+                .expect("value")
+                .to_string(),
+            "42"
+        );
+        let line = response
+            .results
+            .get("line_total")
+            .expect("line_total")
+            .result
+            .value()
+            .expect("value")
+            .to_string();
+        assert!(
+            line.contains("10") && line.to_lowercase().contains("eur"),
+            "5 eur * 2 => ~10 eur, got {line}"
+        );
+        assert_eq!(
+            response
+                .results
+                .get("formatted")
+                .expect("formatted")
+                .result
+                .value()
+                .expect("value")
+                .to_string(),
+            "42"
+        );
     }
 
     #[test]
@@ -1874,14 +1910,13 @@ fact rate: 10"#,
     fn load_returns_all_errors_not_just_first() {
         let mut engine = Engine::new();
 
-        let result = add_lemma_code_blocking(
-            &mut engine,
+        let result = engine.load(
             r#"spec demo
 type money from nonexistent_type_source
 fact helper: spec nonexistent_spec
 fact price: 10
 rule total: helper.value + price"#,
-            "test.lemma",
+            SourceType::Labeled("test.lemma"),
         );
 
         assert!(result.is_err(), "Should fail with multiple errors");
@@ -1918,10 +1953,9 @@ rule total: helper.value + price"#,
     #[test]
     fn planning_rejects_invalid_number_default() {
         let mut engine = Engine::new();
-        let result = add_lemma_code_blocking(
-            &mut engine,
+        let result = engine.load(
             "spec t\nfact x: [number -> default \"10 $$\"]\nrule r: x",
-            "t.lemma",
+            SourceType::Labeled("t.lemma"),
         );
         assert!(
             result.is_err(),
@@ -1936,10 +1970,9 @@ rule total: helper.value + price"#,
         // rejected where a Number literal is required, even though the
         // string content "10" could be parsed as a valid Decimal.
         let mut engine = Engine::new();
-        let result = add_lemma_code_blocking(
-            &mut engine,
+        let result = engine.load(
             "spec t\nfact x: [number -> default \"10\"]\nrule r: x",
-            "t.lemma",
+            SourceType::Labeled("t.lemma"),
         );
         assert!(
             result.is_err(),
@@ -1950,10 +1983,9 @@ rule total: helper.value + price"#,
     #[test]
     fn planning_rejects_invalid_boolean_default() {
         let mut engine = Engine::new();
-        let result = add_lemma_code_blocking(
-            &mut engine,
+        let result = engine.load(
             "spec t\nfact x: [boolean -> default \"maybe\"]\nrule r: x",
-            "t.lemma",
+            SourceType::Labeled("t.lemma"),
         );
         assert!(
             result.is_err(),
@@ -1965,11 +1997,7 @@ rule total: helper.value + price"#,
     fn planning_rejects_invalid_named_type_default() {
         // Named type: the parser can't validate this, only planning can.
         let mut engine = Engine::new();
-        let result = add_lemma_code_blocking(
-            &mut engine,
-            "spec t\ntype custom: number -> minimum 0\nfact x: [custom -> default \"abc\"]\nrule r: x",
-            "t.lemma",
-        );
+        let result = engine.load("spec t\ntype custom: number -> minimum 0\nfact x: [custom -> default \"abc\"]\nrule r: x", SourceType::Labeled("t.lemma",));
         assert!(
             result.is_err(),
             "must reject non-numeric default on named number type"
@@ -1979,10 +2007,9 @@ rule total: helper.value + price"#,
     #[test]
     fn planning_accepts_valid_number_default() {
         let mut engine = Engine::new();
-        let result = add_lemma_code_blocking(
-            &mut engine,
+        let result = engine.load(
             "spec t\nfact x: [number -> default 10]\nrule r: x",
-            "t.lemma",
+            SourceType::Labeled("t.lemma"),
         );
         assert!(result.is_ok(), "must accept valid number default");
     }
@@ -1990,10 +2017,9 @@ rule total: helper.value + price"#,
     #[test]
     fn planning_accepts_valid_boolean_default() {
         let mut engine = Engine::new();
-        let result = add_lemma_code_blocking(
-            &mut engine,
+        let result = engine.load(
             "spec t\nfact x: [boolean -> default true]\nrule r: x",
-            "t.lemma",
+            SourceType::Labeled("t.lemma"),
         );
         assert!(result.is_ok(), "must accept valid boolean default");
     }
@@ -2001,10 +2027,9 @@ rule total: helper.value + price"#,
     #[test]
     fn planning_accepts_valid_text_default() {
         let mut engine = Engine::new();
-        let result = add_lemma_code_blocking(
-            &mut engine,
+        let result = engine.load(
             "spec t\nfact x: [text -> default \"hello\"]\nrule r: x",
-            "t.lemma",
+            SourceType::Labeled("t.lemma"),
         );
         assert!(result.is_ok(), "must accept valid text default");
     }

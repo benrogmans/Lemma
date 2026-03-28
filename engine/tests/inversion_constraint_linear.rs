@@ -1,7 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::{Bound, Domain, Engine, Error, FactPath, LiteralValue, Target, ValueKind};
-mod common;
-use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -15,7 +13,9 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let inv = engine
@@ -57,7 +57,9 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let inv = engine
@@ -99,7 +101,9 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let inv = engine
@@ -142,7 +146,9 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let inv = engine
@@ -193,7 +199,9 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let inv = engine
@@ -239,7 +247,9 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let err = engine
@@ -265,7 +275,9 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let err = engine

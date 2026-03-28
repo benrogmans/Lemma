@@ -1,7 +1,5 @@
-use lemma::{Engine, LiteralValue, Target};
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, LiteralValue, Target};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -19,7 +17,9 @@ fn discount_multiple_paths_to_same_value() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // Query: "What gives me 30% discount?"
     let now = DateTimeValue::now();

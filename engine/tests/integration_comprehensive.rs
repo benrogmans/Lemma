@@ -1,7 +1,5 @@
-use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -38,8 +36,12 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
     unless not is_adult then veto "Employee must be 18 or older"
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_contract, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, employment_terms, "test.lemma").unwrap();
+    engine
+        .load(base_contract, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(employment_terms, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -102,7 +104,9 @@ rule net_income: income - tax_amount
 rule effective_rate: (tax_amount / income) * 100%
 "#;
 
-    add_lemma_code_blocking(&mut engine, tax_spec, "test.lemma").unwrap();
+    engine
+        .load(tax_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -164,7 +168,9 @@ rule status: "LOW"
   unless exceeds_threshold then "HIGH"
 "#;
 
-    add_lemma_code_blocking(&mut engine, config_spec, "test.lemma").unwrap();
+    engine
+        .load(config_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("threshold".to_string(), "500".to_string());
@@ -232,7 +238,9 @@ rule is_phase2_complete: today > phase2_end
 rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 "#;
 
-    add_lemma_code_blocking(&mut engine, timeline_spec, "test.lemma").unwrap();
+    engine
+        .load(timeline_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -274,7 +282,9 @@ fact timespan: 30 days
 rule end_date: start + timespan
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
+    engine
+        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run("test", Some(&now), HashMap::new(), false)
@@ -310,7 +320,9 @@ fact timespan: 30 days
 rule start_date: end - timespan
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
+    engine
+        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run("test", Some(&now), HashMap::new(), false)
@@ -346,7 +358,9 @@ fact end: 2024-02-14
 rule timespan: end - start
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
+    engine
+        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run("test", Some(&now), HashMap::new(), false)
@@ -383,7 +397,9 @@ rule date1_before_date2: date1 < date2
 rule date1_after_date2: date1 > date2
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
+    engine
+        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run("test", Some(&now), HashMap::new(), false)
@@ -424,7 +440,7 @@ fact flag: true
 rule result_true: flag and 100 or 50
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, spec, "test.lemma");
+    let result = engine.load(spec, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "Should reject mixing boolean and number in logical expression"
@@ -441,7 +457,7 @@ fact needs_extra: true
 rule extra_charge: needs_extra and 10 or 0
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, spec, "test.lemma");
+    let result = engine.load(spec, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "Should reject mixing boolean and money in logical expression"
@@ -459,7 +475,7 @@ rule multiplier: value > 50 and 2 or 1
 rule result: value * multiplier
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, spec, "test.lemma");
+    let result = engine.load(spec, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "Should reject mixing boolean comparison result and numbers in logical expression"
@@ -480,7 +496,7 @@ fact system_healthy: true
 rule status: system_healthy and "OK"
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, spec, "test.lemma");
+    let result = engine.load(spec, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "Should reject mixing boolean and text in logical expression"
@@ -524,8 +540,12 @@ fact value: 500
 rule is_valid: value >= config.min_value and value <= config.max_value
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, child_spec, "test.lemma").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(child_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -561,8 +581,12 @@ fact salary: 75000
 rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.max_salary
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, child_spec, "test.lemma").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(child_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -597,8 +621,12 @@ fact base_contract: spec base
 rule probation_end: base_contract.project_start + base_contract.probation_period
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, child_spec, "test.lemma").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(child_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine

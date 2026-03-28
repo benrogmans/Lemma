@@ -3,6 +3,11 @@
 //! Provides a complete self-contained execution plan ready for the evaluator.
 //! The plan contains all facts, rules flattened into executable branches,
 //! and execution order - no spec structure needed during evaluation.
+//!
+//! Reliability model:
+//! - `SpecSchema` is the IO contract surface for consumers (facts and rule outputs).
+//! - `plan_hash()` is the behavior lock (semantic fingerprint of what the plan does).
+//!   IO compatibility and behavior pinning are separate guarantees.
 
 use crate::parsing::ast::{DateTimeValue, LemmaSpec, MetaValue};
 use crate::planning::graph::Graph;
@@ -210,6 +215,13 @@ fn build_type_tables(
 /// consumer. Carries the real [`LemmaType`] and [`LiteralValue`] so consumers
 /// can work at whatever fidelity they need — structured types for input forms,
 /// or `Display` for plain text.
+///
+/// This is the IO contract consumers can rely on:
+/// - `facts`: required/provided inputs with full type constraints
+/// - `rules`: produced outputs with full result types
+///
+/// For cross-spec composition, planning validates that referenced specs satisfy
+/// this contract. Plan hashes are complementary: they lock full behavior.
 #[derive(Debug, Clone, Serialize)]
 pub struct SpecSchema {
     /// Spec name
@@ -704,26 +716,18 @@ mod tests {
         ResourceLimits::default()
     }
 
-    fn add_lemma_code_blocking(
-        engine: &mut Engine,
-        code: &str,
-        source: &str,
-    ) -> Result<(), crate::Errors> {
-        engine.load(code, crate::SourceType::Labeled(source))
-    }
-
     #[test]
     fn test_with_raw_values() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
                 spec test
                 fact age: [number -> default 25]
                 "#,
-            "test.lemma",
-        )
-        .unwrap();
+                crate::SourceType::Labeled("test.lemma"),
+            )
+            .unwrap();
 
         let now = DateTimeValue::now();
         let plan = engine.get_plan("test", Some(&now)).unwrap().clone();
@@ -745,15 +749,15 @@ mod tests {
     #[test]
     fn test_with_raw_values_type_mismatch() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
                 spec test
                 fact age: [number]
                 "#,
-            "test.lemma",
-        )
-        .unwrap();
+                crate::SourceType::Labeled("test.lemma"),
+            )
+            .unwrap();
 
         let now = DateTimeValue::now();
         let plan = engine.get_plan("test", Some(&now)).unwrap().clone();
@@ -767,15 +771,15 @@ mod tests {
     #[test]
     fn test_with_raw_values_unknown_fact() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
                 spec test
                 fact known: [number]
                 "#,
-            "test.lemma",
-        )
-        .unwrap();
+                crate::SourceType::Labeled("test.lemma"),
+            )
+            .unwrap();
 
         let now = DateTimeValue::now();
         let plan = engine.get_plan("test", Some(&now)).unwrap().clone();
@@ -789,18 +793,18 @@ mod tests {
     #[test]
     fn test_with_raw_values_nested() {
         let mut engine = Engine::new();
-        add_lemma_code_blocking(
-            &mut engine,
-            r#"
+        engine
+            .load(
+                r#"
                 spec private
                 fact base_price: [number]
 
                 spec test
                 fact rules: spec private
                 "#,
-            "test.lemma",
-        )
-        .unwrap();
+                crate::SourceType::Labeled("test.lemma"),
+            )
+            .unwrap();
 
         let now = DateTimeValue::now();
         let plan = engine.get_plan("test", Some(&now)).unwrap().clone();

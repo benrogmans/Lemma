@@ -1,7 +1,5 @@
-use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::Engine;
 use std::collections::HashMap;
 
 /// Test that when a rule in a referenced spec fails due to missing facts,
@@ -28,8 +26,12 @@ fact rules.base_price: 500
 rule total: rules.final_total
 "#;
 
-    add_lemma_code_blocking(&mut engine, private_spec, "private.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
+    engine
+        .load(private_spec, lemma::SourceType::Labeled("private.lemma"))
+        .unwrap();
+    engine
+        .load(main_spec, lemma::SourceType::Labeled("main.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     // Evaluate with missing quantity fact
@@ -91,8 +93,12 @@ fact rules.base_price: 500
 rule total: rules.final_total
 "#;
 
-    add_lemma_code_blocking(&mut engine, private_spec, "private.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
+    engine
+        .load(private_spec, lemma::SourceType::Labeled("private.lemma"))
+        .unwrap();
+    engine
+        .load(main_spec, lemma::SourceType::Labeled("main.lemma"))
+        .unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("rules.base_price".to_string(), "9".to_string());
@@ -142,7 +148,9 @@ fact discount: [percent]
 rule total: price * quantity - discount
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
+    engine
+        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     // Evaluate with no facts provided
@@ -199,7 +207,9 @@ rule subtotal: price * quantity
 rule message: "Order processed"
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
+    engine
+        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("price".to_string(), "10".to_string());
@@ -262,8 +272,12 @@ fact rules.base_price: 500
 rule total: rules.total
 "#;
 
-    add_lemma_code_blocking(&mut engine, private_spec, "private.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
+    engine
+        .load(private_spec, lemma::SourceType::Labeled("private.lemma"))
+        .unwrap();
+    engine
+        .load(main_spec, lemma::SourceType::Labeled("main.lemma"))
+        .unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("rules.base_price".to_string(), "100".to_string());

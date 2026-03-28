@@ -3,10 +3,12 @@
 //! Validates spec structure and type declarations
 //! to catch errors early with clear messages.
 
-use crate::parsing::ast::{DateTimeValue, FactValue, LemmaSpec, TimeValue, TypeDef};
+use crate::parsing::ast::{
+    ComparisonComputation, DateTimeValue, FactValue, LemmaSpec, TimeValue, TypeDef,
+};
 use crate::planning::semantics::{
-    Expression, ExpressionKind, FactPath, LemmaType, RulePath, SemanticConversionTarget,
-    TypeSpecification,
+    Expression, ExpressionKind, FactData, FactPath, LemmaType, RulePath, SemanticConversionTarget,
+    TypeSpecification, ValueKind,
 };
 use crate::Error;
 use crate::Source;
@@ -680,54 +682,139 @@ pub struct RuleEntryForBindingCheck {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum ExpectedRuleTypeConstraint {
-    Numeric,
+enum BaseTypeRequirement {
+    Any,
     Boolean,
-    Comparable,
     Number,
     Duration,
     Ratio,
     Scale,
-    Any,
+    Text,
+    Date,
+    Time,
+    Comparable,
+    Numeric,
 }
 
-fn lemma_type_to_expected_constraint(lemma_type: &LemmaType) -> ExpectedRuleTypeConstraint {
+#[derive(Clone, Debug)]
+struct NumericLiteralConstraint {
+    op: ComparisonComputation,
+    literal: Decimal,
+    reference_on_left: bool,
+}
+
+#[derive(Clone, Debug)]
+enum RuleRefRequirement {
+    Base(BaseTypeRequirement),
+    ScaleMustContainUnit(String),
+    RatioMustContainUnit(String),
+    SameBaseAs(LemmaType),
+    SameScaleFamilyAs(LemmaType),
+    ArithmeticCompatibleWithNumber,
+    ArithmeticCompatibleWithRatio,
+    ArithmeticCompatibleWithScale(LemmaType),
+    ArithmeticCompatibleWithDuration,
+    NumericLiteral(NumericLiteralConstraint),
+}
+
+impl RuleRefRequirement {
+    fn describe(&self) -> String {
+        match self {
+            RuleRefRequirement::Base(kind) => match kind {
+                BaseTypeRequirement::Any => "any".to_string(),
+                BaseTypeRequirement::Boolean => "boolean".to_string(),
+                BaseTypeRequirement::Number => "number".to_string(),
+                BaseTypeRequirement::Duration => "duration".to_string(),
+                BaseTypeRequirement::Ratio => "ratio".to_string(),
+                BaseTypeRequirement::Scale => "scale".to_string(),
+                BaseTypeRequirement::Text => "text".to_string(),
+                BaseTypeRequirement::Date => "date".to_string(),
+                BaseTypeRequirement::Time => "time".to_string(),
+                BaseTypeRequirement::Comparable => "comparable".to_string(),
+                BaseTypeRequirement::Numeric => "numeric (number, scale, or ratio)".to_string(),
+            },
+            RuleRefRequirement::ScaleMustContainUnit(unit) => {
+                format!("scale type containing unit '{}'", unit)
+            }
+            RuleRefRequirement::RatioMustContainUnit(unit) => {
+                format!("ratio type containing unit '{}'", unit)
+            }
+            RuleRefRequirement::SameBaseAs(other) => {
+                format!("same base type as {}", other.name())
+            }
+            RuleRefRequirement::SameScaleFamilyAs(other) => {
+                format!("same scale family as {}", other.name())
+            }
+            RuleRefRequirement::ArithmeticCompatibleWithNumber => {
+                "arithmetic-compatible with number (number or ratio)".to_string()
+            }
+            RuleRefRequirement::ArithmeticCompatibleWithRatio => {
+                "arithmetic-compatible with ratio".to_string()
+            }
+            RuleRefRequirement::ArithmeticCompatibleWithScale(other) => {
+                format!("arithmetic-compatible with scale family {}", other.name())
+            }
+            RuleRefRequirement::ArithmeticCompatibleWithDuration => {
+                "arithmetic-compatible with duration".to_string()
+            }
+            RuleRefRequirement::NumericLiteral(rule) => {
+                let side = if rule.reference_on_left {
+                    "left"
+                } else {
+                    "right"
+                };
+                format!(
+                    "numeric range compatible with comparison (rule-ref {} side, op {:?}, literal {})",
+                    side, rule.op, rule.literal
+                )
+            }
+        }
+    }
+}
+
+fn lemma_type_to_base_requirement(lemma_type: &LemmaType) -> BaseTypeRequirement {
     if lemma_type.is_boolean() {
-        return ExpectedRuleTypeConstraint::Boolean;
+        return BaseTypeRequirement::Boolean;
     }
     if lemma_type.is_number() {
-        return ExpectedRuleTypeConstraint::Number;
+        return BaseTypeRequirement::Number;
     }
     if lemma_type.is_scale() {
-        return ExpectedRuleTypeConstraint::Scale;
+        return BaseTypeRequirement::Scale;
     }
     if lemma_type.is_duration() {
-        return ExpectedRuleTypeConstraint::Duration;
+        return BaseTypeRequirement::Duration;
     }
     if lemma_type.is_ratio() {
-        return ExpectedRuleTypeConstraint::Ratio;
+        return BaseTypeRequirement::Ratio;
     }
-    if lemma_type.is_text() || lemma_type.is_date() || lemma_type.is_time() {
-        return ExpectedRuleTypeConstraint::Comparable;
+    if lemma_type.is_text() {
+        return BaseTypeRequirement::Text;
     }
-    ExpectedRuleTypeConstraint::Any
+    if lemma_type.is_date() {
+        return BaseTypeRequirement::Date;
+    }
+    if lemma_type.is_time() {
+        return BaseTypeRequirement::Time;
+    }
+    BaseTypeRequirement::Any
 }
 
-fn rule_type_satisfies_constraint(
-    lemma_type: &LemmaType,
-    constraint: ExpectedRuleTypeConstraint,
-) -> bool {
+fn base_requirement_satisfied(lemma_type: &LemmaType, constraint: BaseTypeRequirement) -> bool {
     match constraint {
-        ExpectedRuleTypeConstraint::Any => true,
-        ExpectedRuleTypeConstraint::Boolean => lemma_type.is_boolean(),
-        ExpectedRuleTypeConstraint::Number => lemma_type.is_number(),
-        ExpectedRuleTypeConstraint::Duration => lemma_type.is_duration(),
-        ExpectedRuleTypeConstraint::Ratio => lemma_type.is_ratio(),
-        ExpectedRuleTypeConstraint::Scale => lemma_type.is_scale(),
-        ExpectedRuleTypeConstraint::Numeric => {
+        BaseTypeRequirement::Any => true,
+        BaseTypeRequirement::Boolean => lemma_type.is_boolean(),
+        BaseTypeRequirement::Number => lemma_type.is_number(),
+        BaseTypeRequirement::Duration => lemma_type.is_duration(),
+        BaseTypeRequirement::Ratio => lemma_type.is_ratio(),
+        BaseTypeRequirement::Scale => lemma_type.is_scale(),
+        BaseTypeRequirement::Text => lemma_type.is_text(),
+        BaseTypeRequirement::Date => lemma_type.is_date(),
+        BaseTypeRequirement::Time => lemma_type.is_time(),
+        BaseTypeRequirement::Numeric => {
             lemma_type.is_number() || lemma_type.is_scale() || lemma_type.is_ratio()
         }
-        ExpectedRuleTypeConstraint::Comparable => {
+        BaseTypeRequirement::Comparable => {
             lemma_type.is_boolean()
                 || lemma_type.is_text()
                 || lemma_type.is_number()
@@ -740,11 +827,165 @@ fn rule_type_satisfies_constraint(
     }
 }
 
-fn collect_expected_constraints_for_rule_ref(
+fn has_scale_unit(lemma_type: &LemmaType, unit: &str) -> bool {
+    match &lemma_type.specifications {
+        TypeSpecification::Scale { units, .. } => {
+            units.iter().any(|u| u.name.eq_ignore_ascii_case(unit))
+        }
+        _ => false,
+    }
+}
+
+fn has_ratio_unit(lemma_type: &LemmaType, unit: &str) -> bool {
+    match &lemma_type.specifications {
+        TypeSpecification::Ratio { units, .. } => {
+            units.iter().any(|u| u.name.eq_ignore_ascii_case(unit))
+        }
+        _ => false,
+    }
+}
+
+fn numeric_bounds(lemma_type: &LemmaType) -> Option<(Option<Decimal>, Option<Decimal>)> {
+    match &lemma_type.specifications {
+        TypeSpecification::Number {
+            minimum, maximum, ..
+        }
+        | TypeSpecification::Scale {
+            minimum, maximum, ..
+        }
+        | TypeSpecification::Ratio {
+            minimum, maximum, ..
+        } => Some((*minimum, *maximum)),
+        _ => None,
+    }
+}
+
+fn normalize_literal_constraint(rule: NumericLiteralConstraint) -> NumericLiteralConstraint {
+    if rule.reference_on_left {
+        return rule;
+    }
+    let op = match rule.op {
+        ComparisonComputation::GreaterThan => ComparisonComputation::LessThan,
+        ComparisonComputation::LessThan => ComparisonComputation::GreaterThan,
+        ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThanOrEqual,
+        ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThanOrEqual,
+        ComparisonComputation::Equal => ComparisonComputation::Equal,
+        ComparisonComputation::NotEqual => ComparisonComputation::NotEqual,
+        ComparisonComputation::Is => ComparisonComputation::Is,
+        ComparisonComputation::IsNot => ComparisonComputation::IsNot,
+    };
+    NumericLiteralConstraint {
+        op,
+        literal: rule.literal,
+        reference_on_left: true,
+    }
+}
+
+fn numeric_literal_constraint_satisfied(
+    lemma_type: &LemmaType,
+    rule: NumericLiteralConstraint,
+) -> bool {
+    let Some((minimum, maximum)) = numeric_bounds(lemma_type) else {
+        return false;
+    };
+    let normalized = normalize_literal_constraint(rule);
+    match normalized.op {
+        ComparisonComputation::GreaterThan => maximum.is_none_or(|max| max > normalized.literal),
+        ComparisonComputation::GreaterThanOrEqual => {
+            maximum.is_none_or(|max| max >= normalized.literal)
+        }
+        ComparisonComputation::LessThan => minimum.is_none_or(|min| min < normalized.literal),
+        ComparisonComputation::LessThanOrEqual => {
+            minimum.is_none_or(|min| min <= normalized.literal)
+        }
+        ComparisonComputation::Equal | ComparisonComputation::Is => {
+            minimum.is_none_or(|min| min <= normalized.literal)
+                && maximum.is_none_or(|max| max >= normalized.literal)
+        }
+        ComparisonComputation::NotEqual | ComparisonComputation::IsNot => {
+            !(minimum == Some(normalized.literal) && maximum == Some(normalized.literal))
+        }
+    }
+}
+
+fn rule_type_satisfies_requirement(
+    lemma_type: &LemmaType,
+    requirement: &RuleRefRequirement,
+) -> bool {
+    if lemma_type.is_undetermined() {
+        unreachable!("BUG: rule_type_satisfies_requirement called with undetermined type; this type exists only during type inference")
+    }
+    // veto is control flow, not a type incompatibility -- it propagates at runtime
+    if lemma_type.vetoed() {
+        return true;
+    }
+    match requirement {
+        RuleRefRequirement::Base(kind) => base_requirement_satisfied(lemma_type, *kind),
+        RuleRefRequirement::ScaleMustContainUnit(unit) => {
+            lemma_type.is_scale() && has_scale_unit(lemma_type, unit)
+        }
+        RuleRefRequirement::RatioMustContainUnit(unit) => {
+            lemma_type.is_ratio() && has_ratio_unit(lemma_type, unit)
+        }
+        RuleRefRequirement::SameBaseAs(other) => lemma_type.has_same_base_type(other),
+        RuleRefRequirement::SameScaleFamilyAs(other) => {
+            lemma_type.is_scale() && other.is_scale() && lemma_type.same_scale_family(other)
+        }
+        RuleRefRequirement::ArithmeticCompatibleWithNumber => {
+            lemma_type.is_number() || lemma_type.is_ratio()
+        }
+        RuleRefRequirement::ArithmeticCompatibleWithRatio => {
+            lemma_type.is_number()
+                || lemma_type.is_ratio()
+                || lemma_type.is_scale()
+                || lemma_type.is_duration()
+        }
+        RuleRefRequirement::ArithmeticCompatibleWithScale(other) => {
+            lemma_type.is_number()
+                || lemma_type.is_ratio()
+                || (lemma_type.is_scale()
+                    && other.is_scale()
+                    && lemma_type.same_scale_family(other))
+        }
+        RuleRefRequirement::ArithmeticCompatibleWithDuration => {
+            lemma_type.is_number() || lemma_type.is_ratio() || lemma_type.is_duration()
+        }
+        RuleRefRequirement::NumericLiteral(rule) => {
+            numeric_literal_constraint_satisfied(lemma_type, rule.clone())
+        }
+    }
+}
+
+fn infer_interface_expression_type(
+    expr: &Expression,
+    rule_entries: &IndexMap<RulePath, RuleEntryForBindingCheck>,
+    facts: &IndexMap<FactPath, FactData>,
+) -> Option<LemmaType> {
+    match &expr.kind {
+        ExpressionKind::Literal(lv) => Some(lv.lemma_type.clone()),
+        ExpressionKind::FactPath(fp) => facts.get(fp).and_then(|f| f.schema_type().cloned()),
+        ExpressionKind::RulePath(rp) => rule_entries.get(rp).map(|r| r.rule_type.clone()),
+        _ => None,
+    }
+}
+
+fn numeric_literal_from_expression(expr: &Expression) -> Option<Decimal> {
+    let ExpressionKind::Literal(lv) = &expr.kind else {
+        return None;
+    };
+    match &lv.value {
+        ValueKind::Number(n) => Some(*n),
+        _ => None,
+    }
+}
+
+fn collect_expected_requirements_for_rule_ref(
     expr: &Expression,
     rule_path: &RulePath,
-    expected: ExpectedRuleTypeConstraint,
-) -> Vec<(Option<Source>, ExpectedRuleTypeConstraint)> {
+    expected: RuleRefRequirement,
+    rule_entries: &IndexMap<RulePath, RuleEntryForBindingCheck>,
+    facts: &IndexMap<FactPath, FactData>,
+) -> Vec<(Option<Source>, RuleRefRequirement)> {
     let mut out = Vec::new();
     match &expr.kind {
         ExpressionKind::RulePath(rp) => {
@@ -753,84 +994,230 @@ fn collect_expected_constraints_for_rule_ref(
             }
         }
         ExpressionKind::LogicalAnd(left, right) => {
-            out.extend(collect_expected_constraints_for_rule_ref(
+            out.extend(collect_expected_requirements_for_rule_ref(
                 left,
                 rule_path,
-                ExpectedRuleTypeConstraint::Boolean,
+                RuleRefRequirement::Base(BaseTypeRequirement::Boolean),
+                rule_entries,
+                facts,
             ));
-            out.extend(collect_expected_constraints_for_rule_ref(
+            out.extend(collect_expected_requirements_for_rule_ref(
                 right,
                 rule_path,
-                ExpectedRuleTypeConstraint::Boolean,
+                RuleRefRequirement::Base(BaseTypeRequirement::Boolean),
+                rule_entries,
+                facts,
             ));
         }
         ExpressionKind::LogicalNegation(operand, _) => {
-            out.extend(collect_expected_constraints_for_rule_ref(
+            out.extend(collect_expected_requirements_for_rule_ref(
                 operand,
                 rule_path,
-                ExpectedRuleTypeConstraint::Boolean,
+                RuleRefRequirement::Base(BaseTypeRequirement::Boolean),
+                rule_entries,
+                facts,
             ));
         }
-        ExpressionKind::Comparison(left, _, right) => {
-            out.extend(collect_expected_constraints_for_rule_ref(
+        ExpressionKind::Comparison(left, op, right) => {
+            out.extend(collect_expected_requirements_for_rule_ref(
                 left,
                 rule_path,
-                ExpectedRuleTypeConstraint::Comparable,
+                RuleRefRequirement::Base(BaseTypeRequirement::Comparable),
+                rule_entries,
+                facts,
             ));
-            out.extend(collect_expected_constraints_for_rule_ref(
+            out.extend(collect_expected_requirements_for_rule_ref(
                 right,
                 rule_path,
-                ExpectedRuleTypeConstraint::Comparable,
+                RuleRefRequirement::Base(BaseTypeRequirement::Comparable),
+                rule_entries,
+                facts,
             ));
+
+            if let ExpressionKind::RulePath(rp) = &left.kind {
+                if rp == rule_path {
+                    if let Some(other_type) =
+                        infer_interface_expression_type(right, rule_entries, facts)
+                    {
+                        out.push((
+                            expr.source_location.clone(),
+                            RuleRefRequirement::SameBaseAs(other_type.clone()),
+                        ));
+                        if other_type.is_scale() {
+                            out.push((
+                                expr.source_location.clone(),
+                                RuleRefRequirement::SameScaleFamilyAs(other_type),
+                            ));
+                        }
+                    }
+                    if let Some(lit) = numeric_literal_from_expression(right) {
+                        out.push((
+                            expr.source_location.clone(),
+                            RuleRefRequirement::NumericLiteral(NumericLiteralConstraint {
+                                op: op.clone(),
+                                literal: lit,
+                                reference_on_left: true,
+                            }),
+                        ));
+                    }
+                }
+            }
+            if let ExpressionKind::RulePath(rp) = &right.kind {
+                if rp == rule_path {
+                    if let Some(other_type) =
+                        infer_interface_expression_type(left, rule_entries, facts)
+                    {
+                        out.push((
+                            expr.source_location.clone(),
+                            RuleRefRequirement::SameBaseAs(other_type.clone()),
+                        ));
+                        if other_type.is_scale() {
+                            out.push((
+                                expr.source_location.clone(),
+                                RuleRefRequirement::SameScaleFamilyAs(other_type),
+                            ));
+                        }
+                    }
+                    if let Some(lit) = numeric_literal_from_expression(left) {
+                        out.push((
+                            expr.source_location.clone(),
+                            RuleRefRequirement::NumericLiteral(NumericLiteralConstraint {
+                                op: op.clone(),
+                                literal: lit,
+                                reference_on_left: false,
+                            }),
+                        ));
+                    }
+                }
+            }
         }
         ExpressionKind::Arithmetic(left, _, right) => {
-            out.extend(collect_expected_constraints_for_rule_ref(
+            out.extend(collect_expected_requirements_for_rule_ref(
                 left,
                 rule_path,
-                ExpectedRuleTypeConstraint::Numeric,
+                RuleRefRequirement::Base(BaseTypeRequirement::Numeric),
+                rule_entries,
+                facts,
             ));
-            out.extend(collect_expected_constraints_for_rule_ref(
+            out.extend(collect_expected_requirements_for_rule_ref(
                 right,
                 rule_path,
-                ExpectedRuleTypeConstraint::Numeric,
+                RuleRefRequirement::Base(BaseTypeRequirement::Numeric),
+                rule_entries,
+                facts,
             ));
+
+            if let ExpressionKind::RulePath(rp) = &left.kind {
+                if rp == rule_path {
+                    if let Some(other_type) =
+                        infer_interface_expression_type(right, rule_entries, facts)
+                    {
+                        if other_type.is_scale() {
+                            out.push((
+                                expr.source_location.clone(),
+                                RuleRefRequirement::ArithmeticCompatibleWithScale(other_type),
+                            ));
+                        } else if other_type.is_number() || other_type.is_ratio() {
+                            out.push((
+                                expr.source_location.clone(),
+                                if other_type.is_number() {
+                                    RuleRefRequirement::ArithmeticCompatibleWithNumber
+                                } else {
+                                    RuleRefRequirement::ArithmeticCompatibleWithRatio
+                                },
+                            ));
+                        } else if other_type.is_duration() {
+                            out.push((
+                                expr.source_location.clone(),
+                                RuleRefRequirement::ArithmeticCompatibleWithDuration,
+                            ));
+                        }
+                    }
+                }
+            }
+            if let ExpressionKind::RulePath(rp) = &right.kind {
+                if rp == rule_path {
+                    if let Some(other_type) =
+                        infer_interface_expression_type(left, rule_entries, facts)
+                    {
+                        if other_type.is_scale() {
+                            out.push((
+                                expr.source_location.clone(),
+                                RuleRefRequirement::ArithmeticCompatibleWithScale(other_type),
+                            ));
+                        } else if other_type.is_number() || other_type.is_ratio() {
+                            out.push((
+                                expr.source_location.clone(),
+                                if other_type.is_number() {
+                                    RuleRefRequirement::ArithmeticCompatibleWithNumber
+                                } else {
+                                    RuleRefRequirement::ArithmeticCompatibleWithRatio
+                                },
+                            ));
+                        } else if other_type.is_duration() {
+                            out.push((
+                                expr.source_location.clone(),
+                                RuleRefRequirement::ArithmeticCompatibleWithDuration,
+                            ));
+                        }
+                    }
+                }
+            }
         }
         ExpressionKind::UnitConversion(source, target) => {
             let constraint = match target {
-                SemanticConversionTarget::Duration(_) => ExpectedRuleTypeConstraint::Duration,
-                SemanticConversionTarget::ScaleUnit(_) => ExpectedRuleTypeConstraint::Scale,
-                SemanticConversionTarget::RatioUnit(_) => ExpectedRuleTypeConstraint::Ratio,
+                SemanticConversionTarget::Duration(_) => {
+                    RuleRefRequirement::Base(BaseTypeRequirement::Duration)
+                }
+                SemanticConversionTarget::ScaleUnit(unit) => {
+                    RuleRefRequirement::ScaleMustContainUnit(unit.clone())
+                }
+                SemanticConversionTarget::RatioUnit(unit) => {
+                    RuleRefRequirement::RatioMustContainUnit(unit.clone())
+                }
             };
-            out.extend(collect_expected_constraints_for_rule_ref(
-                source, rule_path, constraint,
+            out.extend(collect_expected_requirements_for_rule_ref(
+                source,
+                rule_path,
+                constraint,
+                rule_entries,
+                facts,
             ));
         }
         ExpressionKind::MathematicalComputation(_, operand) => {
-            out.extend(collect_expected_constraints_for_rule_ref(
+            out.extend(collect_expected_requirements_for_rule_ref(
                 operand,
                 rule_path,
-                ExpectedRuleTypeConstraint::Number,
+                RuleRefRequirement::Base(BaseTypeRequirement::Number),
+                rule_entries,
+                facts,
             ));
         }
         ExpressionKind::DateRelative(_, date_expr, tolerance) => {
-            out.extend(collect_expected_constraints_for_rule_ref(
+            out.extend(collect_expected_requirements_for_rule_ref(
                 date_expr,
                 rule_path,
-                ExpectedRuleTypeConstraint::Comparable,
+                RuleRefRequirement::Base(BaseTypeRequirement::Date),
+                rule_entries,
+                facts,
             ));
             if let Some(tol) = tolerance {
-                out.extend(collect_expected_constraints_for_rule_ref(
+                out.extend(collect_expected_requirements_for_rule_ref(
                     tol,
                     rule_path,
-                    ExpectedRuleTypeConstraint::Duration,
+                    RuleRefRequirement::Base(BaseTypeRequirement::Duration),
+                    rule_entries,
+                    facts,
                 ));
             }
         }
         ExpressionKind::DateCalendar(_, _, date_expr) => {
-            out.extend(collect_expected_constraints_for_rule_ref(
+            out.extend(collect_expected_requirements_for_rule_ref(
                 date_expr,
                 rule_path,
-                ExpectedRuleTypeConstraint::Comparable,
+                RuleRefRequirement::Base(BaseTypeRequirement::Date),
+                rule_entries,
+                facts,
             ));
         }
         ExpressionKind::Literal(_)
@@ -839,19 +1226,6 @@ fn collect_expected_constraints_for_rule_ref(
         | ExpressionKind::Now => {}
     }
     out
-}
-
-fn expected_constraint_name(c: ExpectedRuleTypeConstraint) -> &'static str {
-    match c {
-        ExpectedRuleTypeConstraint::Numeric => "numeric (number, scale, or ratio)",
-        ExpectedRuleTypeConstraint::Boolean => "boolean",
-        ExpectedRuleTypeConstraint::Comparable => "comparable",
-        ExpectedRuleTypeConstraint::Number => "number",
-        ExpectedRuleTypeConstraint::Duration => "duration",
-        ExpectedRuleTypeConstraint::Ratio => "ratio",
-        ExpectedRuleTypeConstraint::Scale => "scale",
-        ExpectedRuleTypeConstraint::Any => "any",
-    }
 }
 
 fn spec_interface_error(
@@ -869,11 +1243,19 @@ fn spec_interface_error(
     )
 }
 
-/// Validate that every spec-ref fact path's referenced spec has the required rules
-/// and that each such rule's result type satisfies what the referencing rules expect.
+/// Validate cross-spec IO contracts for spec-reference bindings.
+///
+/// Enforces:
+/// - required referenced rule names exist on the provider spec
+/// - referenced rule result types satisfy structural requirements implied by
+///   the consumer expression context (base kind, units, scale family, bounds)
+///
+/// This runs at planning time and reports binding-site errors when a provider
+/// interface is incompatible with consumer expectations.
 pub fn validate_spec_interfaces(
     referenced_rules: &HashMap<Vec<String>, HashSet<String>>,
     spec_ref_facts: &[(FactPath, Arc<LemmaSpec>, Source)],
+    facts: &IndexMap<FactPath, FactData>,
     rule_entries: &IndexMap<RulePath, RuleEntryForBindingCheck>,
     main_spec: &Arc<LemmaSpec>,
 ) -> Result<(), Vec<Error>> {
@@ -905,8 +1287,33 @@ pub fn validate_spec_interfaces(
                 continue;
             }
 
-            let ref_rule_path = RulePath::new(fact_path.segments.clone(), required_rule.clone());
+            let mut ref_segments = fact_path.segments.clone();
+            ref_segments.push(crate::planning::semantics::PathSegment {
+                fact: fact_path.fact.clone(),
+                spec: spec.name.clone(),
+            });
+            let ref_rule_path = RulePath::new(ref_segments, required_rule.clone());
             let Some(ref_entry) = rule_entries.get(&ref_rule_path) else {
+                let binding_path_str = fact_path
+                    .segments
+                    .iter()
+                    .map(|s| s.fact.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                let binding_path_str = if binding_path_str.is_empty() {
+                    fact_path.fact.clone()
+                } else {
+                    format!("{}.{}", binding_path_str, fact_path.fact)
+                };
+                errors.push(spec_interface_error(
+                    fact_source,
+                    format!(
+                        "Fact binding '{}' sets spec reference to '{}', but interface validation could not resolve rule path '{}.{}' for contract checking",
+                        binding_path_str, spec.name, fact_path.fact, required_rule
+                    ),
+                    Some(Arc::clone(main_spec)),
+                    Some(Arc::clone(spec_arc)),
+                ));
                 continue;
             };
             let ref_rule_type = &ref_entry.rule_type;
@@ -915,15 +1322,18 @@ pub fn validate_spec_interfaces(
                 if !entry.depends_on_rules.contains(&ref_rule_path) {
                     continue;
                 }
-                let expected = lemma_type_to_expected_constraint(&entry.rule_type);
+                let expected =
+                    RuleRefRequirement::Base(lemma_type_to_base_requirement(&entry.rule_type));
                 for (_condition, result_expr) in &entry.branches {
-                    let constraints = collect_expected_constraints_for_rule_ref(
+                    let requirements = collect_expected_requirements_for_rule_ref(
                         result_expr,
                         &ref_rule_path,
-                        expected,
+                        expected.clone(),
+                        rule_entries,
+                        facts,
                     );
-                    for (_source, constraint) in constraints {
-                        if !rule_type_satisfies_constraint(ref_rule_type, constraint) {
+                    for (_source, requirement) in requirements {
+                        if !rule_type_satisfies_requirement(ref_rule_type, &requirement) {
                             let report_source = fact_source;
 
                             let binding_path_str = fact_path
@@ -946,7 +1356,7 @@ pub fn validate_spec_interfaces(
                                     spec.name,
                                     required_rule,
                                     ref_rule_type.name(),
-                                    expected_constraint_name(constraint),
+                                    requirement.describe(),
                                 ),
                                 Some(Arc::clone(main_spec)),
                                 Some(Arc::clone(spec_arc)),
@@ -1004,7 +1414,9 @@ pub fn collect_bare_registry_refs(spec: &LemmaSpec) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::parsing::ast::{CommandArg, TypeConstraintCommand};
-    use crate::planning::semantics::TypeSpecification;
+    use crate::planning::semantics::{
+        LemmaType, RatioUnit, RatioUnits, ScaleUnit, ScaleUnits, TypeSpecification,
+    };
     use rust_decimal::Decimal;
 
     fn test_source() -> Source {
@@ -1352,5 +1764,204 @@ mod tests {
         assert!(errors.iter().any(|e| e
             .to_string()
             .contains("minimum 100 is greater than maximum 50")));
+    }
+
+    fn lt(spec: TypeSpecification) -> LemmaType {
+        LemmaType::primitive(spec)
+    }
+
+    #[test]
+    fn interface_requirement_matrix_all_types_base_checks() {
+        let bool_t = lt(TypeSpecification::boolean());
+        let num_t = lt(TypeSpecification::number());
+        let scale_t = lt(TypeSpecification::Scale {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            precision: None,
+            units: ScaleUnits::from(vec![ScaleUnit {
+                name: "eur".to_string(),
+                value: Decimal::ONE,
+            }]),
+            help: String::new(),
+            default: None,
+        });
+        let ratio_t = lt(TypeSpecification::Ratio {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            units: RatioUnits::from(vec![RatioUnit {
+                name: "percent".to_string(),
+                value: Decimal::from(100),
+            }]),
+            help: String::new(),
+            default: None,
+        });
+        let text_t = lt(TypeSpecification::text());
+        let date_t = lt(TypeSpecification::date());
+        let time_t = lt(TypeSpecification::time());
+        let duration_t = lt(TypeSpecification::duration());
+        let veto_t = LemmaType::veto_type();
+        let undetermined_t = LemmaType::undetermined_type();
+
+        assert!(rule_type_satisfies_requirement(
+            &bool_t,
+            &RuleRefRequirement::Base(BaseTypeRequirement::Boolean)
+        ));
+        assert!(rule_type_satisfies_requirement(
+            &num_t,
+            &RuleRefRequirement::Base(BaseTypeRequirement::Number)
+        ));
+        assert!(rule_type_satisfies_requirement(
+            &scale_t,
+            &RuleRefRequirement::Base(BaseTypeRequirement::Scale)
+        ));
+        assert!(rule_type_satisfies_requirement(
+            &ratio_t,
+            &RuleRefRequirement::Base(BaseTypeRequirement::Ratio)
+        ));
+        assert!(rule_type_satisfies_requirement(
+            &text_t,
+            &RuleRefRequirement::Base(BaseTypeRequirement::Text)
+        ));
+        assert!(rule_type_satisfies_requirement(
+            &date_t,
+            &RuleRefRequirement::Base(BaseTypeRequirement::Date)
+        ));
+        assert!(rule_type_satisfies_requirement(
+            &time_t,
+            &RuleRefRequirement::Base(BaseTypeRequirement::Time)
+        ));
+        assert!(rule_type_satisfies_requirement(
+            &duration_t,
+            &RuleRefRequirement::Base(BaseTypeRequirement::Duration)
+        ));
+
+        assert!(!rule_type_satisfies_requirement(
+            &num_t,
+            &RuleRefRequirement::Base(BaseTypeRequirement::Boolean)
+        ));
+        assert!(!rule_type_satisfies_requirement(
+            &scale_t,
+            &RuleRefRequirement::Base(BaseTypeRequirement::Number)
+        ));
+        // veto is control flow, not type incompatibility -- satisfies any requirement
+        assert!(rule_type_satisfies_requirement(
+            &veto_t,
+            &RuleRefRequirement::Base(BaseTypeRequirement::Any)
+        ));
+        assert!(
+            std::panic::catch_unwind(|| {
+                rule_type_satisfies_requirement(
+                    &undetermined_t,
+                    &RuleRefRequirement::Base(BaseTypeRequirement::Any),
+                )
+            })
+            .is_err(),
+            "should panic when rule_type_satisfies_requirement is called with undetermined type"
+        );
+    }
+
+    #[test]
+    fn interface_requirement_matrix_unit_family_and_bounds_checks() {
+        let money = LemmaType::new(
+            "money".to_string(),
+            TypeSpecification::Scale {
+                minimum: Some(Decimal::ZERO),
+                maximum: Some(Decimal::from(100)),
+                decimals: None,
+                precision: None,
+                units: ScaleUnits::from(vec![
+                    ScaleUnit {
+                        name: "eur".to_string(),
+                        value: Decimal::ONE,
+                    },
+                    ScaleUnit {
+                        name: "usd".to_string(),
+                        value: Decimal::new(11, 1),
+                    },
+                ]),
+                help: String::new(),
+                default: None,
+            },
+            crate::planning::semantics::TypeExtends::Primitive,
+        );
+        let weight = LemmaType::new(
+            "weight".to_string(),
+            TypeSpecification::Scale {
+                minimum: None,
+                maximum: None,
+                decimals: None,
+                precision: None,
+                units: ScaleUnits::from(vec![ScaleUnit {
+                    name: "kg".to_string(),
+                    value: Decimal::ONE,
+                }]),
+                help: String::new(),
+                default: None,
+            },
+            crate::planning::semantics::TypeExtends::Primitive,
+        );
+        let ratio = lt(TypeSpecification::Ratio {
+            minimum: Some(Decimal::ZERO),
+            maximum: Some(Decimal::from(100)),
+            decimals: None,
+            units: RatioUnits::from(vec![RatioUnit {
+                name: "percent".to_string(),
+                value: Decimal::from(100),
+            }]),
+            help: String::new(),
+            default: None,
+        });
+        let bounded_number = lt(TypeSpecification::Number {
+            minimum: Some(Decimal::ZERO),
+            maximum: Some(Decimal::from(100)),
+            decimals: None,
+            precision: None,
+            help: String::new(),
+            default: None,
+        });
+
+        assert!(rule_type_satisfies_requirement(
+            &money,
+            &RuleRefRequirement::ScaleMustContainUnit("eur".to_string())
+        ));
+        assert!(!rule_type_satisfies_requirement(
+            &money,
+            &RuleRefRequirement::ScaleMustContainUnit("gbp".to_string())
+        ));
+        assert!(rule_type_satisfies_requirement(
+            &ratio,
+            &RuleRefRequirement::RatioMustContainUnit("percent".to_string())
+        ));
+        assert!(!rule_type_satisfies_requirement(
+            &ratio,
+            &RuleRefRequirement::RatioMustContainUnit("permille".to_string())
+        ));
+        assert!(rule_type_satisfies_requirement(
+            &money,
+            &RuleRefRequirement::SameScaleFamilyAs(money.clone())
+        ));
+        assert!(!rule_type_satisfies_requirement(
+            &money,
+            &RuleRefRequirement::SameScaleFamilyAs(weight)
+        ));
+
+        assert!(rule_type_satisfies_requirement(
+            &bounded_number,
+            &RuleRefRequirement::NumericLiteral(NumericLiteralConstraint {
+                op: ComparisonComputation::GreaterThan,
+                literal: Decimal::from(50),
+                reference_on_left: true,
+            })
+        ));
+        assert!(!rule_type_satisfies_requirement(
+            &bounded_number,
+            &RuleRefRequirement::NumericLiteral(NumericLiteralConstraint {
+                op: ComparisonComputation::GreaterThan,
+                literal: Decimal::from(500),
+                reference_on_left: true,
+            })
+        ));
     }
 }

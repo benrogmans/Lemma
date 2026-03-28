@@ -1,13 +1,11 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::{collections::HashMap, str::FromStr};
 
 fn run(code: &str, rule: &str) -> Result<String, lemma::Errors> {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma")?;
+    engine.load(code, lemma::SourceType::Labeled("test.lemma"))?;
     let now = DateTimeValue::now();
     let mut resp = engine
         .run("test", Some(&now), HashMap::new(), false)
@@ -156,17 +154,17 @@ fn test_nested_math_ops() -> Result<(), lemma::Errors> {
 fn test_sqrt_negative_and_log_domain_errors() {
     // sqrt of negative and log of non-positive should yield runtime errors
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         rule bad_sqrt: sqrt -1
         rule bad_log0: log 0
         rule bad_log_neg: log -5
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let res1 = engine
@@ -216,15 +214,15 @@ fn test_sqrt_negative_and_log_domain_errors() {
 fn test_inverse_trig_domain_error() {
     // asin(x) domain is [-1,1]; asin(2) should return Veto
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         rule bad_asin: asin 2
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine

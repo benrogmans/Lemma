@@ -1,7 +1,5 @@
-use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::Engine;
 use lemma::LiteralValue;
 use lemma::ValueKind;
 use std::collections::HashMap;
@@ -23,7 +21,9 @@ rule with_spaces: not  (  x  )
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine

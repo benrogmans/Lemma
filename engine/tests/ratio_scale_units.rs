@@ -5,8 +5,6 @@
 //! number ± ratio fact semantics (e.g. 100 - discount: 100 * (1 - discount)).
 
 use lemma::evaluation::OperationResult;
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
 use lemma::planning::semantics::ValueKind;
 use lemma::{Engine, LiteralValue};
@@ -27,7 +25,9 @@ rule is_above_30: savings_ratio > 30%
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -77,7 +77,9 @@ rule tier: "low"
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -103,7 +105,9 @@ rule above_20_permille: as_permille > 20 permille
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -138,7 +142,9 @@ rule bad_conv: x in not_a_unit
 "#;
 
     let mut engine = Engine::new();
-    let err = add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap_err();
+    let err = engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap_err();
 
     let msg = format!("{:?}", err);
     assert!(
@@ -163,7 +169,9 @@ rule in_usd: amount in usd
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -191,7 +199,9 @@ rule price: 100 - discount
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -251,7 +261,9 @@ rule compared: plus_five > 25%
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -299,7 +311,9 @@ rule share_above_20: share_pct > 20%
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -349,7 +363,9 @@ rule exceeds: discount > threshold
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine

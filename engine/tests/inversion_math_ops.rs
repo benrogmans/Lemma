@@ -1,14 +1,14 @@
-use lemma::{Engine, LiteralValue, Target};
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, LiteralValue, Target};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
 fn setup_engine(code: &str) -> Engine {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to add code");
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .expect("Failed to add code");
     engine
 }
 

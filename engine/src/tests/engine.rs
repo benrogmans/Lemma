@@ -1,28 +1,25 @@
 use crate::engine::Engine;
 use crate::parsing::ast::DateTimeValue;
+use crate::SourceType;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-fn add_lemma_code(engine: &mut Engine, code: &str, source: &str) -> Result<(), crate::Errors> {
-    engine.load(code, crate::SourceType::Labeled(source))
-}
-
 #[test]
 fn test_evaluate_spec_all_rules() {
     let mut engine = Engine::new();
-    add_lemma_code(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         fact x: 10
         fact y: 5
         rule sum: x + y
         rule product: x * y
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -58,16 +55,16 @@ fn test_evaluate_spec_all_rules() {
 #[test]
 fn test_evaluate_empty_facts() {
     let mut engine = Engine::new();
-    add_lemma_code(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         fact price: 100
         rule total: price * 2
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -85,16 +82,16 @@ fn test_evaluate_empty_facts() {
 #[test]
 fn test_evaluate_boolean_rule() {
     let mut engine = Engine::new();
-    add_lemma_code(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         fact age: 25
         rule is_adult: age >= 18
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -109,17 +106,17 @@ fn test_evaluate_boolean_rule() {
 #[test]
 fn test_evaluate_with_unless_clause() {
     let mut engine = Engine::new();
-    add_lemma_code(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         fact quantity: 15
         rule discount: 0
           unless quantity >= 10 then 10
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -149,27 +146,27 @@ fn test_spec_not_found() {
 #[test]
 fn test_multiple_specs() {
     let mut engine = Engine::new();
-    add_lemma_code(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec spec1
         fact x: 10
         rule result: x * 2
     "#,
-        "spec1.lemma",
-    )
-    .unwrap();
+            SourceType::Labeled("spec1.lemma"),
+        )
+        .unwrap();
 
-    add_lemma_code(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec spec2
         fact y: 5
         rule result: y * 3
     "#,
-        "spec2.lemma",
-    )
-    .unwrap();
+            SourceType::Labeled("spec2.lemma"),
+        )
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response1 = engine
@@ -196,17 +193,17 @@ fn test_multiple_specs() {
 #[test]
 fn test_runtime_error_mapping() {
     let mut engine = Engine::new();
-    add_lemma_code(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         fact numerator: 10
         fact denominator: 0
         rule division: numerator / denominator
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     let now = DateTimeValue::now();
     let result = engine.run("test", Some(&now), HashMap::new(), false);
@@ -239,9 +236,9 @@ fn test_runtime_error_mapping() {
 #[test]
 fn test_rules_sorted_by_source_order() {
     let mut engine = Engine::new();
-    add_lemma_code(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         fact a: 1
         fact b: 2
@@ -249,9 +246,9 @@ fn test_rules_sorted_by_source_order() {
         rule y: a * b
         rule x: a - b
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -259,9 +256,12 @@ fn test_rules_sorted_by_source_order() {
         .unwrap();
     assert_eq!(response.results.len(), 3);
 
-    assert!(response.results.contains_key("z"));
-    assert!(response.results.contains_key("y"));
-    assert!(response.results.contains_key("x"));
+    let z = response.results.get("z").expect("z");
+    let y = response.results.get("y").expect("y");
+    let x = response.results.get("x").expect("x");
+    assert_eq!(z.result.value().unwrap().to_string(), "3");
+    assert_eq!(y.result.value().unwrap().to_string(), "2");
+    assert_eq!(x.result.value().unwrap().to_string(), "-1");
 
     // Verify source positions increase (z < y < x)
     let z_pos = response
@@ -306,7 +306,7 @@ fact value: [invalid]
 rule result: value
 "#;
 
-    let result = add_lemma_code(&mut engine, code, "test.lemma");
+    let result = engine.load(code, SourceType::Labeled("test.lemma"));
     assert!(result.is_err(), "Engine should reject invalid parent types");
 
     let load_err = result.unwrap_err();
@@ -328,7 +328,7 @@ fact value: [invalid_parent_type]
 rule result: value
 "#;
 
-    let result = add_lemma_code(&mut engine, code, "test.lemma");
+    let result = engine.load(code, SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "Engine should reject unknown types used in type declarations"
@@ -347,18 +347,18 @@ rule result: value
 #[test]
 fn test_rule_filtering_evaluates_dependencies() {
     let mut engine = Engine::new();
-    add_lemma_code(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         fact base: 100
         rule subtotal: base * 2
         rule tax: subtotal * 10%
         rule total: subtotal + tax
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     // User filters to 'total' after run (deps were still computed)
     let now = DateTimeValue::now();
@@ -381,9 +381,9 @@ fn test_rule_filtering_evaluates_dependencies() {
 }
 
 #[test]
-fn test_add_lemma_code_empty_string_is_ok() {
+fn test_load_empty_string_is_ok() {
     let mut engine = Engine::new();
-    let result = add_lemma_code(&mut engine, "", "test.lemma");
+    let result = engine.load("", SourceType::Labeled("test.lemma"));
     assert!(result.is_ok());
     assert!(
         engine.list_specs().is_empty(),
@@ -392,9 +392,9 @@ fn test_add_lemma_code_empty_string_is_ok() {
 }
 
 #[test]
-fn test_add_lemma_code_whitespace_only_is_ok() {
+fn test_load_whitespace_only_is_ok() {
     let mut engine = Engine::new();
-    let result = add_lemma_code(&mut engine, "   \n\t  ", "test.lemma");
+    let result = engine.load("   \n\t  ", SourceType::Labeled("test.lemma"));
     assert!(result.is_ok());
     assert!(
         engine.list_specs().is_empty(),
@@ -414,7 +414,7 @@ spec test
 fact x: 2
 "#;
 
-    let result = add_lemma_code(&mut engine, code, "test.lemma");
+    let result = engine.load(code, SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "Duplicate spec names should be rejected (no silent overwrites)"

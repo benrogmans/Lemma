@@ -1,7 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -20,7 +18,9 @@ rule expected: 150
 rule test_passes: price_after_discount == expected
 "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run(
@@ -57,7 +57,9 @@ rule expected: 110
 rule test_passes: price_with_markup == expected
 "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run(
@@ -91,7 +93,9 @@ rule expected: 150
 rule test_passes: result == expected
 "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run(
@@ -126,7 +130,9 @@ rule expected: 150
 rule test_passes: final_price == expected
 "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run(
@@ -163,7 +169,9 @@ rule expected: 72
 rule test_passes: after_second == expected
 "#;
 
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run(

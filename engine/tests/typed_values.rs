@@ -1,7 +1,5 @@
-use lemma::{ValueKind, *};
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{ValueKind, *};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -15,7 +13,9 @@ rule net_multiplier: 1 - discount
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -47,7 +47,9 @@ rule double_meeting: meeting_length * 2
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -82,7 +84,9 @@ rule end: start + 7 days
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -113,7 +117,9 @@ rule can_access: is_active and not is_premium
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -147,7 +153,9 @@ rule message: greeting
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine

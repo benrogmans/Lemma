@@ -2,11 +2,25 @@
 //!
 //! Unit-resolution and PerSliceTypeResolver behavior tests live in `src/planning/types.rs`.
 
-use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, Response};
 use std::collections::HashMap;
+
+fn rule_value_str(response: &Response, name: &str) -> String {
+    let r = response
+        .results
+        .get(name)
+        .unwrap_or_else(|| panic!("rule '{name}' missing from results"));
+    assert!(
+        !r.result.vetoed(),
+        "rule '{name}' must not veto, got {:?}",
+        r.result
+    );
+    r.result
+        .value()
+        .unwrap_or_else(|| panic!("rule '{name}' must produce a value"))
+        .to_string()
+}
 
 #[test]
 fn test_scale_op_scale_same_type_allowed() {
@@ -25,7 +39,9 @@ rule product: price1 * price2
 rule quotient: price1 / price2"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price1".to_string(), "10 eur".to_string());
@@ -36,11 +52,69 @@ rule quotient: price1 / price2"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    // All operations should work
-    assert!(response.results.get("total").is_some());
-    assert!(response.results.get("difference").is_some());
-    assert!(response.results.get("product").is_some());
-    assert!(response.results.get("quotient").is_some());
+    for name in ["total", "difference", "product", "quotient"] {
+        let r = response.results.get(name).expect(name);
+        assert!(
+            !r.result.vetoed(),
+            "{name} must not veto for valid scale inputs"
+        );
+        let v = r
+            .result
+            .value()
+            .unwrap_or_else(|| panic!("{name} must produce a value"));
+        assert!(
+            v.get_type().is_scale(),
+            "{name} result must stay in scale money type"
+        );
+    }
+    let total_s = response
+        .results
+        .get("total")
+        .unwrap()
+        .result
+        .value()
+        .unwrap()
+        .to_string();
+    assert!(
+        total_s.contains("15") && total_s.to_lowercase().contains("eur"),
+        "10 eur + 5 eur => ~15 eur, got {total_s}"
+    );
+    let diff_s = response
+        .results
+        .get("difference")
+        .unwrap()
+        .result
+        .value()
+        .unwrap()
+        .to_string();
+    assert!(
+        diff_s.contains("5") && diff_s.to_lowercase().contains("eur"),
+        "10 eur - 5 eur => ~5 eur, got {diff_s}"
+    );
+    let prod_s = response
+        .results
+        .get("product")
+        .unwrap()
+        .result
+        .value()
+        .unwrap()
+        .to_string();
+    assert!(
+        prod_s.contains("50"),
+        "10 eur * 5 eur => numeric product 50 in display, got {prod_s}"
+    );
+    let quot_s = response
+        .results
+        .get("quotient")
+        .unwrap()
+        .result
+        .value()
+        .unwrap()
+        .to_string();
+    assert!(
+        quot_s.contains("2"),
+        "10 eur / 5 eur => ratio 2 in display, got {quot_s}"
+    );
 }
 
 #[test]
@@ -59,7 +133,7 @@ fact distance: [length]
 rule invalid: price + distance"#;
 
     let mut engine = Engine::new();
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
 
     // Should fail during planning/validation
     assert!(
@@ -94,7 +168,9 @@ rule scaled: price * multiplier
 rule divided: price / multiplier"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "10 eur".to_string());
@@ -105,8 +181,16 @@ rule divided: price / multiplier"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    assert!(response.results.get("scaled").is_some());
-    assert!(response.results.get("divided").is_some());
+    let scaled = rule_value_str(&response, "scaled");
+    assert!(
+        scaled.contains("20") && scaled.to_lowercase().contains("eur"),
+        "10 eur * 2 => ~20 eur, got {scaled}"
+    );
+    let divided = rule_value_str(&response, "divided");
+    assert!(
+        divided.contains("5") && divided.to_lowercase().contains("eur"),
+        "10 eur / 2 => ~5 eur, got {divided}"
+    );
 }
 
 #[test]
@@ -123,7 +207,9 @@ rule scaled: multiplier * price
 rule divided: multiplier / price"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("multiplier".to_string(), "2".to_string());
@@ -134,8 +220,16 @@ rule divided: multiplier / price"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    assert!(response.results.get("scaled").is_some());
-    assert!(response.results.get("divided").is_some());
+    let scaled = rule_value_str(&response, "scaled");
+    assert!(
+        scaled.contains("20") && scaled.to_lowercase().contains("eur"),
+        "2 * 10 eur => ~20 eur, got {scaled}"
+    );
+    let divided = rule_value_str(&response, "divided");
+    assert!(
+        divided.contains("0.2") || divided.contains("0,2"),
+        "2 / 10 eur => dimensionless ~0.2, got {divided}"
+    );
 }
 
 #[test]
@@ -148,7 +242,9 @@ fact multiplier: [number]
 rule result: ratio_value * multiplier"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio_value".to_string(), "0.5".to_string());
@@ -159,7 +255,8 @@ rule result: ratio_value * multiplier"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    assert!(response.results.get("result").is_some());
+    let s = rule_value_str(&response, "result");
+    assert!(s.contains('1'), "0.5 * 2 => 1, got {s}");
 }
 
 #[test]
@@ -173,7 +270,9 @@ rule product: ratio1 * ratio2
 rule quotient: ratio1 / ratio2"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio1".to_string(), "0.5".to_string());
@@ -184,8 +283,13 @@ rule quotient: ratio1 / ratio2"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    assert!(response.results.get("product").is_some());
-    assert!(response.results.get("quotient").is_some());
+    let prod = rule_value_str(&response, "product");
+    assert!(
+        prod.contains("125") || prod.contains("0.125"),
+        "0.5*0.25, got {prod}"
+    );
+    let quot = rule_value_str(&response, "quotient");
+    assert!(quot.contains('2'), "0.5/0.25 => 2, got {quot}");
 }
 
 #[test]
@@ -201,7 +305,9 @@ fact price: [money]
 rule result: ratio_value * price"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio_value".to_string(), "0.5".to_string());
@@ -212,7 +318,11 @@ rule result: ratio_value * price"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    assert!(response.results.get("result").is_some());
+    let s = rule_value_str(&response, "result");
+    assert!(
+        s.contains('5') && s.to_lowercase().contains("eur"),
+        "0.5 * 10 eur => ~5 eur, got {s}"
+    );
 }
 
 #[test]
@@ -228,7 +338,9 @@ fact ratio_value: [ratio]
 rule result: price * ratio_value"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "10 eur".to_string());
@@ -239,7 +351,11 @@ rule result: price * ratio_value"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    assert!(response.results.get("result").is_some());
+    let s = rule_value_str(&response, "result");
+    assert!(
+        s.contains('5') && s.to_lowercase().contains("eur"),
+        "10 eur * 0.5 => ~5 eur, got {s}"
+    );
 }
 
 #[test]
@@ -256,7 +372,9 @@ rule is_greater: price1 > price2
 rule is_equal: price1 == price2"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price1".to_string(), "10 eur".to_string());
@@ -267,8 +385,8 @@ rule is_equal: price1 == price2"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    assert!(response.results.get("is_greater").is_some());
-    assert!(response.results.get("is_equal").is_some());
+    assert_eq!(rule_value_str(&response, "is_greater"), "true");
+    assert_eq!(rule_value_str(&response, "is_equal"), "false");
 }
 
 #[test]
@@ -287,7 +405,7 @@ fact distance: [length]
 rule invalid: price > distance"#;
 
     let mut engine = Engine::new();
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
 
     assert!(
         result.is_err(),
@@ -320,8 +438,19 @@ fact threshold: [number]
 rule is_above: price > threshold"#;
 
     let mut engine = Engine::new();
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
-    assert!(result.is_err(), "Should reject scale vs number comparison");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
+    let errs = result.expect_err("Should reject scale vs number comparison");
+    let error_msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        error_msg.to_lowercase().contains("compare")
+            || error_msg.contains("scale")
+            || error_msg.contains("number"),
+        "Error should mention comparison/scale/number. Got: {error_msg}"
+    );
 }
 
 #[test]
@@ -345,7 +474,9 @@ rule modulo: a % divisor
 rule power: a ^ exponent"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("a".to_string(), "10 eur".to_string());
@@ -358,13 +489,30 @@ rule power: a ^ exponent"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    // All operations should work for same Scale type (modulo uses Number divisor)
-    assert!(response.results.get("add").is_some());
-    assert!(response.results.get("subtract").is_some());
-    assert!(response.results.get("multiply").is_some());
-    assert!(response.results.get("divide").is_some());
-    assert!(response.results.get("modulo").is_some());
-    assert!(response.results.get("power").is_some());
+    let add = rule_value_str(&response, "add");
+    assert!(
+        add.contains("13") && add.to_lowercase().contains("eur"),
+        "add: {add}"
+    );
+    let sub = rule_value_str(&response, "subtract");
+    assert!(
+        sub.contains('7') && sub.to_lowercase().contains("eur"),
+        "subtract: {sub}"
+    );
+    let mul = rule_value_str(&response, "multiply");
+    assert!(mul.contains("30"), "multiply: {mul}");
+    let div = rule_value_str(&response, "divide");
+    assert!(
+        div.contains('3') && div.to_lowercase().contains("eur"),
+        "divide: {div}"
+    );
+    let modulo = rule_value_str(&response, "modulo");
+    assert!(
+        modulo.contains('1') && modulo.to_lowercase().contains("eur"),
+        "modulo: {modulo}"
+    );
+    let pow = rule_value_str(&response, "power");
+    assert!(pow.contains("100"), "power 10^2: {pow}");
 }
 
 #[test]
@@ -385,7 +533,7 @@ rule modulo: price % distance
 rule power: price ^ distance"#;
 
     let mut engine = Engine::new();
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
 
     assert!(
         result.is_err(),
@@ -421,7 +569,9 @@ rule modulo: a % b
 rule power: a ^ b"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("a".to_string(), "10".to_string());
@@ -432,13 +582,16 @@ rule power: a ^ b"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    // All operations should work for Number types
-    assert!(response.results.get("add").is_some());
-    assert!(response.results.get("subtract").is_some());
-    assert!(response.results.get("multiply").is_some());
-    assert!(response.results.get("divide").is_some());
-    assert!(response.results.get("modulo").is_some());
-    assert!(response.results.get("power").is_some());
+    assert_eq!(rule_value_str(&response, "add"), "13");
+    assert_eq!(rule_value_str(&response, "subtract"), "7");
+    assert_eq!(rule_value_str(&response, "multiply"), "30");
+    let div = rule_value_str(&response, "divide");
+    assert!(
+        div.starts_with("3.333") || div == "3.3333333333333333333333333333",
+        "divide 10/3: {div}"
+    );
+    assert_eq!(rule_value_str(&response, "modulo"), "1");
+    assert_eq!(rule_value_str(&response, "power"), "1000");
 }
 
 #[test]
@@ -454,7 +607,9 @@ fact price2: [money]
 rule total: price1 + price2"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price1".to_string(), "10 eur".to_string());
@@ -497,7 +652,9 @@ fact multiplier: [number]
 rule result: price * multiplier"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "10 eur".to_string());
@@ -526,7 +683,9 @@ fact multiplier: [number]
 rule result: ratio_value * multiplier"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio_value".to_string(), "0.5".to_string());
@@ -563,7 +722,9 @@ fact ratio2: [ratio]
 rule result: ratio1 * ratio2"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio1".to_string(), "0.5".to_string());
@@ -603,7 +764,9 @@ fact price: [money]
 rule result: ratio_value * price"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("ratio_value".to_string(), "0.5".to_string());
@@ -639,7 +802,9 @@ rule with_tax: discounted * tax_multiplier
 rule total: with_tax * quantity"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("base_price".to_string(), "100 eur".to_string());
@@ -652,9 +817,21 @@ rule total: with_tax * quantity"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    assert!(response.results.get("discounted").is_some());
-    assert!(response.results.get("with_tax").is_some());
-    assert!(response.results.get("total").is_some());
+    let disc = rule_value_str(&response, "discounted");
+    assert!(
+        disc.contains("90") && disc.to_lowercase().contains("eur"),
+        "100 eur * 0.9 => ~90 eur: {disc}"
+    );
+    let tax = rule_value_str(&response, "with_tax");
+    assert!(
+        tax.contains("108") && tax.to_lowercase().contains("eur"),
+        "90 eur * 1.2 => ~108 eur: {tax}"
+    );
+    let tot = rule_value_str(&response, "total");
+    assert!(
+        tot.contains("540") && tot.to_lowercase().contains("eur"),
+        "108 eur * 5 => ~540 eur: {tot}"
+    );
 }
 
 #[test]
@@ -672,7 +849,9 @@ fact number_value: [number]
 rule result: scale_value * number_value"#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse");
 
     let mut facts = HashMap::new();
     facts.insert("scale_value".to_string(), "10 eur".to_string());
@@ -683,5 +862,9 @@ rule result: scale_value * number_value"#;
         .run("test", Some(&now), facts, false)
         .expect("Should evaluate");
 
-    assert!(response.results.get("result").is_some());
+    let s = rule_value_str(&response, "result");
+    assert!(
+        s.contains("20") && s.to_lowercase().contains("eur"),
+        "10 eur * 2 => ~20 eur: {s}"
+    );
 }

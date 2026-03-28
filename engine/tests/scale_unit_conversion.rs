@@ -1,6 +1,4 @@
 use lemma::evaluation::OperationResult;
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 use lemma::ValueKind;
@@ -22,7 +20,9 @@ rule check: accept
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -61,7 +61,9 @@ rule check: accept
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -100,7 +102,9 @@ rule check: accept
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let err = engine
@@ -133,7 +137,9 @@ rule check: accept
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let err = engine
@@ -161,7 +167,9 @@ rule price_usd: 100 eur in usd
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -205,7 +213,9 @@ rule taxable: gross - pension
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine.run("t", Some(&now), HashMap::new(), false).unwrap();
@@ -241,7 +251,9 @@ rule price_gbp: 100 eur in gbp
 "#;
 
     let mut engine = Engine::new();
-    let load_err = add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap_err();
+    let load_err = engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap_err();
     let msg = load_err
         .errors
         .iter()
@@ -271,7 +283,9 @@ rule base_shipping: 5.99
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -312,7 +326,9 @@ rule total: base_fee + surcharge
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine

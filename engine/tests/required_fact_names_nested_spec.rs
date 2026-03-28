@@ -1,7 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 
 #[test]
 fn necessary_facts_include_nested_spec_facts_for_local_rule_deps() {
@@ -29,7 +27,9 @@ rule total: calc.total
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan("cashier", Some(&now)).unwrap();
@@ -51,17 +51,30 @@ rule total: calc.total
 
     // Schema for specific rule: same result for cashier.total
     let schema_total = plan.schema_for_rules(&["total".to_string()]).unwrap();
+    let (scoped_price_type, _) = schema_total
+        .facts
+        .get("calc.price")
+        .expect("schema_for_rules must include calc.price with same typing as full schema");
+    assert_eq!(
+        scoped_price_type.name(),
+        "money",
+        "scoped schema must preserve nested fact type"
+    );
     assert!(
-        schema_total.facts.contains_key("calc.price"),
-        "Expected schema_for_rules facts for cashier.total to include calc.price, got: {:?}",
-        schema_total.facts.keys().collect::<Vec<_>>()
+        scoped_price_type.is_scale(),
+        "calc.price must remain scale money in scoped schema"
     );
 }
 
 #[test]
 fn schema_errors_on_unknown_rule() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, "spec test\nfact x: 1\nrule y: x", "test.lemma").unwrap();
+    engine
+        .load(
+            "spec test\nfact x: 1\nrule y: x",
+            lemma::SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan("test", Some(&now)).unwrap();

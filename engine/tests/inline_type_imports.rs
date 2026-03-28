@@ -1,5 +1,3 @@
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, Error};
 use std::collections::HashMap;
@@ -21,8 +19,12 @@ fact user_age: [age from age]
 rule is_adult: user_age >= 18
 "#;
 
-    add_lemma_code_blocking(&mut engine, age_spec, "age.lemma").expect("add age spec");
-    add_lemma_code_blocking(&mut engine, test_spec, "test.lemma").expect("add test spec");
+    engine
+        .load(age_spec, lemma::SourceType::Labeled("age.lemma"))
+        .expect("add age spec");
+    engine
+        .load(test_spec, lemma::SourceType::Labeled("test.lemma"))
+        .expect("add test spec");
     let now = DateTimeValue::now();
 
     let mut facts = HashMap::new();
@@ -70,8 +72,12 @@ fact user_age: [age from age -> maximum 120]
 rule is_senior: user_age >= 65
 "#;
 
-    add_lemma_code_blocking(&mut engine, age_spec, "age.lemma").expect("add age spec");
-    add_lemma_code_blocking(&mut engine, test_spec, "test.lemma").expect("add test spec");
+    engine
+        .load(age_spec, lemma::SourceType::Labeled("age.lemma"))
+        .expect("add age spec");
+    engine
+        .load(test_spec, lemma::SourceType::Labeled("test.lemma"))
+        .expect("add test spec");
     let now = DateTimeValue::now();
 
     let mut facts = HashMap::new();

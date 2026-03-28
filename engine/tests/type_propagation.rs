@@ -2,8 +2,6 @@
 
 use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -18,7 +16,9 @@ fn test_money_plus_number_preserves_money() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let mut response = engine
@@ -40,7 +40,9 @@ fn test_number_plus_money_preserves_money() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let mut response = engine
@@ -62,7 +64,9 @@ fn test_money_plus_money_preserves_money() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let mut response = engine
@@ -86,7 +90,9 @@ fn test_different_custom_types_same_base() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     // This should succeed - both extend number (dimensionless), so they're compatible
@@ -111,7 +117,7 @@ fn test_incompatible_types_error() {
 
     let mut engine = Engine::new();
     // This should fail during planning/validation because number + text is incompatible
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "Should fail during planning/validation for incompatible types (number + text)"
@@ -147,7 +153,7 @@ fn test_different_scale_types_are_incompatible() {
     "#;
 
     let mut engine = Engine::new();
-    let parse_result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let parse_result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     // This should fail because different Scale types are incompatible
     assert!(
         parse_result.is_err(),

@@ -1,7 +1,5 @@
 use lemma::parsing::ast::{DateTimeValue, TimezoneValue};
 use lemma::{Engine, ValueKind};
-mod common;
-use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 fn make_effective(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTimeValue {
@@ -92,7 +90,9 @@ fn now_resolves_to_effective_datetime() {
 spec test
 rule current: now
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 14, 30, 0);
     let lit = eval_rule_date(&engine, "test", "current", &effective, HashMap::new());
     if let ValueKind::Date(dt) = &lit.value {
@@ -114,7 +114,9 @@ spec test
 fact birth_date: 2000-01-01
 rule age_duration: now - birth_date
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 1, 1, 0, 0, 0);
     let lit = eval_rule_date(&engine, "test", "age_duration", &effective, HashMap::new());
     if let ValueKind::Duration(seconds, _) = &lit.value {
@@ -133,7 +135,9 @@ spec test
 fact deadline: 2026-04-01
 rule is_before_deadline: now < deadline
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -152,7 +156,9 @@ spec test
 fact deadline: 2026-04-01
 rule is_before_deadline: now < deadline
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 5, 1, 0, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -171,7 +177,9 @@ spec test
 fact threshold: 2026-06-01
 rule is_past_threshold: now > threshold
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let before = make_effective(2026, 3, 1, 0, 0, 0);
     assert!(!eval_rule_bool(
@@ -204,7 +212,9 @@ spec test
 fact event_date: 2026-01-15
 rule was_in_past: event_date in past
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -223,7 +233,9 @@ spec test
 fact event_date: 2026-12-25
 rule was_in_past: event_date in past
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -242,7 +254,9 @@ spec test
 fact launch_date: 2026-12-01
 rule is_upcoming: launch_date in future
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -261,7 +275,9 @@ spec test
 fact launch_date: 2025-06-01
 rule is_upcoming: launch_date in future
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -280,7 +296,9 @@ spec test
 fact event_date: 2026-03-07T12:00:00Z
 rule check: event_date in past
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -299,7 +317,9 @@ spec test
 fact event_date: 2026-03-07T12:00:00Z
 rule check: event_date in future
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -322,7 +342,9 @@ spec test
 fact delivered: 2026-03-03
 rule recent_delivery: delivered in past 7 days
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -341,7 +363,9 @@ spec test
 fact delivered: 2026-02-15
 rule recent_delivery: delivered in past 7 days
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -360,7 +384,9 @@ spec test
 fact renewal_date: 2026-03-20
 rule upcoming_renewal: renewal_date in future 30 days
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -379,7 +405,9 @@ spec test
 fact renewal_date: 2026-06-15
 rule upcoming_renewal: renewal_date in future 30 days
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -398,7 +426,9 @@ spec test
 fact event: 2026-02-28T12:00:00Z
 rule check: event in past 7 days
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     // now - 7 days = 2026-02-28T12:00:00Z, event == window_start → inclusive
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -418,7 +448,9 @@ spec test
 fact event: 2026-03-07T10:00:00Z
 rule check: event in past 4 hours
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -437,7 +469,9 @@ spec test
 fact event: 2026-03-07T06:00:00Z
 rule check: event in past 4 hours
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -460,7 +494,9 @@ spec test
 fact invoice_date: 2026-06-15
 rule current_year_invoice: invoice_date in calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -479,7 +515,9 @@ spec test
 fact invoice_date: 2025-06-15
 rule current_year_invoice: invoice_date in calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -498,7 +536,9 @@ spec test
 fact invoice_date: 2025-06-15
 rule last_year_invoice: invoice_date in past calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -517,7 +557,9 @@ spec test
 fact invoice_date: 2024-06-15
 rule last_year_invoice: invoice_date in past calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -536,7 +578,9 @@ spec test
 fact target_date: 2027-06-15
 rule next_year: target_date in future calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -555,7 +599,9 @@ spec test
 fact old_date: 2024-01-01
 rule is_not_this_year: old_date not in calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -574,7 +620,9 @@ spec test
 fact today_date: 2026-03-07
 rule is_not_this_year: today_date not in calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -593,7 +641,9 @@ spec test
 fact payment_date: 2026-03-15
 rule this_month_payment: payment_date in calendar month
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -612,7 +662,9 @@ spec test
 fact payment_date: 2026-04-01
 rule this_month_payment: payment_date in calendar month
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -631,7 +683,9 @@ spec test
 fact payment_date: 2026-02-15
 rule last_month_payment: payment_date in past calendar month
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -650,7 +704,9 @@ spec test
 fact payment_date: 2025-12-15
 rule last_month_payment: payment_date in past calendar month
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 1, 15, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -669,7 +725,9 @@ spec test
 fact due_date: 2026-04-15
 rule next_month_due: due_date in future calendar month
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -688,7 +746,9 @@ spec test
 fact meeting_date: 2026-03-02
 rule this_week_meeting: meeting_date in calendar week
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     // 2026-03-07 is Saturday, ISO week 10 (Mon Mar 2 - Sun Mar 8)
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -708,7 +768,9 @@ spec test
 fact meeting_date: 2026-03-15
 rule this_week_meeting: meeting_date in calendar week
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -732,7 +794,9 @@ fact order_date: 2026-03-05
 rule shipping_fee: 15
   unless order_date in past 3 days then 0
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_rule_date(&engine, "test", "shipping_fee", &effective, HashMap::new());
     if let ValueKind::Number(n) = &lit.value {
@@ -751,7 +815,9 @@ fact order_date: 2026-02-01
 rule shipping_fee: 15
   unless order_date in past 3 days then 0
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_rule_date(&engine, "test", "shipping_fee", &effective, HashMap::new());
     if let ValueKind::Number(n) = &lit.value {
@@ -770,7 +836,9 @@ fact hire_date: 2026-01-15
 rule is_new_hire: false
   unless hire_date in calendar year then true
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -790,7 +858,9 @@ fact hire_date: 2024-06-01
 rule needs_recertification: false
   unless hire_date not in calendar year then true
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -814,7 +884,9 @@ fact order_date: 2026-03-05
 fact is_premium: true
 rule qualifies: order_date in past 7 days and is_premium
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -834,7 +906,9 @@ fact order_date: 2026-03-05
 fact is_premium: false
 rule qualifies: order_date in past 7 days and is_premium
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -856,7 +930,9 @@ rule status: "unknown"
   unless event_date in future then "upcoming"
   unless event_date in past 3 days then "recently_completed"
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_rule_date(&engine, "test", "status", &effective, HashMap::new());
     if let ValueKind::Text(s) = &lit.value {
@@ -878,7 +954,9 @@ spec test
 fact event_date: [date]
 rule was_recent: event_date in past 7 days
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let mut facts = HashMap::new();
     facts.insert("event_date".to_string(), "2026-03-05".to_string());
@@ -899,7 +977,9 @@ spec test
 fact event_date: [date]
 rule was_recent: event_date in past 7 days
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let mut facts = HashMap::new();
     facts.insert("event_date".to_string(), "2026-01-01".to_string());
@@ -924,7 +1004,9 @@ spec test
 fact event_date: 2026-03-07T00:00:00Z
 rule check: event_date in past
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     // effective is 2026-03-07T01:00:00+02:00 = 2026-03-06T23:00:00Z
     // event (UTC midnight Mar 7) is AFTER effective (UTC 23:00 Mar 6)
     let effective = make_effective_tz((2026, 3, 7, 1, 0, 0), (2, 0));
@@ -945,7 +1027,9 @@ spec test
 fact event_date: 2026-12-31T23:00:00Z
 rule check: event_date in calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     // effective timezone is +05:00; year boundary ends at 2026-12-31T23:59:59.999999+05:00
     // = 2026-12-31T18:59:59.999999 UTC
     // event is 2026-12-31T23:00:00 UTC which is past the boundary
@@ -971,7 +1055,7 @@ spec test
 fact quantity: 42
 rule check: quantity in past
     "#;
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "should reject non-date operand for 'in past'"
@@ -986,7 +1070,7 @@ spec test
 fact name: "Alice"
 rule check: name in calendar year
     "#;
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "should reject non-date operand for 'in calendar year'"
@@ -1001,7 +1085,7 @@ spec test
 fact event_date: 2026-03-01
 rule check: event_date in past 7
     "#;
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "should reject non-duration tolerance for 'in past'"
@@ -1020,7 +1104,9 @@ spec test
 fact payment_date: 2024-02-29
 rule this_month: payment_date in calendar month
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2024, 2, 15, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -1039,7 +1125,9 @@ spec test
 fact event_date: 2026-03-31T23:59:59Z
 rule check: event_date in calendar month
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 1, 0, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -1058,7 +1146,9 @@ spec test
 fact event_date: 2026-04-01T00:00:00Z
 rule check: event_date in calendar month
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 15, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -1081,7 +1171,9 @@ spec test
 fact event_date: 2026-03-02T00:00:00Z
 rule check: event_date in calendar week
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     // 2026-03-07 is Saturday, week Mon Mar 2 - Sun Mar 8
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -1101,7 +1193,9 @@ spec test
 fact event_date: 2026-03-08T23:59:59Z
 rule check: event_date in calendar week
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -1120,7 +1214,9 @@ spec test
 fact event_date: 2026-03-09T00:00:00Z
 rule check: event_date in calendar week
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -1143,7 +1239,9 @@ spec test
 fact event_date: 2026-01-01T00:00:00Z
 rule check: event_date in calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 6, 15, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -1162,7 +1260,9 @@ spec test
 fact event_date: 2026-12-31T23:59:59Z
 rule check: event_date in calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 6, 15, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -1181,7 +1281,9 @@ spec test
 fact event_date: 2025-12-31T23:59:59Z
 rule check: event_date in past calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 1, 1, 0, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -1200,7 +1302,9 @@ spec test
 fact event_date: 2025-01-01T00:00:00Z
 rule check: event_date in past calendar year
     "#;
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let effective = make_effective(2026, 6, 15, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,

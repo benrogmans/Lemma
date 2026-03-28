@@ -1,5 +1,3 @@
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, Error};
 use std::collections::HashMap;
@@ -15,14 +13,13 @@ use std::collections::HashMap;
 fn test_duplicate_fact_definition_error() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec test
         fact salary: 50000
         fact salary: 60000
     "#,
-        "test.lemma",
+        lemma::SourceType::Labeled("test.lemma"),
     );
 
     let errs = result.unwrap_err();
@@ -48,15 +45,14 @@ fn test_duplicate_fact_definition_error() {
 fn test_duplicate_rule_definition_error() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec test
         fact x: 10
         rule total: x * 2
         rule total: x * 3
     "#,
-        "test.lemma",
+        lemma::SourceType::Labeled("test.lemma"),
     );
 
     let errs = result.unwrap_err();
@@ -82,15 +78,14 @@ fn test_duplicate_rule_definition_error() {
 fn test_duplicate_fact_shows_name() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec test
         fact name: "Alice"
         fact age: 30
         fact name: "Bob"
     "#,
-        "test.lemma",
+        lemma::SourceType::Labeled("test.lemma"),
     );
 
     let errs = result.unwrap_err();
@@ -120,17 +115,17 @@ fn test_duplicate_fact_shows_name() {
 fn test_runtime_error_division_by_zero() {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         fact numerator: 100
         fact denominator: 0
         rule result: numerator / denominator
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -162,17 +157,17 @@ fn test_runtime_error_division_by_zero() {
 fn test_runtime_error_division_by_zero_with_cli_facts() {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         fact hours_worked: [number]
         fact salary: 50000
         rule hourly_rate: salary / hours_worked
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     let mut facts = std::collections::HashMap::new();
     facts.insert("hours_worked".to_string(), "0".to_string());
@@ -206,13 +201,12 @@ fn test_transpile_error_self_referencing_rule() {
     let mut engine = Engine::new();
 
     // Self-referencing rules are caught during transpilation
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec test
         rule x: x + 1
     "#,
-        "test.lemma",
+        lemma::SourceType::Labeled("test.lemma"),
     );
 
     let errs = result.unwrap_err();
@@ -236,15 +230,14 @@ fn test_transpile_error_self_referencing_rule() {
 fn test_validation_error_type_mismatch_text_in_arithmetic() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec test
         fact name: "Alice"
         fact salary: 50000
         rule result: salary + name
     "#,
-        "test.lemma",
+        lemma::SourceType::Labeled("test.lemma"),
     );
 
     let errs = result.unwrap_err();
@@ -262,15 +255,14 @@ fn test_validation_error_type_mismatch_text_in_arithmetic() {
 fn test_validation_error_boolean_in_arithmetic() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec test
         fact is_active: true
         fact count: 10
         rule result: count * is_active
     "#,
-        "test.lemma",
+        lemma::SourceType::Labeled("test.lemma"),
     );
 
     let errs = result.unwrap_err();
@@ -292,14 +284,13 @@ fn test_validation_error_boolean_in_arithmetic() {
 fn test_duplicate_error_contains_fact_name() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec my_spec
         fact price: 100
         fact price: 200
     "#,
-        "my_file.lemma",
+        lemma::SourceType::Labeled("my_file.lemma"),
     );
 
     let errs = result.unwrap_err();
@@ -318,14 +309,13 @@ fn test_duplicate_error_contains_fact_name() {
 fn test_duplicate_error_is_reported() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec test
         fact x: 10
         fact x: 20
     "#,
-        "test.lemma",
+        lemma::SourceType::Labeled("test.lemma"),
     );
 
     let errs = result.unwrap_err();
@@ -344,8 +334,7 @@ fn test_duplicate_error_is_reported() {
 fn test_duplicate_in_second_spec_is_caught() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec first_spec
         fact a: 1
@@ -354,7 +343,7 @@ fn test_duplicate_in_second_spec_is_caught() {
         fact b: 2
         fact b: 3
     "#,
-        "multi.lemma",
+        lemma::SourceType::Labeled("multi.lemma"),
     );
 
     let errs = result.unwrap_err();
@@ -377,14 +366,13 @@ fn test_duplicate_in_second_spec_is_caught() {
 fn test_error_display_contains_duplicate_info() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec test
         fact value: 100
         fact value: 200
     "#,
-        "test.lemma",
+        lemma::SourceType::Labeled("test.lemma"),
     );
 
     let errs = result.unwrap_err();
@@ -407,17 +395,17 @@ fn test_error_display_contains_duplicate_info() {
 fn test_division_by_zero_returns_veto_with_message() {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         fact x: 100
         fact y: 0
         rule result: x / y
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -449,14 +437,13 @@ fn test_division_by_zero_returns_veto_with_message() {
 fn test_circular_dependency_has_helpful_suggestion() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec test
         rule x: y
         rule y: x
     "#,
-        "test.lemma",
+        lemma::SourceType::Labeled("test.lemma"),
     );
 
     let errs = result.unwrap_err();
@@ -486,7 +473,7 @@ fact line3: 2
 fact line4: 3
 fact line4: 4"#;
 
-    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
+    let result = engine.load(lemma_code, lemma::SourceType::Labeled("test.lemma"));
 
     let errs = result.unwrap_err();
     let details = errs
@@ -504,17 +491,17 @@ fact line4: 4"#;
 fn test_division_by_zero_returns_veto() {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec test
         fact numerator: 42
         fact denominator: 0
         rule division_result: numerator / denominator
     "#,
-        "test.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -542,14 +529,13 @@ fn test_division_by_zero_returns_veto() {
 fn test_duplicate_detected_from_database_source() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec contract
         fact amount: 1000
         fact amount: 2000
     "#,
-        "db://contracts/123",
+        lemma::SourceType::Labeled("db://contracts/123"),
     );
 
     let errs = result.unwrap_err();
@@ -568,14 +554,13 @@ fn test_duplicate_detected_from_database_source() {
 fn test_duplicate_detected_from_api_source() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec policy
         rule rate: 1.5
         rule rate: 2.0
     "#,
-        "api://policies/endpoint",
+        lemma::SourceType::Labeled("api://policies/endpoint"),
     );
 
     let errs = result.unwrap_err();
@@ -594,14 +579,13 @@ fn test_duplicate_detected_from_api_source() {
 fn test_duplicate_detected_from_runtime_source() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec runtime_spec
         fact x: 5
         fact x: 10
     "#,
-        "<runtime>",
+        lemma::SourceType::Labeled("<runtime>"),
     );
 
     let errs = result.unwrap_err();
@@ -628,8 +612,7 @@ fn test_duplicate_detected_from_runtime_source() {
 fn test_multiple_error_phases_reported_together() {
     let mut engine = Engine::new();
 
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         r#"
         spec pricing
 
@@ -649,7 +632,7 @@ fn test_multiple_error_phases_reported_together() {
         rule total: price * quantity - non_existent_rule
           unless price > 100 usd then veto "This price is too high."
     "#,
-        "pricing.lemma",
+        lemma::SourceType::Labeled("pricing.lemma"),
     );
 
     let errs = result.unwrap_err();

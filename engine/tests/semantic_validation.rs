@@ -1,6 +1,4 @@
 use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 
 #[test]
 fn test_reference_to_rule_succeeds() {
@@ -16,7 +14,7 @@ rule calculated: base * 2
 rule correct_usage: calculated + 50
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
+    let result = engine.load(lemma_code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "Reference to rule should succeed: {:?}",
@@ -37,7 +35,7 @@ fact multiplier: 2
 rule correct_usage: base * multiplier
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
+    let result = engine.load(lemma_code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "Reference to facts should succeed: {:?}",
@@ -60,7 +58,7 @@ rule discount: 0%
   unless is_valid then 10%
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
+    let result = engine.load(lemma_code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "Reference to rule in unless condition should succeed: {:?}",
@@ -82,7 +80,7 @@ fact employee: spec base_spec
 rule total: employee.annual + 1000
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
+    let result = engine.load(lemma_code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "Cross-spec reference to rule should succeed: {:?}",
@@ -102,7 +100,7 @@ fact base: 100
 rule usage: nonexistent + 1
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
+    let result = engine.load(lemma_code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "Reference to non-existent name should fail"
@@ -133,7 +131,7 @@ rule ambiguous: 20
 rule usage: ambiguous + 1
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, lemma_code, "test.lemma");
+    let result = engine.load(lemma_code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "Reference that is both fact and rule should fail"

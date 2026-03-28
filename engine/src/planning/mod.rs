@@ -4,6 +4,11 @@
 //! - Builds Graph with facts and rules (validated, with types computed)
 //! - Builds ExecutionPlan from Graph (topologically sorted, ready for evaluation)
 //! - Validates spec structure and references
+//!
+//! Contract model:
+//! - Interface contract: facts (inputs) + rules (outputs), including full type constraints.
+//!   Cross-spec bindings must satisfy this contract at planning time.
+//! - Behavior lock: plan hash pins full execution semantics (fingerprint), not only IO shape.
 
 pub mod execution_plan;
 pub mod fingerprint;

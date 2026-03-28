@@ -6,8 +6,6 @@
 //! Golden hashes below: load Lemma source into `Engine`, `get_plan`, then `plan_hash`
 //! (format version `lemma::planning::fingerprint::FINGERPRINT_FORMAT_VERSION`, same encoding as unit goldens).
 
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::{DateTimeValue, Engine};
 
 fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
@@ -44,12 +42,12 @@ fn plan_hash_from_loaded_plan(engine: &Engine, spec: &str, effective: &DateTimeV
 #[test]
 fn golden_loaded_minimal_fact_and_rule() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        "spec golden_loaded_minimal\nfact x: 1\nrule r: x",
-        "golden.lemma",
-    )
-    .unwrap();
+    engine
+        .load(
+            "spec golden_loaded_minimal\nfact x: 1\nrule r: x",
+            lemma::SourceType::Labeled("golden.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 1, 1);
     assert_eq!(
         plan_hash_from_loaded_plan(&engine, "golden_loaded_minimal", &eff),
@@ -60,12 +58,12 @@ fn golden_loaded_minimal_fact_and_rule() {
 #[test]
 fn golden_loaded_unless_rule() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        "spec golden_loaded_unless\nfact q: 10\nrule r: 0\n unless q >= 5 then 5",
-        "golden.lemma",
-    )
-    .unwrap();
+    engine
+        .load(
+            "spec golden_loaded_unless\nfact q: 10\nrule r: 0\n unless q >= 5 then 5",
+            lemma::SourceType::Labeled("golden.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 1, 1);
     assert_eq!(
         plan_hash_from_loaded_plan(&engine, "golden_loaded_unless", &eff),
@@ -76,12 +74,12 @@ fn golden_loaded_unless_rule() {
 #[test]
 fn golden_loaded_facts_only_no_rules() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        "spec golden_loaded_facts\nfact a: 1\nfact b: 2",
-        "golden.lemma",
-    )
-    .unwrap();
+    engine
+        .load(
+            "spec golden_loaded_facts\nfact a: 1\nfact b: 2",
+            lemma::SourceType::Labeled("golden.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 1, 1);
     assert_eq!(
         plan_hash_from_loaded_plan(&engine, "golden_loaded_facts", &eff),
@@ -92,15 +90,15 @@ fn golden_loaded_facts_only_no_rules() {
 #[test]
 fn golden_loaded_temporal_effective_slice() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"spec golden_temporal_adv 2025-06-01
+    engine
+        .load(
+            r#"spec golden_temporal_adv 2025-06-01
 
 fact x: 42
 rule r: x"#,
-        "golden.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("golden.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 7, 1);
     assert_eq!(
         plan_hash_from_loaded_plan(&engine, "golden_temporal_adv", &eff),
@@ -111,9 +109,9 @@ rule r: x"#,
 #[test]
 fn golden_loaded_commentary_meta_and_custom_type() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"spec golden_rich_adv
+    engine
+        .load(
+            r#"spec golden_rich_adv
 """
 Golden integration fixture: commentary and meta are not part of the semantic plan hash.
 """
@@ -126,9 +124,9 @@ type money: scale
 
 fact balance: 50 eur
 rule total: balance"#,
-        "golden.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("golden.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 1, 1);
     assert_eq!(
         plan_hash_from_loaded_plan(&engine, "golden_rich_adv", &eff),
@@ -139,26 +137,26 @@ rule total: balance"#,
 #[test]
 fn golden_loaded_spec_ref_hash_pinned() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"spec golden_dep_ref
+    engine
+        .load(
+            r#"spec golden_dep_ref
 fact seed: 7
 rule computed: seed + 1"#,
-        "dep.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("dep.lemma"),
+        )
+        .unwrap();
     let dep_h = plan_hash(&engine, "golden_dep_ref", &date(2025, 1, 1));
-    add_lemma_code_blocking(
-        &mut engine,
-        &format!(
-            r#"spec golden_consumer_ref
+    engine
+        .load(
+            &format!(
+                r#"spec golden_consumer_ref
 fact link: spec golden_dep_ref~{}
 rule out: link.computed"#,
-            dep_h
-        ),
-        "consumer.lemma",
-    )
-    .unwrap();
+                dep_h
+            ),
+            lemma::SourceType::Labeled("consumer.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 1, 1);
     assert_eq!(
         plan_hash_from_loaded_plan(&engine, "golden_consumer_ref", &eff),
@@ -173,9 +171,17 @@ rule out: link.computed"#,
 #[test]
 fn same_spec_different_source_labels_same_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(&mut e1, "spec t\nfact x: 1\nrule r: x", "a.lemma").unwrap();
+    e1.load(
+        "spec t\nfact x: 1\nrule r: x",
+        lemma::SourceType::Labeled("a.lemma"),
+    )
+    .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(&mut e2, "spec t\nfact x: 1\nrule r: x", "b.lemma").unwrap();
+    e2.load(
+        "spec t\nfact x: 1\nrule r: x",
+        lemma::SourceType::Labeled("b.lemma"),
+    )
+    .unwrap();
     let eff = date(2025, 1, 1);
     assert_eq!(
         plan_hash(&e1, "t", &eff),
@@ -187,7 +193,12 @@ fn same_spec_different_source_labels_same_hash() {
 #[test]
 fn hash_deterministic_same_plan_twice() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, "spec t\nfact x: 1\nrule r: x", "t.lemma").unwrap();
+    engine
+        .load(
+            "spec t\nfact x: 1\nrule r: x",
+            lemma::SourceType::Labeled("t.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 1, 1);
     let h1 = plan_hash(&engine, "t", &eff);
     let h2 = plan_hash(&engine, "t", &eff);
@@ -197,9 +208,17 @@ fn hash_deterministic_same_plan_twice() {
 #[test]
 fn empty_plan_same_hash_across_instances() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(&mut e1, "spec empty\nfact x: 1", "a.lemma").unwrap();
+    e1.load(
+        "spec empty\nfact x: 1",
+        lemma::SourceType::Labeled("a.lemma"),
+    )
+    .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(&mut e2, "spec empty\nfact x: 1", "b.lemma").unwrap();
+    e2.load(
+        "spec empty\nfact x: 1",
+        lemma::SourceType::Labeled("b.lemma"),
+    )
+    .unwrap();
     let eff = date(2025, 1, 1);
     assert_eq!(plan_hash(&e1, "empty", &eff), plan_hash(&e2, "empty", &eff));
 }
@@ -211,9 +230,17 @@ fn empty_plan_same_hash_across_instances() {
 #[test]
 fn different_fact_value_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(&mut e1, "spec t\nfact x: 1\nrule r: x", "t.lemma").unwrap();
+    e1.load(
+        "spec t\nfact x: 1\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(&mut e2, "spec t\nfact x: 2\nrule r: x", "t.lemma").unwrap();
+    e2.load(
+        "spec t\nfact x: 2\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let eff = date(2025, 1, 1);
     assert_ne!(plan_hash(&e1, "t", &eff), plan_hash(&e2, "t", &eff));
 }
@@ -221,9 +248,17 @@ fn different_fact_value_different_hash() {
 #[test]
 fn different_fact_type_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(&mut e1, "spec t\nfact x: 1\nrule r: x", "t.lemma").unwrap();
+    e1.load(
+        "spec t\nfact x: 1\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(&mut e2, "spec t\nfact x: \"a\"\nrule r: x", "t.lemma").unwrap();
+    e2.load(
+        "spec t\nfact x: \"a\"\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let eff = date(2025, 1, 1);
     assert_ne!(plan_hash(&e1, "t", &eff), plan_hash(&e2, "t", &eff));
 }
@@ -231,9 +266,17 @@ fn different_fact_type_different_hash() {
 #[test]
 fn different_rule_expression_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(&mut e1, "spec t\nfact x: 1\nrule r: x", "t.lemma").unwrap();
+    e1.load(
+        "spec t\nfact x: 1\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(&mut e2, "spec t\nfact x: 1\nrule r: x + 1", "t.lemma").unwrap();
+    e2.load(
+        "spec t\nfact x: 1\nrule r: x + 1",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let eff = date(2025, 1, 1);
     assert_ne!(plan_hash(&e1, "t", &eff), plan_hash(&e2, "t", &eff));
 }
@@ -241,12 +284,15 @@ fn different_rule_expression_different_hash() {
 #[test]
 fn add_fact_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(&mut e1, "spec t\nfact x: 1\nrule r: x", "t.lemma").unwrap();
+    e1.load(
+        "spec t\nfact x: 1\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e2,
+    e2.load(
         "spec t\nfact x: 1\nfact y: 2\nrule r: x",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let eff = date(2025, 1, 1);
@@ -256,14 +302,17 @@ fn add_fact_different_hash() {
 #[test]
 fn remove_fact_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e1,
+    e1.load(
         "spec t\nfact x: 1\nfact y: 2\nrule r: x",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(&mut e2, "spec t\nfact x: 1\nrule r: x", "t.lemma").unwrap();
+    e2.load(
+        "spec t\nfact x: 1\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let eff = date(2025, 1, 1);
     assert_ne!(plan_hash(&e1, "t", &eff), plan_hash(&e2, "t", &eff));
 }
@@ -271,12 +320,15 @@ fn remove_fact_different_hash() {
 #[test]
 fn add_rule_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(&mut e1, "spec t\nfact x: 1\nrule r: x", "t.lemma").unwrap();
+    e1.load(
+        "spec t\nfact x: 1\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e2,
+    e2.load(
         "spec t\nfact x: 1\nrule r: x\nrule s: x + 1",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let eff = date(2025, 1, 1);
@@ -286,17 +338,15 @@ fn add_rule_different_hash() {
 #[test]
 fn different_unless_clause_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e1,
+    e1.load(
         "spec t\nfact x: 5\nrule r: 0\n unless x >= 10 then 10",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e2,
+    e2.load(
         "spec t\nfact x: 5\nrule r: 0\n unless x >= 20 then 20",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let eff = date(2025, 1, 1);
@@ -306,9 +356,17 @@ fn different_unless_clause_different_hash() {
 #[test]
 fn different_spec_name_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(&mut e1, "spec a\nfact x: 1\nrule r: x", "t.lemma").unwrap();
+    e1.load(
+        "spec a\nfact x: 1\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(&mut e2, "spec b\nfact x: 1\nrule r: x", "t.lemma").unwrap();
+    e2.load(
+        "spec b\nfact x: 1\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let eff = date(2025, 1, 1);
     assert_ne!(plan_hash(&e1, "a", &eff), plan_hash(&e2, "b", &eff));
 }
@@ -316,18 +374,10 @@ fn different_spec_name_different_hash() {
 #[test]
 fn different_spec_ref_dependency_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e1,
-        "spec dep1\nfact x: 1\nrule r: x\nspec dep2\nfact x: 2\nrule r: x\nspec consumer\nfact d: spec dep1\nrule val: d.r",
-        "t.lemma",
-    )
+    e1.load("spec dep1\nfact x: 1\nrule r: x\nspec dep2\nfact x: 2\nrule r: x\nspec consumer\nfact d: spec dep1\nrule val: d.r", lemma::SourceType::Labeled("t.lemma",))
     .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e2,
-        "spec dep1\nfact x: 1\nrule r: x\nspec dep2\nfact x: 2\nrule r: x\nspec consumer\nfact d: spec dep2\nrule val: d.r",
-        "t.lemma",
-    )
+    e2.load("spec dep1\nfact x: 1\nrule r: x\nspec dep2\nfact x: 2\nrule r: x\nspec consumer\nfact d: spec dep2\nrule val: d.r", lemma::SourceType::Labeled("t.lemma",))
     .unwrap();
     let eff = date(2025, 1, 1);
     assert_ne!(
@@ -339,18 +389,18 @@ fn different_spec_ref_dependency_different_hash() {
 #[test]
 fn different_temporal_slice_different_hash() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"spec t
+    engine
+        .load(
+            r#"spec t
 fact x: 1
 rule r: x
 
 spec t 2025-04-01
 fact x: 2
 rule r: x"#,
-        "t.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("t.lemma"),
+        )
+        .unwrap();
     let h1 = plan_hash(&engine, "t", &date(2025, 1, 1));
     let h2 = plan_hash(&engine, "t", &date(2025, 6, 1));
     assert_ne!(
@@ -362,10 +412,13 @@ rule r: x"#,
 #[test]
 fn adding_later_version_does_not_change_earlier_plan_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(&mut e1, "spec t\nfact x: 1\nrule r: x", "t.lemma").unwrap();
+    e1.load(
+        "spec t\nfact x: 1\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e2,
+    e2.load(
         r#"spec t
 fact x: 1
 rule r: x
@@ -373,7 +426,7 @@ rule r: x
 spec t 2025-04-01
 fact x: 2
 rule r: x"#,
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let h_before = plan_hash(&e1, "t", &date(2025, 1, 1));
@@ -387,9 +440,9 @@ rule r: x"#,
 #[test]
 fn type_import_pinned_vs_unpinned_same_resolution_same_hash() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"spec dep
+    engine
+        .load(
+            r#"spec dep
 type money: scale -> unit eur 1
 fact x: 1 eur
 
@@ -397,15 +450,14 @@ spec consumer
 type money from dep
 fact p: [money]
 rule r: p"#,
-        "t.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("t.lemma"),
+        )
+        .unwrap();
     let dep_hash = plan_hash(&engine, "dep", &date(2025, 1, 1));
     let consumer_unpinned = plan_hash(&engine, "consumer", &date(2025, 1, 1));
 
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e2,
+    e2.load(
         &format!(
             r#"spec dep
 type money: scale -> unit eur 1
@@ -417,7 +469,7 @@ fact p: [money]
 rule r: p"#,
             dep_hash
         ),
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let consumer_pinned = plan_hash(&e2, "consumer", &date(2025, 1, 1));
@@ -431,8 +483,7 @@ rule r: p"#,
 #[test]
 fn type_import_different_dep_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e1,
+    e1.load(
         r#"spec dep1
 type money: scale -> unit eur 1
 fact x: 1 eur
@@ -445,12 +496,11 @@ spec consumer
 type money from dep1
 fact p: [money]
 rule r: p"#,
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e2,
+    e2.load(
         r#"spec dep1
 type money: scale -> unit eur 1
 fact x: 1 eur
@@ -463,7 +513,7 @@ spec consumer
 type money from dep2
 fact p: [money]
 rule r: p"#,
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let eff = date(2025, 1, 1);
@@ -477,17 +527,15 @@ rule r: p"#,
 #[test]
 fn is_default_vs_explicit_value_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e1,
+    e1.load(
         "spec t\ntype n: number -> default 1\nfact x: [n]\nrule r: x",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e2,
+    e2.load(
         "spec t\ntype n: number -> default 1\nfact x: 1\nrule r: x",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let eff = date(2025, 1, 1);
@@ -505,7 +553,12 @@ fn is_default_vs_explicit_value_different_hash() {
 #[test]
 fn empty_plan_hash_stable() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, "spec empty\nfact x: 1", "t.lemma").unwrap();
+    engine
+        .load(
+            "spec empty\nfact x: 1",
+            lemma::SourceType::Labeled("t.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 1, 1);
     let h1 = plan_hash(&engine, "empty", &eff);
     let h2 = plan_hash(&engine, "empty", &eff);
@@ -515,12 +568,12 @@ fn empty_plan_hash_stable() {
 #[test]
 fn facts_only_no_rules_hash_stable() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        "spec t\nfact a: 1\nfact b: 2\nfact c: 3",
-        "t.lemma",
-    )
-    .unwrap();
+    engine
+        .load(
+            "spec t\nfact a: 1\nfact b: 2\nfact c: 3",
+            lemma::SourceType::Labeled("t.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 1, 1);
     let h1 = plan_hash(&engine, "t", &eff);
     let h2 = plan_hash(&engine, "t", &eff);
@@ -530,12 +583,12 @@ fn facts_only_no_rules_hash_stable() {
 #[test]
 fn type_only_facts_hash_stable() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        "spec t\nfact x: [number]\nrule r: x",
-        "t.lemma",
-    )
-    .unwrap();
+    engine
+        .load(
+            "spec t\nfact x: [number]\nrule r: x",
+            lemma::SourceType::Labeled("t.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 1, 1);
     let h1 = plan_hash(&engine, "t", &eff);
     let h2 = plan_hash(&engine, "t", &eff);
@@ -545,12 +598,12 @@ fn type_only_facts_hash_stable() {
 #[test]
 fn spec_ref_fact_hash_stable() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        "spec dep\nfact x: 1\nrule r: x\nspec consumer\nfact d: spec dep\nrule val: d.r",
-        "t.lemma",
-    )
-    .unwrap();
+    engine
+        .load(
+            "spec dep\nfact x: 1\nrule r: x\nspec consumer\nfact d: spec dep\nrule val: d.r",
+            lemma::SourceType::Labeled("t.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 1, 1);
     let h1 = plan_hash(&engine, "consumer", &eff);
     let h2 = plan_hash(&engine, "consumer", &eff);
@@ -560,17 +613,17 @@ fn spec_ref_fact_hash_stable() {
 #[test]
 fn many_unless_branches_hash_stable() {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"spec t
+    engine
+        .load(
+            r#"spec t
 fact q: 25
 rule r: 0 percent
  unless q >= 10 then 10 percent
  unless q >= 50 then 20 percent
  unless q >= 100 then 30 percent"#,
-        "t.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("t.lemma"),
+        )
+        .unwrap();
     let eff = date(2025, 1, 1);
     let h1 = plan_hash(&engine, "t", &eff);
     let h2 = plan_hash(&engine, "t", &eff);
@@ -580,17 +633,15 @@ rule r: 0 percent
 #[test]
 fn logical_and_expression_different_from_arithmetic() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e1,
+    e1.load(
         "spec t\nfact a: true\nfact b: true\nrule r: a and b",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e2,
+    e2.load(
         "spec t\nfact a: 1\nfact b: 1\nrule r: a + b",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let eff = date(2025, 1, 1);
@@ -600,9 +651,17 @@ fn logical_and_expression_different_from_arithmetic() {
 #[test]
 fn comparison_vs_literal_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(&mut e1, "spec t\nfact x: 5\nrule r: x > 0", "t.lemma").unwrap();
+    e1.load(
+        "spec t\nfact x: 5\nrule r: x > 0",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(&mut e2, "spec t\nfact x: 5\nrule r: true", "t.lemma").unwrap();
+    e2.load(
+        "spec t\nfact x: 5\nrule r: true",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let eff = date(2025, 1, 1);
     assert_ne!(plan_hash(&e1, "t", &eff), plan_hash(&e2, "t", &eff));
 }
@@ -610,14 +669,17 @@ fn comparison_vs_literal_different_hash() {
 #[test]
 fn veto_expression_different_from_literal() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e1,
+    e1.load(
         "spec t\nfact x: -1\nrule r: x\n unless x < 0 then veto \"negative\"",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(&mut e2, "spec t\nfact x: -1\nrule r: 0", "t.lemma").unwrap();
+    e2.load(
+        "spec t\nfact x: -1\nrule r: 0",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let eff = date(2025, 1, 1);
     assert_ne!(plan_hash(&e1, "t", &eff), plan_hash(&e2, "t", &eff));
 }
@@ -625,17 +687,15 @@ fn veto_expression_different_from_literal() {
 #[test]
 fn unit_conversion_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e1,
+    e1.load(
         "spec t\ntype m: scale -> unit eur 1 -> unit usd 1.1\nfact x: 100 eur\nrule r: x in usd",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e2,
+    e2.load(
         "spec t\ntype m: scale -> unit eur 1 -> unit usd 1.1\nfact x: 100 eur\nrule r: x",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let eff = date(2025, 1, 1);
@@ -645,9 +705,17 @@ fn unit_conversion_different_hash() {
 #[test]
 fn math_function_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(&mut e1, "spec t\nfact x: 4\nrule r: sqrt x", "t.lemma").unwrap();
+    e1.load(
+        "spec t\nfact x: 4\nrule r: sqrt x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(&mut e2, "spec t\nfact x: 4\nrule r: x", "t.lemma").unwrap();
+    e2.load(
+        "spec t\nfact x: 4\nrule r: x",
+        lemma::SourceType::Labeled("t.lemma"),
+    )
+    .unwrap();
     let eff = date(2025, 1, 1);
     assert_ne!(plan_hash(&e1, "t", &eff), plan_hash(&e2, "t", &eff));
 }
@@ -655,17 +723,15 @@ fn math_function_different_hash() {
 #[test]
 fn rule_reference_different_hash() {
     let mut e1 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e1,
+    e1.load(
         "spec t\nfact x: 1\nrule base: x + 1\nrule r: base",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let mut e2 = Engine::new();
-    add_lemma_code_blocking(
-        &mut e2,
+    e2.load(
         "spec t\nfact x: 1\nrule base: x + 1\nrule r: x",
-        "t.lemma",
+        lemma::SourceType::Labeled("t.lemma"),
     )
     .unwrap();
     let eff = date(2025, 1, 1);

@@ -5,10 +5,8 @@
 //! combinations produce the correct result type and that invalid
 //! combinations are rejected during validation.
 
-use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::Engine;
 use std::collections::HashMap;
 
 fn eval_rule(
@@ -18,7 +16,9 @@ fn eval_rule(
     facts: HashMap<String, String>,
 ) -> String {
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").expect("Should parse and plan");
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
         .run(spec_name, Some(&now), facts, false)
@@ -41,7 +41,7 @@ fn eval_rule(
 
 fn expect_plan_error(code: &str, expected_substring: &str) {
     let mut engine = Engine::new();
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "Should reject invalid type combination, but planning succeeded"

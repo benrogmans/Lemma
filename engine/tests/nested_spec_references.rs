@@ -1,5 +1,3 @@
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 use rust_decimal::Decimal;
@@ -25,8 +23,15 @@ fact quantity: 10
 rule line_total: pricing.final_price * quantity
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_spec, "pricing.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, line_item_spec, "line_item.lemma").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("pricing.lemma"))
+        .unwrap();
+    engine
+        .load(
+            line_item_spec,
+            lemma::SourceType::Labeled("line_item.lemma"),
+        )
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -73,9 +78,15 @@ fact middle_ref: spec middle
 rule top_calc: middle_ref.middle_calc
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, middle_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, top_spec, "test.lemma").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(middle_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(top_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -131,10 +142,18 @@ fact line.quantity: 100
 rule order_total: line.line_total
 "#;
 
-    add_lemma_code_blocking(&mut engine, pricing_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, wholesale_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, line_item_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, order_spec, "test.lemma").unwrap();
+    engine
+        .load(pricing_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(wholesale_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(line_item_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(order_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -178,9 +197,15 @@ fact settings: spec middle
 rule final_value: settings.config.value * 2
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, middle_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, top_spec, "test.lemma").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(middle_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(top_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -230,9 +255,15 @@ fact line.quantity: 5
 rule order_total: line.line_total
 "#;
 
-    add_lemma_code_blocking(&mut engine, pricing_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, line_item_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, order_spec, "test.lemma").unwrap();
+    engine
+        .load(pricing_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(line_item_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(order_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -284,9 +315,15 @@ rule total2: path2.base.total
 rule difference: total2 - total1
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, wrapper_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, comparison_spec, "test.lemma").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(wrapper_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(comparison_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -361,9 +398,15 @@ rule sum: c1.doubled + c2.tripled
 rule product: c1.value * c2.value
 "#;
 
-    add_lemma_code_blocking(&mut engine, config1_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, config2_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, combined_spec, "test.lemma").unwrap();
+    engine
+        .load(config1_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(config2_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(combined_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -424,9 +467,15 @@ fact middle_config: spec middle
 rule final_result: middle_config.x_squared_plus_ten * 2
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_spec, "base.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, middle_spec, "middle.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, top_spec, "top.lemma").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("base.lemma"))
+        .unwrap();
+    engine
+        .load(middle_spec, lemma::SourceType::Labeled("middle.lemma"))
+        .unwrap();
+    engine
+        .load(top_spec, lemma::SourceType::Labeled("top.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -476,8 +525,12 @@ rule wholesale_final: wholesale.final_price
 rule price_difference: retail_final - wholesale_final
 "#;
 
-    add_lemma_code_blocking(&mut engine, pricing_spec, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, scenario_spec, "test.lemma").unwrap();
+    engine
+        .load(pricing_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(scenario_spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -555,10 +608,18 @@ fact cc.aa: spec b
 rule yy: cc.y
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec_a, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, spec_b, "test.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, spec_c, "test.lemma").unwrap();
-    let errs = add_lemma_code_blocking(&mut engine, spec_d, "test.lemma").unwrap_err();
+    engine
+        .load(spec_a, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(spec_b, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    engine
+        .load(spec_c, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
+    let errs = engine
+        .load(spec_d, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap_err();
     let err_str = errs
         .iter()
         .map(|e| e.to_string())

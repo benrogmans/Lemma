@@ -444,6 +444,7 @@ impl Graph {
         if let Err(interface_errors) = validate_spec_interfaces(
             &referenced_rules,
             &spec_ref_facts,
+            self.facts(),
             &rule_entries,
             &self.main_spec,
         ) {
@@ -1943,6 +1944,9 @@ fn compute_arithmetic_result_type_recursive(
     swapped: bool,
 ) -> LemmaType {
     match (&left_type.specifications, &right_type.specifications) {
+        (TypeSpecification::Veto { .. }, _) | (_, TypeSpecification::Veto { .. }) => {
+            LemmaType::veto_type()
+        }
         (TypeSpecification::Undetermined, _) => LemmaType::undetermined_type(),
 
         (TypeSpecification::Date { .. }, TypeSpecification::Date { .. }) => {
@@ -2020,6 +2024,9 @@ fn infer_expression_type(
                 infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_name);
             let right_type =
                 infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_name);
+            if left_type.vetoed() || right_type.vetoed() {
+                return LemmaType::veto_type();
+            }
             if left_type.is_undetermined() || right_type.is_undetermined() {
                 return LemmaType::undetermined_type();
             }
@@ -2034,6 +2041,9 @@ fn infer_expression_type(
                 resolved_types,
                 spec_name,
             );
+            if operand_type.vetoed() {
+                return LemmaType::veto_type();
+            }
             if operand_type.is_undetermined() {
                 return LemmaType::undetermined_type();
             }
@@ -2045,6 +2055,9 @@ fn infer_expression_type(
                 infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_name);
             let right_type =
                 infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_name);
+            if left_type.vetoed() || right_type.vetoed() {
+                return LemmaType::veto_type();
+            }
             if left_type.is_undetermined() || right_type.is_undetermined() {
                 return LemmaType::undetermined_type();
             }
@@ -2067,6 +2080,9 @@ fn infer_expression_type(
                 resolved_types,
                 spec_name,
             );
+            if source_type.vetoed() {
+                return LemmaType::veto_type();
+            }
             if source_type.is_undetermined() {
                 return LemmaType::undetermined_type();
             }
@@ -2103,6 +2119,9 @@ fn infer_expression_type(
                 resolved_types,
                 spec_name,
             );
+            if operand_type.vetoed() {
+                return LemmaType::veto_type();
+            }
             if operand_type.is_undetermined() {
                 return LemmaType::undetermined_type();
             }
@@ -2153,6 +2172,9 @@ fn check_logical_operands(
     right_type: &LemmaType,
     source: &Source,
 ) -> Result<(), Vec<Error>> {
+    if left_type.vetoed() || right_type.vetoed() {
+        return Ok(());
+    }
     let mut errors = Vec::new();
     if !left_type.is_boolean() {
         errors.push(engine_error_at_graph(
@@ -2186,6 +2208,9 @@ fn check_logical_operand(
     operand_type: &LemmaType,
     source: &Source,
 ) -> Result<(), Vec<Error>> {
+    if operand_type.vetoed() {
+        return Ok(());
+    }
     if !operand_type.is_boolean() {
         Err(vec![engine_error_at_graph(
             graph,
@@ -2207,6 +2232,9 @@ fn check_comparison_types(
     right_type: &LemmaType,
     source: &Source,
 ) -> Result<(), Vec<Error>> {
+    if left_type.vetoed() || right_type.vetoed() {
+        return Ok(());
+    }
     let is_equality_only = matches!(
         op,
         ComparisonComputation::Equal
@@ -2292,6 +2320,9 @@ fn check_arithmetic_types(
     operator: &ArithmeticComputation,
     source: &Source,
 ) -> Result<(), Vec<Error>> {
+    if left_type.vetoed() || right_type.vetoed() {
+        return Ok(());
+    }
     // Date/Time: only Add and Subtract with Duration (or Date/Time - Date/Time)
     if left_type.is_date() || left_type.is_time() || right_type.is_date() || right_type.is_time() {
         let both_temporal = (left_type.is_date() || left_type.is_time())
@@ -2427,6 +2458,9 @@ fn check_unit_conversion_types(
     source: &Source,
     spec_name: &str,
 ) -> Result<(), Vec<Error>> {
+    if source_type.vetoed() {
+        return Ok(());
+    }
     match target {
         SemanticConversionTarget::ScaleUnit(unit_name)
         | SemanticConversionTarget::RatioUnit(unit_name) => {
@@ -2507,6 +2541,9 @@ fn check_mathematical_operand(
     operand_type: &LemmaType,
     source: &Source,
 ) -> Result<(), Vec<Error>> {
+    if operand_type.vetoed() {
+        return Ok(());
+    }
     if !operand_type.is_number() {
         Err(vec![engine_error_at_graph(
             graph,

@@ -1,7 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::*;
-mod common;
-use common::add_lemma_code_blocking;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -18,7 +16,9 @@ rule discount: 0
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     // Query the discount rule
@@ -58,7 +58,9 @@ rule can_drive: age >= 18 and has_license
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine
@@ -96,7 +98,9 @@ rule result: base * multiplier
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine
@@ -136,7 +140,9 @@ rule final_price: 100 - discount
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine

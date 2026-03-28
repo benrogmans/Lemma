@@ -1,7 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, LiteralValue, Target};
-mod common;
-use common::add_lemma_code_blocking;
 use std::collections::HashMap;
 
 #[test]
@@ -15,7 +13,9 @@ fn test_rule_reference_expansion_simple_constant() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .expect("Failed to parse");
     let now = DateTimeValue::now();
 
     // Invert for total_price = 121, given no facts
@@ -49,7 +49,9 @@ fn test_enhanced_error_message_lists_values() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .expect("Failed to parse");
     let now = DateTimeValue::now();
 
     // Try to invert for a value that doesn't exist in the rule outputs

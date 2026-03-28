@@ -1,7 +1,5 @@
-use lemma::{Engine, LiteralValue, Target};
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, LiteralValue, Target};
 use std::collections::HashMap;
 
 #[test]
@@ -16,7 +14,9 @@ fn test_better_error_for_invalid_value() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .expect("Failed to parse");
 
     // Try to invert for a value that doesn't exist (15)
     let now = DateTimeValue::now();
@@ -48,7 +48,9 @@ fn test_better_error_for_veto_mismatch() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .expect("Failed to parse");
 
     // Try to find a veto that doesn't exist
     let now = DateTimeValue::now();
@@ -80,7 +82,9 @@ fn test_error_with_no_satisfiable_branches() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse");
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .expect("Failed to parse");
 
     // Give facts that make all branches false
     let mut given = HashMap::new();
@@ -97,7 +101,12 @@ fn test_error_with_no_satisfiable_branches() {
         given,
     );
 
-    // This should work because the base branch (result = 100) is not dependent on the given facts
-    // But let's try with a constraint that does filter it
-    assert!(result.is_ok() || result.is_err()); // Either is fine for this case
+    // With x=5, only the default branch (100) applies; target 200 is unreachable.
+    if let Ok(resp) = result {
+        assert!(
+            resp.solutions.is_empty(),
+            "inverting for unreachable branch value should yield no solutions, got {:?}",
+            resp.solutions
+        );
+    }
 }

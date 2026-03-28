@@ -1,7 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
-use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
+use lemma::{Engine, TypeSpecification};
 use std::collections::HashMap;
 
 #[test]
@@ -30,8 +28,15 @@ fact twenties: [adult_age -> maximum 30]
 rule total: age + adult_age + twenties
 "#;
 
-    add_lemma_code_blocking(&mut engine, age_spec, "age.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, test_types_spec, "test_types.lemma").unwrap();
+    engine
+        .load(age_spec, lemma::SourceType::Labeled("age.lemma"))
+        .unwrap();
+    engine
+        .load(
+            test_types_spec,
+            lemma::SourceType::Labeled("test_types.lemma"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let mut facts = HashMap::new();
@@ -62,9 +67,9 @@ rule total: age + adult_age + twenties
 fn test_scale_type_default_before_unit_declarations() {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec pricing
         type money: scale
           -> default 4 eur
@@ -73,17 +78,27 @@ fn test_scale_type_default_before_unit_declarations() {
         fact price: [money]
         rule doubled: price * 2
     "#,
-        "pricing.lemma",
-    )
-    .expect("default before unit should be valid");
+            lemma::SourceType::Labeled("pricing.lemma"),
+        )
+        .expect("default before unit should be valid");
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan("pricing", Some(&now)).unwrap();
     let schema = plan.schema();
-    assert!(
-        schema.facts.contains_key("price"),
-        "price fact should exist"
-    );
+    let (price_type, _) = schema.facts.get("price").expect("price fact in schema");
+    assert!(price_type.is_scale(), "price must be scale money type");
+    assert_eq!(price_type.name(), "money");
+    match &price_type.specifications {
+        TypeSpecification::Scale { units, default, .. } => {
+            let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
+            assert!(names.contains(&"eur") && names.contains(&"usd"));
+            assert!(
+                default.is_some(),
+                "default 4 eur must appear in schema after planning"
+            );
+        }
+        other => panic!("expected Scale, got {:?}", other),
+    }
 }
 
 /// Verify that `-> default` after `-> unit` (the original order) still works.
@@ -91,9 +106,9 @@ fn test_scale_type_default_before_unit_declarations() {
 fn test_scale_type_default_after_unit_declarations() {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec pricing
         type money: scale
           -> unit eur 1
@@ -102,35 +117,45 @@ fn test_scale_type_default_after_unit_declarations() {
         fact price: [money]
         rule doubled: price * 2
     "#,
-        "pricing.lemma",
-    )
-    .expect("default after unit should be valid");
+            lemma::SourceType::Labeled("pricing.lemma"),
+        )
+        .expect("default after unit should be valid");
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan("pricing", Some(&now)).unwrap();
     let schema = plan.schema();
-    assert!(
-        schema.facts.contains_key("price"),
-        "price fact should exist"
-    );
+    let (price_type, _) = schema.facts.get("price").expect("price fact in schema");
+    assert!(price_type.is_scale(), "price must be scale money type");
+    assert_eq!(price_type.name(), "money");
+    match &price_type.specifications {
+        TypeSpecification::Scale { units, default, .. } => {
+            let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
+            assert!(names.contains(&"eur") && names.contains(&"usd"));
+            assert!(
+                default.is_some(),
+                "default 4 eur must appear in schema after planning"
+            );
+        }
+        other => panic!("expected Scale, got {:?}", other),
+    }
 }
 
 #[test]
 fn test_schema_returns_facts_in_definition_order() {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec ordering
         fact zebra: [number]
         fact alpha: [number]
         fact middle: [number]
         rule total: zebra + alpha + middle
     "#,
-        "ordering.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("ordering.lemma"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan("ordering", Some(&now)).unwrap();
@@ -147,18 +172,18 @@ fn test_schema_returns_facts_in_definition_order() {
 fn test_schema_for_rules_returns_facts_in_definition_order() {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec ordering
         fact zebra: [number]
         fact alpha: [number]
         fact middle: [number]
         rule total: zebra + alpha + middle
     "#,
-        "ordering.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("ordering.lemma"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan("ordering", Some(&now)).unwrap();
@@ -175,18 +200,18 @@ fn test_schema_for_rules_returns_facts_in_definition_order() {
 fn test_schema_reports_none_for_default_valued_facts() {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec defaults
         fact quantity: [number -> default 10]
         fact name: [text]
         fact price: 99
         rule total: quantity * price
     "#,
-        "defaults.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("defaults.lemma"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan("defaults", Some(&now)).unwrap();
@@ -215,9 +240,9 @@ fn test_schema_reports_none_for_default_valued_facts() {
 fn test_schema_scale_default_reports_none() {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
-        r#"
+    engine
+        .load(
+            r#"
         spec salary
         type money: scale
           -> unit eur 1
@@ -226,9 +251,9 @@ fn test_schema_scale_default_reports_none() {
         fact salary: [money]
         rule doubled: salary * 2
     "#,
-        "salary.lemma",
-    )
-    .unwrap();
+            lemma::SourceType::Labeled("salary.lemma"),
+        )
+        .unwrap();
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan("salary", Some(&now)).unwrap();

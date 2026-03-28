@@ -1,7 +1,5 @@
-use lemma::{Engine, Error, ResourceLimits};
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, Error, ResourceLimits};
 use std::time::Instant;
 
 #[test]
@@ -16,7 +14,7 @@ fn test_file_size_limit() {
     // Create a file larger than 100 bytes
     let large_code = "spec test\nfact x: 1\n".repeat(10); // ~200 bytes
 
-    let result = add_lemma_code_blocking(&mut engine, &large_code, "test.lemma");
+    let result = engine.load(&large_code, lemma::SourceType::Labeled("test.lemma"));
 
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
@@ -34,7 +32,7 @@ fn test_file_size_just_under_limit() {
     let mut engine = Engine::with_limits(limits);
     let code = "spec test fact x: 1 rule y: x + 1"; // Small file
 
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     assert!(result.is_ok(), "Small file should be accepted");
 }
 
@@ -47,7 +45,7 @@ fn test_expression_depth_limit() {
     let code_4 = r#"spec test
 fact x: 1
 rule r: (((1 + 1) + 1) + 1) + 1"#;
-    let result = add_lemma_code_blocking(&mut engine, code_4, "test.lemma");
+    let result = engine.load(code_4, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "Depth 4 should be accepted: {:?}",
@@ -64,7 +62,7 @@ fn expression_at_max_depth_is_accepted() {
     // 4 nested parens = depth 5 (1 for rule expr + 4 for parens)
     let code = "spec test\nfact x: 1\nrule r: ((((1 + 1) + 1) + 1) + 1) + 1";
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "Depth 5 (at limit) should be accepted: {:?}",
@@ -81,7 +79,7 @@ fn expression_exceeding_max_depth_is_rejected() {
     // 5 nested parens = depth 6 (1 for rule expr + 5 for parens)
     let code = "spec test\nfact x: 1\nrule r: (((((1 + 1) + 1) + 1) + 1) + 1) + 1";
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for expression depth");
@@ -96,7 +94,7 @@ fn expression_depth_error_has_source_location() {
     };
     let code = "spec test\nfact x: 1\nrule r: (((1 + 1) + 1) + 1) + 1";
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     let err = load_err
         .errors
@@ -120,7 +118,7 @@ fn unless_paren_nesting_counts_toward_depth() {
     // parse_expression depth 1 → ( depth 2 → ( depth 3 → EXCEEDS
     let code = "spec test\nfact x: 1\nrule r: 0 unless ((x + 1) + 2) > 3 then 1";
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     assert!(
         find_resource_limit_name(&load_err.errors).is_some(),
@@ -138,7 +136,7 @@ fn single_paren_in_unless_within_depth_limit() {
     // condition: (x + 1) > 2  →  depth 1 → ( depth 2 → ok at limit
     let code = "spec test\nfact x: 1\nrule r: 0 unless (x + 1) > 2 then 1";
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "Single paren in unless at depth 2 should be ok: {:?}",
@@ -157,7 +155,7 @@ fn expression_count_within_limit_is_accepted() {
     // rule r: x + 1 → 3 nodes (ref x, literal 1, arithmetic)
     let code = "spec test\nfact x: 1\nrule r: x + 1";
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "3 nodes should be under limit of 10: {:?}",
@@ -174,7 +172,7 @@ fn expression_count_exceeding_limit_is_rejected() {
     // a + b + c + d → 7 nodes (4 refs + 3 arithmetic), exceeds 3
     let code = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule r: a + b + c + d";
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for expression count");
@@ -194,7 +192,7 @@ fn expression_count_catches_deep_sqrt_without_depth_guard() {
     }
     let code = format!("spec test\nfact x: 1\nrule r: {}", expr);
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expression count should catch deep sqrt even when depth limit is high");
@@ -209,7 +207,7 @@ fn expression_count_error_has_source_location() {
     };
     let code = "spec test\nfact x: 1\nrule r: x + 1 + 2";
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     let err = load_err
         .errors
@@ -245,7 +243,8 @@ fn bench_deep_nesting_performance() {
         let mut engine = Engine::with_limits(limits);
 
         let start = Instant::now();
-        add_lemma_code_blocking(&mut engine, &code, "test.lemma")
+        engine
+            .load(&code, lemma::SourceType::Labeled("test.lemma"))
             .unwrap_or_else(|e| panic!("depth {} failed to parse+plan: {:?}", depth, e));
         let parse_plan = start.elapsed();
 
@@ -273,7 +272,9 @@ fact x: 1
 rule r: (((1 + 1) + 1) + 1) + 1"#;
     let mut engine = Engine::with_limits(limits);
     let start = Instant::now();
-    add_lemma_code_blocking(&mut engine, code_4, "test.lemma").expect("load");
+    engine
+        .load(code_4, lemma::SourceType::Labeled("test.lemma"))
+        .expect("load");
     let now = DateTimeValue::now();
     let _ = engine
         .run("test", Some(&now), std::collections::HashMap::new(), false)
@@ -290,12 +291,12 @@ fn test_fact_value_size_limit() {
     };
 
     let mut engine = Engine::with_limits(limits);
-    add_lemma_code_blocking(
-        &mut engine,
-        "spec test\nfact name: [text]\nrule result: name",
-        "test.lemma",
-    )
-    .unwrap();
+    engine
+        .load(
+            "spec test\nfact name: [text]\nrule result: name",
+            lemma::SourceType::Labeled("test.lemma"),
+        )
+        .unwrap();
 
     let large_string = "a".repeat(100);
     let mut facts = std::collections::HashMap::new();
@@ -327,7 +328,7 @@ fn spec_name_at_max_length_is_accepted() {
     let name = "a".repeat(lemma::limits::MAX_SPEC_NAME_LENGTH);
     let code = format!("spec {name}\nfact x: 1");
     let mut engine = Engine::default();
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "Spec name at max length should be accepted: {result:?}"
@@ -339,7 +340,7 @@ fn spec_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::limits::MAX_SPEC_NAME_LENGTH + 1);
     let code = format!("spec {name}\nfact x: 1");
     let mut engine = Engine::default();
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for spec name");
@@ -351,7 +352,7 @@ fn fact_name_at_max_length_is_accepted() {
     let name = "a".repeat(lemma::limits::MAX_FACT_NAME_LENGTH);
     let code = format!("spec test\nfact {name}: 1");
     let mut engine = Engine::default();
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "Fact name at max length should be accepted: {result:?}"
@@ -363,7 +364,7 @@ fn fact_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::limits::MAX_FACT_NAME_LENGTH + 1);
     let code = format!("spec test\nfact {name}: 1");
     let mut engine = Engine::default();
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for fact name");
@@ -375,7 +376,7 @@ fn fact_binding_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::limits::MAX_FACT_NAME_LENGTH + 1);
     let code = format!("spec test\nfact other.{name}: 1");
     let mut engine = Engine::default();
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for fact binding name");
@@ -387,7 +388,7 @@ fn rule_name_at_max_length_is_accepted() {
     let name = "a".repeat(lemma::limits::MAX_RULE_NAME_LENGTH);
     let code = format!("spec test\nrule {name}: 1");
     let mut engine = Engine::default();
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "Rule name at max length should be accepted: {result:?}"
@@ -399,7 +400,7 @@ fn rule_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::limits::MAX_RULE_NAME_LENGTH + 1);
     let code = format!("spec test\nrule {name}: 1");
     let mut engine = Engine::default();
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for rule name");
@@ -411,7 +412,7 @@ fn type_name_at_max_length_is_accepted() {
     let name = "a".repeat(lemma::limits::MAX_TYPE_NAME_LENGTH);
     let code = format!("spec test\ntype {name}: number\nfact x: 1");
     let mut engine = Engine::default();
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_ok(),
         "Type name at max length should be accepted: {result:?}"
@@ -423,7 +424,7 @@ fn type_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::limits::MAX_TYPE_NAME_LENGTH + 1);
     let code = format!("spec test\ntype {name}: number\nfact x: 1");
     let mut engine = Engine::default();
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     let rle = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for type name");
@@ -443,7 +444,7 @@ fn deeply_nested_math_functions_are_bounded() {
     }
     let code = format!("spec test\nfact x: 1\nrule r: {}", expr);
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     assert!(result.is_err(), "200 nested sqrt should be rejected");
 }
 
@@ -458,7 +459,7 @@ fn deeply_nested_power_operators_are_bounded() {
     let expr = parts.join(" ^ ");
     let code = format!("spec test\nfact x: 1\nrule r: {}", expr);
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     assert!(result.is_err(), "200 chained ^ should be rejected");
 }
 
@@ -474,7 +475,7 @@ fn deeply_nested_not_operators_are_bounded() {
     }
     let code = format!("spec test\nfact x: 1\nrule r: {}", expr);
     let mut engine = Engine::with_limits(limits);
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     assert!(
         result.is_err(),
         "200 nested not should be rejected, not cause stack overflow"
@@ -486,7 +487,7 @@ fn type_import_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::limits::MAX_TYPE_NAME_LENGTH + 1);
     let code = format!("spec test\ntype {name} from other\nfact x: 1");
     let mut engine = Engine::default();
-    let result = add_lemma_code_blocking(&mut engine, &code, "test.lemma");
+    let result = engine.load(&code, lemma::SourceType::Labeled("test.lemma"));
     let load_err = result.unwrap_err();
     let rle = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for type import name");
@@ -510,26 +511,25 @@ fn total_expression_count_accumulates_across_files() {
     let mut engine = Engine::with_limits(limits);
 
     // file 1: rule r: a + b → 3 expression nodes (ref a, ref b, arithmetic)
-    add_lemma_code_blocking(
-        &mut engine,
-        "spec s1\nfact a: 1\nfact b: 2\nrule r: a + b",
-        "f1.lemma",
-    )
-    .expect("first file should succeed");
+    engine
+        .load(
+            "spec s1\nfact a: 1\nfact b: 2\nrule r: a + b",
+            lemma::SourceType::Labeled("f1.lemma"),
+        )
+        .expect("first file should succeed");
 
     // file 2: another 3+ nodes, pushing past the limit of 10
-    add_lemma_code_blocking(
-        &mut engine,
-        "spec s2\nfact c: 1\nfact d: 2\nrule r: c + d + c + d",
-        "f2.lemma",
-    )
-    .expect("second file should succeed");
+    engine
+        .load(
+            "spec s2\nfact c: 1\nfact d: 2\nrule r: c + d + c + d",
+            lemma::SourceType::Labeled("f2.lemma"),
+        )
+        .expect("second file should succeed");
 
     // file 3: should push past the limit
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         "spec s3\nfact e: 1\nfact f: 2\nrule r: e + f + e + f + e + f",
-        "f3.lemma",
+        lemma::SourceType::Labeled("f3.lemma"),
     );
     let load_err = result.unwrap_err();
     let rle = find_resource_limit_name(&load_err.errors)
@@ -545,9 +545,17 @@ fn total_expression_count_within_limit_succeeds() {
     };
     let mut engine = Engine::with_limits(limits);
 
-    add_lemma_code_blocking(&mut engine, "spec s1\nfact x: 1\nrule r: x + 1", "f1.lemma")
+    engine
+        .load(
+            "spec s1\nfact x: 1\nrule r: x + 1",
+            lemma::SourceType::Labeled("f1.lemma"),
+        )
         .expect("first file should succeed");
-    add_lemma_code_blocking(&mut engine, "spec s2\nfact y: 2\nrule r: y * 3", "f2.lemma")
+    engine
+        .load(
+            "spec s2\nfact y: 2\nrule r: y * 3",
+            lemma::SourceType::Labeled("f2.lemma"),
+        )
         .expect("second file should succeed");
 }
 
@@ -561,10 +569,9 @@ fn single_file_exceeding_total_expression_count_is_rejected() {
     let mut engine = Engine::with_limits(limits);
 
     // a + b + c + d → 7 nodes, exceeds total limit of 3
-    let result = add_lemma_code_blocking(
-        &mut engine,
+    let result = engine.load(
         "spec test\nfact a: 1\nrule r: a + a + a + a",
-        "test.lemma",
+        lemma::SourceType::Labeled("test.lemma"),
     );
     let load_err = result.unwrap_err();
     let rle = find_resource_limit_name(&load_err.errors)

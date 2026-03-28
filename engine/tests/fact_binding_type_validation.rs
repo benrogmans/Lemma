@@ -1,11 +1,9 @@
+use lemma::parsing::ast::DateTimeValue;
 /// Comprehensive tests for fact binding type validation
 ///
 /// These tests ensure that the engine correctly validates that fact bindings
 /// match the expected types declared in the spec, preventing type confusion bugs.
 use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
-use lemma::parsing::ast::DateTimeValue;
 use std::collections::HashMap;
 
 #[test]
@@ -17,7 +15,9 @@ rule doubled: age * 2
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let mut facts = HashMap::new();
     facts.insert("age".to_string(), "twenty".to_string());
@@ -45,7 +45,9 @@ rule total: price * quantity
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "expensive".to_string());
@@ -65,32 +67,37 @@ rule total: price * quantity
     facts.insert("quantity".to_string(), "five".to_string());
     facts.insert("active".to_string(), "true".to_string());
 
-    let result = engine.run("test", Some(&now), facts, false);
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Failed to parse fact 'quantity'"));
+    let err = engine
+        .run("test", Some(&now), facts, false)
+        .expect_err("quantity must reject non-number");
+    assert!(err.to_string().contains("Failed to parse fact 'quantity'"));
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "100".to_string());
     facts.insert("quantity".to_string(), "5".to_string());
     facts.insert("active".to_string(), "maybe".to_string());
 
-    let result = engine.run("test", Some(&now), facts, false);
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Failed to parse fact 'active'"));
+    let err = engine
+        .run("test", Some(&now), facts, false)
+        .expect_err("active must reject non-boolean");
+    assert!(err.to_string().contains("Failed to parse fact 'active'"));
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "100".to_string());
     facts.insert("quantity".to_string(), "5".to_string());
     facts.insert("active".to_string(), "true".to_string());
 
-    let result = engine.run("test", Some(&now), facts, false);
-    assert!(result.is_ok());
+    let response = engine
+        .run("test", Some(&now), facts, false)
+        .expect("valid facts must evaluate");
+    let total = response
+        .results
+        .get("total")
+        .expect("total rule")
+        .result
+        .value()
+        .expect("total value");
+    assert_eq!(total.to_string(), "500");
 }
 
 #[test]
@@ -102,24 +109,39 @@ rule total: base_price * 1.2
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let mut facts = HashMap::new();
     facts.insert("base_price".to_string(), "sixty".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run("test", Some(&now), facts, false);
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
+    let err = engine
+        .run("test", Some(&now), facts, false)
+        .expect_err("base_price must reject non-number");
+    assert!(err
         .to_string()
         .contains("Failed to parse fact 'base_price'"));
 
     let mut facts = HashMap::new();
     facts.insert("base_price".to_string(), "60".to_string());
 
-    let result = engine.run("test", Some(&now), facts, false);
-    assert!(result.is_ok());
+    let response = engine
+        .run("test", Some(&now), facts, false)
+        .expect("valid base_price must evaluate");
+    let total = response
+        .results
+        .get("total")
+        .expect("total rule")
+        .result
+        .value()
+        .expect("total value");
+    assert!(
+        total.to_string().starts_with("72"),
+        "60 * 1.2 = 72, got {}",
+        total
+    );
 }
 
 #[test]
@@ -131,7 +153,9 @@ rule total: price * 1.1
 "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
 
     let mut facts = HashMap::new();
     facts.insert("price".to_string(), "100".to_string());
@@ -157,7 +181,7 @@ rule result: line.total
 "#;
 
     let mut engine = Engine::new();
-    let result = add_lemma_code_blocking(&mut engine, code, "test.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
 
     assert!(
         result.is_err(),

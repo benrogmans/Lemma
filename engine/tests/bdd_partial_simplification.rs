@@ -1,7 +1,5 @@
-use lemma::{Engine, LiteralValue, Target};
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, LiteralValue, Target};
 use std::collections::HashMap;
 
 #[test]
@@ -23,7 +21,9 @@ fn bdd_partial_simplification_on_large_expression() {
     }
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, &code, "gen").unwrap();
+    engine
+        .load(&code, lemma::SourceType::Labeled("gen"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let solutions = engine

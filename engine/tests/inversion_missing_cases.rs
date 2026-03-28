@@ -1,7 +1,5 @@
-use lemma::{Engine, FactPath, LiteralValue, Target, TargetOp};
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, FactPath, LiteralValue, Target, TargetOp};
 use std::collections::HashMap;
 
 /// Test TargetOp::Gt (Greater Than)
@@ -16,7 +14,9 @@ fn target_operator_greater_than() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // Question: "What base prices result in final price > $100?"
     let now = DateTimeValue::now();
@@ -59,7 +59,9 @@ fn target_operator_less_than_or_equal() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // Question: "What monthly costs keep annual cost <= $50,000?"
     let now = DateTimeValue::now();
@@ -98,7 +100,9 @@ fn target_operator_greater_than_or_equal() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // Question: "What base salaries give total comp >= $120,000?"
     let now = DateTimeValue::now();
@@ -139,7 +143,9 @@ fn boolean_not_operator() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // Question: "What conditions trigger veto?"
     let now = DateTimeValue::now();
@@ -184,8 +190,12 @@ fn cross_spec_simple() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, base_spec, "base").unwrap();
-    add_lemma_code_blocking(&mut engine, derived_spec, "derived").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("base"))
+        .unwrap();
+    engine
+        .load(derived_spec, lemma::SourceType::Labeled("derived"))
+        .unwrap();
 
     // Question: "What order_total gives final_total of $85?"
     let now = DateTimeValue::now();
@@ -230,8 +240,12 @@ fn cross_spec_rule_references() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, config_spec, "config").unwrap();
-    add_lemma_code_blocking(&mut engine, order_spec, "order").unwrap();
+    engine
+        .load(config_spec, lemma::SourceType::Labeled("config"))
+        .unwrap();
+    engine
+        .load(order_spec, lemma::SourceType::Labeled("order"))
+        .unwrap();
 
     let mut given = HashMap::new();
     given.insert("settings.min_threshold".to_string(), "1000".to_string());
@@ -281,9 +295,15 @@ fn cross_spec_multi_level() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, global_spec, "global").unwrap();
-    add_lemma_code_blocking(&mut engine, regional_spec, "regional").unwrap();
-    add_lemma_code_blocking(&mut engine, transaction_spec, "transaction").unwrap();
+    engine
+        .load(global_spec, lemma::SourceType::Labeled("global"))
+        .unwrap();
+    engine
+        .load(regional_spec, lemma::SourceType::Labeled("regional"))
+        .unwrap();
+    engine
+        .load(transaction_spec, lemma::SourceType::Labeled("transaction"))
+        .unwrap();
 
     let mut given = HashMap::new();
     given.insert(
@@ -342,8 +362,12 @@ fn cross_spec_piecewise() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, base_spec, "base").unwrap();
-    add_lemma_code_blocking(&mut engine, pricing_spec, "pricing").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("base"))
+        .unwrap();
+    engine
+        .load(pricing_spec, lemma::SourceType::Labeled("pricing"))
+        .unwrap();
 
     let mut given = HashMap::new();
     given.insert("subtotal".to_string(), "100".to_string());
@@ -391,7 +415,9 @@ fn complex_boolean_not_and_combination() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
     let now = DateTimeValue::now();
 
     let solutions = engine
@@ -429,7 +455,9 @@ fn target_operator_not_equal() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").unwrap();
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .unwrap();
 
     // Question: "What status values are NOT complete?"
     let now = DateTimeValue::now();

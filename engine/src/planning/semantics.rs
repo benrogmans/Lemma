@@ -1635,7 +1635,7 @@ impl LemmaType {
         })
     }
 
-    /// Create a Veto LemmaType (internal use only - not user-declarable)
+    /// Create a Veto LemmaType
     pub fn veto_type() -> Self {
         Self::primitive(TypeSpecification::veto())
     }

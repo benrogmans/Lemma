@@ -421,14 +421,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    fn add_lemma_code_blocking(
-        engine: &mut Engine,
-        code: &str,
-        source: &str,
-    ) -> Result<(), crate::Errors> {
-        engine.load(code, crate::SourceType::Labeled(source))
-    }
-
     #[test]
     fn test_format_target_eq() {
         let target = Target::value(LiteralValue::number(Decimal::from(42)));
@@ -524,7 +516,9 @@ rule another: base
 "#;
 
         let mut engine = Engine::new();
-        add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+        engine
+            .load(code, crate::SourceType::Labeled("test.lemma"))
+            .unwrap();
         let now = DateTimeValue::now();
 
         let inv = engine
@@ -567,7 +561,9 @@ rule another: base
 "#;
 
         let mut engine = Engine::new();
-        add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+        engine
+            .load(code, crate::SourceType::Labeled("test.lemma"))
+            .unwrap();
         let now = DateTimeValue::now();
 
         let inv = engine
@@ -600,7 +596,9 @@ rule another: base
 "#;
 
         let mut engine = Engine::new();
-        add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+        engine
+            .load(code, crate::SourceType::Labeled("test.lemma"))
+            .unwrap();
         let now = DateTimeValue::now();
 
         let inv = engine
@@ -670,7 +668,9 @@ rule another: base
 "#;
 
         let mut engine = Engine::new();
-        add_lemma_code_blocking(&mut engine, code, "test.lemma").unwrap();
+        engine
+            .load(code, crate::SourceType::Labeled("test.lemma"))
+            .unwrap();
 
         let now = DateTimeValue::now();
         let inv = engine

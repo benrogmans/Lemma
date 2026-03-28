@@ -1,7 +1,5 @@
-use lemma::Engine;
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -11,8 +9,7 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
     // This is shown in the README as a feature - it must work
-    add_lemma_code_blocking(
-        &mut engine,
+    engine.load(
         r#"
         spec pricing
 
@@ -26,7 +23,7 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
 
         rule price: 200 - discount
         "#,
-        "pricing.lemma",
+        lemma::SourceType::Labeled("pricing.lemma"),
     )?;
 
     let now = DateTimeValue::now();
@@ -82,8 +79,7 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
 fn test_unit_add_percentage() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
+    engine.load(
         r#"
         spec tax_calculation
 
@@ -92,7 +88,7 @@ fn test_unit_add_percentage() -> Result<(), lemma::Errors> {
 
         rule price_with_tax: base_price + tax_rate
         "#,
-        "tax.lemma",
+        lemma::SourceType::Labeled("tax.lemma"),
     )?;
 
     let now = DateTimeValue::now();
@@ -136,8 +132,7 @@ fn test_unit_add_percentage() -> Result<(), lemma::Errors> {
 fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
+    engine.load(
         r#"
         spec unit_percentage_ops
 
@@ -149,7 +144,7 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
         rule decreased: price - decrease
         rule scaled: price * increase
         "#,
-        "ops.lemma",
+        lemma::SourceType::Labeled("ops.lemma"),
     )?;
 
     let now = DateTimeValue::now();
@@ -239,8 +234,7 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
 fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
+    engine.load(
         r#"
         spec complex_pricing
 
@@ -251,7 +245,7 @@ fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
         rule after_bulk: base_price - bulk_discount
         rule final_price: after_bulk - loyalty_discount
         "#,
-        "complex.lemma",
+        lemma::SourceType::Labeled("complex.lemma"),
     )?;
 
     let now = DateTimeValue::now();
@@ -323,8 +317,7 @@ fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
 fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
+    engine.load(
         r#"
         spec percentage_ops
 
@@ -338,7 +331,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         rule compound: compound_rate * compound_rate
         rule ratio: compound_rate / discount_a
         "#,
-        "percentage.lemma",
+        lemma::SourceType::Labeled("percentage.lemma"),
     )?;
 
     let now = DateTimeValue::now();
@@ -470,8 +463,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
 fn test_averaging_percentages() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
-    add_lemma_code_blocking(
-        &mut engine,
+    engine.load(
         r#"
         spec avg_percentages
 
@@ -482,7 +474,7 @@ fn test_averaging_percentages() -> Result<(), lemma::Errors> {
         rule sum: rate_a + rate_b + rate_c
         rule average: sum / 3
         "#,
-        "avg.lemma",
+        lemma::SourceType::Labeled("avg.lemma"),
     )?;
 
     let now = DateTimeValue::now();

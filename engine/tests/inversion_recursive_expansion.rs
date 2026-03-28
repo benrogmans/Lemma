@@ -1,7 +1,5 @@
-use lemma::{Engine, LiteralValue, Target};
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, LiteralValue, Target};
 use std::collections::HashMap;
 
 #[test]
@@ -16,7 +14,9 @@ fn test_recursive_rule_reference_expansion_enables_solving() {
     "#;
 
     let mut engine = Engine::new();
-    add_lemma_code_blocking(&mut engine, code, "test").expect("Failed to parse lemma code");
+    engine
+        .load(code, lemma::SourceType::Labeled("test"))
+        .expect("Failed to parse lemma code");
 
     // Invert: total = 122
     let now = DateTimeValue::now();

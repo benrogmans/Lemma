@@ -1,5 +1,3 @@
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::{DateTimeValue, Engine};
 
 #[test]
@@ -15,7 +13,8 @@ meta author: "Alice"
 fact x: 1
 "#;
 
-    add_lemma_code_blocking(&mut engine, code, "meta_test.lemma")
+    engine
+        .load(code, lemma::SourceType::Labeled("meta_test.lemma"))
         .expect("Failed to parse meta_test");
 
     let effective = DateTimeValue {
@@ -57,9 +56,9 @@ spec meta_error
 meta title: 123
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, code, "meta_error.lemma");
-    assert!(result.is_err());
-    let errs = result.unwrap_err();
+    let errs = engine
+        .load(code, lemma::SourceType::Labeled("meta_error.lemma"))
+        .expect_err("meta title must reject non-text");
     let err_msg = errs
         .iter()
         .map(|e| e.to_string())
@@ -78,9 +77,9 @@ meta title: "First"
 meta title: "Second"
 "#;
 
-    let result = add_lemma_code_blocking(&mut engine, code, "meta_dup.lemma");
-    assert!(result.is_err());
-    let errs = result.unwrap_err();
+    let errs = engine
+        .load(code, lemma::SourceType::Labeled("meta_dup.lemma"))
+        .expect_err("duplicate meta key must fail");
     let err_msg = errs
         .iter()
         .map(|e| e.to_string())
@@ -104,7 +103,7 @@ rule total: x
 spec pricing 2025-01-01
 fact x: 20
 "#;
-    let result = add_lemma_code_blocking(&mut engine, code, "pricing.lemma");
+    let result = engine.load(code, lemma::SourceType::Labeled("pricing.lemma"));
     assert!(
         result.is_ok(),
         "later spec with different interface should be accepted when no dependent requires the old interface: {:?}",

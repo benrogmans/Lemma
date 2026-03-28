@@ -1,7 +1,5 @@
-use lemma::{Engine, LiteralValue, OperationResult};
-mod common;
-use common::add_lemma_code_blocking;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, LiteralValue, OperationResult};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -17,7 +15,9 @@ fact base_value: 100
 rule doubled: base_value * 2
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
+    engine
+        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run("test_explanation", Some(&now), HashMap::new(), false)
@@ -69,7 +69,9 @@ rule doubled: base_value * 2
 rule quadruple: doubled * 2
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
+    engine
+        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run("test_explanation_ref", Some(&now), HashMap::new(), false)
@@ -140,7 +142,9 @@ rule discount_percentage: 0%
   unless is_premium then 15%
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
+    engine
+        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run("test_unless", Some(&now), HashMap::new(), false)
@@ -208,7 +212,9 @@ rule age_validation: accept
   unless age < 18 then veto "Must be 18 or older"
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
+    engine
+        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run("test_veto", Some(&now), HashMap::new(), false)
@@ -255,8 +261,12 @@ fact base_ref: spec base
 rule result: base_ref.doubled + 50
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_spec, "base.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("base.lemma"))
+        .unwrap();
+    engine
+        .load(main_spec, lemma::SourceType::Labeled("main.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -334,8 +344,12 @@ fact base_ref: spec base
 rule use_cross_spec: base_ref.doubled + 1
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_spec, "base.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("base.lemma"))
+        .unwrap();
+    engine
+        .load(main_spec, lemma::SourceType::Labeled("main.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -405,8 +419,12 @@ fact base_ref: spec base
 rule use_doubled: base_ref.doubled + 10
 "#;
 
-    add_lemma_code_blocking(&mut engine, base_spec, "base.lemma").unwrap();
-    add_lemma_code_blocking(&mut engine, main_spec, "main.lemma").unwrap();
+    engine
+        .load(base_spec, lemma::SourceType::Labeled("base.lemma"))
+        .unwrap();
+    engine
+        .load(main_spec, lemma::SourceType::Labeled("main.lemma"))
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -522,7 +540,9 @@ rule out: true
  unless 5 < 3 then false
 "#;
 
-    add_lemma_code_blocking(&mut engine, spec, "test.lemma").unwrap();
+    engine
+        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run("test", Some(&now), HashMap::new(), false)
