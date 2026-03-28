@@ -6,6 +6,23 @@ The release version is `[workspace.package] version` in the root `Cargo.toml`. G
 
 Draft notes for the next version quickly: from the repo root run `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`).
 
+## [0.8.7] - 2026-03-28
+
+### Added
+
+- **SpecId** type (`name` + `plan_hash`) with `Display` impl (`name~hash`); replaces ad-hoc `Arc<ExecutionPlan>` set and `format!` string concatenation in fingerprints.
+- Execution plans now carry `dependencies: IndexSet<SpecId>` populated from dependency rules in topological order.
+- Six dependency-tracking unit tests: basic cross-spec, standalone, multiple deps, hash correctness, unused spec ref, and implicit dep via rules.
+
+### Changed
+
+- Cross-spec interface validation improvements and stricter test assertions.
+- Fingerprint `spec_id` fields use `SpecId::to_string()` instead of raw `format!("{}~{}", ...)`.
+
+### Removed
+
+- `serde(alias = "expected_hash_pin")` backwards-compat shim and its test.
+
 ## [0.8.6] - 2025-03-27
 
 ### Changed
