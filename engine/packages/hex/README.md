@@ -6,7 +6,7 @@ Elixir client for the [Lemma](https://github.com/benrogmans/lemma) rules engine,
 
 - Elixir >= 1.14
 
-Precompiled NIF binaries are downloaded automatically for macOS (arm64/x86_64), Linux (gnu/musl x86_64, gnu arm64), and Windows (x86_64).
+Precompiled NIF binaries are downloaded automatically for macOS (arm64/x86_64), Linux (gnu x86_64 and arm64), and Windows (x86_64).
 
 ## Development
 

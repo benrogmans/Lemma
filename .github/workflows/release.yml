@@ -112,9 +112,10 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
+            use-cross: true
           - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             use-cross: true
           - os: macos-15-intel
             target: x86_64-apple-darwin
@@ -143,6 +144,17 @@ jobs:
           else
             cargo build --release -p lemma-cli --target ${{ matrix.target }}
           fi
+
+      - name: Verify static Linux binary
+        if: contains(matrix.target, 'linux-musl')
+        shell: bash
+        run: |
+          B="target/${{ matrix.target }}/release/lemma"
+          file "$B"
+          file "$B" | grep -Eiq 'statically linked|static-pie' || {
+            echo "error: expected static musl binary (scratch Docker)"
+            exit 1
+          }
 
       - name: Package binary
         shell: bash
@@ -178,7 +190,6 @@ jobs:
           - { target: x86_64-apple-darwin,       os: macos-15-intel }
           - { target: aarch64-unknown-linux-gnu,  os: ubuntu-latest, use-cross: true }
           - { target: x86_64-unknown-linux-gnu,   os: ubuntu-latest }
-          - { target: x86_64-unknown-linux-musl,  os: ubuntu-latest, use-cross: true }
           - { target: x86_64-pc-windows-msvc,     os: windows-latest }
     steps:
       - uses: actions/checkout@v4
@@ -407,7 +418,7 @@ jobs:
 
   publish-docker:
     name: Publish Docker Image
-    needs: [detect-version-changes, create-release, build-cli-binaries]
+    needs: [detect-version-changes, create-release]
     if: |
       !cancelled() &&
       needs.create-release.result == 'success' &&
@@ -418,16 +429,6 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download Linux binaries from release
-        run: |
-          VERSION="${{ needs.detect-version-changes.outputs.version }}"
-          gh release download "cli-v${VERSION}" --pattern 'lemma-*-linux-gnu.tar.gz'
-          mkdir -p binaries/amd64 binaries/arm64
-          tar -xzf lemma-x86_64-unknown-linux-gnu.tar.gz -C binaries/amd64
-          tar -xzf lemma-aarch64-unknown-linux-gnu.tar.gz -C binaries/arm64
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

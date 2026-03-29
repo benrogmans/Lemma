@@ -6,6 +6,15 @@ The release version is `[workspace.package] version` in the root `Cargo.toml`. G
 
 Draft notes for the next version quickly: from the repo root run `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`).
 
+## [0.8.9] - 2026-03-30
+
+### Changed
+
+- Precompiled Hex NIFs: drop **`x86_64-unknown-linux-musl`** from the release **build-nif-binaries** matrix and **RustlerPrecompiled** `targets` (that triple cannot build this `cdylib`); Linux x86_64 uses **`x86_64-unknown-linux-gnu`** only.
+- Hex **README**: precompiled Linux wording matches (gnu x86_64 + arm64).
+- Workspace / crates / VS Code extension / lockfiles bumped to **0.8.9** (routine version alignment).
+- Linux `lemma` CLI release assets are **musl static** only (`lemma-*-linux-musl.tar.gz`); **publish-docker** copies them into `FROM scratch`. GNU Linux CLI tarballs removed. Hex NIF prebuilds stay **linux-gnu** (`cdylib`).
+
 ## [0.8.8] - 2026-03-29
 
 ### Added
