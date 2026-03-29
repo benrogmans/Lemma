@@ -1,12 +1,12 @@
 defmodule Lemma.MixProject do
   use Mix.Project
 
-  @version "0.8.7"
+  @version "0.8.8"
   @source_url "https://github.com/benrogmans/lemma"
 
   def project do
     [
-      app: :lemma,
+      app: :lemma_engine,
       version: @version,
       elixir: "~> 1.14",
       compilers: Mix.compilers(),
@@ -32,7 +32,8 @@ defmodule Lemma.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
-      {:rustler, "~> 0.37", runtime: false},
+      {:rustler_precompiled, "~> 0.9"},
+      {:rustler, ">= 0.9.0", optional: true},
       {:ex_doc, "~> 0.40.1", only: :dev, runtime: false}
     ]
   end
@@ -40,7 +41,14 @@ defmodule Lemma.MixProject do
   defp package do
     [
       name: "lemma_engine",
-      files: ["lib", "native", "mix.exs", "README.md"],
+      files: [
+        "lib",
+        "native/lemma_hex/src",
+        "native/lemma_hex/Cargo*",
+        "checksum-*.exs",
+        "mix.exs",
+        "README.md"
+      ],
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url}
     ]

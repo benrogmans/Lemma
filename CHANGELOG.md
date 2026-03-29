@@ -6,6 +6,24 @@ The release version is `[workspace.package] version` in the root `Cargo.toml`. G
 
 Draft notes for the next version quickly: from the repo root run `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`).
 
+## [0.8.8] - 2026-03-29
+
+### Added
+
+- Release workflow **build-nif-binaries** job: cross-build `lemma_hex` for macOS (arm64/x86_64), Linux (gnu arm64/x86_64, musl x86_64), Windows x86_64; package `.so`/`.dll` as versioned tarballs and upload to the `cli-v*` GitHub release.
+- Hex package uses **rustler_precompiled**: consumers download matching NIFs from release assets; contributors can still compile from source with `LEMMA_BUILD_NIF=1` and Rust on `PATH`.
+- **publish-hex** runs `mix rustler_precompiled.download Lemma.Native --all --print` (with `GITHUB_TOKEN`) so checksum files are generated before publish; job depends on **build-nif-binaries** completing.
+
+### Changed
+
+- Hex **mix.exs** OTP application `:lemma` → `:lemma_engine`; **package** `files` list includes checksum scripts and trimmed native sources for precompiled workflow.
+- Hex **README**: documents precompiled targets and dev workflow (`LEMMA_BUILD_NIF=1` for `mix compile` / `mix precommit`).
+- Workspace / crates / VS Code extension / lockfiles bumped to **0.8.8** (routine version alignment).
+
+### Removed
+
+- **engine/packages/hex/.mise.toml** (Erlang/Elixir pin no longer shipped in the package tree).
+
 ## [0.8.7] - 2026-03-28
 
 ### Added

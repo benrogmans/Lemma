@@ -1,6 +1,21 @@
 defmodule Lemma.Native do
   @moduledoc false
-  use Rustler, otp_app: :lemma, crate: :lemma_hex
+  version = Mix.Project.config()[:version]
+
+  use RustlerPrecompiled,
+    otp_app: :lemma_engine,
+    crate: "lemma_hex",
+    base_url: "https://github.com/benrogmans/lemma/releases/download/cli-v#{version}",
+    force_build: not File.exists?("checksum-Elixir.Lemma.Native.exs"),
+    version: version,
+    targets: ~w(
+      aarch64-apple-darwin
+      x86_64-apple-darwin
+      aarch64-unknown-linux-gnu
+      x86_64-unknown-linux-gnu
+      x86_64-unknown-linux-musl
+      x86_64-pc-windows-msvc
+    )
 
   def lemma_new(_limits), do: :erlang.nif_error(:nif_not_loaded)
   def lemma_load(_resource, _code, _source_label), do: :erlang.nif_error(:nif_not_loaded)

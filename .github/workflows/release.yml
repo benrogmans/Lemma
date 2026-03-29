@@ -162,6 +162,76 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  build-nif-binaries:
+    name: Build NIF (${{ matrix.job.target }})
+    needs: [detect-version-changes, create-release]
+    if: needs.detect-version-changes.outputs.changed == 'true'
+    runs-on: ${{ matrix.job.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        nif: ["2.15"]
+        job:
+          - { target: aarch64-apple-darwin,      os: macos-latest }
+          - { target: x86_64-apple-darwin,       os: macos-15-intel }
+          - { target: aarch64-unknown-linux-gnu,  os: ubuntu-latest, use-cross: true }
+          - { target: x86_64-unknown-linux-gnu,   os: ubuntu-latest }
+          - { target: x86_64-unknown-linux-musl,  os: ubuntu-latest, use-cross: true }
+          - { target: x86_64-pc-windows-msvc,     os: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+          targets: ${{ matrix.job.target }}
+
+      - name: Install cross
+        if: matrix.job.use-cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build NIF
+        shell: bash
+        run: |
+          if [ "${{ matrix.job.use-cross }}" == "true" ]; then
+            cross build --release -p lemma_hex --target ${{ matrix.job.target }}
+          else
+            cargo build --release -p lemma_hex --target ${{ matrix.job.target }}
+          fi
+
+      - name: Package NIF library
+        shell: bash
+        run: |
+          VERSION="${{ needs.detect-version-changes.outputs.version }}"
+          NIF_VERSION="${{ matrix.nif }}"
+          TARGET="${{ matrix.job.target }}"
+          RELEASE_DIR="target/${TARGET}/release"
+
+          case "${{ runner.os }}" in
+            Windows)
+              LIB_NAME="lemma_hex-v${VERSION}-nif-${NIF_VERSION}-${TARGET}.dll"
+              cp "${RELEASE_DIR}/lemma_hex.dll" "${LIB_NAME}" ;;
+            macOS)
+              LIB_NAME="liblemma_hex-v${VERSION}-nif-${NIF_VERSION}-${TARGET}.so"
+              cp "${RELEASE_DIR}/liblemma_hex.dylib" "${LIB_NAME}" ;;
+            *)
+              LIB_NAME="liblemma_hex-v${VERSION}-nif-${NIF_VERSION}-${TARGET}.so"
+              cp "${RELEASE_DIR}/liblemma_hex.so" "${LIB_NAME}" ;;
+          esac
+
+          tar czf "${LIB_NAME}.tar.gz" "${LIB_NAME}"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: cli-v${{ needs.detect-version-changes.outputs.version }}
+          files: "*lemma_hex-*.tar.gz"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # Publish jobs run in parallel (no dependencies between them). If one fails
   # (e.g. auth/expired token), update the secret and use "Re-run failed jobs".
   publish-crates:
@@ -282,11 +352,12 @@ jobs:
 
   publish-hex:
     name: Publish to Hex.pm
-    needs: [detect-version-changes, create-release, publish-crates]
+    needs: [detect-version-changes, create-release, publish-crates, build-nif-binaries]
     if: |
       !cancelled() &&
       needs.create-release.result == 'success' &&
       needs.publish-crates.result == 'success' &&
+      needs.build-nif-binaries.result == 'success' &&
       needs.detect-version-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -321,6 +392,12 @@ jobs:
       - name: Install mix deps
         working-directory: engine/packages/hex
         run: mix deps.get
+
+      - name: Generate NIF checksums
+        working-directory: engine/packages/hex
+        run: mix rustler_precompiled.download Lemma.Native --all --print
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to Hex
         working-directory: engine/packages/hex
