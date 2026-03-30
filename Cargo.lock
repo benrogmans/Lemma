@@ -1630,7 +1630,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "lemma-cli"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -1664,7 +1664,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-engine"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "async-trait",
  "boolean_expression",
@@ -1689,7 +1689,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-openapi"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "lemma-engine",
  "serde",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "lemma_hex"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "lemma-engine",
  "rust_decimal",
@@ -1764,7 +1764,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lsp"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "async-trait",
  "console_error_panic_hook",
@@ -3920,9 +3920,9 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "winnow"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a90e88e4667264a994d34e6d1ab2d26d398dcdca8b7f52bec8668957517fc7d8"
+checksum = "09dac053f1cd375980747450bfc7250c264eaae0583872e845c0c7cd578872b5"
 dependencies = [
  "memchr",
 ]

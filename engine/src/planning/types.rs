@@ -726,7 +726,12 @@ impl<'a> PerSliceTypeResolver<'a> {
     ) -> Result<(Arc<LemmaSpec>, String), Error> {
         if let Some(pin) = &from.hash_pin {
             return match self.plan_hashes.get_by_pin(&from.name, pin) {
-                Some(arc) => Ok((Arc::clone(arc), pin.clone())),
+                Some(arc) => {
+                    if let Some(err) = super::validate_effective_for_pin(from, arc, self.context) {
+                        return Err(err);
+                    }
+                    Ok((Arc::clone(arc), pin.clone()))
+                }
                 None => Err(Error::validation(
                     format!(
                         "No spec '{}' found with plan hash '{}' for type import",
@@ -754,12 +759,16 @@ impl<'a> PerSliceTypeResolver<'a> {
             .plan_hashes
             .get_by_slice(&arc.name, &arc.effective_from)
             .map(std::string::ToString::to_string)
-            .unwrap_or_else(|| {
-                unreachable!(
-                    "BUG: resolved type-import dependency must have plan hash; \
-                     topological planning guarantees deps are planned first"
+            .ok_or_else(|| {
+                Error::validation(
+                    format!(
+                        "Cannot import types from spec '{}': no plan hash (that spec may have failed validation)",
+                        arc.name
+                    ),
+                    None,
+                    None::<String>,
                 )
-            });
+            })?;
         Ok((arc, hash))
     }
 

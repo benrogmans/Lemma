@@ -71,6 +71,40 @@ impl PlanHashRegistry {
     }
 }
 
+/// When a SpecRef has both a hash_pin and an explicit effective datetime,
+/// verify the effective falls within the pinned spec's temporal range.
+/// Returns `Some(Error)` if the effective is outside the range.
+pub(crate) fn validate_effective_for_pin(
+    spec_ref: &crate::parsing::ast::SpecRef,
+    resolved_spec: &Arc<LemmaSpec>,
+    context: &Context,
+) -> Option<Error> {
+    let effective = spec_ref.effective.as_ref()?;
+    let (_, eff_to) = context.effective_range(resolved_spec);
+    let from_ok = resolved_spec
+        .effective_from()
+        .map(|f| *effective >= *f)
+        .unwrap_or(true);
+    let to_ok = eff_to.as_ref().map(|t| *effective < *t).unwrap_or(true);
+    if from_ok && to_ok {
+        return None;
+    }
+    Some(Error::validation(
+        format!(
+            "Effective {} is outside the temporal range of pinned spec '{}~{}' ([{}, {}))",
+            effective,
+            spec_ref.name,
+            spec_ref.hash_pin.as_deref().unwrap_or("?"),
+            resolved_spec
+                .effective_from()
+                .map_or("-inf".to_string(), |d| d.to_string()),
+            eff_to.map_or("+inf".to_string(), |d| d.to_string()),
+        ),
+        None,
+        Some("The effective datetime must fall within the pinned version's temporal range"),
+    ))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct SpecName(String);
 

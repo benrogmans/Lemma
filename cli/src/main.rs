@@ -544,7 +544,7 @@ async fn get_single_spec(
     }
 
     let bundle = registry
-        .get_specs(spec_id)
+        .get(spec_id)
         .await
         .map_err(|e| anyhow::anyhow!("Registry error for {}: {}", spec_id, e.message))?;
 

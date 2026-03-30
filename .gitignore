@@ -1,4 +1,6 @@
 /target
+result
+result-*
 
 # npm build output
 engine/packages/npm/dist/

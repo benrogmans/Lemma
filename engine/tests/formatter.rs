@@ -334,3 +334,89 @@ fn idempotency_precedence_expressions() {
         );
     }
 }
+
+// =============================================================================
+// Type import round-trip tests
+// =============================================================================
+
+#[test]
+fn round_trip_type_import_with_effective() {
+    let source = "spec consumer\ntype money from finance 2026-01-15\nfact p: [money]";
+    let formatted = format_source(source, "test.lemma").unwrap();
+    assert!(
+        formatted.contains("type money from finance 2026-01-15"),
+        "expected effective datetime in formatted output: {}",
+        formatted
+    );
+    let reformatted = format_source(&formatted, "test.lemma").unwrap();
+    assert_eq!(
+        formatted, reformatted,
+        "type import with effective is not idempotent"
+    );
+}
+
+#[test]
+fn round_trip_type_import_with_hash_and_effective() {
+    let source =
+        "spec consumer\ntype money from finance~a1b2c3d4 2026-01-15T00:00:03\nfact p: [money]";
+    let formatted = format_source(source, "test.lemma").unwrap();
+    assert!(
+        formatted.contains("type money from finance~a1b2c3d4 2026-01-15T00:00:03"),
+        "expected hash+effective in formatted output: {}",
+        formatted
+    );
+    let reformatted = format_source(&formatted, "test.lemma").unwrap();
+    assert_eq!(
+        formatted, reformatted,
+        "type import with hash+effective is not idempotent"
+    );
+}
+
+#[test]
+fn round_trip_type_import_with_hash_only() {
+    let source = "spec consumer\ntype money from finance~a1b2c3d4\nfact p: [money]";
+    let formatted = format_source(source, "test.lemma").unwrap();
+    assert!(
+        formatted.contains("type money from finance~a1b2c3d4"),
+        "expected hash in formatted output: {}",
+        formatted
+    );
+    let reformatted = format_source(&formatted, "test.lemma").unwrap();
+    assert_eq!(
+        formatted, reformatted,
+        "type import with hash is not idempotent"
+    );
+}
+
+#[test]
+fn round_trip_type_import_registry_with_effective() {
+    let source = "spec consumer\ntype money from @lemma/std/finance 2026-01-15\nfact p: [money]";
+    let formatted = format_source(source, "test.lemma").unwrap();
+    assert!(
+        formatted.contains("type money from @lemma/std/finance 2026-01-15"),
+        "expected registry+effective in formatted output: {}",
+        formatted
+    );
+    let reformatted = format_source(&formatted, "test.lemma").unwrap();
+    assert_eq!(
+        formatted, reformatted,
+        "registry type import with effective is not idempotent"
+    );
+}
+
+#[test]
+fn round_trip_type_import_registry_with_hash_and_effective() {
+    let source =
+        "spec consumer\ntype money from @lemma/std/finance~ab12cd34 2026-03-01\nfact p: [money]";
+    let formatted = format_source(source, "test.lemma").unwrap();
+    assert!(
+        formatted.contains("type money from @lemma/std/finance~ab12cd34 2026-03-01"),
+        "expected registry+hash+effective in formatted output: {}",
+        formatted
+    );
+    let reformatted = format_source(&formatted, "test.lemma").unwrap();
+    assert_eq!(
+        formatted, reformatted,
+        "registry type import with hash+effective is not idempotent"
+    );
+}

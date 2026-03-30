@@ -1,5 +1,5 @@
 use crate::engine::{Context, TemporalBound};
-use crate::parsing::ast::{DateTimeValue, FactValue, LemmaSpec};
+use crate::parsing::ast::{DateTimeValue, FactValue, LemmaSpec, TypeDef};
 use crate::parsing::source::Source;
 use crate::Error;
 use std::collections::BTreeSet;
@@ -15,19 +15,55 @@ pub struct TemporalSlice {
     pub to: Option<DateTimeValue>,
 }
 
-/// Collect names of implicit (unpinned) spec references with their source locations.
+/// Collect names of implicit (unpinned) dependency references with their source locations.
+/// Includes both fact-level spec refs and type imports (named and inline) that are not hash-pinned.
 fn implicit_spec_refs(spec: &LemmaSpec) -> Vec<(String, Source)> {
-    spec.facts
-        .iter()
-        .filter_map(|fact| {
-            if let FactValue::SpecReference(spec_ref) = &fact.value {
+    let mut refs: Vec<(String, Source)> = Vec::new();
+
+    for fact in &spec.facts {
+        match &fact.value {
+            FactValue::SpecReference(spec_ref) => {
                 if spec_ref.hash_pin.is_none() {
-                    return Some((spec_ref.name.clone(), fact.source_location.clone()));
+                    refs.push((spec_ref.name.clone(), fact.source_location.clone()));
                 }
             }
-            None
-        })
-        .collect()
+            FactValue::TypeDeclaration {
+                from: Some(from_ref),
+                ..
+            } => {
+                if from_ref.hash_pin.is_none() {
+                    refs.push((from_ref.name.clone(), fact.source_location.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for type_def in &spec.types {
+        match type_def {
+            TypeDef::Import {
+                from,
+                source_location,
+                ..
+            } => {
+                if from.hash_pin.is_none() {
+                    refs.push((from.name.clone(), source_location.clone()));
+                }
+            }
+            TypeDef::Inline {
+                from: Some(from_ref),
+                source_location,
+                ..
+            } => {
+                if from_ref.hash_pin.is_none() {
+                    refs.push((from_ref.name.clone(), source_location.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    refs
 }
 
 /// Collect just the names (for callers that don't need locations).

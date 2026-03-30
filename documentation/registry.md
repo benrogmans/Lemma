@@ -26,8 +26,7 @@ Implement `lemma::Registry`. All methods receive the identifier **without** the 
 
 | Method | Purpose |
 |--------|---------|
-| `get_specs(&self, name) -> Result<RegistryBundle, RegistryError>` | Download all temporal versions for a `spec @...` reference. |
-| `get_types(&self, name) -> Result<RegistryBundle, RegistryError>` | Download all temporal versions for a `type ... from @...` reference. |
+| `get(&self, name) -> Result<RegistryBundle, RegistryError>` | Download all temporal versions for an `@...` identifier (both spec refs and type imports). |
 | `url_for_id(&self, name, effective) -> Option<String>` | Optional: return a URL for editor navigation. |
 
 The trait is **async** and requires `Send + Sync`. On WASM the future is `?Send`.

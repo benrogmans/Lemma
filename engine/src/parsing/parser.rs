@@ -725,11 +725,19 @@ impl Parser {
         let from_registry = from_name.starts_with('@');
         let hash_pin = self.try_parse_hash_pin()?;
 
+        let mut effective = None;
+        if self.at(&TokenKind::NumberLit)? {
+            let peeked = self.peek()?;
+            if peeked.text.len() == 4 && peeked.text.chars().all(|c| c.is_ascii_digit()) {
+                effective = self.try_parse_effective_from()?;
+            }
+        }
+
         let from = SpecRef {
             name: from_name,
             from_registry,
             hash_pin,
-            effective: None,
+            effective,
         };
 
         // Check for arrow chain constraints after import
@@ -776,11 +784,18 @@ impl Parser {
             let (from_name, _) = self.parse_spec_name()?;
             let from_registry = from_name.starts_with('@');
             let hash_pin = self.try_parse_hash_pin()?;
+            let mut effective = None;
+            if self.at(&TokenKind::NumberLit)? {
+                let peeked = self.peek()?;
+                if peeked.text.len() == 4 && peeked.text.chars().all(|c| c.is_ascii_digit()) {
+                    effective = self.try_parse_effective_from()?;
+                }
+            }
             Some(SpecRef {
                 name: from_name,
                 from_registry,
                 hash_pin,
-                effective: None,
+                effective,
             })
         } else {
             None

@@ -117,7 +117,7 @@ impl Graph {
                     FactData::SpecRef {
                         resolved_plan_hash, ..
                     } => resolved_plan_hash.clone(),
-                    _ => None,
+                    _ => unreachable!("spec_arcs only populated from SpecRef variants"),
                 };
                 facts.insert(
                     path.clone(),
@@ -514,6 +514,10 @@ impl<'a> GraphBuilder<'a> {
     ) -> Option<Arc<LemmaSpec>> {
         if let Some(pin) = &spec_ref.hash_pin {
             if let Some(arc) = self.plan_hashes.get_by_pin(&spec_ref.name, pin) {
+                if let Some(err) = super::validate_effective_for_pin(spec_ref, arc, self.context) {
+                    self.errors.push(err);
+                    return None;
+                }
                 return Some(Arc::clone(arc));
             }
             self.errors.push(self.engine_error(
@@ -617,14 +621,18 @@ impl<'a> GraphBuilder<'a> {
                 .map(String::from)
                 .unwrap_or_else(|| parent_name.to_string());
             let defining_spec = if from.is_some() {
-                let hash = self
-                    .lookup_dependency_hash(source_spec_arc)
-                    .unwrap_or_else(|| {
-                        unreachable!(
-                            "BUG: resolved type-import dependency must have plan hash; \
-                         topological planning guarantees deps are planned first"
-                        )
-                    });
+                let hash = match self.lookup_dependency_hash(source_spec_arc) {
+                    Some(h) => h,
+                    None => {
+                        return Err(vec![self.engine_error(
+                            format!(
+                                "Cannot import types from spec '{}': no plan hash (that spec may have failed validation)",
+                                source_spec_arc.name
+                            ),
+                            decl_source,
+                        )]);
+                    }
+                };
                 TypeDefiningSpec::Import {
                     spec: Arc::clone(source_spec_arc),
                     resolved_plan_hash: hash,
@@ -1040,19 +1048,29 @@ impl<'a> GraphBuilder<'a> {
                         }
                     };
 
-                let resolved_hash = self.lookup_dependency_hash(&effective_spec_arc);
+                let resolved_hash = match self.lookup_dependency_hash(&effective_spec_arc) {
+                    Some(h) => h,
+                    None => {
+                        self.errors.push(self.engine_error(
+                            format!(
+                                "Cannot bind spec reference '{}': no plan hash for that spec (it may have failed validation)",
+                                effective_spec_arc.name
+                            ),
+                            &effective_source,
+                        ));
+                        return;
+                    }
+                };
                 if let Some(pin) = &spec_ref.hash_pin {
-                    if let Some(ref actual) = resolved_hash {
-                        if !pin.trim().eq_ignore_ascii_case(actual.trim()) {
-                            self.errors.push(self.engine_error(
-                                format!(
-                                    "Spec '{}' plan hash mismatch: expected {}, got {}",
-                                    spec_ref.name, pin, actual
-                                ),
-                                &effective_source,
-                            ));
-                            return;
-                        }
+                    if !pin.trim().eq_ignore_ascii_case(resolved_hash.trim()) {
+                        self.errors.push(self.engine_error(
+                            format!(
+                                "Spec '{}' plan hash mismatch: expected {}, got {}",
+                                spec_ref.name, pin, resolved_hash
+                            ),
+                            &effective_source,
+                        ));
+                        return;
                     }
                 }
 
@@ -3201,7 +3219,8 @@ mod tests {
         sources
     }
 
-    /// Test helper: build graph in one call. Types are resolved per-slice inside Graph::build.
+    /// Test helper: build graph in one call. Plans dependency specs first so the
+    /// PlanHashRegistry is populated (mirrors the topological guarantee of plan()).
     fn build_graph(
         main_spec: &LemmaSpec,
         all_specs: &[LemmaSpec],
@@ -3216,7 +3235,35 @@ mod tests {
             .get_spec_effective_from(main_spec.name.as_str(), main_spec.effective_from())
             .expect("main_spec must be in all_specs");
 
-        let plan_hashes = crate::planning::PlanHashRegistry::default();
+        let mut plan_hashes = crate::planning::PlanHashRegistry::default();
+        for spec in all_specs {
+            if spec.name == main_spec.name {
+                continue;
+            }
+            let dep_arc = ctx
+                .get_spec_effective_from(&spec.name, spec.effective_from())
+                .expect("dep spec must be in context");
+            if let Ok((dep_graph, dep_types)) = Graph::build(
+                &dep_arc,
+                &ctx,
+                sources.clone(),
+                dep_arc.effective_from().cloned(),
+                &plan_hashes,
+            ) {
+                let dep_plan = crate::planning::execution_plan::build_execution_plan(
+                    &dep_graph,
+                    &dep_types,
+                    dep_arc.effective_from().cloned(),
+                    None,
+                );
+                plan_hashes.insert(
+                    &dep_arc,
+                    dep_arc.effective_from().cloned(),
+                    dep_plan.plan_hash(),
+                );
+            }
+        }
+
         match Graph::build(
             &main_spec_arc,
             &ctx,

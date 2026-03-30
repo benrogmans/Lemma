@@ -1908,7 +1908,7 @@ pub enum FactData {
     SpecRef {
         spec: Arc<crate::parsing::ast::LemmaSpec>,
         source: Source,
-        resolved_plan_hash: Option<String>,
+        resolved_plan_hash: String,
     },
 }
 
@@ -1963,7 +1963,7 @@ impl FactData {
             FactData::Value { .. } | FactData::TypeDeclaration { .. } => None,
             FactData::SpecRef {
                 resolved_plan_hash, ..
-            } => resolved_plan_hash.as_deref(),
+            } => Some(resolved_plan_hash.as_str()),
         }
     }
 

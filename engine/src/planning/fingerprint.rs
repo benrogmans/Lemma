@@ -222,10 +222,7 @@ fn fact_fingerprint(data: &FactData) -> FactFingerprint {
             resolved_plan_hash,
             ..
         } => FactFingerprint::SpecRef {
-            spec_id: resolved_plan_hash
-                .as_ref()
-                .map(|h| SpecId::new(spec.name.clone(), h.clone()).to_string())
-                .unwrap_or_else(|| spec.name.clone()),
+            spec_id: SpecId::new(spec.name.clone(), resolved_plan_hash.clone()).to_string(),
             effective_from: spec.effective_from.clone(),
         },
     }

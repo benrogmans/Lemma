@@ -107,16 +107,9 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Registry for TestLinkRegistry {
-        async fn get_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+        async fn get(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             Err(RegistryError {
-                message: format!("TestLinkRegistry does not resolve specs: '{}'", name),
-                kind: RegistryErrorKind::Other,
-            })
-        }
-
-        async fn get_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
-            Err(RegistryError {
-                message: format!("TestLinkRegistry does not resolve type imports: '{}'", name),
+                message: format!("TestLinkRegistry does not resolve: '{}'", name),
                 kind: RegistryErrorKind::Other,
             })
         }

@@ -608,6 +608,98 @@ fact a: spec @user/workspace/spec_a"#;
     }
 
     #[test]
+    fn parse_type_import_with_effective() {
+        let input = "spec consumer\ntype money from finance 2026-01-15\nfact p: [money]";
+        let result = parse(input, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        match &result[0].types[0] {
+            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
+                assert_eq!(name, "money");
+                assert_eq!(from.name, "finance");
+                assert!(from.hash_pin.is_none());
+                let eff = from
+                    .effective
+                    .as_ref()
+                    .expect("expected effective datetime");
+                assert_eq!(eff.year, 2026);
+                assert_eq!(eff.month, 1);
+                assert_eq!(eff.day, 15);
+            }
+            other => panic!("expected Import, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_type_import_with_hash_and_effective() {
+        let input =
+            "spec consumer\ntype money from finance~a1b2c3d4 2026-01-15T00:00:03\nfact p: [money]";
+        let result = parse(input, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        match &result[0].types[0] {
+            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
+                assert_eq!(name, "money");
+                assert_eq!(from.name, "finance");
+                assert_eq!(from.hash_pin.as_deref(), Some("a1b2c3d4"));
+                let eff = from
+                    .effective
+                    .as_ref()
+                    .expect("expected effective datetime");
+                assert_eq!(eff.year, 2026);
+                assert_eq!(eff.month, 1);
+                assert_eq!(eff.day, 15);
+                assert_eq!(eff.second, 3);
+            }
+            other => panic!("expected Import, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_type_import_registry_with_effective() {
+        let input = "spec consumer\ntype money from @lemma/std/finance 2026-03-01\nfact p: [money]";
+        let result = parse(input, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        match &result[0].types[0] {
+            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
+                assert_eq!(name, "money");
+                assert_eq!(from.name, "@lemma/std/finance");
+                assert!(from.from_registry);
+                let eff = from
+                    .effective
+                    .as_ref()
+                    .expect("expected effective datetime");
+                assert_eq!(eff.year, 2026);
+                assert_eq!(eff.month, 3);
+            }
+            other => panic!("expected Import, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_inline_type_from_with_effective() {
+        let input = "spec consumer\nfact price: [money from finance 2026-06-01 -> minimum 0]";
+        let result = parse(input, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        match &result[0].facts[0].value {
+            crate::parsing::ast::FactValue::TypeDeclaration { from, .. } => {
+                let spec_ref = from.as_ref().expect("expected from spec ref");
+                assert_eq!(spec_ref.name, "finance");
+                assert!(spec_ref.hash_pin.is_none());
+                let eff = spec_ref
+                    .effective
+                    .as_ref()
+                    .expect("expected effective datetime");
+                assert_eq!(eff.year, 2026);
+                assert_eq!(eff.month, 6);
+            }
+            other => panic!("expected TypeDeclaration, got: {:?}", other),
+        }
+    }
+
+    #[test]
     fn parse_type_import_spec_name_with_slashes() {
         let input = "spec consumer\ntype money from @lemma/std/finance\nfact p: [money]";
         let result = parse(input, "test.lemma", &ResourceLimits::default());

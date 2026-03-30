@@ -418,10 +418,11 @@ jobs:
 
   publish-docker:
     name: Publish Docker Image
-    needs: [detect-version-changes, create-release]
+    needs: [detect-version-changes, create-release, build-cli-binaries]
     if: |
       !cancelled() &&
       needs.create-release.result == 'success' &&
+      needs.build-cli-binaries.result == 'success' &&
       needs.detect-version-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -429,6 +430,18 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download Linux binaries from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.detect-version-changes.outputs.version }}"
+          TAG="cli-v${VERSION}"
+          mkdir -p binaries/amd64 binaries/arm64
+          gh release download "$TAG" -p "lemma-x86_64-unknown-linux-musl.tar.gz" -D /tmp
+          gh release download "$TAG" -p "lemma-aarch64-unknown-linux-musl.tar.gz" -D /tmp
+          tar xzf /tmp/lemma-x86_64-unknown-linux-musl.tar.gz -C binaries/amd64
+          tar xzf /tmp/lemma-aarch64-unknown-linux-musl.tar.gz -C binaries/arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -87,25 +87,20 @@ impl std::error::Error for RegistryError {}
 /// Implementations must be `Send + Sync` so they can be shared across threads.
 /// Resolution is async so that WASM can use `fetch()` and native can use async HTTP.
 ///
-/// `get_specs` / `get_types` return a bundle containing ALL temporal versions
-/// for the requested identifier. The engine handles temporal resolution
-/// locally using `effective_from` on the parsed specs.
+/// `get` returns a bundle containing ALL temporal versions for the requested
+/// identifier. The engine handles temporal resolution locally using
+/// `effective_from` on the parsed specs. Both `spec @...` references and
+/// `type ... from @...` imports are resolved through the same `get` method.
 ///
 /// `name` is the base identifier **without** the leading `@`.
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait Registry: Send + Sync {
-    /// Fetch all temporal versions for a `spec @...` reference.
+    /// Fetch all temporal versions for an `@...` identifier.
     ///
     /// `name` is the base name (e.g. `"user/workspace/somespec"`).
-    /// Returns a bundle whose `lemma_source` contains all temporal versions of the spec.
-    async fn get_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
-
-    /// Fetch all temporal versions for a `type ... from @...` reference.
-    ///
-    /// `name` is the base name (e.g. `"lemma/std/finance"`).
-    /// Returns a bundle whose `lemma_source` contains all temporal versions of the type source.
-    async fn get_types(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
+    /// Returns a bundle whose `lemma_source` contains all temporal versions.
+    async fn get(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
 
     /// Map a Registry identifier to a human-facing address for navigation.
     ///
@@ -318,11 +313,7 @@ impl Default for LemmaBase {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl Registry for LemmaBase {
-    async fn get_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
-        self.fetch_source(name).await
-    }
-
-    async fn get_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+    async fn get(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
         self.fetch_source(name).await
     }
 
@@ -355,7 +346,7 @@ pub async fn resolve_registry_references(
     registry: &dyn Registry,
     limits: &ResourceLimits,
 ) -> Result<(), Vec<Error>> {
-    let mut already_requested: HashSet<(String, RegistryReferenceKind)> = HashSet::new();
+    let mut already_requested: HashSet<String> = HashSet::new();
 
     loop {
         let unresolved = collect_unresolved_registry_references(ctx, &already_requested);
@@ -366,16 +357,12 @@ pub async fn resolve_registry_references(
 
         let mut round_errors: Vec<Error> = Vec::new();
         for reference in &unresolved {
-            let dedup = reference.dedup_key();
-            if already_requested.contains(&dedup) {
+            if already_requested.contains(&reference.name) {
                 continue;
             }
-            already_requested.insert(dedup);
+            already_requested.insert(reference.name.clone());
 
-            let bundle_result = match reference.kind {
-                RegistryReferenceKind::Spec => registry.get_specs(&reference.name).await,
-                RegistryReferenceKind::TypeImport => registry.get_types(&reference.name).await,
-            };
+            let bundle_result = registry.get(&reference.name).await;
 
             let bundle = match bundle_result {
                 Ok(b) => b,
@@ -456,46 +443,38 @@ pub async fn resolve_registry_references(
     Ok(())
 }
 
-/// The kind of `@...` reference: a spec reference or a type import.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum RegistryReferenceKind {
-    Spec,
-    TypeImport,
-}
-
 /// A collected `@...` reference needing registry fetch.
 #[derive(Debug, Clone)]
 struct RegistryReference {
     name: String,
-    kind: RegistryReferenceKind,
     source: Source,
 }
 
-impl RegistryReference {
-    fn dedup_key(&self) -> (String, RegistryReferenceKind) {
-        (self.name.clone(), self.kind.clone())
-    }
-}
-
 /// Collect all unresolved `@...` references from specs in `ctx`.
-/// Unresolved = not satisfied by ctx.get_spec(name, effective) and not already in already_requested.
+/// Collects from both fact-level spec refs and type imports into a single flat set.
 fn collect_unresolved_registry_references(
     ctx: &Context,
-    already_requested: &HashSet<(String, RegistryReferenceKind)>,
+    already_requested: &HashSet<String>,
 ) -> Vec<RegistryReference> {
     let mut unresolved: Vec<RegistryReference> = Vec::new();
-    let mut seen_in_this_round: HashSet<(String, RegistryReferenceKind)> = HashSet::new();
+    let mut seen_in_this_round: HashSet<String> = HashSet::new();
 
     for spec in ctx.iter() {
         let spec = spec.as_ref();
         if spec.attribute.is_none() {
-            let has_registry_refs =
-                spec.facts.iter().any(
-                    |f| matches!(&f.value, FactValue::SpecReference(ref r) if r.from_registry),
-                ) || spec
-                    .types
-                    .iter()
-                    .any(|t| matches!(t, TypeDef::Import { from, .. } if from.from_registry));
+            let has_registry_refs = spec.facts.iter().any(|f| match &f.value {
+                FactValue::SpecReference(ref r) => r.from_registry,
+                FactValue::TypeDeclaration {
+                    from: Some(ref r), ..
+                } => r.from_registry,
+                _ => false,
+            }) || spec.types.iter().any(|t| match t {
+                TypeDef::Import { from, .. } => from.from_registry,
+                TypeDef::Inline {
+                    from: Some(ref r), ..
+                } => r.from_registry,
+                _ => false,
+            });
             if has_registry_refs {
                 panic!(
                     "BUG: spec '{}' must have source attribute when it has registry references",
@@ -505,52 +484,51 @@ fn collect_unresolved_registry_references(
             continue;
         }
 
+        let mut try_collect = |name: &str, source: &Source| {
+            let already_satisfied = ctx.get_spec_effective_from(name, None).is_some();
+            if !already_satisfied
+                && !already_requested.contains(name)
+                && seen_in_this_round.insert(name.to_string())
+            {
+                unresolved.push(RegistryReference {
+                    name: name.to_string(),
+                    source: source.clone(),
+                });
+            }
+        };
+
         for fact in &spec.facts {
-            if let FactValue::SpecReference(spec_ref) = &fact.value {
-                if !spec_ref.from_registry {
-                    continue;
+            match &fact.value {
+                FactValue::SpecReference(spec_ref) if spec_ref.from_registry => {
+                    try_collect(&spec_ref.name, &fact.source_location);
                 }
-                let already_satisfied = ctx
-                    .get_spec_effective_from(spec_ref.name.as_str(), None)
-                    .is_some();
-                let dedup = (spec_ref.name.clone(), RegistryReferenceKind::Spec);
-                if !already_satisfied
-                    && !already_requested.contains(&dedup)
-                    && seen_in_this_round.insert(dedup)
-                {
-                    unresolved.push(RegistryReference {
-                        name: spec_ref.name.clone(),
-                        kind: RegistryReferenceKind::Spec,
-                        source: fact.source_location.clone(),
-                    });
+                FactValue::TypeDeclaration {
+                    from: Some(from_ref),
+                    ..
+                } if from_ref.from_registry => {
+                    try_collect(&from_ref.name, &fact.source_location);
                 }
+                _ => {}
             }
         }
 
         for type_def in &spec.types {
-            if let TypeDef::Import {
-                from,
-                source_location,
-                ..
-            } = type_def
-            {
-                if !from.from_registry {
-                    continue;
+            match type_def {
+                TypeDef::Import {
+                    from,
+                    source_location,
+                    ..
+                } if from.from_registry => {
+                    try_collect(&from.name, source_location);
                 }
-                let already_satisfied = ctx
-                    .get_spec_effective_from(from.name.as_str(), None)
-                    .is_some();
-                let dedup = (from.name.clone(), RegistryReferenceKind::TypeImport);
-                if !already_satisfied
-                    && !already_requested.contains(&dedup)
-                    && seen_in_this_round.insert(dedup)
-                {
-                    unresolved.push(RegistryReference {
-                        name: from.name.clone(),
-                        kind: RegistryReferenceKind::TypeImport,
-                        source: source_location.clone(),
-                    });
+                TypeDef::Inline {
+                    from: Some(from_ref),
+                    source_location,
+                    ..
+                } if from_ref.from_registry => {
+                    try_collect(&from_ref.name, source_location);
                 }
+                _ => {}
             }
         }
     }
@@ -593,22 +571,12 @@ mod tests {
     #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
     #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
     impl Registry for TestRegistry {
-        async fn get_specs(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
+        async fn get(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
             self.bundles
                 .get(name)
                 .cloned()
                 .ok_or_else(|| RegistryError {
-                    message: format!("Spec '{}' not found in test registry", name),
-                    kind: RegistryErrorKind::NotFound,
-                })
-        }
-
-        async fn get_types(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
-            self.bundles
-                .get(name)
-                .cloned()
-                .ok_or_else(|| RegistryError {
-                    message: format!("Type source '{}' not found in test registry", name),
+                    message: format!("'{}' not found in test registry", name),
                     kind: RegistryErrorKind::NotFound,
                 })
         }
@@ -692,7 +660,7 @@ fact quantity: 42"#,
     }
 
     #[tokio::test]
-    async fn get_specs_returns_all_zones_and_url_for_id_supports_effective() {
+    async fn get_returns_all_zones_and_url_for_id_supports_effective() {
         let effective = DateTimeValue {
             year: 2026,
             month: 1,
@@ -709,7 +677,7 @@ fact quantity: 42"#,
             "spec org/spec 2025-01-01\nfact x: 1\n\nspec org/spec 2026-01-15\nfact x: 2",
         );
 
-        let bundle = registry.get_specs("org/spec").await.unwrap();
+        let bundle = registry.get("org/spec").await.unwrap();
         assert!(bundle.lemma_source.contains("fact x: 1"));
         assert!(bundle.lemma_source.contains("fact x: 2"));
 
@@ -1372,50 +1340,34 @@ type money: scale
         // -------------------------------------------------------------------
 
         #[tokio::test]
-        async fn get_specs_delegates_to_fetch_source() {
+        async fn get_delegates_to_fetch_source() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
                 "spec org/resolved\nfact a: 1",
             )));
 
-            let bundle = registry.get_specs("@org/resolved").await.unwrap();
+            let bundle = registry.get("@org/resolved").await.unwrap();
 
             assert_eq!(bundle.lemma_source, "spec org/resolved\nfact a: 1");
             assert_eq!(bundle.attribute, "@org/resolved");
         }
 
         #[tokio::test]
-        async fn get_types_delegates_to_fetch_source() {
-            let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
-                "spec lemma/std/finance\ntype money: scale\n -> unit eur 1.00",
-            )));
-
-            let bundle = registry.get_types("@lemma/std/finance").await.unwrap();
-
-            assert_eq!(bundle.attribute, "@lemma/std/finance");
-            assert!(
-                bundle.lemma_source.contains("type money: scale"),
-                "Expected source to contain 'type money: scale': {}",
-                bundle.lemma_source
-            );
-        }
-
-        #[tokio::test]
-        async fn get_specs_propagates_http_error() {
+        async fn get_propagates_http_error() {
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
 
-            let err = registry.get_specs("@org/missing").await.unwrap_err();
+            let err = registry.get("@org/missing").await.unwrap_err();
 
             assert!(err.message.contains("HTTP 404"));
         }
 
         #[tokio::test]
-        async fn get_types_propagates_network_error() {
+        async fn get_propagates_network_error() {
             let registry = LemmaBase::with_fetcher(Box::new(
                 MockHttpFetcher::always_failing_with_network_error("timeout"),
             ));
 
-            let err = registry.get_types("@lemma/std/types").await.unwrap_err();
+            let err = registry.get("@lemma/std/types").await.unwrap_err();
 
             assert!(err.message.contains("timeout"));
         }

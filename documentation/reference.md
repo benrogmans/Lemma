@@ -213,6 +213,17 @@ type currency from base_types
 type discount_rate from pricing -> maximum 0.5
 ```
 
+Type imports support explicit effective datetimes and hash pins, identical to fact spec refs:
+
+```lemma
+type money from finance 2026-01-15
+type money from finance~a1b2c3d4
+type money from finance~a1b2c3d4 2026-01-15T00:00:03
+```
+
+Unpinned type imports (without `~hash`) participate in temporal slicing: the engine
+creates slice boundaries when the imported spec has multiple temporal versions.
+
 ### Inline Type Definitions
 
 Define types inline in fact declarations:
